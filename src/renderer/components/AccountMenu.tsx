@@ -27,6 +27,18 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Close dropdown on Escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen]);
+
   if (!user) {
     return (
       <button className="account-btn login-btn" onClick={onLogin}>
@@ -38,7 +50,7 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
   return (
     <div className="account-menu" ref={menuRef}>
       <button className="account-btn" onClick={() => setIsOpen(!isOpen)}>
-        <span className="avatar">{user.username[0].toUpperCase()}</span>
+        <span className="avatar">{user.username?.[0]?.toUpperCase() || '?'}</span>
         <span className="username">{user.username}</span>
         <span className={`tier-badge ${user.tier}`}>{user.tier}</span>
       </button>
@@ -47,7 +59,7 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
         <div className="account-dropdown">
           <div className="account-info">
             <div className="account-name">{user.username}</div>
-            <div className="account-email">{user.email}</div>
+            {user.email && <div className="account-email">{user.email}</div>}
           </div>
 
           <div className="dropdown-divider" />
@@ -56,7 +68,11 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
             <button
               className="dropdown-item upgrade"
               onClick={() => {
-                window.electronAPI.openExternal('https://api.sytanek.tech/billing/checkout');
+                try {
+                  window.electronAPI.openExternal('https://api.sytanek.tech/billing/checkout');
+                } catch (error) {
+                  console.error('Failed to open external URL:', error);
+                }
               }}
             >
               Upgrade to Pro - $5/mo
@@ -67,7 +83,11 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
             <button
               className="dropdown-item"
               onClick={() => {
-                window.electronAPI.openExternal('https://api.sytanek.tech/billing/portal');
+                try {
+                  window.electronAPI.openExternal('https://api.sytanek.tech/billing/portal');
+                } catch (error) {
+                  console.error('Failed to open external URL:', error);
+                }
               }}
             >
               Manage Subscription
