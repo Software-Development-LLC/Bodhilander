@@ -33,18 +33,28 @@ export function useSharing() {
 
     loadUser();
 
-    // Listen for auth changes
-    window.electronAPI.onAuthChanged((data) => {
+    // Listen for auth changes - store cleanup functions
+    const unsubscribeAuthChanged = window.electronAPI.onAuthChanged((data: any) => {
       setState({ user: data.user, isLoading: false });
       if (data.token) {
-        localStorage.setItem('claudelander_auth_token', data.token);
+        try {
+          localStorage.setItem('claudelander_auth_token', data.token);
+        } catch (e) {
+          console.error('Failed to save auth token:', e);
+        }
       }
     });
 
-    window.electronAPI.onAuthError((data) => {
+    const unsubscribeAuthError = window.electronAPI.onAuthError((data: any) => {
       console.error('Auth error:', data.error);
       setState({ user: null, isLoading: false });
     });
+
+    // Cleanup listeners on unmount
+    return () => {
+      unsubscribeAuthChanged?.();
+      unsubscribeAuthError?.();
+    };
   }, []);
 
   const login = useCallback(() => {
@@ -53,7 +63,11 @@ export function useSharing() {
 
   const logout = useCallback(() => {
     window.electronAPI.logout();
-    localStorage.removeItem('claudelander_auth_token');
+    try {
+      localStorage.removeItem('claudelander_auth_token');
+    } catch (e) {
+      console.error('Failed to remove auth token:', e);
+    }
     setState({ user: null, isLoading: false });
   }, []);
 
