@@ -37,8 +37,12 @@ export const JoinSessionModal: React.FC<JoinSessionModalProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (loading) return;
     if (e.key === 'Enter') {
       handleJoin();
+    }
+    if (e.key === 'Escape') {
+      onClose();
     }
   };
 
