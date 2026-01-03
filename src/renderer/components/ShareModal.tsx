@@ -24,6 +24,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [permission, setPermission] = useState<'read' | 'control'>('read');
   const [expiresIn, setExpiresIn] = useState<number>(30);
   const [maxUses, setMaxUses] = useState<number | null>(null);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -32,6 +33,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   }, [isOpen, sessionId]);
 
   const checkSharingStatus = async () => {
+    setError(null);
     const sharing = await window.electronAPI.isSharing(sessionId);
     setIsSharing(sharing);
     if (sharing) {
@@ -82,16 +84,24 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   };
 
   const handleRevokeCode = async (code: string) => {
+    setLoading(true);
     try {
       await window.electronAPI.revokeShareCode(code);
       setCodes(codes.filter((c) => c.code !== code));
     } catch (e) {
       setError((e as Error).message);
     }
+    setLoading(false);
   };
 
-  const copyCode = (code: string) => {
-    navigator.clipboard.writeText(code);
+  const copyCode = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopiedCode(code);
+      setTimeout(() => setCopiedCode(null), 2000);
+    } catch (e) {
+      setError('Failed to copy to clipboard');
+    }
   };
 
   if (!isOpen) return null;
@@ -152,12 +162,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 <div className="form-group">
                   <label>Max Uses</label>
                   <select
-                    value={maxUses || 0}
-                    onChange={(e) => setMaxUses(Number(e.target.value) || null)}
+                    value={maxUses === null ? 'unlimited' : String(maxUses)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setMaxUses(val === 'unlimited' ? null : Number(val));
+                    }}
                   >
-                    <option value={1}>1 use</option>
-                    <option value={5}>5 uses</option>
-                    <option value={0}>Unlimited</option>
+                    <option value="1">1 use</option>
+                    <option value="5">5 uses</option>
+                    <option value="unlimited">Unlimited</option>
                   </select>
                 </div>
 
@@ -178,7 +191,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                       <div className="code-value">
                         <span className="code">{code.code}</span>
                         <button className="copy-btn" onClick={() => copyCode(code.code)}>
-                          Copy
+                          {copiedCode === code.code ? 'Copied!' : 'Copy'}
                         </button>
                       </div>
                       <div className="code-meta">
