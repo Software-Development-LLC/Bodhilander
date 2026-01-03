@@ -150,3 +150,25 @@
   margin-bottom: 16px;
   color: #fca5a5;
 }
+
+.code-input {
+  width: 100%;
+  padding: 12px;
+  font-size: 18px;
+  font-family: monospace;
+  text-align: center;
+  background: #2a2a2a;
+  border: 2px solid #444;
+  border-radius: 8px;
+  color: #fff;
+  letter-spacing: 2px;
+}
+
+.code-input:focus {
+  outline: none;
+  border-color: #4ade80;
+}
+
+.code-input::placeholder {
+  color: #666;
+}
