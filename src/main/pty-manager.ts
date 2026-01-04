@@ -92,9 +92,10 @@ class PtyManager extends EventEmitter {
         }
         env = { ...env, ...claudeConfig.env } as { [key: string]: string };
       } else {
-        shell = claudeConfig.command;
-        args = claudeConfig.args;
-        env = claudeConfig.env as { [key: string]: string };
+        // macOS/Linux: run Claude through login shell so PATH is resolved
+        shell = shellInfo.shell;
+        args = ['-l', '-c', 'claude'];
+        env = { ...env, ...claudeConfig.env } as { [key: string]: string };
       }
     } else {
       shell = shellInfo.shell;
