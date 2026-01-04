@@ -12,6 +12,7 @@ autoUpdater.autoInstallOnAppQuit = true;
 
 let mainWindow: BrowserWindow | null = null;
 let isDownloading = false;
+let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string }) => void) | null = null;
 
 export function initAutoUpdater(window: BrowserWindow): void {
   mainWindow = window;
@@ -33,9 +34,28 @@ export function checkForUpdates(): void {
   });
 }
 
+// Manual check that returns result (for About dialog)
+export async function checkForUpdatesManual(): Promise<{ updateAvailable: boolean; version?: string; error?: string }> {
+  return new Promise((resolve) => {
+    manualCheckResolver = resolve;
+    autoUpdater.checkForUpdates().catch((err) => {
+      log.error('Error checking for updates:', err);
+      manualCheckResolver = null;
+      resolve({ updateAvailable: false, error: err.message });
+    });
+  });
+}
+
 // Update available
 autoUpdater.on('update-available', (info: UpdateInfo) => {
   log.info('Update available:', info.version);
+
+  // Resolve manual check promise if pending
+  if (manualCheckResolver) {
+    manualCheckResolver({ updateAvailable: true, version: info.version });
+    manualCheckResolver = null;
+    return; // Don't show dialog - About window will handle it
+  }
 
   if (!mainWindow) return;
 
@@ -82,6 +102,12 @@ autoUpdater.on('update-available', (info: UpdateInfo) => {
 // No update available
 autoUpdater.on('update-not-available', () => {
   log.info('No updates available');
+
+  // Resolve manual check promise if pending
+  if (manualCheckResolver) {
+    manualCheckResolver({ updateAvailable: false });
+    manualCheckResolver = null;
+  }
 });
 
 // Download progress

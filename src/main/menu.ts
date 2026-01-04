@@ -2,6 +2,7 @@ import { Menu, shell, app, BrowserWindow } from 'electron';
 import * as path from 'path';
 
 const settingsPreloadPath = path.join(__dirname, 'preload-settings.js');
+const aboutPreloadPath = path.join(__dirname, 'preload-about.js');
 
 let aboutWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
@@ -60,6 +61,7 @@ function showAboutWindow(parentWindow: BrowserWindow): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: aboutPreloadPath,
     },
   });
 

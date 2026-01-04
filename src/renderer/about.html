@@ -85,16 +85,25 @@
       text-decoration: underline;
     }
 
-    .close-btn {
-      background: linear-gradient(135deg, #ffd700 0%, #ff8c00 100%);
+    .button-group {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+
+    .btn {
       border: none;
-      color: #1a1a2e;
-      padding: 10px 40px;
+      padding: 10px 24px;
       font-size: 14px;
       font-weight: bold;
       border-radius: 6px;
       cursor: pointer;
       transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .close-btn {
+      background: linear-gradient(135deg, #ffd700 0%, #ff8c00 100%);
+      color: #1a1a2e;
     }
 
     .close-btn:hover {
@@ -104,6 +113,44 @@
 
     .close-btn:active {
       transform: translateY(0);
+    }
+
+    .update-btn {
+      background: #3c3c3c;
+      color: #d4d4d4;
+      border: 1px solid #555;
+    }
+
+    .update-btn:hover:not(:disabled) {
+      background: #4a4a4a;
+      transform: translateY(-2px);
+    }
+
+    .update-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .update-status {
+      font-size: 12px;
+      margin-top: 8px;
+      min-height: 18px;
+    }
+
+    .update-status.checking {
+      color: #888;
+    }
+
+    .update-status.available {
+      color: #4ade80;
+    }
+
+    .update-status.current {
+      color: #888;
+    }
+
+    .update-status.error {
+      color: #e06c75;
     }
 
     .separator {
@@ -135,7 +182,11 @@
       <span style="color: #555;">&copy; 2024-2025</span>
     </div>
 
-    <button class="close-btn" onclick="window.close()">OK</button>
+    <div class="button-group">
+      <button class="btn update-btn" id="updateBtn" onclick="checkForUpdate()">Check for Updates</button>
+      <button class="btn close-btn" onclick="window.close()">OK</button>
+    </div>
+    <div class="update-status" id="updateStatus"></div>
   </div>
 
   <script>
@@ -143,6 +194,37 @@
     const params = new URLSearchParams(window.location.search);
     const version = params.get('version') || '1.0.0';
     document.getElementById('version').textContent = `Version ${version}`;
+
+    async function checkForUpdate() {
+      const btn = document.getElementById('updateBtn');
+      const status = document.getElementById('updateStatus');
+
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      status.className = 'update-status checking';
+      status.textContent = 'Checking for updates...';
+
+      try {
+        const result = await window.electronAPI.checkForUpdate();
+
+        if (result.error) {
+          status.className = 'update-status error';
+          status.textContent = 'Failed to check for updates';
+        } else if (result.updateAvailable) {
+          status.className = 'update-status available';
+          status.textContent = `Version ${result.version} is available!`;
+        } else {
+          status.className = 'update-status current';
+          status.textContent = 'You are running the latest version';
+        }
+      } catch (e) {
+        status.className = 'update-status error';
+        status.textContent = 'Failed to check for updates';
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Check for Updates';
+    }
   </script>
 </body>
 </html>
