@@ -29,7 +29,7 @@ export class RelayClient extends EventEmitter {
   /**
    * Connect to relay as host (sharing a session)
    */
-  async connectAsHost(localSessionId: string): Promise<{ sessionId: string; publicKey: string }> {
+  async connectAsHost(localSessionId: string, sessionName?: string): Promise<{ sessionId: string; publicKey: string }> {
     this.keyPair = crypto.generateKeyPair();
     this.isHost = true;
 
@@ -40,6 +40,7 @@ export class RelayClient extends EventEmitter {
       headers: authService.getHeaders(),
       body: JSON.stringify({
         hostPublicKey: crypto.toBase64(this.keyPair.publicKey),
+        sessionName: sessionName || 'Shared Session',
       }),
     });
 
@@ -73,6 +74,8 @@ export class RelayClient extends EventEmitter {
   async connectAsGuest(code: string): Promise<{
     hostPublicKey: string;
     permission: 'read' | 'control';
+    hostUsername: string;
+    sessionName: string;
   }> {
     this.keyPair = crypto.generateKeyPair();
     this.isHost = false;
@@ -104,6 +107,8 @@ export class RelayClient extends EventEmitter {
           resolve({
             hostPublicKey: response.hostPublicKey,
             permission: response.permission,
+            hostUsername: response.hostUsername,
+            sessionName: response.sessionName,
           });
         },
       );
