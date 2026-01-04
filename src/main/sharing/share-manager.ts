@@ -20,13 +20,13 @@ class ShareManager extends EventEmitter {
   /**
    * Start sharing a local session
    */
-  async startSharing(localSessionId: string): Promise<ShareSession> {
+  async startSharing(localSessionId: string, sessionName?: string): Promise<ShareSession> {
     if (this.activeShares.has(localSessionId)) {
       throw new Error('Session is already being shared');
     }
 
     const client = new RelayClient();
-    const { sessionId, publicKey } = await client.connectAsHost(localSessionId);
+    const { sessionId, publicKey } = await client.connectAsHost(localSessionId, sessionName);
 
     const share: ActiveShare = {
       localSessionId,
@@ -187,14 +187,21 @@ class ShareManager extends EventEmitter {
    */
   async joinSession(code: string): Promise<{
     permission: 'read' | 'control';
+    hostUsername: string;
+    sessionName: string;
     relayClient: RelayClient;
   }> {
     const client = new RelayClient();
-    const { permission } = await client.connectAsGuest(code);
+    const result = await client.connectAsGuest(code);
 
     this.joinedSessions.set(code, client);
 
-    return { permission, relayClient: client };
+    return {
+      permission: result.permission,
+      hostUsername: result.hostUsername,
+      sessionName: result.sessionName,
+      relayClient: client,
+    };
   }
 
   /**
