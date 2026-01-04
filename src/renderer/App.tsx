@@ -230,6 +230,28 @@ const App: React.FC = () => {
     });
   };
 
+  const handleRemoteGroupContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: 'Join Remote Session', onClick: () => setJoinModalOpen(true) },
+        { label: 'separator', onClick: () => {}, separator: true },
+        {
+          label: 'Disconnect All',
+          onClick: () => {
+            remoteSessions.forEach(rs => window.electronAPI.leaveSession(rs.code));
+            setRemoteSessions([]);
+            setActiveRemoteCode(null);
+          },
+          danger: true,
+          disabled: remoteSessions.length === 0,
+        },
+      ],
+    });
+  };
+
   const handleStartEditSession = (sessionId: string, currentName: string) => {
     setEditingSessionId(sessionId);
     setEditingSessionName(currentName);
@@ -426,6 +448,7 @@ const App: React.FC = () => {
   // Click handlers that also update focus state
   const handleSessionClick = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId);
+    setActiveRemoteCode(null); // Clear remote session when switching to local
     setFocusedItemId(sessionId);
     setFocusedItemType('session');
   }, [setActiveSessionId]);
@@ -982,7 +1005,10 @@ const App: React.FC = () => {
         {isAuthenticated && (
           <div className="group-container">
             <div className="group remote-group">
-              <div className="group-header">
+              <div
+                className="group-header"
+                onContextMenu={handleRemoteGroupContextMenu}
+              >
                 <span className="group-chevron" style={{ visibility: 'hidden' }}>▼</span>
                 <span className="group-color remote-color" style={{ background: '#9333ea' }} />
                 <span className="group-name">Remote Sessions</span>
