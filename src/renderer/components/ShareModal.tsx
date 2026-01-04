@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ShareCode, CreateCodeOptions } from '../../shared/types';
+import { TIER_LIMITS, UserTier } from '../../shared/constants';
 import './ShareModal.css';
 
 interface ShareModalProps {
   sessionId: string;
   sessionName: string;
+  userTier: UserTier;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -12,6 +14,7 @@ interface ShareModalProps {
 export const ShareModal: React.FC<ShareModalProps> = ({
   sessionId,
   sessionName,
+  userTier,
   isOpen,
   onClose,
 }) => {
@@ -25,6 +28,43 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [expiresIn, setExpiresIn] = useState<number>(30);
   const [maxUses, setMaxUses] = useState<number | null>(null);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  // Get tier limits
+  const tierLimits = TIER_LIMITS[userTier];
+
+  // Build expiry options based on tier
+  const expiryOptions = useMemo(() => {
+    const allOptions = [
+      { value: 30, label: '30 minutes' },
+      { value: 60, label: '1 hour' },
+      { value: 240, label: '4 hours' },
+      { value: 0, label: 'No expiry' },
+    ];
+
+    if (tierLimits.maxDuration === null) {
+      // Pro/Admin can use all options
+      return allOptions;
+    }
+
+    // Filter options to those within tier limit
+    return allOptions.filter(opt => opt.value > 0 && opt.value <= tierLimits.maxDuration);
+  }, [tierLimits.maxDuration]);
+
+  // Build max uses options based on tier
+  const maxUsesOptions = useMemo(() => {
+    const allOptions = [
+      { value: '1', label: '1 use' },
+      { value: '5', label: '5 uses' },
+      { value: 'unlimited', label: 'Unlimited' },
+    ];
+
+    if (tierLimits.maxCodes === null) {
+      return allOptions;
+    }
+
+    // Free tier: limit to specific use counts
+    return allOptions.filter(opt => opt.value !== 'unlimited');
+  }, [tierLimits.maxCodes]);
 
   useEffect(() => {
     if (isOpen) {
@@ -152,11 +192,13 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                     value={expiresIn}
                     onChange={(e) => setExpiresIn(Number(e.target.value))}
                   >
-                    <option value={30}>30 minutes</option>
-                    <option value={60}>1 hour</option>
-                    <option value={240}>4 hours</option>
-                    <option value={0}>No expiry</option>
+                    {expiryOptions.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
                   </select>
+                  {userTier === 'free' && (
+                    <span className="tier-hint">Free tier: 30 min max</span>
+                  )}
                 </div>
 
                 <div className="form-group">
@@ -168,9 +210,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                       setMaxUses(val === 'unlimited' ? null : Number(val));
                     }}
                   >
-                    <option value="1">1 use</option>
-                    <option value="5">5 uses</option>
-                    <option value="unlimited">Unlimited</option>
+                    {maxUsesOptions.map(opt => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
                   </select>
                 </div>
 

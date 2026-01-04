@@ -993,10 +993,11 @@ const App: React.FC = () => {
       )}
 
       {/* Sharing modals */}
-      {shareModalSessionId && (
+      {shareModalSessionId && user && (
         <ShareModal
           sessionId={shareModalSessionId}
           sessionName={sessions.find(s => s.id === shareModalSessionId)?.name || 'Session'}
+          userTier={user.tier}
           isOpen={true}
           onClose={() => setShareModalSessionId(null)}
         />

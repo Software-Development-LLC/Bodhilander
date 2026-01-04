@@ -172,3 +172,10 @@
 .code-input::placeholder {
   color: #666;
 }
+
+.tier-hint {
+  display: block;
+  font-size: 11px;
+  color: #888;
+  margin-top: 4px;
+}
