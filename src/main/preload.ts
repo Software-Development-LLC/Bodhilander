@@ -141,6 +141,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Sharing (guest)
   joinSession: (code: string) => ipcRenderer.invoke('share:join', code),
   leaveSession: (code: string) => ipcRenderer.invoke('share:leave', code),
+  writeToRemote: (code: string, data: string) =>
+    ipcRenderer.invoke('share:write', code, data),
   onShareData: (callback: (data: any) => void) => {
     const listener = (_: Electron.IpcRendererEvent, data: any) => callback(data);
     ipcRenderer.on('share:data', listener);
