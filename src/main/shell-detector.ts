@@ -23,8 +23,8 @@ export function detectShell(customShellPath?: string): ShellInfo {
       } else if (isPowerShell) {
         args = ['-NoLogo'];
       } else if (!isWindows) {
-        // Unix shell - use login flag
-        args = ['-l'];
+        // Unix shell - use login + interactive flags
+        args = ['-l', '-i'];
       }
 
       return {
@@ -99,7 +99,7 @@ function detectUnixShell(): ShellInfo {
 
   return {
     shell: actualShell,
-    args: ['-l'], // Login shell to load user's shell config
+    args: ['-l', '-i'], // Login + interactive shell to load full user config
     isWSL: false,
   };
 }
