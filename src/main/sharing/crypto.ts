@@ -1,11 +1,6 @@
 import sodium from 'sodium-native';
 
-// Type augmentation for sodium-native functions not in @types
-const sodiumLib = sodium as typeof sodium & {
-  crypto_box_beforenm: (sharedSecret: Buffer, publicKey: Buffer, secretKey: Buffer) => void;
-};
-
-// crypto_box_BEFORENMBYTES is always 32 for X25519
+// Shared secret size for symmetric encryption (32 bytes for XChaCha20-Poly1305)
 const SHARED_SECRET_BYTES = 32;
 
 export interface KeyPair {
@@ -30,13 +25,21 @@ export function generateKeyPair(): KeyPair {
 
 /**
  * Derive a shared secret from our secret key and their public key
+ * Uses X25519 scalar multiplication followed by BLAKE2b hash
  */
 export function deriveSharedSecret(
   ourSecretKey: Buffer,
   theirPublicKey: Buffer,
 ): Buffer {
+  // Perform X25519 Diffie-Hellman to get shared point
+  const sharedPoint = Buffer.alloc(sodium.crypto_scalarmult_BYTES);
+  sodium.crypto_scalarmult(sharedPoint, ourSecretKey, theirPublicKey);
+
+  // Hash the shared point to derive the final symmetric key
+  // This is the standard approach for converting a DH shared secret to a symmetric key
   const sharedSecret = Buffer.alloc(SHARED_SECRET_BYTES);
-  sodiumLib.crypto_box_beforenm(sharedSecret, theirPublicKey, ourSecretKey);
+  sodium.crypto_generichash(sharedSecret, sharedPoint);
+
   return sharedSecret;
 }
 
