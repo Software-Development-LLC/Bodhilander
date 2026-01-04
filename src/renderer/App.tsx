@@ -2,8 +2,12 @@ import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
+import { ShareModal } from './components/ShareModal';
+import { JoinSessionModal } from './components/JoinSessionModal';
+import { AccountMenu } from './components/AccountMenu';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
+import { useSharing } from './store/sharing';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
@@ -49,6 +53,11 @@ const App: React.FC = () => {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [isResizing, setIsResizing] = useState(false);
+
+  // Sharing state
+  const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null);
+  const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const { user, isAuthenticated, login, logout } = useSharing();
 
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
@@ -145,6 +154,7 @@ const App: React.FC = () => {
       y: e.clientY,
       items: [
         { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
+        { label: 'Share Session', onClick: () => setShareModalSessionId(sessionId), disabled: !isAuthenticated },
         { label: 'separator', onClick: () => {}, separator: true },
         { label: 'Close Session', onClick: () => handleRemoveSession(sessionId), danger: true },
       ],
@@ -572,13 +582,26 @@ const App: React.FC = () => {
         />
         <div className="sidebar-header">
           <h2>Groups</h2>
-          <button
-            className="icon-button"
-            onClick={handleCreateGroup}
-            title="New Group"
-          >
-            +
-          </button>
+          <div className="sidebar-header-actions">
+            <button
+              className="icon-button"
+              onClick={() => setJoinModalOpen(true)}
+              title={isAuthenticated ? 'Join Shared Session' : 'Sign in to join sessions'}
+              disabled={!isAuthenticated}
+            >
+              ⇄
+            </button>
+            <button
+              className="icon-button"
+              onClick={handleCreateGroup}
+              title="New Group"
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <div className="sidebar-account">
+          <AccountMenu user={user} onLogin={login} onLogout={logout} />
         </div>
 
         {getTopLevelGroups().map(group => (
@@ -968,6 +991,25 @@ const App: React.FC = () => {
           onClose={() => setContextMenu(null)}
         />
       )}
+
+      {/* Sharing modals */}
+      {shareModalSessionId && (
+        <ShareModal
+          sessionId={shareModalSessionId}
+          sessionName={sessions.find(s => s.id === shareModalSessionId)?.name || 'Session'}
+          isOpen={true}
+          onClose={() => setShareModalSessionId(null)}
+        />
+      )}
+
+      <JoinSessionModal
+        isOpen={joinModalOpen}
+        onClose={() => setJoinModalOpen(false)}
+        onJoined={(code, permission) => {
+          console.log(`Joined session with code ${code}, permission: ${permission}`);
+          // Could show a toast or update UI to indicate joined state
+        }}
+      />
     </div>
   );
 };

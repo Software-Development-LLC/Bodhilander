@@ -120,7 +120,18 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 8px;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.sidebar-account {
   margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #3c3c3c;
 }
 
 .icon-button {
