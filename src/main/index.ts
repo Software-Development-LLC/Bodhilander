@@ -318,6 +318,10 @@ ipcMain.on('pty:resize', (_, id: string, cols: number, rows: number) => {
 });
 
 ipcMain.on('pty:kill', (_, id: string) => {
+  // Stop sharing if this session was being shared
+  shareManager.stopSharing(id).catch(() => {
+    // Ignore errors - session may not have been shared
+  });
   ptyManager.kill(id);
 });
 
@@ -365,6 +369,12 @@ ipcMain.handle('db:sessions:update', async (_, id: string, updates: Partial<Sess
 });
 
 ipcMain.handle('db:sessions:delete', async (_, id: string) => {
+  // Stop sharing if this session was being shared
+  try {
+    await shareManager.stopSharing(id);
+  } catch {
+    // Ignore errors - session may not have been shared
+  }
   sessionsRepo.deleteSession(id);
 });
 
@@ -498,8 +508,16 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', async () => {
   isQuitting = true;
+
+  // Stop all active shares before quitting
+  try {
+    await shareManager.stopAllSharing();
+  } catch (e) {
+    log.error('Error stopping shares on quit:', e);
+  }
+
   trayManager.destroy();
   stateMonitor?.stop();
   closeDatabase();

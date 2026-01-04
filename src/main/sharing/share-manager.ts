@@ -105,6 +105,22 @@ class ShareManager extends EventEmitter {
   }
 
   /**
+   * Stop all active shares (called on app quit)
+   */
+  async stopAllSharing(): Promise<void> {
+    const sessionIds = Array.from(this.activeShares.keys());
+    log.info(`Stopping ${sessionIds.length} active shares...`);
+
+    await Promise.all(sessionIds.map((id) => this.stopSharing(id)));
+
+    // Also leave any joined sessions
+    const codes = Array.from(this.joinedSessions.keys());
+    await Promise.all(codes.map((code) => this.leaveSession(code)));
+
+    log.info('All shares stopped');
+  }
+
+  /**
    * Create a share code for a session
    */
   async createCode(

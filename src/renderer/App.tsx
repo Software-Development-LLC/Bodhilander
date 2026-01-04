@@ -57,6 +57,7 @@ const App: React.FC = () => {
   // Sharing state
   const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
   const { user, isAuthenticated, login, logout } = useSharing();
 
   const GROUP_COLORS = [
@@ -79,6 +80,28 @@ const App: React.FC = () => {
   const homedir = window.electronAPI.homedir;
   const counts = getStateCounts();
   const isLoading = groupsLoading || sessionsLoading;
+
+  // Check sharing status for all sessions
+  useEffect(() => {
+    const checkSharingStatus = async () => {
+      const sharing = new Set<string>();
+      for (const session of sessions) {
+        try {
+          const isSharing = await window.electronAPI.isSharing(session.id);
+          if (isSharing) {
+            sharing.add(session.id);
+          }
+        } catch {
+          // Ignore errors
+        }
+      }
+      setSharingSessions(sharing);
+    };
+
+    if (sessions.length > 0) {
+      checkSharingStatus();
+    }
+  }, [sessions]);
 
   const handleNewSession = useCallback(async (groupId: string) => {
     if (!groupId) {
@@ -747,6 +770,9 @@ const App: React.FC = () => {
                         </span>
                       )}
                     </div>
+                    {sharingSessions.has(session.id) && (
+                      <span className="share-indicator" title="Sharing">⇄</span>
+                    )}
                     <span className={`status-pill ${session.state}`}>{session.state}</span>
                     <button
                       className="session-close"
@@ -905,6 +931,9 @@ const App: React.FC = () => {
                           </span>
                         )}
                       </div>
+                      {sharingSessions.has(session.id) && (
+                        <span className="share-indicator" title="Sharing">⇄</span>
+                      )}
                       <span className={`status-pill ${session.state}`}>{session.state}</span>
                       <button
                         className="session-close"
@@ -936,6 +965,7 @@ const App: React.FC = () => {
             >
               <TerminalHeader
                 session={session}
+                isSharing={sharingSessions.has(session.id)}
                 onRename={(name) => updateSession(session.id, { name })}
                 onRestart={() => updateSession(session.id, { state: 'idle' })}
                 onStop={() => updateSession(session.id, { state: 'stopped' })}
