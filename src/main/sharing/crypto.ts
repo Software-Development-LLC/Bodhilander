@@ -2,9 +2,11 @@ import sodium from 'sodium-native';
 
 // Type augmentation for sodium-native functions not in @types
 const sodiumLib = sodium as typeof sodium & {
-  crypto_box_BEFORENMBYTES: number;
   crypto_box_beforenm: (sharedSecret: Buffer, publicKey: Buffer, secretKey: Buffer) => void;
 };
+
+// crypto_box_BEFORENMBYTES is always 32 for X25519
+const SHARED_SECRET_BYTES = 32;
 
 export interface KeyPair {
   publicKey: Buffer;
@@ -33,7 +35,7 @@ export function deriveSharedSecret(
   ourSecretKey: Buffer,
   theirPublicKey: Buffer,
 ): Buffer {
-  const sharedSecret = Buffer.alloc(sodiumLib.crypto_box_BEFORENMBYTES);
+  const sharedSecret = Buffer.alloc(SHARED_SECRET_BYTES);
   sodiumLib.crypto_box_beforenm(sharedSecret, theirPublicKey, ourSecretKey);
   return sharedSecret;
 }
