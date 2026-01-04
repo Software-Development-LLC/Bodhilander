@@ -11,6 +11,8 @@ import { initAutoUpdater } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { Group, Session } from '../shared/types';
+import { authService } from './sharing/auth';
+import log from 'electron-log';
 
 // Set app name for Windows notifications
 if (process.platform === 'win32') {
@@ -21,6 +23,58 @@ let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
 let stateMonitor: StateMonitor | null = null;
 let isQuitting = false;
+
+// Register deep link protocol
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('claudelander', process.execPath, [
+      path.resolve(process.argv[1]),
+    ]);
+  }
+} else {
+  app.setAsDefaultProtocolClient('claudelander');
+}
+
+// Handle deep link on macOS
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
+});
+
+// Handle deep link on Windows/Linux (second instance)
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (event, commandLine) => {
+    const url = commandLine.find((arg) => arg.startsWith('claudelander://'));
+    if (url) {
+      handleDeepLink(url);
+    }
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+async function handleDeepLink(url: string) {
+  log.info('Received deep link:', url);
+  const parsed = new URL(url);
+
+  if (parsed.hostname === 'auth' || parsed.pathname === '/auth') {
+    const token = parsed.searchParams.get('token');
+    if (token) {
+      try {
+        const user = await authService.handleCallback(token);
+        mainWindow?.webContents.send('auth:changed', { user, token });
+      } catch (e) {
+        log.error('Auth callback failed:', e);
+        mainWindow?.webContents.send('auth:error', { error: (e as Error).message });
+      }
+    }
+  }
+}
 
 // Track sessions by state for tray updates
 const sessionStates: Map<string, { name: string; state: string }> = new Map();
