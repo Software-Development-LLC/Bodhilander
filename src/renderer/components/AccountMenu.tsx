@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ShareUser } from '../../shared/types';
+import { RELAY_URL } from '../../shared/constants';
 import './AccountMenu.css';
 
 interface AccountMenuProps {
@@ -69,7 +70,7 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
               className="dropdown-item upgrade"
               onClick={() => {
                 try {
-                  window.electronAPI.openExternal('https://api.sytanek.tech/billing/checkout');
+                  window.electronAPI.openExternal(`${RELAY_URL}/billing/checkout`);
                 } catch (error) {
                   console.error('Failed to open external URL:', error);
                 }
@@ -84,7 +85,7 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
               className="dropdown-item"
               onClick={() => {
                 try {
-                  window.electronAPI.openExternal('https://api.sytanek.tech/billing/portal');
+                  window.electronAPI.openExternal(`${RELAY_URL}/billing/portal`);
                 } catch (error) {
                   console.error('Failed to open external URL:', error);
                 }
