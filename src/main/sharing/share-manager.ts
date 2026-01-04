@@ -216,6 +216,13 @@ class ShareManager extends EventEmitter {
   }
 
   /**
+   * Get a joined session's relay client
+   */
+  getJoinedClient(code: string): RelayClient | undefined {
+    return this.joinedSessions.get(code);
+  }
+
+  /**
    * Check if a session is being shared
    */
   isSharing(localSessionId: string): boolean {
