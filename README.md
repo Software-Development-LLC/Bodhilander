@@ -39,6 +39,13 @@ Organize sessions into groups by project, client, or workflow. Color-code for qu
 ### **Persistent Sessions**
 Sessions survive app restarts. Your context is preserved.
 
+### **Session Sharing**
+Share live sessions with collaborators using `SYCLX-` codes:
+- **End-to-end encryption** - X25519 + XChaCha20-Poly1305
+- **Permission controls** - Read-only or read-write access
+- **Time-limited codes** - Auto-expire for security
+- **Real-time sync** - See terminal output as it happens
+
 ### **Auto-Update**
 New versions download automatically.
 
@@ -122,7 +129,7 @@ npm run dist:win     # Windows
 | Phase | Status | Features |
 |-------|--------|----------|
 | **1 (MVP)** | Complete | Multi-session management, state detection, groups, persistence, auto-update |
-| **2** | Future | E2E encrypted session sharing (`SYCLX-` codes) |
+| **2** | Complete | E2E encrypted session sharing (`SYCLX-` codes) |
 | **3** | Future | Teams, mobile companion, AI session summaries |
 
 ---
