@@ -14,9 +14,22 @@ export function detectShell(customShellPath?: string): ShellInfo {
     if (fs.existsSync(trimmedPath)) {
       // Determine if it's WSL
       const isWSL = trimmedPath.toLowerCase().includes('wsl');
+      const isWindows = process.platform === 'win32';
+      const isPowerShell = trimmedPath.toLowerCase().includes('powershell');
+
+      let args: string[] = [];
+      if (isWSL) {
+        args = [];
+      } else if (isPowerShell) {
+        args = ['-NoLogo'];
+      } else if (!isWindows) {
+        // Unix shell - use login flag
+        args = ['-l'];
+      }
+
       return {
         shell: trimmedPath,
-        args: isWSL ? [] : (trimmedPath.toLowerCase().includes('powershell') ? ['-NoLogo'] : []),
+        args,
         isWSL,
       };
     }
@@ -70,10 +83,23 @@ function detectWindowsShell(): ShellInfo {
 }
 
 function detectUnixShell(): ShellInfo {
-  const shell = process.env.SHELL || '/bin/bash';
+  const shell = process.env.SHELL || '/bin/zsh';
+
+  // Verify shell exists, fallback to common shells
+  let actualShell = shell;
+  if (!fs.existsSync(shell)) {
+    const fallbacks = ['/bin/zsh', '/bin/bash', '/bin/sh'];
+    for (const fb of fallbacks) {
+      if (fs.existsSync(fb)) {
+        actualShell = fb;
+        break;
+      }
+    }
+  }
+
   return {
-    shell,
-    args: [],
+    shell: actualShell,
+    args: ['-l'], // Login shell to load user's shell config
     isWSL: false,
   };
 }
