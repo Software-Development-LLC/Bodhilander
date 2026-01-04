@@ -34,6 +34,7 @@ export class RelayClient extends EventEmitter {
     this.isHost = true;
 
     // Register session with relay server
+    log.info('Creating share session at:', `${RELAY_URL}/sessions`);
     const response = await fetch(`${RELAY_URL}/sessions`, {
       method: 'POST',
       headers: authService.getHeaders(),
@@ -43,7 +44,9 @@ export class RelayClient extends EventEmitter {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to create share session');
+      const errorText = await response.text();
+      log.error('Failed to create share session:', response.status, errorText);
+      throw new Error(`Failed to create share session: ${response.status} ${errorText}`);
     }
 
     const session = await response.json();

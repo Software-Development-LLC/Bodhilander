@@ -89,7 +89,19 @@ export const ShareModal: React.FC<ShareModalProps> = ({
       await window.electronAPI.startSharing(sessionId);
       setIsSharing(true);
     } catch (e) {
-      setError((e as Error).message);
+      const errMsg = (e as Error).message;
+      // Parse server error messages for cleaner display
+      const jsonMatch = errMsg.match(/\{.*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          setError(parsed.message || errMsg);
+        } catch {
+          setError(errMsg);
+        }
+      } else {
+        setError(errMsg);
+      }
     }
     setLoading(false);
   };
