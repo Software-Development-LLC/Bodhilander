@@ -68,8 +68,14 @@ export interface ElectronAPI {
   onGuestLeft: (callback: (info: { sessionId: string; guestUserId: string }) => void) => () => void;
 
   // Sharing (guest)
-  joinSession: (code: string) => Promise<{ permission: 'read' | 'control' }>;
+  joinSession: (code: string) => Promise<{
+    code: string;
+    permission: 'read' | 'control';
+    hostUsername: string;
+    sessionName: string;
+  }>;
   leaveSession: (code: string) => Promise<void>;
+  writeToRemote: (code: string, data: string) => Promise<{ success: boolean; error?: string }>;
   onShareData: (callback: (data: { code: string; data: string }) => void) => () => void;
   onShareEnded: (callback: (data: { code: string; reason: string }) => void) => () => void;
 
