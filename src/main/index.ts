@@ -470,6 +470,15 @@ ipcMain.handle('share:leave', (_, code: string) => {
   shareManager.leaveSession(code);
 });
 
+ipcMain.handle('share:write', (_, code: string, data: string) => {
+  const client = shareManager.getJoinedClient(code);
+  if (client && client.canSendInput()) {
+    client.send(data);
+    return { success: true };
+  }
+  return { success: false, error: 'Cannot send input' };
+});
+
 // Open external URL
 ipcMain.handle('shell:openExternal', (_, url: string) => {
   shell.openExternal(url);
