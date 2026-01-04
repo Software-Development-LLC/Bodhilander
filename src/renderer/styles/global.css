@@ -711,3 +711,55 @@ body {
   color: #999;
   cursor: not-allowed;
 }
+
+/* Remote Sessions */
+.remote-group {
+  border-left: 3px solid #9333ea;
+}
+
+.remote-color {
+  background: #9333ea !important;
+}
+
+.remote-host-group {
+  margin-left: 8px;
+}
+
+.remote-host-header {
+  font-size: 11px;
+  color: #888;
+  padding: 4px 8px;
+  font-weight: 500;
+}
+
+.remote-empty {
+  padding: 12px;
+  color: #666;
+  font-size: 12px;
+  text-align: center;
+}
+
+.status-pill.read {
+  background: #4a5568;
+}
+
+.status-pill.control {
+  background: #9333ea;
+}
+
+.permission-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+
+.permission-badge.read {
+  background: #4a5568;
+  color: #fff;
+}
+
+.permission-badge.control {
+  background: #9333ea;
+  color: #fff;
+}

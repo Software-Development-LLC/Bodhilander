@@ -4,7 +4,7 @@ import './ShareModal.css'; // Reuse styles
 interface JoinSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onJoined: (code: string, permission: 'read' | 'control') => void;
+  onJoined: (result: { code: string; hostUsername: string; sessionName: string; permission: 'read' | 'control' }) => void;
 }
 
 export const JoinSessionModal: React.FC<JoinSessionModalProps> = ({
@@ -27,7 +27,12 @@ export const JoinSessionModal: React.FC<JoinSessionModalProps> = ({
 
     try {
       const result = await window.electronAPI.joinSession(code.toUpperCase());
-      onJoined(code.toUpperCase(), result.permission);
+      onJoined({
+        code: code.toUpperCase(),
+        hostUsername: result.hostUsername,
+        sessionName: result.sessionName,
+        permission: result.permission,
+      });
       onClose();
     } catch (e) {
       setError((e as Error).message);
@@ -53,7 +58,7 @@ export const JoinSessionModal: React.FC<JoinSessionModalProps> = ({
       <div className="modal-content share-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>Join Shared Session</h2>
-          <button className="close-btn" onClick={onClose}>×</button>
+          <button className="close-btn" onClick={onClose}>x</button>
         </div>
 
         <div className="modal-body">

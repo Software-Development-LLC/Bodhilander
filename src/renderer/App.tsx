@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
+import RemoteTerminal from './components/RemoteTerminal';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { ShareModal } from './components/ShareModal';
 import { JoinSessionModal } from './components/JoinSessionModal';
@@ -11,6 +12,14 @@ import { useSharing } from './store/sharing';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
+
+interface RemoteSession {
+  code: string;
+  hostUsername: string;
+  sessionName: string;
+  permission: 'read' | 'control';
+  connectedAt: string;
+}
 
 const App: React.FC = () => {
   const {
@@ -60,6 +69,10 @@ const App: React.FC = () => {
   const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
   const { user, isAuthenticated, login, logout } = useSharing();
 
+  // Remote sessions state
+  const [remoteSessions, setRemoteSessions] = useState<RemoteSession[]>([]);
+  const [activeRemoteCode, setActiveRemoteCode] = useState<string | null>(null);
+
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
     '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da',
@@ -102,6 +115,17 @@ const App: React.FC = () => {
       checkSharingStatus();
     }
   }, [sessions]);
+
+  // Listen for remote session disconnection
+  useEffect(() => {
+    const cleanup = window.electronAPI.onShareEnded((event) => {
+      setRemoteSessions(prev => prev.filter(rs => rs.code !== event.code));
+      if (activeRemoteCode === event.code) {
+        setActiveRemoteCode(null);
+      }
+    });
+    return cleanup;
+  }, [activeRemoteCode]);
 
   const handleNewSession = useCallback(async (groupId: string) => {
     if (!groupId) {
@@ -953,6 +977,64 @@ const App: React.FC = () => {
             ))}
           </div>
         ))}
+
+        {/* Remote Sessions group - only visible when authenticated */}
+        {isAuthenticated && (
+          <div className="group-container">
+            <div className="group remote-group">
+              <div className="group-header">
+                <span className="group-chevron" style={{ visibility: 'hidden' }}>▼</span>
+                <span className="group-color remote-color" style={{ background: '#9333ea' }} />
+                <span className="group-name">Remote Sessions</span>
+              </div>
+              <div className="group-sessions">
+                {/* Group by host */}
+                {Object.entries(
+                  remoteSessions.reduce((acc, rs) => {
+                    if (!acc[rs.hostUsername]) acc[rs.hostUsername] = [];
+                    acc[rs.hostUsername].push(rs);
+                    return acc;
+                  }, {} as Record<string, RemoteSession[]>)
+                ).map(([hostUsername, hostSessions]) => (
+                  <div key={hostUsername} className="remote-host-group">
+                    <div className="remote-host-header">@ {hostUsername}</div>
+                    {hostSessions.map(rs => (
+                      <div
+                        key={rs.code}
+                        className={`session ${activeRemoteCode === rs.code ? 'active' : ''}`}
+                        onClick={() => {
+                          setActiveRemoteCode(rs.code);
+                          setActiveSessionId(null);
+                        }}
+                      >
+                        <div className="session-info">
+                          <span className="session-name">{rs.sessionName}</span>
+                        </div>
+                        <span className={`permission-badge ${rs.permission}`}>
+                          {rs.permission}
+                        </span>
+                        <button
+                          className="session-close"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            window.electronAPI.leaveSession(rs.code);
+                            setRemoteSessions(prev => prev.filter(r => r.code !== rs.code));
+                            if (activeRemoteCode === rs.code) {
+                              setActiveRemoteCode(null);
+                            }
+                          }}
+                          title="Leave session"
+                        >
+                          x
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </aside>
 
       <main className="main">
@@ -982,7 +1064,44 @@ const App: React.FC = () => {
               />
             </div>
           ))}
-          {sessions.length === 0 && (
+          {/* Remote sessions */}
+          {remoteSessions.map(rs => (
+            <div
+              key={`remote:${rs.code}`}
+              className="terminal-wrapper"
+              style={{ display: activeRemoteCode === rs.code ? 'flex' : 'none' }}
+            >
+              <div className="terminal-header">
+                <div className="terminal-header-left">
+                  <span className="terminal-title">
+                    {rs.sessionName} (from {rs.hostUsername})
+                  </span>
+                  <span className={`permission-badge ${rs.permission}`}>
+                    {rs.permission === 'read' ? 'Read-only' : 'Control'}
+                  </span>
+                </div>
+                <div className="terminal-header-right">
+                  <button
+                    className="header-btn"
+                    onClick={() => {
+                      window.electronAPI.leaveSession(rs.code);
+                      setRemoteSessions(prev => prev.filter(s => s.code !== rs.code));
+                      setActiveRemoteCode(null);
+                    }}
+                    title="Leave session"
+                  >
+                    Leave
+                  </button>
+                </div>
+              </div>
+              <RemoteTerminal
+                code={rs.code}
+                permission={rs.permission}
+                isActive={activeRemoteCode === rs.code}
+              />
+            </div>
+          ))}
+          {sessions.length === 0 && remoteSessions.length === 0 && (
             <div className="no-session">
               <p>No active session</p>
               <button
@@ -1036,9 +1155,17 @@ const App: React.FC = () => {
       <JoinSessionModal
         isOpen={joinModalOpen}
         onClose={() => setJoinModalOpen(false)}
-        onJoined={(code, permission) => {
-          console.log(`Joined session with code ${code}, permission: ${permission}`);
-          // Could show a toast or update UI to indicate joined state
+        onJoined={(result) => {
+          const newRemoteSession: RemoteSession = {
+            code: result.code,
+            hostUsername: result.hostUsername,
+            sessionName: result.sessionName,
+            permission: result.permission,
+            connectedAt: new Date().toISOString(),
+          };
+          setRemoteSessions(prev => [...prev, newRemoteSession]);
+          setActiveRemoteCode(result.code);
+          setActiveSessionId(null);
         }}
       />
     </div>
