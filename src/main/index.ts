@@ -452,7 +452,7 @@ ipcMain.handle('share:getGuestCount', (_, localSessionId: string) => {
 
 // Sharing IPC handlers (guest)
 ipcMain.handle('share:join', async (_, code: string) => {
-  const { permission, relayClient } = await shareManager.joinSession(code);
+  const { permission, hostUsername, sessionName, relayClient } = await shareManager.joinSession(code);
 
   // Forward relay data to renderer
   relayClient.on('data', (data) => {
@@ -463,7 +463,7 @@ ipcMain.handle('share:join', async (_, code: string) => {
     mainWindow?.webContents.send('share:ended', { code });
   });
 
-  return { permission };
+  return { code, permission, hostUsername, sessionName };
 });
 
 ipcMain.handle('share:leave', (_, code: string) => {
