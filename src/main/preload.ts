@@ -93,4 +93,65 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:sessions:update', id, updates),
   deleteDbSession: (id: string): Promise<void> =>
     ipcRenderer.invoke('db:sessions:delete', id),
+
+  // Preferences
+  getPreference: (key: string): Promise<string | null> =>
+    ipcRenderer.invoke('prefs:get', key),
+  setPreference: (key: string, value: string): Promise<void> =>
+    ipcRenderer.invoke('prefs:set', key, value),
+  getAllPreferences: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('prefs:getAll'),
+
+  // Auth
+  login: () => ipcRenderer.invoke('auth:login'),
+  logout: () => ipcRenderer.invoke('auth:logout'),
+  getUser: () => ipcRenderer.invoke('auth:getUser'),
+  setAuthToken: (token: string) => ipcRenderer.invoke('auth:setToken', token),
+  onAuthChanged: (callback: (data: any) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: any) => callback(data);
+    ipcRenderer.on('auth:changed', listener);
+    return () => ipcRenderer.removeListener('auth:changed', listener);
+  },
+  onAuthError: (callback: (data: any) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: any) => callback(data);
+    ipcRenderer.on('auth:error', listener);
+    return () => ipcRenderer.removeListener('auth:error', listener);
+  },
+
+  // Sharing (host)
+  startSharing: (sessionId: string) => ipcRenderer.invoke('share:start', sessionId),
+  stopSharing: (sessionId: string) => ipcRenderer.invoke('share:stop', sessionId),
+  createShareCode: (sessionId: string, options: any) =>
+    ipcRenderer.invoke('share:createCode', sessionId, options),
+  revokeShareCode: (code: string) => ipcRenderer.invoke('share:revokeCode', code),
+  getShareCodes: (sessionId: string) => ipcRenderer.invoke('share:getCodes', sessionId),
+  isSharing: (sessionId: string) => ipcRenderer.invoke('share:isSharing', sessionId),
+  getGuestCount: (sessionId: string) => ipcRenderer.invoke('share:getGuestCount', sessionId),
+  onGuestJoined: (callback: (info: any) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, info: any) => callback(info);
+    ipcRenderer.on('share:guestJoined', listener);
+    return () => ipcRenderer.removeListener('share:guestJoined', listener);
+  },
+  onGuestLeft: (callback: (info: any) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, info: any) => callback(info);
+    ipcRenderer.on('share:guestLeft', listener);
+    return () => ipcRenderer.removeListener('share:guestLeft', listener);
+  },
+
+  // Sharing (guest)
+  joinSession: (code: string) => ipcRenderer.invoke('share:join', code),
+  leaveSession: (code: string) => ipcRenderer.invoke('share:leave', code),
+  onShareData: (callback: (data: any) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: any) => callback(data);
+    ipcRenderer.on('share:data', listener);
+    return () => ipcRenderer.removeListener('share:data', listener);
+  },
+  onShareEnded: (callback: (data: any) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: any) => callback(data);
+    ipcRenderer.on('share:ended', listener);
+    return () => ipcRenderer.removeListener('share:ended', listener);
+  },
+
+  // Shell
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 });

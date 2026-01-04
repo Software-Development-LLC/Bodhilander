@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { getDatabase, closeDatabase } from './database';
@@ -12,6 +12,7 @@ import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { Group, Session } from '../shared/types';
 import { authService } from './sharing/auth';
+import { shareManager } from './sharing/share-manager';
 import log from 'electron-log';
 
 // Set app name for Windows notifications
@@ -390,6 +391,87 @@ ipcMain.handle('prefs:getAll', async () => {
     webglRenderer: prefsRepo.getPreference('webglRenderer') ?? 'true',
   };
   return settings;
+});
+
+// Auth IPC handlers
+ipcMain.handle('auth:login', () => {
+  authService.startLogin();
+});
+
+ipcMain.handle('auth:logout', () => {
+  authService.logout();
+  return { success: true };
+});
+
+ipcMain.handle('auth:getUser', () => {
+  return authService.currentUser;
+});
+
+ipcMain.handle('auth:setToken', async (_, token: string) => {
+  return authService.setToken(token);
+});
+
+// Sharing IPC handlers (host)
+ipcMain.handle('share:start', async (_, localSessionId: string) => {
+  return shareManager.startSharing(localSessionId);
+});
+
+ipcMain.handle('share:stop', async (_, localSessionId: string) => {
+  return shareManager.stopSharing(localSessionId);
+});
+
+ipcMain.handle('share:createCode', async (_, localSessionId: string, options: any) => {
+  return shareManager.createCode(localSessionId, options);
+});
+
+ipcMain.handle('share:revokeCode', async (_, code: string) => {
+  return shareManager.revokeCode(code);
+});
+
+ipcMain.handle('share:getCodes', async (_, localSessionId: string) => {
+  return shareManager.getCodes(localSessionId);
+});
+
+ipcMain.handle('share:isSharing', (_, localSessionId: string) => {
+  return shareManager.isSharing(localSessionId);
+});
+
+ipcMain.handle('share:getGuestCount', (_, localSessionId: string) => {
+  return shareManager.getGuestCount(localSessionId);
+});
+
+// Sharing IPC handlers (guest)
+ipcMain.handle('share:join', async (_, code: string) => {
+  const { permission, relayClient } = await shareManager.joinSession(code);
+
+  // Forward relay data to renderer
+  relayClient.on('data', (data) => {
+    mainWindow?.webContents.send('share:data', { code, data: data.toString() });
+  });
+
+  relayClient.on('disconnected', () => {
+    mainWindow?.webContents.send('share:ended', { code });
+  });
+
+  return { permission };
+});
+
+ipcMain.handle('share:leave', (_, code: string) => {
+  shareManager.leaveSession(code);
+});
+
+// Open external URL
+ipcMain.handle('shell:openExternal', (_, url: string) => {
+  shell.openExternal(url);
+});
+
+// Forward share manager events to renderer
+shareManager.on('guestJoined', (info) => {
+  mainWindow?.webContents.send('share:guestJoined', info);
+});
+
+shareManager.on('guestLeft', (info) => {
+  mainWindow?.webContents.send('share:guestLeft', info);
 });
 
 app.whenReady().then(() => {
