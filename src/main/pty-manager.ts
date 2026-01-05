@@ -256,6 +256,22 @@ class PtyManager extends EventEmitter {
       /\d+\.\s*Yes/i,                     // Numbered Yes option
       /Type something/i,                  // Claude Code "Type something" option
       />\s*\d+\./,                        // Selected numbered option (> 1.)
+      // Conversational questions from Claude asking for feedback/confirmation
+      /does this.{0,50}work for you\?/i,      // "Does this approach work for you?"
+      /does this.{0,50}look right/i,          // "Does this look right?"
+      /does that.{0,50}work/i,                // "Does that work for you?"
+      /does that.{0,50}make sense/i,          // "Does that make sense?"
+      /what do you think\?/i,                 // "What do you think?"
+      /how does this look\?/i,                // "How does this look?"
+      /is this.{0,30}(okay|ok|correct|right)\?/i, // "Is this okay?"
+      /should I.{0,50}\?/i,                   // "Should I proceed?"
+      /shall I.{0,50}\?/i,                    // "Shall I continue?"
+      /let me know.{0,30}(if|when|what)/i,    // "Let me know if..."
+      /any.{0,20}(feedback|thoughts|questions)\?/i, // "Any feedback?"
+      /sound good\?/i,                        // "Sound good?"
+      /ready to.{0,30}\?/i,                   // "Ready to proceed?"
+      /want me to.{0,50}\?/i,                 // "Want me to continue?"
+      /proceed with/i,                        // "Proceed with this approach?"
     ];
 
     let isWaiting = false;
