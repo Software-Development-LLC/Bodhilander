@@ -21,10 +21,13 @@ interface ContextMenuState {
   hasSelection: boolean;
 }
 
+const PASTE_DEBOUNCE_MS = 300;
+
 const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, isActive = false, onStart, onError }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const lastPasteTimeRef = useRef<number>(0);
   const [isRunning, setIsRunning] = useState(!isStopped);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
@@ -53,8 +56,15 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     setContextMenu(prev => ({ ...prev, visible: false }));
   }, []);
 
-  // Paste text into terminal
+  // Paste text into terminal (with debounce)
   const handlePaste = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastPasteTimeRef.current < PASTE_DEBOUNCE_MS) {
+      setContextMenu(prev => ({ ...prev, visible: false }));
+      return;
+    }
+    lastPasteTimeRef.current = now;
+
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
@@ -141,8 +151,14 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         }
         return false;
       }
-      // Ctrl+Shift+V = Paste
+      // Ctrl+Shift+V = Paste (with debounce)
       if (isMod && event.shiftKey && event.key === 'V') {
+        const now = Date.now();
+        if (now - lastPasteTimeRef.current < PASTE_DEBOUNCE_MS) {
+          return false;
+        }
+        lastPasteTimeRef.current = now;
+
         navigator.clipboard.readText().then(text => {
           if (text) {
             window.electronAPI.writeToSession(sessionId, text);
