@@ -143,16 +143,16 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     term.attachCustomKeyEventHandler((event) => {
       const isMod = event.ctrlKey || event.metaKey;
 
-      // Ctrl+Shift+C = Copy
-      if (isMod && event.shiftKey && event.key === 'C') {
+      // Ctrl+Shift+C = Copy (only on keydown)
+      if (isMod && event.shiftKey && event.key === 'C' && event.type === 'keydown') {
         const selection = term.getSelection();
         if (selection) {
           navigator.clipboard.writeText(selection);
         }
         return false;
       }
-      // Ctrl+Shift+V = Paste (with debounce)
-      if (isMod && event.shiftKey && event.key === 'V') {
+      // Ctrl+Shift+V = Paste (only on keydown, with debounce)
+      if (isMod && event.shiftKey && event.key === 'V' && event.type === 'keydown') {
         const now = Date.now();
         if (now - lastPasteTimeRef.current < PASTE_DEBOUNCE_MS) {
           return false;
