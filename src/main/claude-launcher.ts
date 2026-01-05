@@ -21,6 +21,8 @@ export function getClaudeCommand(config: ClaudeLaunchConfig): { command: string;
     CLAUDELANDER_SOCKET: config.socketPath,
     // Point Claude to use our hook
     CLAUDE_HOOKS_DIR: path.dirname(hookScriptPath),
+    // Enable experimental MCP CLI features
+    ENABLE_EXPERIMENTAL_MCP_CLI: 'true',
   };
 
   return {
