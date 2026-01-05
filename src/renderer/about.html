@@ -131,6 +131,21 @@
       cursor: not-allowed;
     }
 
+    .download-btn {
+      background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+      color: #1a1a2e;
+    }
+
+    .download-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(74, 222, 128, 0.4);
+    }
+
+    .download-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     .update-status {
       font-size: 12px;
       margin-top: 8px;
@@ -184,6 +199,7 @@
 
     <div class="button-group">
       <button class="btn update-btn" id="updateBtn" onclick="checkForUpdate()">Check for Updates</button>
+      <button class="btn download-btn" id="downloadBtn" onclick="downloadUpdate()" style="display: none;">Download Update</button>
       <button class="btn close-btn" onclick="window.close()">OK</button>
     </div>
     <div class="update-status" id="updateStatus"></div>
@@ -197,10 +213,12 @@
 
     async function checkForUpdate() {
       const btn = document.getElementById('updateBtn');
+      const downloadBtn = document.getElementById('downloadBtn');
       const status = document.getElementById('updateStatus');
 
       btn.disabled = true;
       btn.textContent = 'Checking...';
+      downloadBtn.style.display = 'none';
       status.className = 'update-status checking';
       status.textContent = 'Checking for updates...';
 
@@ -213,6 +231,7 @@
         } else if (result.updateAvailable) {
           status.className = 'update-status available';
           status.textContent = `Version ${result.version} is available!`;
+          downloadBtn.style.display = 'inline-block';
         } else {
           status.className = 'update-status current';
           status.textContent = 'You are running the latest version';
@@ -224,6 +243,26 @@
 
       btn.disabled = false;
       btn.textContent = 'Check for Updates';
+    }
+
+    async function downloadUpdate() {
+      const downloadBtn = document.getElementById('downloadBtn');
+      const status = document.getElementById('updateStatus');
+
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = 'Downloading...';
+      status.className = 'update-status checking';
+      status.textContent = 'Starting download...';
+
+      try {
+        await window.electronAPI.downloadUpdate();
+        status.textContent = 'Download started - check for notification when complete';
+      } catch (e) {
+        status.className = 'update-status error';
+        status.textContent = 'Failed to start download';
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = 'Download Update';
+      }
     }
   </script>
 </body>

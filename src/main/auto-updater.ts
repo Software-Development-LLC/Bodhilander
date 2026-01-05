@@ -46,6 +46,40 @@ export async function checkForUpdatesManual(): Promise<{ updateAvailable: boolea
   });
 }
 
+// Trigger download (called from About dialog after manual check)
+export function downloadUpdate(): void {
+  if (isDownloading) {
+    log.info('Download already in progress');
+    return;
+  }
+
+  isDownloading = true;
+  log.info('Starting update download from About dialog...');
+
+  if (Notification.isSupported()) {
+    new Notification({
+      title: 'Downloading Update',
+      body: 'ClaudeLander is downloading the update in the background...',
+    }).show();
+  }
+
+  autoUpdater.downloadUpdate().catch((err) => {
+    log.error('Download failed:', err);
+    isDownloading = false;
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Download Failed',
+        message: 'Failed to download update',
+        detail: `Error: ${err.message}\n\nPlease try again later or download manually from GitHub.`,
+        buttons: ['OK'],
+      });
+    }
+  });
+
+  mainWindow?.webContents.send('update:downloading');
+}
+
 // Update available
 autoUpdater.on('update-available', (info: UpdateInfo) => {
   log.info('Update available:', info.version);

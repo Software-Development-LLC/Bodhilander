@@ -7,7 +7,7 @@ import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu, showSettingsWindow } from './menu';
-import { initAutoUpdater, checkForUpdatesManual } from './auto-updater';
+import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { Group, Session } from '../shared/types';
@@ -424,6 +424,11 @@ ipcMain.handle('auth:setToken', async (_, token: string) => {
 // App update check (for About dialog)
 ipcMain.handle('app:check-for-update', async () => {
   return checkForUpdatesManual();
+});
+
+// App update download (for About dialog)
+ipcMain.handle('app:download-update', async () => {
+  downloadUpdate();
 });
 
 // Sharing IPC handlers (host)
