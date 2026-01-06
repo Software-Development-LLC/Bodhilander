@@ -1,4 +1,4 @@
-import { BrowserWindow, app } from 'electron';
+import { BrowserWindow, app, webContents } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getPreference } from './repositories/preferences';
@@ -127,7 +127,7 @@ class SoundManager {
   }
 
   /**
-   * Test play a sound (ignores enabled state)
+   * Test play a sound (ignores enabled state, sends to all windows)
    */
   testSound(event: SoundEvent): void {
     const soundPath = this.getSoundPath(event);
@@ -138,12 +138,15 @@ class SoundManager {
 
     const volume = this.getVolume() / 100;
 
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('sound:play', {
-        path: soundPath,
-        volume,
-      });
-    }
+    // Send to all windows (settings window may be focused)
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('sound:play', {
+          path: soundPath,
+          volume,
+        });
+      }
+    });
   }
 
   /**
