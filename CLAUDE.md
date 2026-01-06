@@ -1,8 +1,20 @@
 # ClaudeLander - Project Notes for Claude
 
+## Branching Strategy
+
+- **`main`** - Production branch. Merging to main triggers a release build.
+- **`develop`** - Staging branch. Accumulate features/fixes here before releasing.
+- **`fix/*` or `feature/*`** - Feature/fix branches. Create PRs targeting `develop`.
+
+**Workflow:**
+1. Create feature branch from `develop`
+2. PR to `develop` for code review
+3. When ready to release, PR from `develop` → `main`
+4. Bump version on `main` and push to trigger release
+
 ## Release Workflow
 
-**IMPORTANT:** When bumping versions for release:
+**IMPORTANT:** When bumping versions for release (on `main` branch):
 
 ```bash
 npm version patch   # or minor/major
