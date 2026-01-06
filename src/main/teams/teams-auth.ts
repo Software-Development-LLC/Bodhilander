@@ -1,4 +1,4 @@
-import { shell } from 'electron';
+import { shell, BrowserWindow } from 'electron';
 import { getPreference, setPreference } from '../repositories/preferences';
 import {
   TEAMS_CLIENT_ID,
@@ -10,6 +10,7 @@ import {
 } from '../../shared/teams-constants';
 import log from 'electron-log';
 import crypto from 'crypto';
+import http from 'http';
 
 interface TeamsTokens {
   accessToken: string;
@@ -26,6 +27,7 @@ class TeamsAuthService {
   private tokens: TeamsTokens | null = null;
   private user: TeamsUser | null = null;
   private codeVerifier: string | null = null;
+  private callbackServer: http.Server | null = null;
 
   get isAuthenticated(): boolean {
     return this.tokens !== null && Date.now() < this.tokens.expiresAt;
@@ -69,12 +71,61 @@ class TeamsAuthService {
   }
 
   /**
-   * Start OAuth flow
+   * Start OAuth flow with localhost callback server
    */
   startLogin(): void {
+    // Close any existing server
+    if (this.callbackServer) {
+      this.callbackServer.close();
+      this.callbackServer = null;
+    }
+
     const { verifier, challenge } = this.generatePKCE();
     this.codeVerifier = verifier;
 
+    // Start temporary HTTP server to catch the callback
+    this.callbackServer = http.createServer(async (req, res) => {
+      const url = new URL(req.url || '', `http://localhost:8374`);
+
+      if (url.pathname === '/auth/teams/callback') {
+        const code = url.searchParams.get('code');
+        const error = url.searchParams.get('error');
+
+        if (error) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body><h1>Authentication Failed</h1><p>You can close this window.</p><script>window.close()</script></body></html>');
+          log.error('Teams OAuth error:', error);
+          this.closeCallbackServer();
+          this.notifyAuthChange({ error, connected: false });
+          return;
+        }
+
+        if (code) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body><h1>Authentication Successful</h1><p>You can close this window and return to ClaudeLander.</p><script>window.close()</script></body></html>');
+
+          try {
+            const user = await this.handleCallback(code);
+            this.notifyAuthChange({ user, connected: true });
+          } catch (e) {
+            log.error('Teams callback handling failed:', e);
+            this.notifyAuthChange({ error: (e as Error).message, connected: false });
+          }
+
+          this.closeCallbackServer();
+          return;
+        }
+      }
+
+      res.writeHead(404);
+      res.end('Not found');
+    });
+
+    this.callbackServer.listen(8374, () => {
+      log.info('Teams OAuth callback server listening on port 8374');
+    });
+
+    // Build auth URL and open browser
     const params = new URLSearchParams({
       client_id: TEAMS_CLIENT_ID,
       response_type: 'code',
@@ -87,6 +138,32 @@ class TeamsAuthService {
 
     const authUrl = `${TEAMS_AUTH_URL}?${params.toString()}`;
     shell.openExternal(authUrl);
+
+    // Auto-close server after 5 minutes (timeout)
+    setTimeout(() => {
+      this.closeCallbackServer();
+    }, 5 * 60 * 1000);
+  }
+
+  /**
+   * Close the callback server
+   */
+  private closeCallbackServer(): void {
+    if (this.callbackServer) {
+      this.callbackServer.close();
+      this.callbackServer = null;
+    }
+  }
+
+  /**
+   * Notify renderer of auth state change
+   */
+  private notifyAuthChange(data: { user?: TeamsUser; error?: string; connected: boolean }): void {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('teams:authChanged', data);
+      }
+    });
   }
 
   /**
