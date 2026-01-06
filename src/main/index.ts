@@ -116,6 +116,7 @@ function updateTrayWithWaitingSessions(): void {
 function handleStateChange(sessionId: string, state: string, sessionName?: string): void {
   // Look up session name from database if not provided
   let name = sessionName;
+  let projectPath = '';
   if (!name) {
     const existing = sessionStates.get(sessionId);
     if (existing?.name && existing.name !== sessionId) {
@@ -126,6 +127,7 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
         const sessions = sessionsRepo.getAllSessions();
         const session = sessions.find(s => s.id === sessionId);
         name = session?.name || `Session`;
+        projectPath = session?.cwd || '';
       } catch {
         name = 'Session';
       }
@@ -156,6 +158,24 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 
   // Play sound notification
   soundManager.handleStateChange(sessionId, state, previousState);
+
+  // Teams notifications
+  if (!projectPath) {
+    try {
+      const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
+      projectPath = session?.cwd || '';
+    } catch {
+      // Ignore - projectPath remains empty
+    }
+  }
+
+  if (state === 'waiting') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'waiting');
+  } else if (state === 'error') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'error');
+  } else if (state === 'idle' && previousState === 'working') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'complete');
+  }
 
   // Update tray
   updateTrayWithWaitingSessions();
