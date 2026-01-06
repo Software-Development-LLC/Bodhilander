@@ -515,6 +515,7 @@ ipcMain.handle('teams:login', () => {
 
 ipcMain.handle('teams:logout', () => {
   teamsAuthService.logout();
+  teamsNotifier.clearCache();
   return { success: true };
 });
 
