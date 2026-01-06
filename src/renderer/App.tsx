@@ -277,6 +277,13 @@ const App: React.FC = () => {
   };
 
   const handleSessionDragStart = (e: React.DragEvent, sessionId: string, groupId: string) => {
+    // Prevent drag initiation from interactive child elements
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'BUTTON' || target.tagName === 'INPUT' || target.tagName === 'SPAN') {
+      e.preventDefault();
+      return;
+    }
+
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', sessionId);
     setDraggedItem({ type: 'session', id: sessionId, groupId });
