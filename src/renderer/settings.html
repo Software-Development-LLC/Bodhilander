@@ -309,17 +309,99 @@
       flex: 1;
       width: auto;
     }
+
+    /* Sidebar Layout */
+    .settings-layout {
+      display: flex;
+      height: 100vh;
+      margin: -24px -40px; /* Offset body padding */
+    }
+
+    .settings-sidebar {
+      width: 180px;
+      background: #252526;
+      border-right: 1px solid #3c3c3c;
+      padding: 16px 0;
+      flex-shrink: 0;
+    }
+
+    .sidebar-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      color: #888;
+      cursor: pointer;
+      font-size: 13px;
+      border-left: 3px solid transparent;
+      transition: all 0.15s ease;
+    }
+
+    .sidebar-item:hover {
+      color: #d4d4d4;
+      background: #2a2a2a;
+    }
+
+    .sidebar-item.active {
+      color: #fff;
+      background: #2a2a2a;
+      border-left-color: #ff8c00;
+    }
+
+    .sidebar-icon {
+      font-size: 16px;
+      width: 20px;
+      text-align: center;
+    }
+
+    .settings-content {
+      flex: 1;
+      padding: 24px 40px;
+      overflow-y: auto;
+    }
+
+    .settings-panel {
+      display: none;
+    }
+
+    .settings-panel.active {
+      display: block;
+    }
   </style>
 </head>
 <body>
-  <div class="settings-container">
-    <div class="header">
-      <h1>Settings <span class="status-indicator" id="saveStatus"></span></h1>
-      <button class="close-btn" onclick="window.close()" title="Close">&times;</button>
+  <div class="settings-layout">
+    <div class="settings-sidebar">
+      <div class="sidebar-item active" data-panel="general">
+        <span class="sidebar-icon">&#9881;</span>
+        <span>General</span>
+      </div>
+      <div class="sidebar-item" data-panel="appearance">
+        <span class="sidebar-icon">&#127912;</span>
+        <span>Appearance</span>
+      </div>
+      <div class="sidebar-item" data-panel="sounds">
+        <span class="sidebar-icon">&#128266;</span>
+        <span>Sounds</span>
+      </div>
+      <div class="sidebar-item" data-panel="integrations">
+        <span class="sidebar-icon">&#128268;</span>
+        <span>Integrations</span>
+      </div>
+      <div class="sidebar-item" data-panel="terminal">
+        <span class="sidebar-icon">&#128187;</span>
+        <span>Terminal</span>
+      </div>
     </div>
+    <div class="settings-content">
+      <div class="settings-container">
+        <div class="header">
+          <h1>Settings <span class="status-indicator" id="saveStatus"></span></h1>
+          <button class="close-btn" onclick="window.close()" title="Close">&times;</button>
+        </div>
 
-    <div class="section">
-      <div class="section-title">Sessions</div>
+        <div class="section">
+          <div class="section-title">Sessions</div>
 
       <div class="setting-row">
         <div class="setting-info">
@@ -574,9 +656,11 @@
       </div>
     </div>
 
-    <div class="footer">
-      <button class="btn btn-secondary" onclick="resetDefaults()">Reset to Defaults</button>
-      <button class="btn btn-primary" onclick="saveAndClose()">Save & Close</button>
+        <div class="footer">
+          <button class="btn btn-secondary" onclick="resetDefaults()">Reset to Defaults</button>
+          <button class="btn btn-primary" onclick="saveAndClose()">Save & Close</button>
+        </div>
+      </div>
     </div>
   </div>
 
