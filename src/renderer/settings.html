@@ -873,6 +873,7 @@
       }
 
       updateShellHint();
+      restoreLastPanel();
     }
 
     async function resetDefaults() {
@@ -960,6 +961,40 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') window.close();
     });
+
+    // Panel switching
+    const sidebarItems = document.querySelectorAll('.sidebar-item');
+    const panels = document.querySelectorAll('.settings-panel');
+
+    sidebarItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const panelId = item.dataset.panel;
+
+        // Update sidebar active state
+        sidebarItems.forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+
+        // Show selected panel
+        panels.forEach(p => p.classList.remove('active'));
+        document.getElementById(`panel-${panelId}`).classList.add('active');
+
+        // Save last selected panel
+        if (window.settingsAPI?.setPreference) {
+          window.settingsAPI.setPreference('settingsLastPanel', panelId);
+        }
+      });
+    });
+
+    // Restore last panel on load
+    async function restoreLastPanel() {
+      if (window.settingsAPI?.getPreference) {
+        const lastPanel = await window.settingsAPI.getPreference('settingsLastPanel');
+        if (lastPanel) {
+          const item = document.querySelector(`[data-panel="${lastPanel}"]`);
+          if (item) item.click();
+        }
+      }
+    }
 
     // Load settings when page loads
     loadSettings();
