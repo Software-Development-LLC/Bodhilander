@@ -14,6 +14,8 @@ import { soundManager, SoundEvent } from './sound-manager';
 import { Group, Session } from '../shared/types';
 import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
+import { teamsAuthService } from './teams/teams-auth';
+import { teamsNotifier } from './teams/teams-notifier';
 import log from 'electron-log';
 
 // Use separate userData directory for development to avoid cache conflicts
@@ -82,6 +84,20 @@ async function handleDeepLink(url: string) {
       }
     }
   }
+
+  // Teams OAuth callback
+  if (parsed.pathname === '/auth/teams' || (parsed.hostname === 'auth' && parsed.pathname.includes('teams'))) {
+    const code = parsed.searchParams.get('code');
+    if (code) {
+      try {
+        const user = await teamsAuthService.handleCallback(code);
+        mainWindow?.webContents.send('teams:authChanged', { user, connected: true });
+      } catch (e) {
+        log.error('Teams auth callback failed:', e);
+        mainWindow?.webContents.send('teams:authChanged', { error: (e as Error).message, connected: false });
+      }
+    }
+  }
 }
 
 // Track sessions by state for tray updates
@@ -100,6 +116,7 @@ function updateTrayWithWaitingSessions(): void {
 function handleStateChange(sessionId: string, state: string, sessionName?: string): void {
   // Look up session name from database if not provided
   let name = sessionName;
+  let projectPath = '';
   if (!name) {
     const existing = sessionStates.get(sessionId);
     if (existing?.name && existing.name !== sessionId) {
@@ -110,6 +127,7 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
         const sessions = sessionsRepo.getAllSessions();
         const session = sessions.find(s => s.id === sessionId);
         name = session?.name || `Session`;
+        projectPath = session?.workingDir || '';
       } catch {
         name = 'Session';
       }
@@ -140,6 +158,24 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 
   // Play sound notification
   soundManager.handleStateChange(sessionId, state, previousState);
+
+  // Teams notifications
+  if (!projectPath) {
+    try {
+      const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
+      projectPath = session?.workingDir || '';
+    } catch {
+      // Ignore - projectPath remains empty
+    }
+  }
+
+  if (state === 'waiting') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'waiting');
+  } else if (state === 'error') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'error');
+  } else if (state === 'idle' && previousState === 'working') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'complete');
+  }
 
   // Update tray
   updateTrayWithWaitingSessions();
@@ -251,6 +287,9 @@ function createWindow(): void {
       showSettingsWindow(mainWindow);
     }
   });
+
+  // Initialize Teams auth service
+  teamsAuthService.initialize();
 
   // PTY data forwarding
   ptyManager.on('data', ({ id, data }) => {
@@ -467,6 +506,28 @@ ipcMain.handle('auth:getUser', () => {
 
 ipcMain.handle('auth:setToken', async (_, token: string) => {
   return authService.setToken(token);
+});
+
+// Teams IPC Handlers
+ipcMain.handle('teams:login', () => {
+  teamsAuthService.startLogin();
+});
+
+ipcMain.handle('teams:logout', () => {
+  teamsAuthService.logout();
+  teamsNotifier.clearCache();
+  return { success: true };
+});
+
+ipcMain.handle('teams:getStatus', () => {
+  return {
+    connected: teamsAuthService.isAuthenticated,
+    user: teamsAuthService.currentUser,
+  };
+});
+
+ipcMain.handle('teams:testNotification', async () => {
+  return teamsNotifier.sendTestNotification();
 });
 
 // App update check (for About dialog)
