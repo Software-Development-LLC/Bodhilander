@@ -840,6 +840,41 @@
       }
     }
 
+    // GitHub auth handling
+    async function loadGithubStatus() {
+      if (!window.settingsAPI?.githubGetUser) return;
+
+      const user = await window.settingsAPI.githubGetUser();
+      const btn = document.getElementById('githubAuthBtn');
+      const status = document.querySelector('#panel-integrations .integration-card:first-child .integration-status');
+
+      if (user) {
+        btn.textContent = 'Sign Out';
+        btn.onclick = githubLogout;
+        status.textContent = user.username;
+        status.classList.add('connected');
+      } else {
+        btn.textContent = 'Sign In';
+        btn.onclick = githubLogin;
+        status.textContent = 'Not connected';
+        status.classList.remove('connected');
+      }
+    }
+
+    async function githubLogin() {
+      await window.settingsAPI.githubLogin();
+    }
+
+    async function githubLogout() {
+      await window.settingsAPI.githubLogout();
+      loadGithubStatus();
+    }
+
+    // Listen for auth changes
+    window.addEventListener('github-auth-changed', () => {
+      loadGithubStatus();
+    });
+
     // Load settings on page load
     async function loadSettings() {
       if (!window.settingsAPI) {
@@ -887,6 +922,7 @@
       }
 
       updateShellHint();
+      loadGithubStatus();
       restoreLastPanel();
     }
 
