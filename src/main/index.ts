@@ -16,6 +16,12 @@ import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
 import log from 'electron-log';
 
+// Use separate userData directory for development to avoid cache conflicts
+if (!app.isPackaged) {
+  const devUserData = path.join(app.getPath('userData'), 'dev');
+  app.setPath('userData', devUserData);
+}
+
 // Set app name for Windows notifications
 if (process.platform === 'win32') {
   app.setAppUserModelId('ClaudeLander');
