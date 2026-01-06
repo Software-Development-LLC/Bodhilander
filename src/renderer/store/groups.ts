@@ -81,25 +81,31 @@ export function useGroups() {
       const group = prev.find(g => g.id === groupId);
       if (!group) return prev;
 
-      // Remove group from current position
-      const filtered = prev.filter(g => g.id !== groupId);
+      // Only get siblings (same parentId) excluding the moved group
+      const siblings = prev
+        .filter(g => g.parentId === group.parentId && g.id !== groupId)
+        .sort((a, b) => a.order - b.order);
 
-      // Insert at new position
-      filtered.splice(newOrder, 0, group);
+      // Insert at new position among siblings only
+      siblings.splice(newOrder, 0, group);
 
-      // Update orders
-      const reordered = filtered.map((g, idx) => ({
+      // Update orders for siblings only
+      const reorderedSiblings = siblings.map((g, idx) => ({
         ...g,
         order: idx,
       }));
 
-      // Persist changes
-      reordered.forEach(g => {
+      // Merge: keep non-siblings unchanged, replace siblings with reordered
+      const nonSiblings = prev.filter(g => g.parentId !== group.parentId);
+      const result = [...nonSiblings, ...reorderedSiblings];
+
+      // Persist only the affected siblings
+      reorderedSiblings.forEach(g => {
         window.electronAPI.updateGroup(g.id, { order: g.order })
           .catch(err => console.error('Failed to update group order:', err));
       });
 
-      return reordered;
+      return result;
     });
   }, []);
 
