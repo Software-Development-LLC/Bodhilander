@@ -19,14 +19,20 @@ class StateMonitor extends EventEmitter {
     this.socketPath = socketPath;
   }
 
+  private isWindowsPipe(): boolean {
+    return this.socketPath.startsWith('\\\\.\\pipe\\');
+  }
+
   start(): void {
-    // Wrap socket cleanup in try-catch
-    try {
-      if (fs.existsSync(this.socketPath)) {
-        fs.unlinkSync(this.socketPath);
+    // Clean up old socket file (not needed for Windows named pipes)
+    if (!this.isWindowsPipe()) {
+      try {
+        if (fs.existsSync(this.socketPath)) {
+          fs.unlinkSync(this.socketPath);
+        }
+      } catch (e) {
+        console.warn('Failed to clean up old socket:', e);
       }
-    } catch (e) {
-      console.warn('Failed to clean up old socket:', e);
     }
 
     this.server = net.createServer((socket) => {
@@ -81,12 +87,15 @@ class StateMonitor extends EventEmitter {
       this.server.close();
       this.server = null;
     }
-    try {
-      if (fs.existsSync(this.socketPath)) {
-        fs.unlinkSync(this.socketPath);
+    // Clean up socket file (not needed for Windows named pipes)
+    if (!this.isWindowsPipe()) {
+      try {
+        if (fs.existsSync(this.socketPath)) {
+          fs.unlinkSync(this.socketPath);
+        }
+      } catch (e) {
+        console.warn('Failed to clean up socket file:', e);
       }
-    } catch (e) {
-      console.warn('Failed to clean up socket file:', e);
     }
   }
 }
