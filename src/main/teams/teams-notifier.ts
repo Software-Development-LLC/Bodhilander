@@ -12,10 +12,10 @@ interface NotificationPayload {
   type: TeamsNotificationType;
 }
 
-const ACTIVITY_TYPES: Record<TeamsNotificationType, string> = {
-  waiting: 'sessionWaiting',
-  error: 'sessionError',
-  complete: 'sessionComplete',
+const NOTIFICATION_ICONS: Record<TeamsNotificationType, string> = {
+  waiting: '⏳',
+  error: '❌',
+  complete: '✅',
 };
 
 const NOTIFICATION_MESSAGES: Record<TeamsNotificationType, string> = {
@@ -25,6 +25,8 @@ const NOTIFICATION_MESSAGES: Record<TeamsNotificationType, string> = {
 };
 
 class TeamsNotifier {
+  private selfChatId: string | null = null;
+
   /**
    * Check if Teams notifications are enabled for a specific type
    */
@@ -37,7 +39,59 @@ class TeamsNotifier {
   }
 
   /**
-   * Send a notification to Teams
+   * Get or create a chat with yourself for notifications
+   */
+  private async getSelfChatId(): Promise<string> {
+    if (this.selfChatId) {
+      return this.selfChatId;
+    }
+
+    const token = await teamsAuthService.getAccessToken();
+
+    // Get user ID first
+    const meResponse = await fetch(`${GRAPH_API_URL}/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!meResponse.ok) {
+      throw new Error('Failed to get user info');
+    }
+
+    const me = await meResponse.json();
+    const userId = me.id;
+
+    // Create a one-on-one chat with yourself
+    const chatResponse = await fetch(`${GRAPH_API_URL}/chats`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        chatType: 'oneOnOne',
+        members: [
+          {
+            '@odata.type': '#microsoft.graph.aadUserConversationMember',
+            roles: ['owner'],
+            'user@odata.bind': `https://graph.microsoft.com/v1.0/users('${userId}')`,
+          },
+        ],
+      }),
+    });
+
+    if (!chatResponse.ok) {
+      const error = await chatResponse.text();
+      log.error('Failed to create self chat:', error);
+      throw new Error('Failed to create notification chat');
+    }
+
+    const chat = await chatResponse.json();
+    this.selfChatId = chat.id;
+    return chat.id;
+  }
+
+  /**
+   * Send a notification as a chat message
    */
   async sendNotification(payload: NotificationPayload): Promise<void> {
     if (!this.isEnabled(payload.type)) {
@@ -46,37 +100,30 @@ class TeamsNotifier {
 
     try {
       const token = await teamsAuthService.getAccessToken();
-      const deepLink = `claudelander://session/${payload.sessionId}`;
+      const chatId = await this.getSelfChatId();
 
-      const response = await fetch(
-        `${GRAPH_API_URL}/me/teamwork/sendActivityNotification`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
+      const icon = NOTIFICATION_ICONS[payload.type];
+      const message = NOTIFICATION_MESSAGES[payload.type];
+
+      const response = await fetch(`${GRAPH_API_URL}/chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          body: {
+            contentType: 'html',
+            content: `<b>${icon} ClaudeLander</b><br/><b>${payload.sessionName}</b> ${message}<br/><i>${payload.projectPath}</i>`,
           },
-          body: JSON.stringify({
-            topic: {
-              source: 'text',
-              value: 'ClaudeLander',
-              webUrl: deepLink,
-            },
-            activityType: ACTIVITY_TYPES[payload.type],
-            previewText: {
-              content: `${payload.sessionName} ${NOTIFICATION_MESSAGES[payload.type]}`,
-            },
-            templateParameters: [
-              { name: 'sessionName', value: payload.sessionName },
-              { name: 'projectPath', value: payload.projectPath },
-            ],
-          }),
-        }
-      );
+        }),
+      });
 
       if (!response.ok) {
         const error = await response.text();
-        log.error('Failed to send Teams notification:', error);
+        log.error('Failed to send Teams message:', error);
+      } else {
+        log.info('Teams notification sent successfully');
       }
     } catch (e) {
       log.error('Teams notification error:', e);
@@ -103,6 +150,13 @@ class TeamsNotifier {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Clear cached chat ID (call on logout)
+   */
+  clearCache(): void {
+    this.selfChatId = null;
   }
 }
 
