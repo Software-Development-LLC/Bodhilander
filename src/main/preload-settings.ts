@@ -38,9 +38,20 @@ contextBridge.exposeInMainWorld('settingsAPI', {
   githubLogout: (): Promise<void> => ipcRenderer.invoke('auth:logout'),
   githubGetUser: (): Promise<{ username: string; avatarUrl: string } | null> =>
     ipcRenderer.invoke('auth:getUser'),
+
+  // Teams auth
+  teamsLogin: (): Promise<void> => ipcRenderer.invoke('teams:login'),
+  teamsLogout: (): Promise<void> => ipcRenderer.invoke('teams:logout'),
+  teamsGetStatus: (): Promise<{ connected: boolean; user: { email: string; displayName: string } | null }> =>
+    ipcRenderer.invoke('teams:getStatus'),
+  teamsTestNotification: (): Promise<boolean> => ipcRenderer.invoke('teams:testNotification'),
 });
 
 // Listen for auth state changes and dispatch to window
 ipcRenderer.on('auth:changed', (_, data) => {
   window.dispatchEvent(new CustomEvent('github-auth-changed', { detail: data }));
+});
+
+ipcRenderer.on('teams:authChanged', (_, data) => {
+  window.dispatchEvent(new CustomEvent('teams-auth-changed', { detail: data }));
 });

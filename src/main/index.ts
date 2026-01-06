@@ -14,6 +14,8 @@ import { soundManager, SoundEvent } from './sound-manager';
 import { Group, Session } from '../shared/types';
 import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
+import { teamsAuthService } from './teams/teams-auth';
+import { teamsNotifier } from './teams/teams-notifier';
 import log from 'electron-log';
 
 // Use separate userData directory for development to avoid cache conflicts
@@ -79,6 +81,20 @@ async function handleDeepLink(url: string) {
       } catch (e) {
         log.error('Auth callback failed:', e);
         mainWindow?.webContents.send('auth:error', { error: (e as Error).message });
+      }
+    }
+  }
+
+  // Teams OAuth callback
+  if (parsed.pathname === '/auth/teams' || (parsed.hostname === 'auth' && parsed.pathname.includes('teams'))) {
+    const code = parsed.searchParams.get('code');
+    if (code) {
+      try {
+        const user = await teamsAuthService.handleCallback(code);
+        mainWindow?.webContents.send('teams:authChanged', { user, connected: true });
+      } catch (e) {
+        log.error('Teams auth callback failed:', e);
+        mainWindow?.webContents.send('teams:authChanged', { error: (e as Error).message, connected: false });
       }
     }
   }
@@ -251,6 +267,9 @@ function createWindow(): void {
       showSettingsWindow(mainWindow);
     }
   });
+
+  // Initialize Teams auth service
+  teamsAuthService.initialize();
 
   // PTY data forwarding
   ptyManager.on('data', ({ id, data }) => {
@@ -467,6 +486,27 @@ ipcMain.handle('auth:getUser', () => {
 
 ipcMain.handle('auth:setToken', async (_, token: string) => {
   return authService.setToken(token);
+});
+
+// Teams IPC Handlers
+ipcMain.handle('teams:login', () => {
+  teamsAuthService.startLogin();
+});
+
+ipcMain.handle('teams:logout', () => {
+  teamsAuthService.logout();
+  return { success: true };
+});
+
+ipcMain.handle('teams:getStatus', () => {
+  return {
+    connected: teamsAuthService.isAuthenticated,
+    user: teamsAuthService.currentUser,
+  };
+});
+
+ipcMain.handle('teams:testNotification', async () => {
+  return teamsNotifier.sendTestNotification();
 });
 
 // App update check (for About dialog)
