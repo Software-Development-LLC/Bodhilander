@@ -639,11 +639,17 @@
       }
     }
 
-    // Test sound function - uses current slider value, not saved preference
+    // Test sound function - uses current UI values, not saved preferences
     async function testSound(event) {
       if (window.settingsAPI?.testSound) {
         const currentVolume = parseInt(document.getElementById('soundVolume').value, 10);
-        await window.settingsAPI.testSound(event, currentVolume);
+        const cap = capitalize(event);
+        const source = document.getElementById(`sound${cap}Source`).value;
+        // Empty string = use default, otherwise use custom path
+        const customPath = source === 'custom'
+          ? document.getElementById(`sound${cap}CustomPath`).value
+          : '';
+        await window.settingsAPI.testSound(event, currentVolume, customPath);
       }
     }
 

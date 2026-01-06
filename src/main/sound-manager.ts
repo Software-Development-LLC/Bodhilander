@@ -130,9 +130,22 @@ class SoundManager {
    * Test play a sound (ignores enabled state, sends to all windows)
    * @param event - The sound event type
    * @param overrideVolume - Optional volume override (0-100), uses saved preference if not provided
+   * @param overridePath - Optional path override, uses saved preference if not provided (empty string = use default)
    */
-  testSound(event: SoundEvent, overrideVolume?: number): void {
-    const soundPath = this.getSoundPath(event);
+  testSound(event: SoundEvent, overrideVolume?: number, overridePath?: string): void {
+    let soundPath: string;
+
+    if (overridePath !== undefined) {
+      // Use override path: empty string means default, otherwise use custom path
+      if (overridePath === '' || !fs.existsSync(overridePath)) {
+        soundPath = this.getDefaultSoundPath(SOUND_CONFIGS[event].defaultFile);
+      } else {
+        soundPath = overridePath;
+      }
+    } else {
+      soundPath = this.getSoundPath(event);
+    }
+
     if (!fs.existsSync(soundPath)) {
       console.warn(`Sound file not found: ${soundPath}`);
       return;
