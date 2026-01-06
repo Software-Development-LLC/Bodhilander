@@ -9,6 +9,7 @@ interface TerminalProps {
   cwd: string;
   launchClaude?: boolean;
   isStopped?: boolean;
+  restartKey?: number;
   isActive?: boolean;
   onStart?: () => void;
   onError?: (error: string) => void;
@@ -23,7 +24,7 @@ interface ContextMenuState {
 
 const PASTE_DEBOUNCE_MS = 300;
 
-const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, isActive = false, onStart, onError }) => {
+const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, onStart, onError }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -32,10 +33,22 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
 
-  // Sync isStopped prop changes to isRunning state (fixes stop/restart buttons)
+  // Sync isStopped prop changes to isRunning state (fixes stop button)
   useEffect(() => {
     setIsRunning(!isStopped);
   }, [isStopped]);
+
+  // Handle restart: cycle isRunning off then on to kill PTY and start fresh
+  useEffect(() => {
+    if (restartKey > 0) {
+      setIsRunning(false);
+      const timer = setTimeout(() => {
+        setError(null);
+        setIsRunning(true);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [restartKey]);
 
   // Listen for focus-terminal event to focus this terminal
   useEffect(() => {

@@ -73,6 +73,9 @@ const App: React.FC = () => {
   const [remoteSessions, setRemoteSessions] = useState<RemoteSession[]>([]);
   const [activeRemoteCode, setActiveRemoteCode] = useState<string | null>(null);
 
+  // Restart keys for each session (increment to trigger restart)
+  const [restartKeys, setRestartKeys] = useState<Record<string, number>>({});
+
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
     '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da',
@@ -1075,7 +1078,7 @@ const App: React.FC = () => {
                 session={session}
                 isSharing={sharingSessions.has(session.id)}
                 onRename={(name) => updateSession(session.id, { name })}
-                onRestart={() => updateSession(session.id, { state: 'idle' })}
+                onRestart={() => setRestartKeys(prev => ({ ...prev, [session.id]: (prev[session.id] || 0) + 1 }))}
                 onStop={() => updateSession(session.id, { state: 'stopped' })}
                 onClose={() => handleRemoveSession(session.id)}
               />
