@@ -25,6 +25,10 @@ publish:
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.png
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   target:
     - target: dmg
       arch:
@@ -34,6 +38,9 @@ mac:
       arch:
         - x64
         - arm64
+
+# Notarization (runs after signing)
+afterSign: scripts/notarize.js
 
 dmg:
   contents:
