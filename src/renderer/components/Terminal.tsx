@@ -145,6 +145,8 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
 
       // Ctrl+Shift+C = Copy (only on keydown)
       if (isMod && event.shiftKey && event.key === 'C' && event.type === 'keydown') {
+        event.preventDefault();
+        event.stopPropagation();
         const selection = term.getSelection();
         if (selection) {
           navigator.clipboard.writeText(selection);
@@ -153,6 +155,8 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       }
       // Ctrl+Shift+V = Paste (only on keydown, with debounce)
       if (isMod && event.shiftKey && event.key === 'V' && event.type === 'keydown') {
+        event.preventDefault();
+        event.stopPropagation();
         const now = Date.now();
         if (now - lastPasteTimeRef.current < PASTE_DEBOUNCE_MS) {
           return false;
