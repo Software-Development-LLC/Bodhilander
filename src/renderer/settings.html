@@ -976,7 +976,8 @@
 
         // Show selected panel
         panels.forEach(p => p.classList.remove('active'));
-        document.getElementById(`panel-${panelId}`).classList.add('active');
+        const panel = document.getElementById(`panel-${panelId}`);
+        if (panel) panel.classList.add('active');
 
         // Save last selected panel
         if (window.settingsAPI?.setPreference) {
