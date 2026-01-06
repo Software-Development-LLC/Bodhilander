@@ -1,6 +1,7 @@
 import { Notification, BrowserWindow, app } from 'electron';
 import * as path from 'path';
 import { getPreference } from './repositories/preferences';
+import { teamsNotifier, TeamsNotificationType } from './teams/teams-notifier';
 
 interface NotificationOptions {
   sessionId: string;
@@ -100,6 +101,23 @@ class NotificationManager {
 
     // In development, use the build icon
     return path.join(__dirname, '../../build/icon.png');
+  }
+
+  /**
+   * Send Teams notification for session event
+   */
+  sendTeamsNotification(
+    sessionId: string,
+    sessionName: string,
+    projectPath: string,
+    type: TeamsNotificationType
+  ): void {
+    teamsNotifier.sendNotification({
+      sessionId,
+      sessionName,
+      projectPath,
+      type,
+    });
   }
 }
 

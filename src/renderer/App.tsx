@@ -73,6 +73,9 @@ const App: React.FC = () => {
   const [remoteSessions, setRemoteSessions] = useState<RemoteSession[]>([]);
   const [activeRemoteCode, setActiveRemoteCode] = useState<string | null>(null);
 
+  // Restart keys for each session (increment to trigger restart)
+  const [restartKeys, setRestartKeys] = useState<Record<string, number>>({});
+
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
     '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da',
@@ -272,13 +275,22 @@ const App: React.FC = () => {
   // Drag and drop handlers
   const handleGroupDragStart = (e: React.DragEvent, groupId: string) => {
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', groupId);
+    e.dataTransfer.setData('text/plain', `group:${groupId}`);
     setDraggedItem({ type: 'group', id: groupId });
   };
 
   const handleSessionDragStart = (e: React.DragEvent, sessionId: string, groupId: string) => {
+    e.stopPropagation(); // Prevent group from capturing this drag
+
+    // Only block drag from buttons and inputs (not spans - session name needs to be draggable)
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'BUTTON' || target.tagName === 'INPUT') {
+      e.preventDefault();
+      return;
+    }
+
     e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', sessionId);
+    e.dataTransfer.setData('text/plain', `session:${sessionId}:${groupId}`);
     setDraggedItem({ type: 'session', id: sessionId, groupId });
   };
 
@@ -289,8 +301,24 @@ const App: React.FC = () => {
 
   const handleGroupDragOver = (e: React.DragEvent, groupId: string) => {
     e.preventDefault();
+    e.stopPropagation(); // Prevent parent group from also handling this
     if (!draggedItem || draggedItem.type !== 'group') return;
-    if (draggedItem.id === groupId) return;
+    if (draggedItem.id === groupId) {
+      setDropTarget(null); // Clear when hovering over self
+      return;
+    }
+
+    // Only allow drop indicator for same hierarchy level (same parentId)
+    const draggedGroup = groups.find(g => g.id === draggedItem.id);
+    const targetGroup = groups.find(g => g.id === groupId);
+    if (!draggedGroup || !targetGroup) {
+      setDropTarget(null);
+      return;
+    }
+    if (draggedGroup.parentId !== targetGroup.parentId) {
+      setDropTarget(null); // Clear when hovering over different hierarchy level
+      return;
+    }
 
     const rect = e.currentTarget.getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
@@ -301,6 +329,7 @@ const App: React.FC = () => {
 
   const handleSessionDragOver = (e: React.DragEvent, sessionId: string, groupId: string) => {
     e.preventDefault();
+    e.stopPropagation();
     if (!draggedItem || draggedItem.type !== 'session') return;
     if (draggedItem.id === sessionId) return;
 
@@ -324,43 +353,78 @@ const App: React.FC = () => {
 
   const handleGroupDrop = (e: React.DragEvent, targetGroupId: string) => {
     e.preventDefault();
-    if (!draggedItem || draggedItem.type !== 'group' || !dropTarget) return;
+    e.stopPropagation(); // Prevent parent group from also handling this
 
-    const targetIndex = groups.findIndex(g => g.id === targetGroupId);
-    let newOrder = dropTarget.position === 'before' ? targetIndex : targetIndex + 1;
+    // Read from dataTransfer (race-condition safe on macOS)
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data.startsWith('group:')) return;
+    const draggedGroupId = data.replace('group:', '');
 
-    // Adjust if moving down
-    const currentIndex = groups.findIndex(g => g.id === draggedItem.id);
+    // Still need dropTarget for position - fallback to 'after' if not set
+    const position = dropTarget?.position || 'after';
+
+    const draggedGroup = groups.find(g => g.id === draggedGroupId);
+    const targetGroup = groups.find(g => g.id === targetGroupId);
+
+    if (!draggedGroup || !targetGroup) return;
+
+    // Only allow reorder within same parent (same hierarchy level)
+    if (draggedGroup.parentId !== targetGroup.parentId) return;
+
+    // Get siblings sorted by order
+    const siblings = groups
+      .filter(g => g.parentId === targetGroup.parentId)
+      .sort((a, b) => a.order - b.order);
+
+    const targetIndex = siblings.findIndex(g => g.id === targetGroupId);
+    let newOrder = position === 'before' ? targetIndex : targetIndex + 1;
+
+    // Adjust if moving down within the list
+    const currentIndex = siblings.findIndex(g => g.id === draggedGroupId);
     if (currentIndex < newOrder) newOrder--;
 
-    reorderGroup(draggedItem.id, newOrder);
+    reorderGroup(draggedGroupId, newOrder);
     handleDragEnd();
   };
 
   const handleSessionDrop = (e: React.DragEvent, targetSessionId: string, targetGroupId: string) => {
     e.preventDefault();
-    if (!draggedItem || draggedItem.type !== 'session' || !dropTarget) return;
+
+    // Read from dataTransfer (race-condition safe on macOS)
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data.startsWith('session:')) return;
+    const parts = data.split(':');
+    const draggedSessionId = parts[1];
+    const sourceGroupId = parts[2];
+
+    // Still need dropTarget for position - fallback to 'after' if not set
+    const position = dropTarget?.position || 'after';
 
     const targetGroupSessions = getSessionsByGroup(targetGroupId).sort((a, b) => a.order - b.order);
     const targetIndex = targetGroupSessions.findIndex(s => s.id === targetSessionId);
-    let newOrder = dropTarget.position === 'before' ? targetIndex : targetIndex + 1;
+    let newOrder = position === 'before' ? targetIndex : targetIndex + 1;
 
     // Adjust if moving within same group and moving down
-    if (draggedItem.groupId === targetGroupId) {
-      const currentIndex = targetGroupSessions.findIndex(s => s.id === draggedItem.id);
+    if (sourceGroupId === targetGroupId) {
+      const currentIndex = targetGroupSessions.findIndex(s => s.id === draggedSessionId);
       if (currentIndex < newOrder) newOrder--;
     }
 
-    reorderSession(draggedItem.id, targetGroupId, newOrder);
+    reorderSession(draggedSessionId, targetGroupId, newOrder);
     handleDragEnd();
   };
 
   const handleGroupAreaDrop = (e: React.DragEvent, targetGroupId: string) => {
     e.preventDefault();
-    if (!draggedItem || draggedItem.type !== 'session') return;
+
+    // Read from dataTransfer (race-condition safe on macOS)
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data.startsWith('session:')) return;
+    const parts = data.split(':');
+    const draggedSessionId = parts[1];
 
     const targetGroupSessions = getSessionsByGroup(targetGroupId);
-    reorderSession(draggedItem.id, targetGroupId, targetGroupSessions.length);
+    reorderSession(draggedSessionId, targetGroupId, targetGroupSessions.length);
     handleDragEnd();
   };
 
@@ -818,11 +882,12 @@ const App: React.FC = () => {
                       )}
                     </div>
                     {sharingSessions.has(session.id) && (
-                      <span className="share-indicator" title="Sharing">⇄</span>
+                      <span className="share-indicator" title="Sharing" draggable={false}>⇄</span>
                     )}
-                    <span className={`status-pill ${session.state}`}>{session.state}</span>
+                    <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
                     <button
                       className="session-close"
+                      draggable={false}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleRemoveSession(session.id);
@@ -841,10 +906,12 @@ const App: React.FC = () => {
             {!group.collapsed && getSubGroups(group.id).map(subGroup => (
               <div
                 key={subGroup.id}
-                className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''}`}
+                className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === subGroup.id ? `drop-${dropTarget.position}` : ''}`}
                 draggable
                 onDragStart={(e) => handleGroupDragStart(e, subGroup.id)}
                 onDragEnd={handleDragEnd}
+                onDragOver={(e) => handleGroupDragOver(e, subGroup.id)}
+                onDrop={(e) => handleGroupDrop(e, subGroup.id)}
               >
                 <div
                   className={`group-header ${focusedItemType === 'group' && focusedItemId === subGroup.id ? 'item-focused' : ''}`}
@@ -1075,7 +1142,7 @@ const App: React.FC = () => {
                 session={session}
                 isSharing={sharingSessions.has(session.id)}
                 onRename={(name) => updateSession(session.id, { name })}
-                onRestart={() => updateSession(session.id, { state: 'idle' })}
+                onRestart={() => setRestartKeys(prev => ({ ...prev, [session.id]: (prev[session.id] || 0) + 1 }))}
                 onStop={() => updateSession(session.id, { state: 'stopped' })}
                 onClose={() => handleRemoveSession(session.id)}
               />
@@ -1084,6 +1151,7 @@ const App: React.FC = () => {
                 cwd={session.workingDir}
                 launchClaude={session.shellType === 'claude'}
                 isStopped={session.state === 'stopped'}
+                restartKey={restartKeys[session.id] || 0}
                 isActive={session.id === activeSessionId}
                 onStart={() => updateSession(session.id, { state: 'idle' })}
                 onError={() => updateSession(session.id, { state: 'error' })}
