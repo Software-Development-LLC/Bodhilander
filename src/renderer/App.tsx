@@ -326,11 +326,23 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!draggedItem || draggedItem.type !== 'group' || !dropTarget) return;
 
-    const targetIndex = groups.findIndex(g => g.id === targetGroupId);
+    const draggedGroup = groups.find(g => g.id === draggedItem.id);
+    const targetGroup = groups.find(g => g.id === targetGroupId);
+    if (!draggedGroup || !targetGroup) return;
+
+    // Only allow reorder within same parent (same hierarchy level)
+    if (draggedGroup.parentId !== targetGroup.parentId) return;
+
+    // Get siblings sorted by order
+    const siblings = groups
+      .filter(g => g.parentId === targetGroup.parentId)
+      .sort((a, b) => a.order - b.order);
+
+    const targetIndex = siblings.findIndex(g => g.id === targetGroupId);
     let newOrder = dropTarget.position === 'before' ? targetIndex : targetIndex + 1;
 
-    // Adjust if moving down
-    const currentIndex = groups.findIndex(g => g.id === draggedItem.id);
+    // Adjust if moving down within the list
+    const currentIndex = siblings.findIndex(g => g.id === draggedItem.id);
     if (currentIndex < newOrder) newOrder--;
 
     reorderGroup(draggedItem.id, newOrder);
