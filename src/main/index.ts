@@ -127,7 +127,7 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
         const sessions = sessionsRepo.getAllSessions();
         const session = sessions.find(s => s.id === sessionId);
         name = session?.name || `Session`;
-        projectPath = session?.cwd || '';
+        projectPath = session?.workingDir || '';
       } catch {
         name = 'Session';
       }
@@ -163,7 +163,7 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
   if (!projectPath) {
     try {
       const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
-      projectPath = session?.cwd || '';
+      projectPath = session?.workingDir || '';
     } catch {
       // Ignore - projectPath remains empty
     }
