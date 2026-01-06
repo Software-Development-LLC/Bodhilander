@@ -1,4 +1,4 @@
-export const TEAMS_CLIENT_ID = 'YOUR_AZURE_APP_CLIENT_ID'; // TODO: Replace after Azure setup
+export const TEAMS_CLIENT_ID = 'b6b2189d-bf85-4127-bc89-6f2855d197a1';
 export const TEAMS_REDIRECT_URI = 'https://claudelander.app/auth/teams/callback';
 export const TEAMS_SCOPES = ['User.Read', 'TeamsActivity.Send'];
 export const TEAMS_AUTH_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
