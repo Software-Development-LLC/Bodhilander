@@ -57,13 +57,17 @@ function showAboutWindow(parentWindow: BrowserWindow): void {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#1a1a1a',
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: aboutPreloadPath,
     },
   });
+
+  // Hide menu bar for About window
+  aboutWindow.setMenuBarVisibility(false);
 
   const version = app.getVersion();
   aboutWindow.loadFile(path.join(__dirname, '../renderer/about.html'), {
