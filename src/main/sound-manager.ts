@@ -1,0 +1,204 @@
+import { BrowserWindow, app, webContents } from 'electron';
+import * as path from 'path';
+import * as fs from 'fs';
+import { getPreference } from './repositories/preferences';
+
+export type SoundEvent = 'waiting' | 'error' | 'start' | 'complete';
+
+interface SoundConfig {
+  enabledKey: string;
+  customPathKey: string;
+  defaultFile: string;
+}
+
+const SOUND_CONFIGS: Record<SoundEvent, SoundConfig> = {
+  waiting: {
+    enabledKey: 'soundWaitingEnabled',
+    customPathKey: 'soundWaitingCustomPath',
+    defaultFile: 'waiting.wav',
+  },
+  error: {
+    enabledKey: 'soundErrorEnabled',
+    customPathKey: 'soundErrorCustomPath',
+    defaultFile: 'error.wav',
+  },
+  start: {
+    enabledKey: 'soundStartEnabled',
+    customPathKey: 'soundStartCustomPath',
+    defaultFile: 'start.wav',
+  },
+  complete: {
+    enabledKey: 'soundCompleteEnabled',
+    customPathKey: 'soundCompleteCustomPath',
+    defaultFile: 'complete.wav',
+  },
+};
+
+class SoundManager {
+  private mainWindow: BrowserWindow | null = null;
+  private lastState: Map<string, string> = new Map();
+
+  setMainWindow(window: BrowserWindow): void {
+    this.mainWindow = window;
+  }
+
+  /**
+   * Get the master volume (0-100)
+   */
+  getVolume(): number {
+    const pref = getPreference('soundVolume');
+    const volume = pref ? parseInt(pref, 10) : 70;
+    return Math.max(0, Math.min(100, volume));
+  }
+
+  /**
+   * Check if a specific sound event is enabled
+   */
+  isEnabled(event: SoundEvent): boolean {
+    const config = SOUND_CONFIGS[event];
+    const pref = getPreference(config.enabledKey);
+    return pref !== 'false'; // Default to true
+  }
+
+  /**
+   * Check if sound notifications are globally enabled
+   */
+  isSoundEnabled(): boolean {
+    const pref = getPreference('notificationSound');
+    return pref !== 'false'; // Default to true
+  }
+
+  /**
+   * Get the sound file path for an event (custom or default)
+   */
+  getSoundPath(event: SoundEvent): string {
+    const config = SOUND_CONFIGS[event];
+
+    // Check for custom path
+    const customPath = getPreference(config.customPathKey);
+    if (customPath && fs.existsSync(customPath)) {
+      return customPath;
+    }
+
+    // Use default bundled sound
+    return this.getDefaultSoundPath(config.defaultFile);
+  }
+
+  /**
+   * Get path to bundled default sound
+   */
+  private getDefaultSoundPath(filename: string): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'sounds', filename);
+    }
+    // Development: use resources folder
+    return path.join(__dirname, '../../resources/sounds', filename);
+  }
+
+  /**
+   * Play a sound for the given event
+   */
+  playSound(event: SoundEvent): void {
+    // Check global sound setting
+    if (!this.isSoundEnabled()) {
+      return;
+    }
+
+    // Check if this specific event is enabled
+    if (!this.isEnabled(event)) {
+      return;
+    }
+
+    const soundPath = this.getSoundPath(event);
+    if (!fs.existsSync(soundPath)) {
+      console.warn(`Sound file not found: ${soundPath}`);
+      return;
+    }
+
+    const volume = this.getVolume() / 100;
+
+    // Send to renderer to play
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('sound:play', {
+        path: soundPath,
+        volume,
+      });
+    }
+  }
+
+  /**
+   * Test play a sound (ignores enabled state, sends to all windows)
+   * @param event - The sound event type
+   * @param overrideVolume - Optional volume override (0-100), uses saved preference if not provided
+   * @param overridePath - Optional path override, uses saved preference if not provided (empty string = use default)
+   */
+  testSound(event: SoundEvent, overrideVolume?: number, overridePath?: string): void {
+    let soundPath: string;
+
+    if (overridePath !== undefined) {
+      // Use override path: empty string means default, otherwise use custom path
+      if (overridePath === '' || !fs.existsSync(overridePath)) {
+        soundPath = this.getDefaultSoundPath(SOUND_CONFIGS[event].defaultFile);
+      } else {
+        soundPath = overridePath;
+      }
+    } else {
+      soundPath = this.getSoundPath(event);
+    }
+
+    if (!fs.existsSync(soundPath)) {
+      console.warn(`Sound file not found: ${soundPath}`);
+      return;
+    }
+
+    // Use override volume if provided, otherwise use saved preference
+    const volumePercent = overrideVolume !== undefined ? overrideVolume : this.getVolume();
+    const volume = Math.max(0, Math.min(100, volumePercent)) / 100;
+
+    // Send to all windows (settings window may be focused)
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('sound:play', {
+          path: soundPath,
+          volume,
+        });
+      }
+    });
+  }
+
+  /**
+   * Handle session state change and play appropriate sound
+   */
+  handleStateChange(sessionId: string, newState: string, previousState?: string): void {
+    const lastKnown = previousState || this.lastState.get(sessionId);
+
+    // Determine which sound to play based on state transition
+    if (newState === 'waiting') {
+      this.playSound('waiting');
+    } else if (newState === 'error') {
+      this.playSound('error');
+    } else if (newState === 'idle' && lastKnown === 'working') {
+      // Task completed (working -> idle)
+      this.playSound('complete');
+    }
+
+    // Update last known state
+    this.lastState.set(sessionId, newState);
+  }
+
+  /**
+   * Play the session start sound
+   */
+  playStartSound(): void {
+    this.playSound('start');
+  }
+
+  /**
+   * Clean up state for a removed session
+   */
+  removeSession(sessionId: string): void {
+    this.lastState.delete(sessionId);
+  }
+}
+
+export const soundManager = new SoundManager();

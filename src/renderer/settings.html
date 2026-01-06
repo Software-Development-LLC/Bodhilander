@@ -256,6 +256,59 @@
     .status-unsaved {
       background: #ff8c00;
     }
+
+    /* Sound notification controls */
+    .sound-control {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sound-select {
+      background: #2d2d2d;
+      border: 1px solid #3c3c3c;
+      color: #d4d4d4;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      min-width: 100px;
+      cursor: pointer;
+    }
+
+    .sound-select:focus {
+      outline: none;
+      border-color: #ff8c00;
+    }
+
+    .btn-small {
+      background: #3c3c3c;
+      border: 1px solid #555;
+      color: #d4d4d4;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-small:hover {
+      background: #4c4c4c;
+    }
+
+    .custom-path-row {
+      padding-top: 0;
+      margin-top: -8px;
+    }
+
+    .custom-path-row .setting-control {
+      display: flex;
+      gap: 8px;
+    }
+
+    .custom-path-row .text-input {
+      flex: 1;
+      width: auto;
+    }
   </style>
 </head>
 <body>
@@ -367,6 +420,131 @@
     </div>
 
     <div class="section">
+      <div class="section-title">Sound Notifications</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">Master Volume</div>
+          <div class="setting-description">Volume level for all notification sounds</div>
+        </div>
+        <div class="setting-control">
+          <div class="range-container">
+            <input type="range" class="range" id="soundVolume" min="0" max="100" step="5" value="70">
+            <span class="range-value" id="soundVolumeValue">70%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">Waiting Sound</div>
+          <div class="setting-description">Session needs your input</div>
+        </div>
+        <div class="setting-control sound-control">
+          <label class="toggle">
+            <input type="checkbox" id="soundWaitingEnabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <select id="soundWaitingSource" class="sound-select">
+            <option value="default">Default</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <button class="btn-small" onclick="testSound('waiting')">Test</button>
+        </div>
+      </div>
+      <div class="setting-row custom-path-row" id="soundWaitingCustomRow" style="display: none;">
+        <div class="setting-info">
+          <div class="setting-label"></div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="text-input" id="soundWaitingCustomPath" placeholder="No file selected" readonly>
+          <button class="btn-small" onclick="selectSoundFile('waiting')">Browse</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">Error Sound</div>
+          <div class="setting-description">Session entered error state</div>
+        </div>
+        <div class="setting-control sound-control">
+          <label class="toggle">
+            <input type="checkbox" id="soundErrorEnabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <select id="soundErrorSource" class="sound-select">
+            <option value="default">Default</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <button class="btn-small" onclick="testSound('error')">Test</button>
+        </div>
+      </div>
+      <div class="setting-row custom-path-row" id="soundErrorCustomRow" style="display: none;">
+        <div class="setting-info">
+          <div class="setting-label"></div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="text-input" id="soundErrorCustomPath" placeholder="No file selected" readonly>
+          <button class="btn-small" onclick="selectSoundFile('error')">Browse</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">Session Start Sound</div>
+          <div class="setting-description">New session created</div>
+        </div>
+        <div class="setting-control sound-control">
+          <label class="toggle">
+            <input type="checkbox" id="soundStartEnabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <select id="soundStartSource" class="sound-select">
+            <option value="default">Default</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <button class="btn-small" onclick="testSound('start')">Test</button>
+        </div>
+      </div>
+      <div class="setting-row custom-path-row" id="soundStartCustomRow" style="display: none;">
+        <div class="setting-info">
+          <div class="setting-label"></div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="text-input" id="soundStartCustomPath" placeholder="No file selected" readonly>
+          <button class="btn-small" onclick="selectSoundFile('start')">Browse</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-label">Complete Sound</div>
+          <div class="setting-description">Session finished task</div>
+        </div>
+        <div class="setting-control sound-control">
+          <label class="toggle">
+            <input type="checkbox" id="soundCompleteEnabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <select id="soundCompleteSource" class="sound-select">
+            <option value="default">Default</option>
+            <option value="custom">Custom...</option>
+          </select>
+          <button class="btn-small" onclick="testSound('complete')">Test</button>
+        </div>
+      </div>
+      <div class="setting-row custom-path-row" id="soundCompleteCustomRow" style="display: none;">
+        <div class="setting-info">
+          <div class="setting-label"></div>
+        </div>
+        <div class="setting-control">
+          <input type="text" class="text-input" id="soundCompleteCustomPath" placeholder="No file selected" readonly>
+          <button class="btn-small" onclick="selectSoundFile('complete')">Browse</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="section-title">Terminal</div>
 
       <div class="setting-row">
@@ -403,6 +581,9 @@
   </div>
 
   <script>
+    // Sound event types
+    const SOUND_EVENTS = ['waiting', 'error', 'start', 'complete'];
+
     // Update range displays
     document.getElementById('splashDuration').addEventListener('input', (e) => {
       document.getElementById('splashDurationValue').textContent = e.target.value + 's';
@@ -414,8 +595,28 @@
       markUnsaved();
     });
 
+    document.getElementById('soundVolume').addEventListener('input', (e) => {
+      document.getElementById('soundVolumeValue').textContent = e.target.value + '%';
+      markUnsaved();
+    });
+
+    // Sound source dropdown handlers
+    SOUND_EVENTS.forEach(event => {
+      const select = document.getElementById(`sound${capitalize(event)}Source`);
+      const customRow = document.getElementById(`sound${capitalize(event)}CustomRow`);
+
+      select.addEventListener('change', (e) => {
+        customRow.style.display = e.target.value === 'custom' ? 'flex' : 'none';
+        markUnsaved();
+      });
+    });
+
+    function capitalize(str) {
+      return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
     // Track changes
-    document.querySelectorAll('input').forEach(input => {
+    document.querySelectorAll('input, select').forEach(input => {
       input.addEventListener('change', markUnsaved);
       input.addEventListener('input', markUnsaved);
     });
@@ -435,6 +636,31 @@
         hint.textContent = 'Examples: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe or C:\\Windows\\System32\\cmd.exe';
       } else {
         hint.textContent = 'Examples: /bin/bash, /bin/zsh, /usr/bin/fish';
+      }
+    }
+
+    // Test sound function - uses current UI values, not saved preferences
+    async function testSound(event) {
+      if (window.settingsAPI?.testSound) {
+        const currentVolume = parseInt(document.getElementById('soundVolume').value, 10);
+        const cap = capitalize(event);
+        const source = document.getElementById(`sound${cap}Source`).value;
+        // Empty string = use default, otherwise use custom path
+        const customPath = source === 'custom'
+          ? document.getElementById(`sound${cap}CustomPath`).value
+          : '';
+        await window.settingsAPI.testSound(event, currentVolume, customPath);
+      }
+    }
+
+    // Select custom sound file
+    async function selectSoundFile(event) {
+      if (!window.settingsAPI?.selectSoundFile) return;
+
+      const path = await window.settingsAPI.selectSoundFile();
+      if (path) {
+        document.getElementById(`sound${capitalize(event)}CustomPath`).value = path;
+        markUnsaved();
       }
     }
 
@@ -460,6 +686,25 @@
         document.getElementById('fontSizeValue').textContent = (settings.fontSize || '14') + 'px';
         document.getElementById('webglRenderer').checked = settings.webglRenderer === 'true';
 
+        // Sound settings
+        document.getElementById('soundVolume').value = settings.soundVolume || '70';
+        document.getElementById('soundVolumeValue').textContent = (settings.soundVolume || '70') + '%';
+
+        // Load each sound event setting
+        SOUND_EVENTS.forEach(event => {
+          const cap = capitalize(event);
+          const enabledKey = `sound${cap}Enabled`;
+          const customPathKey = `sound${cap}CustomPath`;
+
+          document.getElementById(`sound${cap}Enabled`).checked = settings[enabledKey] !== 'false';
+          document.getElementById(`sound${cap}CustomPath`).value = settings[customPathKey] || '';
+
+          // Set dropdown and show/hide custom row
+          const hasCustomPath = settings[customPathKey] && settings[customPathKey].length > 0;
+          document.getElementById(`sound${cap}Source`).value = hasCustomPath ? 'custom' : 'default';
+          document.getElementById(`sound${cap}CustomRow`).style.display = hasCustomPath ? 'flex' : 'none';
+        });
+
         markSaved();
       } catch (err) {
         console.error('Failed to load settings:', err);
@@ -480,6 +725,19 @@
       document.getElementById('fontSize').value = 14;
       document.getElementById('fontSizeValue').textContent = '14px';
       document.getElementById('webglRenderer').checked = true;
+
+      // Sound defaults
+      document.getElementById('soundVolume').value = 70;
+      document.getElementById('soundVolumeValue').textContent = '70%';
+
+      SOUND_EVENTS.forEach(event => {
+        const cap = capitalize(event);
+        document.getElementById(`sound${cap}Enabled`).checked = true;
+        document.getElementById(`sound${cap}Source`).value = 'default';
+        document.getElementById(`sound${cap}CustomPath`).value = '';
+        document.getElementById(`sound${cap}CustomRow`).style.display = 'none';
+      });
+
       markUnsaved();
     }
 
@@ -509,6 +767,24 @@
           document.getElementById('fontSize').value);
         await window.settingsAPI.setPreference('webglRenderer',
           document.getElementById('webglRenderer').checked.toString());
+
+        // Sound settings
+        await window.settingsAPI.setPreference('soundVolume',
+          document.getElementById('soundVolume').value);
+
+        // Save each sound event setting
+        for (const event of SOUND_EVENTS) {
+          const cap = capitalize(event);
+          await window.settingsAPI.setPreference(`sound${cap}Enabled`,
+            document.getElementById(`sound${cap}Enabled`).checked.toString());
+
+          // Only save custom path if custom is selected
+          const source = document.getElementById(`sound${cap}Source`).value;
+          const customPath = source === 'custom'
+            ? document.getElementById(`sound${cap}CustomPath`).value
+            : '';
+          await window.settingsAPI.setPreference(`sound${cap}CustomPath`, customPath);
+        }
 
         markSaved();
         window.close();
