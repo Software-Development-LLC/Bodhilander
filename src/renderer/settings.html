@@ -705,14 +705,14 @@
               <div class="integration-desc">Used for: Session sharing</div>
             </div>
 
-            <!-- Teams card -->
-            <div class="integration-card" id="teamsCard">
+            <!-- Teams card (disabled pending admin approval) -->
+            <div class="integration-card" id="teamsCard" style="opacity: 0.5;">
               <div class="integration-header">
                 <span class="integration-icon">&#9679;</span>
                 <span class="integration-name">Microsoft Teams</span>
-                <button class="btn-small" id="teamsAuthBtn">Sign In</button>
+                <button class="btn-small" id="teamsAuthBtn" disabled style="cursor: not-allowed;">Coming Soon</button>
               </div>
-              <div class="integration-status" id="teamsStatus">Not connected</div>
+              <div class="integration-status" id="teamsStatus">Pending admin approval</div>
               <div class="integration-desc">Used for: Notifications</div>
 
               <div class="integration-options" id="teamsOptions" style="display: none;">
@@ -920,8 +920,11 @@
       loadGithubStatus();
     });
 
-    // Teams auth handling
+    // Teams auth handling (disabled pending admin approval)
     async function loadTeamsStatus() {
+      // Teams integration disabled until admin approves the app
+      return;
+
       if (!window.settingsAPI?.teamsGetStatus) return;
 
       const status = await window.settingsAPI.teamsGetStatus();
