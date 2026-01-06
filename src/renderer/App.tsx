@@ -837,11 +837,12 @@ const App: React.FC = () => {
                       )}
                     </div>
                     {sharingSessions.has(session.id) && (
-                      <span className="share-indicator" title="Sharing">⇄</span>
+                      <span className="share-indicator" title="Sharing" draggable={false}>⇄</span>
                     )}
-                    <span className={`status-pill ${session.state}`}>{session.state}</span>
+                    <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
                     <button
                       className="session-close"
+                      draggable={false}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleRemoveSession(session.id);
