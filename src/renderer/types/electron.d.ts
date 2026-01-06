@@ -81,6 +81,11 @@ export interface ElectronAPI {
 
   // Shell
   openExternal: (url: string) => Promise<void>;
+
+  // Sound notifications
+  testSound: (event: 'waiting' | 'error' | 'start' | 'complete') => Promise<void>;
+  selectSoundFile: () => Promise<string | null>;
+  onSoundPlay: (callback: (data: { path: string; volume: number }) => void) => () => void;
 }
 
 declare global {

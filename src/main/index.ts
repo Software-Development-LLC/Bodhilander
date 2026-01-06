@@ -10,10 +10,17 @@ import { createApplicationMenu, showSettingsWindow } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
+import { soundManager, SoundEvent } from './sound-manager';
 import { Group, Session } from '../shared/types';
 import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
 import log from 'electron-log';
+
+// Use separate userData directory for development to avoid cache conflicts
+if (!app.isPackaged) {
+  const devUserData = path.join(app.getPath('userData'), 'dev');
+  app.setPath('userData', devUserData);
+}
 
 // Set app name for Windows notifications
 if (process.platform === 'win32') {
@@ -109,6 +116,9 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
     }
   }
 
+  // Get previous state for sound manager
+  const previousState = sessionStates.get(sessionId)?.state;
+
   if (state === 'waiting') {
     sessionStates.set(sessionId, { name, state });
 
@@ -127,6 +137,9 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
       sessionStates.set(sessionId, { name, state });
     }
   }
+
+  // Play sound notification
+  soundManager.handleStateChange(sessionId, state, previousState);
 
   // Update tray
   updateTrayWithWaitingSessions();
@@ -228,6 +241,9 @@ function createWindow(): void {
   // Initialize notification manager
   notificationManager.setMainWindow(mainWindow);
 
+  // Initialize sound manager
+  soundManager.setMainWindow(mainWindow);
+
   // Initialize tray manager
   trayManager.initialize(mainWindow);
   trayManager.setShowSettingsHandler(() => {
@@ -307,6 +323,8 @@ function createWindow(): void {
 // IPC Handlers
 ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false) => {
   ptyManager.createSession(id, cwd, launchClaude);
+  // Play session start sound
+  soundManager.playStartSound();
 });
 
 ipcMain.on('pty:write', (_, id: string, data: string) => {
@@ -399,8 +417,38 @@ ipcMain.handle('prefs:getAll', async () => {
     closeToTray: prefsRepo.getPreference('closeToTray') ?? 'true',
     fontSize: prefsRepo.getPreference('fontSize') ?? '14',
     webglRenderer: prefsRepo.getPreference('webglRenderer') ?? 'true',
+    // Sound notification settings
+    soundVolume: prefsRepo.getPreference('soundVolume') ?? '70',
+    soundWaitingEnabled: prefsRepo.getPreference('soundWaitingEnabled') ?? 'true',
+    soundWaitingCustomPath: prefsRepo.getPreference('soundWaitingCustomPath') ?? '',
+    soundErrorEnabled: prefsRepo.getPreference('soundErrorEnabled') ?? 'true',
+    soundErrorCustomPath: prefsRepo.getPreference('soundErrorCustomPath') ?? '',
+    soundStartEnabled: prefsRepo.getPreference('soundStartEnabled') ?? 'true',
+    soundStartCustomPath: prefsRepo.getPreference('soundStartCustomPath') ?? '',
+    soundCompleteEnabled: prefsRepo.getPreference('soundCompleteEnabled') ?? 'true',
+    soundCompleteCustomPath: prefsRepo.getPreference('soundCompleteCustomPath') ?? '',
   };
   return settings;
+});
+
+// Sound IPC Handlers
+ipcMain.handle('sound:test', (_, event: SoundEvent, volume?: number, customPath?: string) => {
+  soundManager.testSound(event, volume, customPath);
+});
+
+ipcMain.handle('sound:selectFile', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    title: 'Select Sound File',
+    filters: [
+      { name: 'Audio Files', extensions: ['wav', 'mp3', 'ogg', 'm4a'] },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0];
 });
 
 // Auth IPC handlers

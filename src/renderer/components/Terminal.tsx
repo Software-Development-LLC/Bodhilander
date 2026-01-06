@@ -44,6 +44,17 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     return () => window.removeEventListener('focus-terminal', handleFocusTerminal);
   }, [isActive]);
 
+  // Scroll to bottom when terminal becomes active (session switch)
+  useEffect(() => {
+    if (isActive && xtermRef.current && fitAddonRef.current) {
+      // Fit first to ensure dimensions are correct, then scroll to bottom
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit();
+        xtermRef.current?.scrollToBottom();
+      });
+    }
+  }, [isActive]);
+
   // Copy text from terminal selection
   const handleCopy = useCallback(() => {
     const term = xtermRef.current;

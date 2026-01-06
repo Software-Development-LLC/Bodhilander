@@ -10,10 +10,12 @@ files:
   - dist/**/*
   - package.json
 
-# Include icon files for tray icon
+# Include icon files for tray icon and sound files
 extraResources:
   - from: build/icon.png
     to: icon.png
+  - from: resources/sounds
+    to: sounds
 
 # Auto-update configuration
 publish:

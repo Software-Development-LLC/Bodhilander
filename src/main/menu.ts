@@ -57,13 +57,17 @@ function showAboutWindow(parentWindow: BrowserWindow): void {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#1a1a1a',
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: aboutPreloadPath,
     },
   });
+
+  // Hide menu bar for About window
+  aboutWindow.setMenuBarVisibility(false);
 
   const version = app.getVersion();
   aboutWindow.loadFile(path.join(__dirname, '../renderer/about.html'), {
@@ -108,36 +112,6 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
       ],
     }] : []),
 
-    // Edit menu (required for copy/paste to work on macOS)
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        ...(isMac ? [
-          { role: 'pasteAndMatchStyle' as const },
-          { role: 'delete' as const },
-          { role: 'selectAll' as const },
-          { type: 'separator' as const },
-          {
-            label: 'Speech',
-            submenu: [
-              { role: 'startSpeaking' as const },
-              { role: 'stopSpeaking' as const },
-            ],
-          },
-        ] : [
-          { role: 'delete' as const },
-          { type: 'separator' as const },
-          { role: 'selectAll' as const },
-        ]),
-      ],
-    },
-
     // Session menu
     {
       label: 'Session',
@@ -177,6 +151,36 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
           },
           { type: 'separator' as const },
           { role: 'quit' as const },
+        ]),
+      ],
+    },
+
+    // Edit menu (required for copy/paste to work on macOS)
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac ? [
+          { role: 'pasteAndMatchStyle' as const },
+          { role: 'delete' as const },
+          { role: 'selectAll' as const },
+          { type: 'separator' as const },
+          {
+            label: 'Speech',
+            submenu: [
+              { role: 'startSpeaking' as const },
+              { role: 'stopSpeaking' as const },
+            ],
+          },
+        ] : [
+          { role: 'delete' as const },
+          { type: 'separator' as const },
+          { role: 'selectAll' as const },
         ]),
       ],
     },

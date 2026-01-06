@@ -90,6 +90,11 @@ exit 0
 }
 
 export function getSocketPath(): string {
+  if (process.platform === 'win32') {
+    // Use Windows named pipes
+    return `\\\\.\\pipe\\claudelander-${process.pid}`;
+  }
+  // Use Unix domain sockets on macOS/Linux
   const tmpDir = os.tmpdir();
   return path.join(tmpDir, `claudelander-${process.pid}.sock`);
 }
