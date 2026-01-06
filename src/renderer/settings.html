@@ -705,14 +705,59 @@
               <div class="integration-desc">Used for: Session sharing</div>
             </div>
 
-            <div class="integration-card">
+            <!-- Teams card -->
+            <div class="integration-card" id="teamsCard">
               <div class="integration-header">
-                <span class="integration-icon">&#128313;</span>
+                <span class="integration-icon">&#128999;</span>
                 <span class="integration-name">Microsoft Teams</span>
-                <button class="btn-small" disabled>Coming Soon</button>
+                <button class="btn-small" id="teamsAuthBtn">Sign In</button>
               </div>
-              <div class="integration-status">Not available yet</div>
+              <div class="integration-status" id="teamsStatus">Not connected</div>
               <div class="integration-desc">Used for: Notifications</div>
+
+              <div class="integration-options" id="teamsOptions" style="display: none;">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-label">Notify on waiting</div>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="teamsNotifyWaiting" checked>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-label">Notify on errors</div>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="teamsNotifyError" checked>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-label">Notify on complete</div>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="teamsNotifyComplete" checked>
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <div class="setting-label">Test notification</div>
+                  </div>
+                  <div class="setting-control">
+                    <button class="btn-small" onclick="testTeamsNotification()">Send Test</button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -875,6 +920,58 @@
       loadGithubStatus();
     });
 
+    // Teams auth handling
+    async function loadTeamsStatus() {
+      if (!window.settingsAPI?.teamsGetStatus) return;
+
+      const status = await window.settingsAPI.teamsGetStatus();
+      const btn = document.getElementById('teamsAuthBtn');
+      const statusEl = document.getElementById('teamsStatus');
+      const options = document.getElementById('teamsOptions');
+
+      if (status.connected && status.user) {
+        btn.textContent = 'Sign Out';
+        btn.onclick = teamsLogout;
+        statusEl.textContent = status.user.email;
+        statusEl.classList.add('connected');
+        options.style.display = 'block';
+
+        // Load toggle states
+        const settings = await window.settingsAPI.getAllSettings();
+        document.getElementById('teamsNotifyWaiting').checked = settings.teamsNotifyWaiting !== 'false';
+        document.getElementById('teamsNotifyError').checked = settings.teamsNotifyError !== 'false';
+        document.getElementById('teamsNotifyComplete').checked = settings.teamsNotifyComplete !== 'false';
+      } else {
+        btn.textContent = 'Sign In';
+        btn.onclick = teamsLogin;
+        statusEl.textContent = 'Not connected';
+        statusEl.classList.remove('connected');
+        options.style.display = 'none';
+      }
+    }
+
+    async function teamsLogin() {
+      await window.settingsAPI.teamsLogin();
+    }
+
+    async function teamsLogout() {
+      await window.settingsAPI.teamsLogout();
+      loadTeamsStatus();
+    }
+
+    async function testTeamsNotification() {
+      const success = await window.settingsAPI.teamsTestNotification();
+      if (success) {
+        alert('Test notification sent! Check your Teams activity feed.');
+      } else {
+        alert('Failed to send test notification.');
+      }
+    }
+
+    window.addEventListener('teams-auth-changed', () => {
+      loadTeamsStatus();
+    });
+
     // Load settings on page load
     async function loadSettings() {
       if (!window.settingsAPI) {
@@ -923,6 +1020,7 @@
 
       updateShellHint();
       loadGithubStatus();
+      loadTeamsStatus();
       restoreLastPanel();
     }
 
@@ -998,6 +1096,14 @@
             : '';
           await window.settingsAPI.setPreference(`sound${cap}CustomPath`, customPath);
         }
+
+        // Teams notification settings
+        await window.settingsAPI.setPreference('teamsNotifyWaiting',
+          document.getElementById('teamsNotifyWaiting').checked.toString());
+        await window.settingsAPI.setPreference('teamsNotifyError',
+          document.getElementById('teamsNotifyError').checked.toString());
+        await window.settingsAPI.setPreference('teamsNotifyComplete',
+          document.getElementById('teamsNotifyComplete').checked.toString());
 
         markSaved();
         window.close();
