@@ -432,8 +432,8 @@ ipcMain.handle('prefs:getAll', async () => {
 });
 
 // Sound IPC Handlers
-ipcMain.handle('sound:test', (_, event: SoundEvent) => {
-  soundManager.testSound(event);
+ipcMain.handle('sound:test', (_, event: SoundEvent, volume?: number) => {
+  soundManager.testSound(event, volume);
 });
 
 ipcMain.handle('sound:selectFile', async () => {

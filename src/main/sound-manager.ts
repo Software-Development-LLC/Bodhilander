@@ -128,15 +128,19 @@ class SoundManager {
 
   /**
    * Test play a sound (ignores enabled state, sends to all windows)
+   * @param event - The sound event type
+   * @param overrideVolume - Optional volume override (0-100), uses saved preference if not provided
    */
-  testSound(event: SoundEvent): void {
+  testSound(event: SoundEvent, overrideVolume?: number): void {
     const soundPath = this.getSoundPath(event);
     if (!fs.existsSync(soundPath)) {
       console.warn(`Sound file not found: ${soundPath}`);
       return;
     }
 
-    const volume = this.getVolume() / 100;
+    // Use override volume if provided, otherwise use saved preference
+    const volumePercent = overrideVolume !== undefined ? overrideVolume : this.getVolume();
+    const volume = Math.max(0, Math.min(100, volumePercent)) / 100;
 
     // Send to all windows (settings window may be focused)
     BrowserWindow.getAllWindows().forEach((win) => {

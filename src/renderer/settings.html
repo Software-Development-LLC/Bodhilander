@@ -639,10 +639,11 @@
       }
     }
 
-    // Test sound function
+    // Test sound function - uses current slider value, not saved preference
     async function testSound(event) {
       if (window.settingsAPI?.testSound) {
-        await window.settingsAPI.testSound(event);
+        const currentVolume = parseInt(document.getElementById('soundVolume').value, 10);
+        await window.settingsAPI.testSound(event, currentVolume);
       }
     }
 

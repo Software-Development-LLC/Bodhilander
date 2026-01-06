@@ -24,8 +24,8 @@ contextBridge.exposeInMainWorld('settingsAPI', {
     ipcRenderer.invoke('prefs:getAll'),
 
   // Sound notifications
-  testSound: (event: 'waiting' | 'error' | 'start' | 'complete'): Promise<void> =>
-    ipcRenderer.invoke('sound:test', event),
+  testSound: (event: 'waiting' | 'error' | 'start' | 'complete', volume?: number): Promise<void> =>
+    ipcRenderer.invoke('sound:test', event, volume),
 
   selectSoundFile: (): Promise<string | null> =>
     ipcRenderer.invoke('sound:selectFile'),
