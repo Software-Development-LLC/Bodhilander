@@ -156,4 +156,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+
+  // Sound notifications
+  testSound: (event: 'waiting' | 'error' | 'start' | 'complete') =>
+    ipcRenderer.invoke('sound:test', event),
+  selectSoundFile: (): Promise<string | null> =>
+    ipcRenderer.invoke('sound:selectFile'),
+  onSoundPlay: (callback: (data: { path: string; volume: number }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { path: string; volume: number }) => callback(data);
+    ipcRenderer.on('sound:play', listener);
+    return () => ipcRenderer.removeListener('sound:play', listener);
+  },
 });
