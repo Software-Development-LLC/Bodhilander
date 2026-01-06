@@ -32,6 +32,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
 
+  // Sync isStopped prop changes to isRunning state (fixes stop/restart buttons)
+  useEffect(() => {
+    setIsRunning(!isStopped);
+  }, [isStopped]);
+
   // Listen for focus-terminal event to focus this terminal
   useEffect(() => {
     const handleFocusTerminal = () => {
