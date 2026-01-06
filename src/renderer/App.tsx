@@ -1087,6 +1087,7 @@ const App: React.FC = () => {
                 cwd={session.workingDir}
                 launchClaude={session.shellType === 'claude'}
                 isStopped={session.state === 'stopped'}
+                restartKey={restartKeys[session.id] || 0}
                 isActive={session.id === activeSessionId}
                 onStart={() => updateSession(session.id, { state: 'idle' })}
                 onError={() => updateSession(session.id, { state: 'error' })}
