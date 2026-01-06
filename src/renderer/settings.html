@@ -367,6 +367,52 @@
     .settings-panel.active {
       display: block;
     }
+
+    /* Integration cards */
+    .integration-card {
+      background: #2d2d2d;
+      border: 1px solid #3c3c3c;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+
+    .integration-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .integration-icon {
+      font-size: 20px;
+    }
+
+    .integration-name {
+      font-size: 14px;
+      font-weight: 500;
+      flex: 1;
+    }
+
+    .integration-status {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    .integration-desc {
+      font-size: 11px;
+      color: #666;
+    }
+
+    .btn-small:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-small:disabled:hover {
+      background: #3c3c3c;
+    }
   </style>
 </head>
 <body>
@@ -400,261 +446,293 @@
           <button class="close-btn" onclick="window.close()" title="Close">&times;</button>
         </div>
 
-        <div class="section">
-          <div class="section-title">Sessions</div>
+        <!-- General Panel -->
+        <div id="panel-general" class="settings-panel active">
+          <div class="section">
+            <div class="section-title">Sessions</div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Auto-launch Claude</div>
+                <div class="setting-description">Automatically start Claude when creating new sessions</div>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="autoLaunchClaude" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Custom Shell Path</div>
+                <div class="setting-description">Full path to shell executable (leave empty for auto-detect)</div>
+                <div class="hint" id="shellHint"></div>
+              </div>
+              <div class="setting-control">
+                <input type="text" class="text-input" id="customShellPath" placeholder="Auto-detect">
+              </div>
+            </div>
+          </div>
 
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Auto-launch Claude</div>
-          <div class="setting-description">Automatically start Claude when creating new sessions</div>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="autoLaunchClaude" checked>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Custom Shell Path</div>
-          <div class="setting-description">Full path to shell executable (leave empty for auto-detect)</div>
-          <div class="hint" id="shellHint"></div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="text-input" id="customShellPath" placeholder="Auto-detect">
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Appearance</div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Show Splash Screen</div>
-          <div class="setting-description">Display splash screen on startup</div>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="showSplash" checked>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Splash Duration</div>
-          <div class="setting-description">How long to show the splash screen</div>
-        </div>
-        <div class="setting-control">
-          <div class="range-container">
-            <input type="range" class="range" id="splashDuration" min="1" max="5" step="0.5" value="2.5">
-            <span class="range-value" id="splashDurationValue">2.5s</span>
+          <div class="section">
+            <div class="section-title">System</div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Close to Tray</div>
+                <div class="setting-description">Minimize to system tray instead of quitting when closing window</div>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="closeToTray" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <div class="section">
-      <div class="section-title">Notifications & System Tray</div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Enable Notifications</div>
-          <div class="setting-description">Show system notifications when sessions need attention</div>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="enableNotifications" checked>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Notification Sound</div>
-          <div class="setting-description">Play sound with notifications</div>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="notificationSound" checked>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Close to Tray</div>
-          <div class="setting-description">Minimize to system tray instead of quitting when closing window</div>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="closeToTray" checked>
-            <span class="toggle-slider"></span>
-          </label>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Sound Notifications</div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Master Volume</div>
-          <div class="setting-description">Volume level for all notification sounds</div>
-        </div>
-        <div class="setting-control">
-          <div class="range-container">
-            <input type="range" class="range" id="soundVolume" min="0" max="100" step="5" value="70">
-            <span class="range-value" id="soundVolumeValue">70%</span>
+        <!-- Appearance Panel -->
+        <div id="panel-appearance" class="settings-panel">
+          <div class="section">
+            <div class="section-title">Splash Screen</div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Show Splash Screen</div>
+                <div class="setting-description">Display splash screen on startup</div>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="showSplash" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Splash Duration</div>
+                <div class="setting-description">How long to show the splash screen</div>
+              </div>
+              <div class="setting-control">
+                <div class="range-container">
+                  <input type="range" class="range" id="splashDuration" min="1" max="5" step="0.5" value="2.5">
+                  <span class="range-value" id="splashDurationValue">2.5s</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Waiting Sound</div>
-          <div class="setting-description">Session needs your input</div>
-        </div>
-        <div class="setting-control sound-control">
-          <label class="toggle">
-            <input type="checkbox" id="soundWaitingEnabled" checked>
-            <span class="toggle-slider"></span>
-          </label>
-          <select id="soundWaitingSource" class="sound-select">
-            <option value="default">Default</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <button class="btn-small" onclick="testSound('waiting')">Test</button>
-        </div>
-      </div>
-      <div class="setting-row custom-path-row" id="soundWaitingCustomRow" style="display: none;">
-        <div class="setting-info">
-          <div class="setting-label"></div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="text-input" id="soundWaitingCustomPath" placeholder="No file selected" readonly>
-          <button class="btn-small" onclick="selectSoundFile('waiting')">Browse</button>
-        </div>
-      </div>
+        <!-- Sounds Panel -->
+        <div id="panel-sounds" class="settings-panel">
+          <div class="section">
+            <div class="section-title">Desktop Notifications</div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Enable Notifications</div>
+                <div class="setting-description">Show system notifications when sessions need attention</div>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="enableNotifications" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Notification Sound</div>
+                <div class="setting-description">Play sound with notifications</div>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="notificationSound" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
 
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Error Sound</div>
-          <div class="setting-description">Session entered error state</div>
-        </div>
-        <div class="setting-control sound-control">
-          <label class="toggle">
-            <input type="checkbox" id="soundErrorEnabled" checked>
-            <span class="toggle-slider"></span>
-          </label>
-          <select id="soundErrorSource" class="sound-select">
-            <option value="default">Default</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <button class="btn-small" onclick="testSound('error')">Test</button>
-        </div>
-      </div>
-      <div class="setting-row custom-path-row" id="soundErrorCustomRow" style="display: none;">
-        <div class="setting-info">
-          <div class="setting-label"></div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="text-input" id="soundErrorCustomPath" placeholder="No file selected" readonly>
-          <button class="btn-small" onclick="selectSoundFile('error')">Browse</button>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Session Start Sound</div>
-          <div class="setting-description">New session created</div>
-        </div>
-        <div class="setting-control sound-control">
-          <label class="toggle">
-            <input type="checkbox" id="soundStartEnabled" checked>
-            <span class="toggle-slider"></span>
-          </label>
-          <select id="soundStartSource" class="sound-select">
-            <option value="default">Default</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <button class="btn-small" onclick="testSound('start')">Test</button>
-        </div>
-      </div>
-      <div class="setting-row custom-path-row" id="soundStartCustomRow" style="display: none;">
-        <div class="setting-info">
-          <div class="setting-label"></div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="text-input" id="soundStartCustomPath" placeholder="No file selected" readonly>
-          <button class="btn-small" onclick="selectSoundFile('start')">Browse</button>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Complete Sound</div>
-          <div class="setting-description">Session finished task</div>
-        </div>
-        <div class="setting-control sound-control">
-          <label class="toggle">
-            <input type="checkbox" id="soundCompleteEnabled" checked>
-            <span class="toggle-slider"></span>
-          </label>
-          <select id="soundCompleteSource" class="sound-select">
-            <option value="default">Default</option>
-            <option value="custom">Custom...</option>
-          </select>
-          <button class="btn-small" onclick="testSound('complete')">Test</button>
-        </div>
-      </div>
-      <div class="setting-row custom-path-row" id="soundCompleteCustomRow" style="display: none;">
-        <div class="setting-info">
-          <div class="setting-label"></div>
-        </div>
-        <div class="setting-control">
-          <input type="text" class="text-input" id="soundCompleteCustomPath" placeholder="No file selected" readonly>
-          <button class="btn-small" onclick="selectSoundFile('complete')">Browse</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Terminal</div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Font Size</div>
-          <div class="setting-description">Terminal text size</div>
-        </div>
-        <div class="setting-control">
-          <div class="range-container">
-            <input type="range" class="range" id="fontSize" min="10" max="24" step="1" value="14">
-            <span class="range-value" id="fontSizeValue">14px</span>
+          <div class="section">
+            <div class="section-title">Sound Notifications</div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Master Volume</div>
+                <div class="setting-description">Volume level for all notification sounds</div>
+              </div>
+              <div class="setting-control">
+                <div class="range-container">
+                  <input type="range" class="range" id="soundVolume" min="0" max="100" step="5" value="70">
+                  <span class="range-value" id="soundVolumeValue">70%</span>
+                </div>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Waiting Sound</div>
+                <div class="setting-description">Session needs your input</div>
+              </div>
+              <div class="setting-control sound-control">
+                <label class="toggle">
+                  <input type="checkbox" id="soundWaitingEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <select id="soundWaitingSource" class="sound-select">
+                  <option value="default">Default</option>
+                  <option value="custom">Custom...</option>
+                </select>
+                <button class="btn-small" onclick="testSound('waiting')">Test</button>
+              </div>
+            </div>
+            <div class="setting-row custom-path-row" id="soundWaitingCustomRow" style="display: none;">
+              <div class="setting-info">
+                <div class="setting-label"></div>
+              </div>
+              <div class="setting-control">
+                <input type="text" class="text-input" id="soundWaitingCustomPath" placeholder="No file selected" readonly>
+                <button class="btn-small" onclick="selectSoundFile('waiting')">Browse</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Error Sound</div>
+                <div class="setting-description">Session entered error state</div>
+              </div>
+              <div class="setting-control sound-control">
+                <label class="toggle">
+                  <input type="checkbox" id="soundErrorEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <select id="soundErrorSource" class="sound-select">
+                  <option value="default">Default</option>
+                  <option value="custom">Custom...</option>
+                </select>
+                <button class="btn-small" onclick="testSound('error')">Test</button>
+              </div>
+            </div>
+            <div class="setting-row custom-path-row" id="soundErrorCustomRow" style="display: none;">
+              <div class="setting-info">
+                <div class="setting-label"></div>
+              </div>
+              <div class="setting-control">
+                <input type="text" class="text-input" id="soundErrorCustomPath" placeholder="No file selected" readonly>
+                <button class="btn-small" onclick="selectSoundFile('error')">Browse</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Session Start Sound</div>
+                <div class="setting-description">New session created</div>
+              </div>
+              <div class="setting-control sound-control">
+                <label class="toggle">
+                  <input type="checkbox" id="soundStartEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <select id="soundStartSource" class="sound-select">
+                  <option value="default">Default</option>
+                  <option value="custom">Custom...</option>
+                </select>
+                <button class="btn-small" onclick="testSound('start')">Test</button>
+              </div>
+            </div>
+            <div class="setting-row custom-path-row" id="soundStartCustomRow" style="display: none;">
+              <div class="setting-info">
+                <div class="setting-label"></div>
+              </div>
+              <div class="setting-control">
+                <input type="text" class="text-input" id="soundStartCustomPath" placeholder="No file selected" readonly>
+                <button class="btn-small" onclick="selectSoundFile('start')">Browse</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Complete Sound</div>
+                <div class="setting-description">Session finished task</div>
+              </div>
+              <div class="setting-control sound-control">
+                <label class="toggle">
+                  <input type="checkbox" id="soundCompleteEnabled" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <select id="soundCompleteSource" class="sound-select">
+                  <option value="default">Default</option>
+                  <option value="custom">Custom...</option>
+                </select>
+                <button class="btn-small" onclick="testSound('complete')">Test</button>
+              </div>
+            </div>
+            <div class="setting-row custom-path-row" id="soundCompleteCustomRow" style="display: none;">
+              <div class="setting-info">
+                <div class="setting-label"></div>
+              </div>
+              <div class="setting-control">
+                <input type="text" class="text-input" id="soundCompleteCustomPath" placeholder="No file selected" readonly>
+                <button class="btn-small" onclick="selectSoundFile('complete')">Browse</button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="setting-row">
-        <div class="setting-info">
-          <div class="setting-label">Enable WebGL Rendering</div>
-          <div class="setting-description">Use GPU acceleration for terminal (recommended)</div>
+        <!-- Integrations Panel -->
+        <div id="panel-integrations" class="settings-panel">
+          <div class="section">
+            <div class="section-title">Connected Services</div>
+            <p style="color: #888; font-size: 13px; padding: 12px 0;">
+              Connect external services to receive notifications and share sessions.
+            </p>
+
+            <div class="integration-card">
+              <div class="integration-header">
+                <span class="integration-icon">&#11035;</span>
+                <span class="integration-name">GitHub</span>
+                <button class="btn-small" id="githubAuthBtn">Sign In</button>
+              </div>
+              <div class="integration-status">Not connected</div>
+              <div class="integration-desc">Used for: Session sharing</div>
+            </div>
+
+            <div class="integration-card">
+              <div class="integration-header">
+                <span class="integration-icon">&#128313;</span>
+                <span class="integration-name">Microsoft Teams</span>
+                <button class="btn-small" disabled>Coming Soon</button>
+              </div>
+              <div class="integration-status">Not available yet</div>
+              <div class="integration-desc">Used for: Notifications</div>
+            </div>
+          </div>
         </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="webglRenderer" checked>
-            <span class="toggle-slider"></span>
-          </label>
+
+        <!-- Terminal Panel -->
+        <div id="panel-terminal" class="settings-panel">
+          <div class="section">
+            <div class="section-title">Display</div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Font Size</div>
+                <div class="setting-description">Terminal text size</div>
+              </div>
+              <div class="setting-control">
+                <div class="range-container">
+                  <input type="range" class="range" id="fontSize" min="10" max="24" step="1" value="14">
+                  <span class="range-value" id="fontSizeValue">14px</span>
+                </div>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div class="setting-info">
+                <div class="setting-label">Enable WebGL Rendering</div>
+                <div class="setting-description">Use GPU acceleration for terminal (recommended)</div>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="webglRenderer" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
 
         <div class="footer">
           <button class="btn btn-secondary" onclick="resetDefaults()">Reset to Defaults</button>
