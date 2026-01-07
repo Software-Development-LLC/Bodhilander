@@ -412,7 +412,7 @@ ipcMain.handle('db:groups:delete', async (_, id: string) => {
 ipcMain.handle('dialog:selectDirectory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
+    properties: ['openDirectory', 'showHiddenFiles'],
     title: 'Select Working Directory',
   });
   if (result.canceled || result.filePaths.length === 0) {
