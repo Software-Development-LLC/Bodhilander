@@ -40,3 +40,6 @@ yarn-error.log*
 *.sqlite
 *.sqlite3
 *.db
+.test-data/
+.screenshot_coms/
+.claude/settings.local.json

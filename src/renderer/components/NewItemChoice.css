@@ -1,0 +1,35 @@
+.new-item-choice {
+  position: fixed;
+  background: #2d2d2d;
+  border: 1px solid #454545;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  min-width: 140px;
+  z-index: 1000;
+}
+
+.new-item-choice button {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #d4d4d4;
+  font-size: 13px;
+  padding: 8px 12px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-item-choice button:hover {
+  background: #094771;
+}
+
+.new-item-choice .choice-icon {
+  color: #888;
+  font-size: 12px;
+  width: 16px;
+  text-align: center;
+}

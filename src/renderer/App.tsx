@@ -5,7 +5,8 @@ import RemoteTerminal from './components/RemoteTerminal';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { ShareModal } from './components/ShareModal';
 import { JoinSessionModal } from './components/JoinSessionModal';
-import { AccountMenu } from './components/AccountMenu';
+import { NamePromptModal } from './components/NamePromptModal';
+import { NewItemChoice } from './components/NewItemChoice';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -67,7 +68,7 @@ const App: React.FC = () => {
   const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
-  const { user, isAuthenticated, login, logout } = useSharing();
+  const { user, isAuthenticated } = useSharing();
 
   // Remote sessions state
   const [remoteSessions, setRemoteSessions] = useState<RemoteSession[]>([]);
@@ -75,6 +76,14 @@ const App: React.FC = () => {
 
   // Restart keys for each session (increment to trigger restart)
   const [restartKeys, setRestartKeys] = useState<Record<string, number>>({});
+
+  // Name prompt state
+  const [sessionPrompt, setSessionPrompt] = useState<{ groupId: string; defaultName: string } | null>(null);
+  const [groupPrompt, setGroupPrompt] = useState<{ defaultName: string } | null>(null);
+  const [subGroupPrompt, setSubGroupPrompt] = useState<{ parentId: string; defaultName: string } | null>(null);
+
+  // New item choice menu state (for + button on groups)
+  const [newItemChoice, setNewItemChoice] = useState<{ x: number; y: number; groupId: string } | null>(null);
 
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
@@ -130,18 +139,33 @@ const App: React.FC = () => {
     return cleanup;
   }, [activeRemoteCode]);
 
-  const handleNewSession = useCallback(async (groupId: string) => {
+  // Show prompt for new session name
+  const handleNewSession = useCallback((groupId: string) => {
     if (!groupId) {
       console.error('Cannot create session: no group available');
       return;
     }
-    const cwd = getEffectiveWorkingDir(groupId) || homedir;
     const count = getSessionsByGroup(groupId).length + 1;
-    await createSession(groupId, `Session ${count}`, cwd, true); // launchClaude = true
-  }, [getEffectiveWorkingDir, getSessionsByGroup, createSession, homedir]);
+    setSessionPrompt({ groupId, defaultName: `Session ${count}` });
+  }, [getSessionsByGroup]);
 
-  const handleCreateGroup = async () => {
-    const name = `Group ${groups.filter(g => !g.parentId).length + 1}`;
+  // Actually create the session after name is confirmed
+  const handleConfirmSession = useCallback(async (name: string) => {
+    if (!sessionPrompt) return;
+    const cwd = getEffectiveWorkingDir(sessionPrompt.groupId) || homedir;
+    await createSession(sessionPrompt.groupId, name, cwd, true); // launchClaude = true
+    setSessionPrompt(null);
+  }, [sessionPrompt, getEffectiveWorkingDir, createSession, homedir]);
+
+  // Show prompt for new group name
+  const handleCreateGroup = () => {
+    const count = groups.filter(g => !g.parentId).length + 1;
+    setGroupPrompt({ defaultName: `Group ${count}` });
+  };
+
+  // Actually create the group after name is confirmed
+  const handleConfirmGroup = async (name: string) => {
+    setGroupPrompt(null);
 
     // Create the group first
     const newGroup = await createGroup(name);
@@ -155,12 +179,20 @@ const App: React.FC = () => {
     }
   };
 
-  const handleCreateSubGroup = async (parentId: string) => {
+  // Show prompt for new sub-group name
+  const handleCreateSubGroup = (parentId: string) => {
     const parent = groups.find(g => g.id === parentId);
     if (!parent || parent.parentId) return; // Can't create sub-group of sub-group
 
     const subGroups = getSubGroups(parentId);
-    await createGroup(`Sub-Group ${subGroups.length + 1}`, parentId);
+    setSubGroupPrompt({ parentId, defaultName: `Sub-Group ${subGroups.length + 1}` });
+  };
+
+  // Actually create the sub-group after name is confirmed
+  const handleConfirmSubGroup = async (name: string) => {
+    if (!subGroupPrompt) return;
+    await createGroup(name, subGroupPrompt.parentId);
+    setSubGroupPrompt(null);
   };
 
   const handleStartEditGroup = (groupId: string, currentName: string) => {
@@ -734,9 +766,6 @@ const App: React.FC = () => {
             </button>
           </div>
         </div>
-        <div className="sidebar-account">
-          <AccountMenu user={user} onLogin={login} onLogout={logout} />
-        </div>
 
         {getTopLevelGroups().map(group => (
           <div key={group.id} className="group-container">
@@ -826,8 +855,11 @@ const App: React.FC = () => {
                 </div>
                 <button
                   className="icon-button small"
-                  onClick={() => handleNewSession(group.id)}
-                  title="New Session"
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setNewItemChoice({ x: rect.left, y: rect.bottom + 4, groupId: group.id });
+                  }}
+                  title="Add to group"
                 >
                   +
                 </button>
@@ -1261,6 +1293,54 @@ const App: React.FC = () => {
           setActiveRemoteCode(result.code);
           setActiveSessionId(null);
         }}
+      />
+
+      {/* Name prompt modals */}
+      <NamePromptModal
+        isOpen={sessionPrompt !== null}
+        title="New Session"
+        placeholder="Enter session name"
+        defaultValue={sessionPrompt?.defaultName || ''}
+        onConfirm={handleConfirmSession}
+        onCancel={() => setSessionPrompt(null)}
+      />
+
+      <NamePromptModal
+        isOpen={groupPrompt !== null}
+        title="New Group"
+        placeholder="Enter group name"
+        defaultValue={groupPrompt?.defaultName || ''}
+        onConfirm={handleConfirmGroup}
+        onCancel={() => setGroupPrompt(null)}
+      />
+
+      <NamePromptModal
+        isOpen={subGroupPrompt !== null}
+        title="New Sub-Group"
+        placeholder="Enter sub-group name"
+        defaultValue={subGroupPrompt?.defaultName || ''}
+        onConfirm={handleConfirmSubGroup}
+        onCancel={() => setSubGroupPrompt(null)}
+      />
+
+      {/* Choice menu for + button on groups */}
+      <NewItemChoice
+        isOpen={newItemChoice !== null}
+        x={newItemChoice?.x || 0}
+        y={newItemChoice?.y || 0}
+        onNewSession={() => {
+          if (newItemChoice) {
+            handleNewSession(newItemChoice.groupId);
+          }
+          setNewItemChoice(null);
+        }}
+        onNewSubGroup={() => {
+          if (newItemChoice) {
+            handleCreateSubGroup(newItemChoice.groupId);
+          }
+          setNewItemChoice(null);
+        }}
+        onClose={() => setNewItemChoice(null)}
       />
     </div>
   );
