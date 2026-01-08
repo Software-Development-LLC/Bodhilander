@@ -166,7 +166,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   <div className="settings-row">
                     <label>Status:</label>
                     <span className={`api-status ${apiStatus.running ? 'running' : 'stopped'}`}>
-                      {apiStatus.running ? `Running on ${apiStatus.address}:${apiStatus.port}` : 'Stopped'}
+                      {apiStatus.running ? `Running on ${apiStatus.addresses?.[0] ?? 'localhost'}:${apiStatus.port}` : 'Stopped'}
                     </span>
                   </div>
 
@@ -224,7 +224,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       <div className="pairing-active">
                         <div className="pairing-qr">
                           <img
-                            src={pairingCode.qrData}
+                            src={pairingCode.qrCode}
                             alt="Scan with mobile app"
                             width={200}
                             height={200}

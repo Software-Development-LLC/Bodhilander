@@ -6,8 +6,8 @@ import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { ShareModal } from './components/ShareModal';
 import { JoinSessionModal } from './components/JoinSessionModal';
 import { NamePromptModal } from './components/NamePromptModal';
-import { NewItemChoice } from './components/NewItemChoice';
 import { SettingsModal } from './components/SettingsModal';
+import { NewItemChoice } from './components/NewItemChoice';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -68,6 +68,7 @@ const App: React.FC = () => {
   // Sharing state
   const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
   const { user, isAuthenticated } = useSharing();
 
@@ -86,8 +87,6 @@ const App: React.FC = () => {
   // New item choice menu state (for + button on groups)
   const [newItemChoice, setNewItemChoice] = useState<{ x: number; y: number; groupId: string } | null>(null);
 
-  // Settings modal state
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',

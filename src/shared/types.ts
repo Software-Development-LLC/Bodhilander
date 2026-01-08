@@ -102,13 +102,15 @@ export interface GuestInfo {
 export interface ApiServerStatus {
   running: boolean;
   port?: number;
-  address?: string;
+  addresses?: string[];
 }
 
 export interface PairingCode {
   code: string;
-  qrData: string;
+  qrCode: string;
   expiresAt: number;
+  addresses?: string[];
+  port?: number;
 }
 
 export interface PairedDevice {
