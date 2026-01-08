@@ -714,17 +714,15 @@ ipcMain.handle('api:cancelPairing', () => {
 ipcMain.handle('api:getPairedDevices', () => {
   const apiServer = getApiServer();
   const devices = apiServer.pairingManager.getAllDevices();
-  return {
-    devices: devices.map(d => ({
-      id: d.id,
-      name: d.name,
-      platform: d.platform,
-      canControl: d.canControl,
-      canModify: d.canModify,
-      createdAt: d.createdAt.toISOString(),
-      lastUsedAt: d.lastUsedAt.toISOString(),
-    })),
-  };
+  return devices.map(d => ({
+    id: d.id,
+    name: d.name,
+    platform: d.platform,
+    canControl: d.canControl,
+    canModify: d.canModify,
+    createdAt: d.createdAt.toISOString(),
+    lastUsedAt: d.lastUsedAt.toISOString(),
+  }));
 });
 
 ipcMain.handle('api:unpairDevice', (_, deviceId: string) => {
