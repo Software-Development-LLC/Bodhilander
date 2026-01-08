@@ -17,6 +17,7 @@ import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import log from 'electron-log';
+import { getApiServer } from './api';
 
 // Use separate userData directory for development to avoid cache conflicts
 if (!app.isPackaged) {
@@ -303,6 +304,8 @@ function createWindow(): void {
   // PTY data forwarding
   ptyManager.on('data', ({ id, data }) => {
     mainWindow?.webContents.send('pty:data', id, data);
+    // Broadcast to mobile clients
+    getApiServer().broadcastTerminalData(id, data);
   });
 
   ptyManager.on('exit', ({ id, exitCode }) => {
@@ -323,6 +326,8 @@ function createWindow(): void {
     }
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
+    // Broadcast to mobile clients
+    getApiServer().broadcastSessionState(event.sessionId, event.state, event.event);
   });
 
   // Save window bounds on resize/move
@@ -398,14 +403,17 @@ ipcMain.handle('db:groups:getAll', async () => {
 
 ipcMain.handle('db:groups:create', async (_, group: Group) => {
   groupsRepo.createGroup(group);
+  getApiServer().broadcastGroupsUpdated();
 });
 
 ipcMain.handle('db:groups:update', async (_, id: string, updates: Partial<Group>) => {
   groupsRepo.updateGroup(id, updates);
+  getApiServer().broadcastGroupsUpdated();
 });
 
 ipcMain.handle('db:groups:delete', async (_, id: string) => {
   groupsRepo.deleteGroup(id);
+  getApiServer().broadcastGroupsUpdated();
 });
 
 // Dialog IPC Handlers
@@ -428,10 +436,12 @@ ipcMain.handle('db:sessions:getAll', async () => {
 
 ipcMain.handle('db:sessions:create', async (_, session: Session) => {
   sessionsRepo.createSession(session);
+  getApiServer().broadcastSessionsUpdated();
 });
 
 ipcMain.handle('db:sessions:update', async (_, id: string, updates: Partial<Session>) => {
   sessionsRepo.updateSession(id, updates);
+  getApiServer().broadcastSessionsUpdated();
 });
 
 ipcMain.handle('db:sessions:delete', async (_, id: string) => {
@@ -442,6 +452,7 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
     // Ignore errors - session may not have been shared
   }
   sessionsRepo.deleteSession(id);
+  getApiServer().broadcastSessionsUpdated();
 });
 
 // Preferences IPC Handlers
@@ -611,6 +622,154 @@ ipcMain.handle('share:write', (_, code: string, data: string) => {
 ipcMain.handle('shell:openExternal', (_, url: string) => {
   shell.openExternal(url);
 });
+
+// ============================================================================
+// Mobile API Server IPC Handlers
+// ============================================================================
+
+ipcMain.handle('api:start', async () => {
+  try {
+    const apiServer = getApiServer();
+    if (apiServer.isRunning) {
+      return {
+        success: true,
+        port: apiServer.port,
+        addresses: apiServer.addresses,
+        message: 'API server is already running',
+      };
+    }
+    const result = await apiServer.start();
+    return { success: true, port: result.port, addresses: result.addresses };
+  } catch (error) {
+    log.error('[ApiHandlers] Failed to start API server:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+});
+
+ipcMain.handle('api:stop', async () => {
+  try {
+    const apiServer = getApiServer();
+    await apiServer.stop();
+    return { success: true };
+  } catch (error) {
+    log.error('[ApiHandlers] Failed to stop API server:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+});
+
+ipcMain.handle('api:getStatus', () => {
+  const apiServer = getApiServer();
+  return apiServer.getStatus();
+});
+
+ipcMain.handle('api:generatePairingCode', async (_, options?: { canControl?: boolean; canModify?: boolean }) => {
+  try {
+    const apiServer = getApiServer();
+    if (!apiServer.isRunning) {
+      return { success: false, error: 'API server is not running. Start it first.' };
+    }
+
+    const pairingInfo = apiServer.pairingManager.generatePairingCode(options);
+    const QRCode = require('qrcode');
+    const { hostname, networkInterfaces } = require('os');
+
+    const addresses = getLocalAddresses();
+    const primaryAddress = addresses[0] || '127.0.0.1';
+
+    const qrData = {
+      type: 'claudelander-pair',
+      host: primaryAddress,
+      port: apiServer.port,
+      code: pairingInfo.code,
+      hostname: hostname(),
+      expiresAt: pairingInfo.expiresAt,
+    };
+
+    const qrCodeDataUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
+      errorCorrectionLevel: 'M',
+      width: 256,
+      margin: 2,
+    });
+
+    return {
+      success: true,
+      code: pairingInfo.code,
+      qrCode: qrCodeDataUrl,
+      expiresAt: pairingInfo.expiresAt,
+      addresses,
+      port: apiServer.port,
+    };
+  } catch (error) {
+    log.error('[ApiHandlers] Failed to generate pairing code:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+});
+
+ipcMain.handle('api:cancelPairing', () => {
+  const apiServer = getApiServer();
+  apiServer.pairingManager.cancelPairing();
+  return { success: true };
+});
+
+ipcMain.handle('api:getPairedDevices', () => {
+  const apiServer = getApiServer();
+  const devices = apiServer.pairingManager.getAllDevices();
+  return {
+    devices: devices.map(d => ({
+      id: d.id,
+      name: d.name,
+      platform: d.platform,
+      canControl: d.canControl,
+      canModify: d.canModify,
+      createdAt: d.createdAt.toISOString(),
+      lastUsedAt: d.lastUsedAt.toISOString(),
+    })),
+  };
+});
+
+ipcMain.handle('api:unpairDevice', (_, deviceId: string) => {
+  try {
+    const apiServer = getApiServer();
+    const success = apiServer.pairingManager.unpairDevice(deviceId);
+    return { success };
+  } catch (error) {
+    log.error('[ApiHandlers] Failed to unpair device:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+});
+
+ipcMain.handle('api:updateDevicePermissions', (_, deviceId: string, permissions: { canControl?: boolean; canModify?: boolean }) => {
+  try {
+    const apiServer = getApiServer();
+    const success = apiServer.pairingManager.updateDevicePermissions(deviceId, permissions);
+    return { success };
+  } catch (error) {
+    log.error('[ApiHandlers] Failed to update device permissions:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+});
+
+ipcMain.handle('api:hasPairingCode', () => {
+  const apiServer = getApiServer();
+  return { active: apiServer.pairingManager.hasActivePairingCode() };
+});
+
+function getLocalAddresses(): string[] {
+  const { networkInterfaces } = require('os');
+  const addresses: string[] = [];
+  const interfaces = networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    const nets = interfaces[name];
+    if (!nets) continue;
+    for (const net of nets) {
+      if (net.internal) continue;
+      if (net.family === 'IPv4') {
+        addresses.push(net.address);
+      }
+    }
+  }
+  return addresses;
+}
 
 // Forward share manager events to renderer
 shareManager.on('guestJoined', (info) => {

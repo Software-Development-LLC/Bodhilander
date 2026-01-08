@@ -1,4 +1,16 @@
-import { Group, Session, ShareUser, ShareCode, CreateCodeOptions, GuestInfo } from '../../shared/types';
+import {
+  Group,
+  Session,
+  ShareUser,
+  ShareCode,
+  CreateCodeOptions,
+  GuestInfo,
+  ApiServerStatus,
+  PairingCode,
+  PairedDevice,
+  ApiServerConfig,
+  DevicePermissions,
+} from '../../shared/types';
 
 interface StateChangeEvent {
   sessionId: string;
@@ -86,6 +98,17 @@ export interface ElectronAPI {
   testSound: (event: 'waiting' | 'error' | 'start' | 'complete') => Promise<void>;
   selectSoundFile: () => Promise<string | null>;
   onSoundPlay: (callback: (data: { path: string; volume: number }) => void) => () => void;
+
+  // Mobile API Server
+  apiStart: (config?: ApiServerConfig) => Promise<void>;
+  apiStop: () => Promise<void>;
+  apiGetStatus: () => Promise<ApiServerStatus>;
+  apiGeneratePairingCode: (options?: DevicePermissions) => Promise<PairingCode>;
+  apiCancelPairing: () => Promise<void>;
+  apiGetPairedDevices: () => Promise<PairedDevice[]>;
+  apiUnpairDevice: (deviceId: string) => Promise<void>;
+  apiUpdateDevicePermissions: (deviceId: string, permissions: DevicePermissions) => Promise<void>;
+  apiHasPairingCode: () => Promise<boolean>;
 }
 
 declare global {
