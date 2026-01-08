@@ -7,6 +7,7 @@ import { ShareModal } from './components/ShareModal';
 import { JoinSessionModal } from './components/JoinSessionModal';
 import { NamePromptModal } from './components/NamePromptModal';
 import { NewItemChoice } from './components/NewItemChoice';
+import { SettingsModal } from './components/SettingsModal';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -84,6 +85,9 @@ const App: React.FC = () => {
 
   // New item choice menu state (for + button on groups)
   const [newItemChoice, setNewItemChoice] = useState<{ x: number; y: number; groupId: string } | null>(null);
+
+  // Settings modal state
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
@@ -751,6 +755,13 @@ const App: React.FC = () => {
           <div className="sidebar-header-actions">
             <button
               className="icon-button"
+              onClick={() => setSettingsOpen(true)}
+              title="Settings"
+            >
+              ⚙
+            </button>
+            <button
+              className="icon-button"
               onClick={() => setJoinModalOpen(true)}
               title={isAuthenticated ? 'Join Shared Session' : 'Sign in to join sessions'}
               disabled={!isAuthenticated}
@@ -1341,6 +1352,12 @@ const App: React.FC = () => {
           setNewItemChoice(null);
         }}
         onClose={() => setNewItemChoice(null)}
+      />
+
+      {/* Settings modal */}
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
       />
     </div>
   );

@@ -92,3 +92,41 @@ export interface GuestInfo {
   permission: 'read' | 'control';
   publicKey: string;
 }
+
+// =============================================================================
+// Mobile API Server Types
+// =============================================================================
+// Types for the local API server that enables mobile companion app connectivity
+// =============================================================================
+
+export interface ApiServerStatus {
+  running: boolean;
+  port?: number;
+  address?: string;
+}
+
+export interface PairingCode {
+  code: string;
+  qrData: string;
+  expiresAt: number;
+}
+
+export interface PairedDevice {
+  id: string;
+  name: string;
+  platform: string;
+  createdAt: string;
+  lastUsedAt: string;
+  canControl: boolean;
+  canModify: boolean;
+}
+
+export interface ApiServerConfig {
+  port?: number;
+  enableMdns?: boolean;
+}
+
+export interface DevicePermissions {
+  canControl?: boolean;
+  canModify?: boolean;
+}

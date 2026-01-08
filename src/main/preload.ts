@@ -167,4 +167,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('sound:play', listener);
     return () => ipcRenderer.removeListener('sound:play', listener);
   },
+
+  // Mobile API Server
+  apiStart: (config?: { port?: number; enableMdns?: boolean }) =>
+    ipcRenderer.invoke('api:start', config),
+  apiStop: () => ipcRenderer.invoke('api:stop'),
+  apiGetStatus: (): Promise<{ running: boolean; port?: number; address?: string }> =>
+    ipcRenderer.invoke('api:getStatus'),
+  apiGeneratePairingCode: (options?: { canControl?: boolean; canModify?: boolean }): Promise<{
+    code: string;
+    qrData: string;
+    expiresAt: number;
+  }> => ipcRenderer.invoke('api:generatePairingCode', options),
+  apiCancelPairing: () => ipcRenderer.invoke('api:cancelPairing'),
+  apiGetPairedDevices: (): Promise<Array<{
+    id: string;
+    name: string;
+    platform: string;
+    createdAt: string;
+    lastUsedAt: string;
+    canControl: boolean;
+    canModify: boolean;
+  }>> => ipcRenderer.invoke('api:getPairedDevices'),
+  apiUnpairDevice: (deviceId: string) => ipcRenderer.invoke('api:unpairDevice', deviceId),
+  apiUpdateDevicePermissions: (deviceId: string, permissions: { canControl?: boolean; canModify?: boolean }) =>
+    ipcRenderer.invoke('api:updateDevicePermissions', deviceId, permissions),
+  apiHasPairingCode: (): Promise<boolean> => ipcRenderer.invoke('api:hasPairingCode'),
 });
