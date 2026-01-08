@@ -22,12 +22,16 @@ export function showSettingsWindow(parentWindow: BrowserWindow): void {
     minimizable: false,
     maximizable: false,
     backgroundColor: '#1e1e1e',
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: settingsPreloadPath,
     },
   });
+
+  // Hide menu bar for Settings window
+  settingsWindow.setMenuBarVisibility(false);
 
   settingsWindow.loadFile(path.join(__dirname, '../renderer/settings.html'));
 

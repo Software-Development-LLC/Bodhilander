@@ -68,6 +68,14 @@ if (!gotTheLock) {
   });
 }
 
+// Broadcast an event to all open windows
+function broadcastToAllWindows(channel: string, ...args: any[]) {
+  const windows = BrowserWindow.getAllWindows();
+  for (const win of windows) {
+    win.webContents.send(channel, ...args);
+  }
+}
+
 async function handleDeepLink(url: string) {
   log.info('Received deep link:', url);
   const parsed = new URL(url);
@@ -77,10 +85,11 @@ async function handleDeepLink(url: string) {
     if (token) {
       try {
         const user = await authService.handleCallback(token);
-        mainWindow?.webContents.send('auth:changed', { user, token });
+        // Broadcast to all windows (main + settings)
+        broadcastToAllWindows('auth:changed', { user, token });
       } catch (e) {
         log.error('Auth callback failed:', e);
-        mainWindow?.webContents.send('auth:error', { error: (e as Error).message });
+        broadcastToAllWindows('auth:error', { error: (e as Error).message });
       }
     }
   }
@@ -91,10 +100,10 @@ async function handleDeepLink(url: string) {
     if (code) {
       try {
         const user = await teamsAuthService.handleCallback(code);
-        mainWindow?.webContents.send('teams:authChanged', { user, connected: true });
+        broadcastToAllWindows('teams:authChanged', { user, connected: true });
       } catch (e) {
         log.error('Teams auth callback failed:', e);
-        mainWindow?.webContents.send('teams:authChanged', { error: (e as Error).message, connected: false });
+        broadcastToAllWindows('teams:authChanged', { error: (e as Error).message, connected: false });
       }
     }
   }
@@ -403,7 +412,7 @@ ipcMain.handle('db:groups:delete', async (_, id: string) => {
 ipcMain.handle('dialog:selectDirectory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
+    properties: ['openDirectory', 'showHiddenFiles'],
     title: 'Select Working Directory',
   });
   if (result.canceled || result.filePaths.length === 0) {

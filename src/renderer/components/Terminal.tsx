@@ -45,10 +45,16 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       const timer = setTimeout(() => {
         setError(null);
         setIsRunning(true);
+        // Focus terminal after restart is complete (wait for terminal to be created)
+        setTimeout(() => {
+          if (isActive && xtermRef.current) {
+            xtermRef.current.focus();
+          }
+        }, 200);
       }, 100);
       return () => clearTimeout(timer);
     }
-  }, [restartKey]);
+  }, [restartKey, isActive]);
 
   // Listen for focus-terminal event to focus this terminal
   useEffect(() => {

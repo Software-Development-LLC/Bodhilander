@@ -44,3 +44,7 @@ The GitHub Actions workflow (`release.yml`) checks if the tag exists:
   - Corporate firewalls/proxies
   - VPNs interfering with TLS
   - Not a bug in the app - it's GitHub's CDN (`release-assets.githubusercontent.com`)
+
+## Claude Code Workarounds
+
+- **File modification bug**: Always use complete absolute Windows paths with drive letters and backslashes for ALL file operations (Read, Edit, Write tools). Example: `D:\Projects\claudelander\src\file.ts` not `D:/Projects/claudelander/src/file.ts`

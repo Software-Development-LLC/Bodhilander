@@ -695,13 +695,13 @@
               Connect external services to receive notifications and share sessions.
             </p>
 
-            <div class="integration-card">
+            <div class="integration-card" id="githubCard">
               <div class="integration-header">
-                <span class="integration-icon">&#9679;</span>
+                <span class="integration-icon" id="githubIcon">&#9679;</span>
                 <span class="integration-name">GitHub</span>
                 <button class="btn-small" id="githubAuthBtn">Sign In</button>
               </div>
-              <div class="integration-status">Not connected</div>
+              <div class="integration-status" id="githubStatus">Not connected</div>
               <div class="integration-desc">Used for: Session sharing</div>
             </div>
 
@@ -886,23 +886,34 @@
     }
 
     // GitHub auth handling
+    let githubRetryCount = 0;
     async function loadGithubStatus() {
       if (!window.settingsAPI?.githubGetUser) return;
 
       const user = await window.settingsAPI.githubGetUser();
       const btn = document.getElementById('githubAuthBtn');
-      const status = document.querySelector('#panel-integrations .integration-card:first-child .integration-status');
+      const status = document.getElementById('githubStatus');
+      const icon = document.getElementById('githubIcon');
 
       if (user) {
         btn.textContent = 'Sign Out';
         btn.onclick = githubLogout;
-        status.textContent = user.username;
+        status.textContent = 'Connected as ' + user.username;
         status.classList.add('connected');
+        icon.style.color = '#4ade80'; // Green when connected
+        githubRetryCount = 0;
       } else {
         btn.textContent = 'Sign In';
         btn.onclick = githubLogin;
         status.textContent = 'Not connected';
         status.classList.remove('connected');
+        icon.style.color = ''; // Reset to default gray
+
+        // Retry a few times in case main app is still restoring auth
+        if (githubRetryCount < 3) {
+          githubRetryCount++;
+          setTimeout(loadGithubStatus, 500);
+        }
       }
     }
 
