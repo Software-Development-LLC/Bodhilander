@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
+import { ApiServerStatus, PairedDevice, PairingCode, RelayConnectionStatus } from '../../shared/types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -17,22 +17,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [enableMdns, setEnableMdns] = useState(true);
   const [loading, setLoading] = useState(false);
 
+  // Remote access state
+  const [remoteStatus, setRemoteStatus] = useState<RelayConnectionStatus>({
+    enabled: false,
+    connected: false,
+    desktopId: null,
+    relayUrl: '',
+  });
+  const [remoteLoading, setRemoteLoading] = useState(false);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
 
     const loadState = async () => {
       try {
-        const [status, devices, hasPairing] = await Promise.all([
+        const [status, devices, hasPairingResult, remoteAccessStatus] = await Promise.all([
           window.electronAPI.apiGetStatus(),
           window.electronAPI.apiGetPairedDevices(),
           window.electronAPI.apiHasPairingCode(),
+          window.electronAPI.apiGetRemoteAccessStatus(),
         ]);
         setApiStatus(status);
         setPairedDevices(devices);
-        if (!hasPairing) {
+        if (!hasPairingResult.active) {
           setPairingCode(null);
         }
+        setRemoteStatus(remoteAccessStatus);
       } catch (err) {
         console.error('Failed to load API state:', err);
       }
@@ -67,11 +78,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   const handleGeneratePairingCode = useCallback(async () => {
     try {
-      const code = await window.electronAPI.apiGeneratePairingCode({
+      const result = await window.electronAPI.apiGeneratePairingCode({
         canControl: true,
         canModify: false,
       });
-      setPairingCode(code);
+      if (result.success && result.code && result.qrCode && result.expiresAt) {
+        setPairingCode({
+          code: result.code,
+          qrCode: result.qrCode,
+          expiresAt: result.expiresAt,
+          addresses: result.addresses,
+          port: result.port,
+        });
+      } else {
+        console.error('Failed to generate pairing code:', result.error);
+      }
     } catch (err) {
       console.error('Failed to generate pairing code:', err);
     }
@@ -111,6 +132,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     } catch (err) {
       console.error('Failed to update permissions:', err);
     }
+  }, []);
+
+  const handleEnableRemoteAccess = useCallback(async () => {
+    setRemoteLoading(true);
+    try {
+      const result = await window.electronAPI.apiEnableRemoteAccess();
+      if (result.success && result.status) {
+        setRemoteStatus(result.status);
+      } else {
+        console.error('Failed to enable remote access:', result.error);
+      }
+    } catch (err) {
+      console.error('Failed to enable remote access:', err);
+    }
+    setRemoteLoading(false);
+  }, []);
+
+  const handleDisableRemoteAccess = useCallback(async () => {
+    setRemoteLoading(true);
+    try {
+      const result = await window.electronAPI.apiDisableRemoteAccess();
+      if (result.success) {
+        setRemoteStatus(prev => ({ ...prev, enabled: false, connected: false }));
+      } else {
+        console.error('Failed to disable remote access:', result.error);
+      }
+    } catch (err) {
+      console.error('Failed to disable remote access:', err);
+    }
+    setRemoteLoading(false);
   }, []);
 
   if (!isOpen) return null;
@@ -299,6 +350,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       ))}
                     </div>
                   )}
+                </div>
+
+                <div className="settings-group">
+                  <h4>Remote Access</h4>
+                  <p className="settings-description">
+                    Enable remote access to connect from outside your local network via the relay server.
+                  </p>
+
+                  <div className="settings-row">
+                    <label>Status:</label>
+                    <span className={`remote-status ${remoteStatus.connected ? 'connected' : remoteStatus.enabled ? 'connecting' : 'disabled'}`}>
+                      {remoteStatus.connected
+                        ? 'Connected to relay'
+                        : remoteStatus.enabled
+                        ? 'Connecting...'
+                        : 'Disabled'}
+                    </span>
+                  </div>
+
+                  {remoteStatus.enabled && remoteStatus.desktopId && (
+                    <div className="settings-row">
+                      <label>Desktop ID:</label>
+                      <code className="desktop-id">{remoteStatus.desktopId}</code>
+                    </div>
+                  )}
+
+                  {remoteStatus.enabled && remoteStatus.relayUrl && (
+                    <div className="settings-row">
+                      <label>Relay Server:</label>
+                      <span className="relay-url">{remoteStatus.relayUrl}</span>
+                    </div>
+                  )}
+
+                  <div className="settings-actions">
+                    {remoteStatus.enabled ? (
+                      <button
+                        className="btn btn-danger"
+                        onClick={handleDisableRemoteAccess}
+                        disabled={remoteLoading}
+                      >
+                        {remoteLoading ? 'Disabling...' : 'Disable Remote Access'}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleEnableRemoteAccess}
+                        disabled={remoteLoading}
+                      >
+                        {remoteLoading ? 'Enabling...' : 'Enable Remote Access'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

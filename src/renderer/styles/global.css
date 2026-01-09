@@ -975,6 +975,43 @@ body {
   color: #ef4444;
 }
 
+/* Remote Access Status */
+.remote-status {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.remote-status.connected {
+  background: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.remote-status.connecting {
+  background: rgba(250, 204, 21, 0.2);
+  color: #facc15;
+}
+
+.remote-status.disabled {
+  background: rgba(113, 113, 122, 0.2);
+  color: #71717a;
+}
+
+.desktop-id {
+  font-family: 'Consolas', 'Monaco', monospace;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  user-select: all;
+}
+
+.relay-url {
+  font-size: 12px;
+  color: #71717a;
+}
+
 /* Button styles */
 .btn {
   padding: 8px 16px;

@@ -175,9 +175,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   apiGetStatus: (): Promise<{ running: boolean; port?: number; address?: string }> =>
     ipcRenderer.invoke('api:getStatus'),
   apiGeneratePairingCode: (options?: { canControl?: boolean; canModify?: boolean }): Promise<{
-    code: string;
-    qrData: string;
-    expiresAt: number;
+    success: boolean;
+    code?: string;
+    qrCode?: string;
+    expiresAt?: number;
+    addresses?: string[];
+    port?: number;
+    error?: string;
   }> => ipcRenderer.invoke('api:generatePairingCode', options),
   apiCancelPairing: () => ipcRenderer.invoke('api:cancelPairing'),
   apiGetPairedDevices: (): Promise<Array<{
@@ -192,5 +196,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   apiUnpairDevice: (deviceId: string) => ipcRenderer.invoke('api:unpairDevice', deviceId),
   apiUpdateDevicePermissions: (deviceId: string, permissions: { canControl?: boolean; canModify?: boolean }) =>
     ipcRenderer.invoke('api:updateDevicePermissions', deviceId, permissions),
-  apiHasPairingCode: (): Promise<boolean> => ipcRenderer.invoke('api:hasPairingCode'),
+  apiHasPairingCode: (): Promise<{ active: boolean }> => ipcRenderer.invoke('api:hasPairingCode'),
+
+  // Remote access
+  apiEnableRemoteAccess: (): Promise<{
+    success: boolean;
+    status?: {
+      enabled: boolean;
+      connected: boolean;
+      desktopId: string | null;
+      relayUrl: string;
+    };
+    error?: string;
+  }> => ipcRenderer.invoke('api:enableRemoteAccess'),
+  apiDisableRemoteAccess: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('api:disableRemoteAccess'),
+  apiGetRemoteAccessStatus: (): Promise<{
+    enabled: boolean;
+    connected: boolean;
+    desktopId: string | null;
+    relayUrl: string;
+  }> => ipcRenderer.invoke('api:getRemoteAccessStatus'),
 });
