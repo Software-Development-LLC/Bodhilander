@@ -113,6 +113,11 @@ async function handleDeepLink(url: string) {
 // Track sessions by state for tray updates
 const sessionStates: Map<string, { name: string; state: string }> = new Map();
 
+// Provide state lookup to sound manager for debounce validation
+soundManager.setSessionStateLookup((sessionId: string) => {
+  return sessionStates.get(sessionId)?.state;
+});
+
 const SPLASH_DURATION = 2500; // 2.5 seconds
 
 function updateTrayWithWaitingSessions(): void {
