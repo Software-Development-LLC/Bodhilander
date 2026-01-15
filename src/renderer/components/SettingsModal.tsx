@@ -200,6 +200,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     setRemoteLoading(false);
   }, []);
 
+  // Sound setting handlers
+  const handleSoundEnabledChange = useCallback(async (enabled: boolean) => {
+    setSoundEnabled(enabled);
+    await window.electronAPI.setPreference('notificationSound', enabled.toString());
+  }, []);
+
+  const handleVolumeChange = useCallback(async (volume: number) => {
+    setSoundVolume(volume);
+    await window.electronAPI.setPreference('soundVolume', volume.toString());
+  }, []);
+
+  const handleDebouncePresetChange = useCallback(async (preset: 'fast' | 'normal' | 'relaxed') => {
+    setDebouncePreset(preset);
+    await window.electronAPI.setPreference('soundDebouncePreset', preset);
+  }, []);
+
+  const handleSoundToggle = useCallback(async (
+    event: 'waiting' | 'error' | 'start' | 'complete',
+    enabled: boolean
+  ) => {
+    const prefKey = `sound${event.charAt(0).toUpperCase() + event.slice(1)}Enabled`;
+    await window.electronAPI.setPreference(prefKey, enabled.toString());
+
+    switch (event) {
+      case 'waiting': setSoundWaitingEnabled(enabled); break;
+      case 'error': setSoundErrorEnabled(enabled); break;
+      case 'start': setSoundStartEnabled(enabled); break;
+      case 'complete': setSoundCompleteEnabled(enabled); break;
+    }
+  }, []);
+
+  const handleTestSound = useCallback(async (event: 'waiting' | 'error' | 'start' | 'complete') => {
+    await window.electronAPI.testSound(event);
+  }, []);
+
   if (!isOpen) return null;
 
   return (
