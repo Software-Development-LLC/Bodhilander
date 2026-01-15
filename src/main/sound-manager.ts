@@ -94,6 +94,59 @@ class SoundManager {
   }
 
   /**
+   * Check if a sound event is still valid for the current session state
+   */
+  private isEventValidForState(event: SoundEvent, currentState: string | undefined): boolean {
+    if (!currentState) return false;
+
+    switch (event) {
+      case 'waiting':
+        return currentState === 'waiting';
+      case 'error':
+        return currentState === 'error';
+      case 'start':
+        return true; // Start sound always valid (one-time event)
+      case 'complete':
+        return currentState === 'idle'; // Complete fires on working->idle
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Schedule a sound to play after debounce delay
+   * Validates session state before playing
+   */
+  scheduleSound(sessionId: string, event: SoundEvent): void {
+    // Clear any existing timer for this session
+    const existingTimer = this.debounceTimers.get(sessionId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const delay = this.getDebounceDuration();
+
+    const timer = setTimeout(() => {
+      // Clean up timer reference
+      this.debounceTimers.delete(sessionId);
+
+      // Validate session state before playing
+      if (this.getSessionState) {
+        const currentState = this.getSessionState(sessionId);
+        if (!this.isEventValidForState(event, currentState)) {
+          console.debug(`[SoundManager] Skipping ${event} sound - session ${sessionId} state changed to ${currentState}`);
+          return;
+        }
+      }
+
+      // Play the sound
+      this.playSound(event);
+    }, delay);
+
+    this.debounceTimers.set(sessionId, timer);
+  }
+
+  /**
    * Get the sound file path for an event (custom or default)
    */
   getSoundPath(event: SoundEvent): string {
@@ -223,6 +276,13 @@ class SoundManager {
    */
   removeSession(sessionId: string): void {
     this.lastState.delete(sessionId);
+
+    // Clear any pending debounce timer
+    const timer = this.debounceTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.debounceTimers.delete(sessionId);
+    }
   }
 }
 
