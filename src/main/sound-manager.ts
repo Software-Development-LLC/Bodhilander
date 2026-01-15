@@ -5,6 +5,14 @@ import { getPreference } from './repositories/preferences';
 
 export type SoundEvent = 'waiting' | 'error' | 'start' | 'complete';
 
+export type DebouncePreset = 'fast' | 'normal' | 'relaxed';
+
+const DEBOUNCE_PRESETS: Record<DebouncePreset, number> = {
+  fast: 200,
+  normal: 500,
+  relaxed: 1000,
+};
+
 interface SoundConfig {
   enabledKey: string;
   customPathKey: string;
