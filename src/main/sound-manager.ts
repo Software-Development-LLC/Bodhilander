@@ -45,6 +45,15 @@ const SOUND_CONFIGS: Record<SoundEvent, SoundConfig> = {
 class SoundManager {
   private mainWindow: BrowserWindow | null = null;
   private lastState: Map<string, string> = new Map();
+  private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private getSessionState: ((sessionId: string) => string | undefined) | null = null;
+
+  /**
+   * Set the session state lookup function (called from index.ts)
+   */
+  setSessionStateLookup(lookup: (sessionId: string) => string | undefined): void {
+    this.getSessionState = lookup;
+  }
 
   setMainWindow(window: BrowserWindow): void {
     this.mainWindow = window;
@@ -74,6 +83,14 @@ class SoundManager {
   isSoundEnabled(): boolean {
     const pref = getPreference('notificationSound');
     return pref !== 'false'; // Default to true
+  }
+
+  /**
+   * Get the current debounce duration in milliseconds
+   */
+  getDebounceDuration(): number {
+    const preset = getPreference('soundDebouncePreset') as DebouncePreset | null;
+    return DEBOUNCE_PRESETS[preset || 'normal'];
   }
 
   /**
