@@ -245,19 +245,19 @@ class SoundManager {
   }
 
   /**
-   * Handle session state change and play appropriate sound
+   * Handle session state change and schedule appropriate sound
    */
   handleStateChange(sessionId: string, newState: string, previousState?: string): void {
     const lastKnown = previousState || this.lastState.get(sessionId);
 
-    // Determine which sound to play based on state transition
+    // Determine which sound to schedule based on state transition
     if (newState === 'waiting') {
-      this.playSound('waiting');
+      this.scheduleSound(sessionId, 'waiting');
     } else if (newState === 'error') {
-      this.playSound('error');
+      this.scheduleSound(sessionId, 'error');
     } else if (newState === 'idle' && lastKnown === 'working') {
       // Task completed (working -> idle)
-      this.playSound('complete');
+      this.scheduleSound(sessionId, 'complete');
     }
 
     // Update last known state
