@@ -26,6 +26,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   });
   const [remoteLoading, setRemoteLoading] = useState(false);
 
+  // Sound settings state
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundVolume, setSoundVolume] = useState(70);
+  const [debouncePreset, setDebouncePreset] = useState<'fast' | 'normal' | 'relaxed'>('normal');
+  const [soundWaitingEnabled, setSoundWaitingEnabled] = useState(true);
+  const [soundErrorEnabled, setSoundErrorEnabled] = useState(true);
+  const [soundStartEnabled, setSoundStartEnabled] = useState(true);
+  const [soundCompleteEnabled, setSoundCompleteEnabled] = useState(true);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
@@ -44,6 +53,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           setPairingCode(null);
         }
         setRemoteStatus(remoteAccessStatus);
+
+        // Load sound settings
+        const [
+          soundEnabledPref,
+          volumePref,
+          debouncePref,
+          waitingPref,
+          errorPref,
+          startPref,
+          completePref,
+        ] = await Promise.all([
+          window.electronAPI.getPreference('notificationSound'),
+          window.electronAPI.getPreference('soundVolume'),
+          window.electronAPI.getPreference('soundDebouncePreset'),
+          window.electronAPI.getPreference('soundWaitingEnabled'),
+          window.electronAPI.getPreference('soundErrorEnabled'),
+          window.electronAPI.getPreference('soundStartEnabled'),
+          window.electronAPI.getPreference('soundCompleteEnabled'),
+        ]);
+
+        setSoundEnabled(soundEnabledPref !== 'false');
+        setSoundVolume(volumePref ? parseInt(volumePref, 10) : 70);
+        setDebouncePreset((debouncePref as 'fast' | 'normal' | 'relaxed') || 'normal');
+        setSoundWaitingEnabled(waitingPref !== 'false');
+        setSoundErrorEnabled(errorPref !== 'false');
+        setSoundStartEnabled(startPref !== 'false');
+        setSoundCompleteEnabled(completePref !== 'false');
       } catch (err) {
         console.error('Failed to load API state:', err);
       }
