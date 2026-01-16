@@ -7,7 +7,8 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'mobile' | 'notifications'>('mobile');
+  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile';
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   // Mobile API state
   const [apiStatus, setApiStatus] = useState<ApiServerStatus>({ running: false });
