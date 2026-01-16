@@ -7,7 +7,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile' | 'notifications';
+  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile';
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   // Mobile API state
@@ -50,6 +50,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [fontSize, setFontSize] = useState(14);
   const [webglRenderer, setWebglRenderer] = useState(true);
 
+  // Desktop notifications state
+  const [enableNotifications, setEnableNotifications] = useState(true);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
@@ -85,6 +88,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           splashDurationPref,
           fontSizePref,
           webglRendererPref,
+          enableNotificationsPref,
         ] = await Promise.all([
           window.electronAPI.getPreference('notificationSound'),
           window.electronAPI.getPreference('soundVolume'),
@@ -100,6 +104,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           window.electronAPI.getPreference('splashDuration'),
           window.electronAPI.getPreference('fontSize'),
           window.electronAPI.getPreference('webglRenderer'),
+          window.electronAPI.getPreference('enableNotifications'),
         ]);
 
         setSoundEnabled(soundEnabledPref !== 'false');
@@ -116,6 +121,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setSplashDuration(splashDurationPref ? parseFloat(splashDurationPref) : 2.5);
         setFontSize(fontSizePref ? parseInt(fontSizePref, 10) : 14);
         setWebglRenderer(webglRendererPref === 'true');
+        setEnableNotifications(enableNotificationsPref !== 'false');
       } catch (err) {
         console.error('Failed to load API state:', err);
       }
@@ -315,6 +321,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     await window.electronAPI.setPreference('webglRenderer', enabled.toString());
   }, []);
 
+  const handleEnableNotificationsChange = useCallback(async (enabled: boolean) => {
+    setEnableNotifications(enabled);
+    await window.electronAPI.setPreference('enableNotifications', enabled.toString());
+  }, []);
+
   if (!isOpen) return null;
 
   return (
@@ -352,10 +363,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               Mobile App
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'notifications' ? 'active' : ''}`}
-              onClick={() => setActiveTab('notifications')}
+              className={`settings-nav-item ${activeTab === 'sound' ? 'active' : ''}`}
+              onClick={() => setActiveTab('sound')}
             >
-              Notifications
+              Sound
             </button>
           </nav>
 
@@ -681,9 +692,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               </div>
             )}
 
-            {activeTab === 'notifications' && (
+            {activeTab === 'sound' && (
               <div className="settings-section">
                 <h3>Sound Settings</h3>
+
+                <div className="settings-group">
+                  <h4>Desktop Notifications</h4>
+                  <div className="settings-row">
+                    <label htmlFor="enable-notifications">Enable Notifications:</label>
+                    <input
+                      id="enable-notifications"
+                      type="checkbox"
+                      checked={enableNotifications}
+                      onChange={e => handleEnableNotificationsChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Show system notifications when sessions need attention</span>
+                  </div>
+                </div>
 
                 <div className="settings-group">
                   <div className="settings-row">
