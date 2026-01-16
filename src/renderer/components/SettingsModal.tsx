@@ -42,6 +42,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [customShellPath, setCustomShellPath] = useState('');
   const [closeToTray, setCloseToTray] = useState(true);
 
+  // Appearance settings state
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashDuration, setSplashDuration] = useState(2.5);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
@@ -73,6 +77,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           autoLaunchPref,
           shellPathPref,
           closeToTrayPref,
+          showSplashPref,
+          splashDurationPref,
         ] = await Promise.all([
           window.electronAPI.getPreference('notificationSound'),
           window.electronAPI.getPreference('soundVolume'),
@@ -84,6 +90,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           window.electronAPI.getPreference('autoLaunchClaude'),
           window.electronAPI.getPreference('customShellPath'),
           window.electronAPI.getPreference('closeToTray'),
+          window.electronAPI.getPreference('showSplash'),
+          window.electronAPI.getPreference('splashDuration'),
         ]);
 
         setSoundEnabled(soundEnabledPref !== 'false');
@@ -96,6 +104,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setAutoLaunchClaude(autoLaunchPref === 'true');
         setCustomShellPath(shellPathPref || '');
         setCloseToTray(closeToTrayPref !== 'false');
+        setShowSplash(showSplashPref === 'true');
+        setSplashDuration(splashDurationPref ? parseFloat(splashDurationPref) : 2.5);
       } catch (err) {
         console.error('Failed to load API state:', err);
       }
@@ -273,6 +283,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     await window.electronAPI.setPreference('closeToTray', enabled.toString());
   }, []);
 
+  // Appearance setting handlers
+  const handleShowSplashChange = useCallback(async (enabled: boolean) => {
+    setShowSplash(enabled);
+    await window.electronAPI.setPreference('showSplash', enabled.toString());
+  }, []);
+
+  const handleSplashDurationChange = useCallback(async (duration: number) => {
+    setSplashDuration(duration);
+    await window.electronAPI.setPreference('splashDuration', duration.toString());
+  }, []);
+
   if (!isOpen) return null;
 
   return (
@@ -290,6 +311,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               onClick={() => setActiveTab('general')}
             >
               General
+            </button>
+            <button
+              className={`settings-nav-item ${activeTab === 'appearance' ? 'active' : ''}`}
+              onClick={() => setActiveTab('appearance')}
+            >
+              Appearance
             </button>
             <button
               className={`settings-nav-item ${activeTab === 'mobile' ? 'active' : ''}`}
@@ -352,6 +379,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       onChange={e => handleCloseToTrayChange(e.target.checked)}
                     />
                     <span className="settings-hint">Minimize to system tray instead of quitting when closing window</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'appearance' && (
+              <div className="settings-section">
+                <h3>Appearance</h3>
+
+                <div className="settings-group">
+                  <h4>Splash Screen</h4>
+                  <div className="settings-row">
+                    <label htmlFor="show-splash">Show Splash Screen:</label>
+                    <input
+                      id="show-splash"
+                      type="checkbox"
+                      checked={showSplash}
+                      onChange={e => handleShowSplashChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Display splash screen on startup</span>
+                  </div>
+
+                  <div className="settings-row">
+                    <label htmlFor="splash-duration">Splash Duration:</label>
+                    <input
+                      type="range"
+                      id="splash-duration"
+                      min="1"
+                      max="5"
+                      step="0.5"
+                      value={splashDuration}
+                      onChange={e => handleSplashDurationChange(parseFloat(e.target.value))}
+                    />
+                    <span className="range-value">{splashDuration}s</span>
                   </div>
                 </div>
               </div>
