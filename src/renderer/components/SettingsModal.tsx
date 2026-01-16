@@ -479,8 +479,87 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
             {activeTab === 'notifications' && (
               <div className="settings-section">
-                <h3>Notification Settings</h3>
-                <p className="settings-placeholder">Notification settings coming soon...</p>
+                <h3>Sound Settings</h3>
+
+                <div className="settings-group">
+                  <div className="settings-row">
+                    <label htmlFor="sound-enabled">Enable Sounds:</label>
+                    <input
+                      id="sound-enabled"
+                      type="checkbox"
+                      checked={soundEnabled}
+                      onChange={e => handleSoundEnabledChange(e.target.checked)}
+                    />
+                  </div>
+                </div>
+
+                {soundEnabled && (
+                  <>
+                    <div className="settings-group">
+                      <h4>Sound Frequency</h4>
+                      <p className="settings-description">
+                        Controls how rapidly sounds can play when states change quickly.
+                      </p>
+                      <div className="settings-row">
+                        <label htmlFor="debounce-preset">Preset:</label>
+                        <select
+                          id="debounce-preset"
+                          value={debouncePreset}
+                          onChange={e => handleDebouncePresetChange(e.target.value as 'fast' | 'normal' | 'relaxed')}
+                        >
+                          <option value="fast">Fast (200ms)</option>
+                          <option value="normal">Normal (500ms) - Recommended</option>
+                          <option value="relaxed">Relaxed (1000ms)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="settings-group">
+                      <h4>Master Volume</h4>
+                      <div className="settings-row volume-row">
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={soundVolume}
+                          onChange={e => handleVolumeChange(parseInt(e.target.value, 10))}
+                        />
+                        <span className="volume-value">{soundVolume}%</span>
+                      </div>
+                    </div>
+
+                    <div className="settings-group">
+                      <h4>Individual Sounds</h4>
+                      <div className="sound-events-list">
+                        {[
+                          { event: 'waiting' as const, label: 'Waiting for Input', enabled: soundWaitingEnabled },
+                          { event: 'error' as const, label: 'Error', enabled: soundErrorEnabled },
+                          { event: 'start' as const, label: 'Session Start', enabled: soundStartEnabled },
+                          { event: 'complete' as const, label: 'Task Complete', enabled: soundCompleteEnabled },
+                        ].map(({ event, label, enabled }) => (
+                          <div key={event} className="sound-event-row">
+                            <span className="sound-event-label">{label}</span>
+                            <label className="sound-event-toggle">
+                              <input
+                                type="checkbox"
+                                checked={enabled}
+                                onChange={e => handleSoundToggle(event, e.target.checked)}
+                              />
+                              <span>{enabled ? 'On' : 'Off'}</span>
+                            </label>
+                            <button
+                              className="btn btn-small btn-secondary"
+                              onClick={() => handleTestSound(event)}
+                              disabled={!enabled}
+                            >
+                              Test
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
