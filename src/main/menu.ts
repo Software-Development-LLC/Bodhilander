@@ -1,51 +1,9 @@
 import { Menu, shell, app, BrowserWindow } from 'electron';
 import * as path from 'path';
 
-const settingsPreloadPath = path.join(__dirname, 'preload-settings.js');
 const aboutPreloadPath = path.join(__dirname, 'preload-about.js');
 
 let aboutWindow: BrowserWindow | null = null;
-let settingsWindow: BrowserWindow | null = null;
-
-export function showSettingsWindow(parentWindow: BrowserWindow): void {
-  if (settingsWindow) {
-    settingsWindow.focus();
-    return;
-  }
-
-  settingsWindow = new BrowserWindow({
-    width: 850,
-    height: 750,
-    parent: parentWindow,
-    modal: false,
-    resizable: true,
-    minimizable: false,
-    maximizable: false,
-    backgroundColor: '#1e1e1e',
-    autoHideMenuBar: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      preload: settingsPreloadPath,
-    },
-  });
-
-  // Hide menu bar for Settings window
-  settingsWindow.setMenuBarVisibility(false);
-
-  settingsWindow.loadFile(path.join(__dirname, '../renderer/settings.html'));
-
-  settingsWindow.on('closed', () => {
-    settingsWindow = null;
-  });
-
-  // Close on Escape key
-  settingsWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.key === 'Escape') {
-      settingsWindow?.close();
-    }
-  });
-}
 
 function showAboutWindow(parentWindow: BrowserWindow): void {
   if (aboutWindow) {
@@ -103,7 +61,11 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         {
           label: 'Preferences...',
           accelerator: 'CmdOrCtrl+,',
-          click: () => showSettingsWindow(mainWindow),
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('open-settings');
+            }
+          },
         },
         { type: 'separator' as const },
         { role: 'services' as const },
@@ -151,7 +113,11 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
           {
             label: 'Settings',
             accelerator: 'CmdOrCtrl+,',
-            click: () => showSettingsWindow(mainWindow),
+            click: () => {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('open-settings');
+              }
+            },
           },
           { type: 'separator' as const },
           { role: 'quit' as const },

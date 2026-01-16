@@ -6,7 +6,7 @@ import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import { StateMonitor } from './state-monitor';
-import { createApplicationMenu, showSettingsWindow } from './menu';
+import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
@@ -298,8 +298,8 @@ function createWindow(): void {
   // Initialize tray manager
   trayManager.initialize(mainWindow);
   trayManager.setShowSettingsHandler(() => {
-    if (mainWindow) {
-      showSettingsWindow(mainWindow);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('open-settings');
     }
   });
 
