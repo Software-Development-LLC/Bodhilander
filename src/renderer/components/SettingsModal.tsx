@@ -37,6 +37,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [soundCompleteEnabled, setSoundCompleteEnabled] = useState(true);
   const volumeSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // General settings state
+  const [autoLaunchClaude, setAutoLaunchClaude] = useState(true);
+  const [customShellPath, setCustomShellPath] = useState('');
+  const [closeToTray, setCloseToTray] = useState(true);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
@@ -65,6 +70,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           errorPref,
           startPref,
           completePref,
+          autoLaunchPref,
+          shellPathPref,
+          closeToTrayPref,
         ] = await Promise.all([
           window.electronAPI.getPreference('notificationSound'),
           window.electronAPI.getPreference('soundVolume'),
@@ -73,6 +81,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           window.electronAPI.getPreference('soundErrorEnabled'),
           window.electronAPI.getPreference('soundStartEnabled'),
           window.electronAPI.getPreference('soundCompleteEnabled'),
+          window.electronAPI.getPreference('autoLaunchClaude'),
+          window.electronAPI.getPreference('customShellPath'),
+          window.electronAPI.getPreference('closeToTray'),
         ]);
 
         setSoundEnabled(soundEnabledPref !== 'false');
@@ -82,6 +93,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setSoundErrorEnabled(errorPref !== 'false');
         setSoundStartEnabled(startPref !== 'false');
         setSoundCompleteEnabled(completePref !== 'false');
+        setAutoLaunchClaude(autoLaunchPref === 'true');
+        setCustomShellPath(shellPathPref || '');
+        setCloseToTray(closeToTrayPref !== 'false');
       } catch (err) {
         console.error('Failed to load API state:', err);
       }
@@ -241,6 +255,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   const handleTestSound = useCallback(async (event: 'waiting' | 'error' | 'start' | 'complete') => {
     await window.electronAPI.testSound(event);
+  }, []);
+
+  // General setting handlers
+  const handleAutoLaunchClaudeChange = useCallback(async (enabled: boolean) => {
+    setAutoLaunchClaude(enabled);
+    await window.electronAPI.setPreference('autoLaunchClaude', enabled.toString());
+  }, []);
+
+  const handleCustomShellPathChange = useCallback(async (path: string) => {
+    setCustomShellPath(path);
+    await window.electronAPI.setPreference('customShellPath', path);
+  }, []);
+
+  const handleCloseToTrayChange = useCallback(async (enabled: boolean) => {
+    setCloseToTray(enabled);
+    await window.electronAPI.setPreference('closeToTray', enabled.toString());
   }, []);
 
   if (!isOpen) return null;
