@@ -35,7 +35,6 @@ module.exports = {
       patterns: [
         { from: 'src/renderer/splash.html', to: 'splash.html' },
         { from: 'src/renderer/about.html', to: 'about.html' },
-        { from: 'src/renderer/settings.html', to: 'settings.html' },
         { from: 'src/renderer/assets', to: 'assets' },
       ],
     }),
