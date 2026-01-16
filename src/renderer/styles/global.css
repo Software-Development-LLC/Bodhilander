@@ -1160,3 +1160,63 @@ body {
   width: 14px;
   height: 14px;
 }
+
+/* Sound Settings */
+.settings-row select {
+  padding: 6px 10px;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  color: #d4d4d4;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.volume-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.volume-row input[type="range"] {
+  flex: 1;
+  max-width: 200px;
+}
+
+.volume-value {
+  min-width: 40px;
+  text-align: right;
+}
+
+.sound-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sound-event-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.sound-event-row:last-child {
+  border-bottom: none;
+}
+
+.sound-event-label {
+  flex: 1;
+  min-width: 120px;
+}
+
+.sound-event-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 60px;
+}
+
+.sound-event-toggle input {
+  margin: 0;
+}
