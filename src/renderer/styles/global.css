@@ -1220,3 +1220,73 @@ body {
 .sound-event-toggle input {
   margin: 0;
 }
+
+/* Settings text input */
+.settings-text-input {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  color: #d4d4d4;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  width: 300px;
+}
+
+.settings-text-input:focus {
+  outline: none;
+  border-color: #ff8c00;
+}
+
+.settings-text-input::placeholder {
+  color: #666;
+}
+
+/* Range value display */
+.range-value {
+  font-size: 13px;
+  color: #888;
+  min-width: 50px;
+  text-align: right;
+}
+
+/* Integration cards */
+.integration-card {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.integration-card.disabled {
+  opacity: 0.5;
+}
+
+.integration-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.integration-header h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.integration-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.integration-status-dot.connected {
+  background: #4ade80;
+}
+
+.integration-status {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
+}
