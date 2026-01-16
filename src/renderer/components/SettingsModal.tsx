@@ -53,6 +53,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   // Desktop notifications state
   const [enableNotifications, setEnableNotifications] = useState(true);
 
+  // Integrations state
+  const [githubUser, setGithubUser] = useState<{ username: string } | null>(null);
+  const [githubLoading, setGithubLoading] = useState(false);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
@@ -122,6 +126,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setFontSize(fontSizePref ? parseInt(fontSizePref, 10) : 14);
         setWebglRenderer(webglRendererPref === 'true');
         setEnableNotifications(enableNotificationsPref !== 'false');
+
+        // Load GitHub user status
+        try {
+          const user = await window.electronAPI.getUser();
+          setGithubUser(user);
+        } catch {
+          setGithubUser(null);
+        }
       } catch (err) {
         console.error('Failed to load API state:', err);
       }
@@ -129,6 +141,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
     loadState();
   }, [isOpen]);
+
+  // Listen for GitHub auth changes
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onAuthChanged(async () => {
+      try {
+        const user = await window.electronAPI.getUser();
+        setGithubUser(user);
+      } catch {
+        setGithubUser(null);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   const handleStartServer = useCallback(async () => {
     setLoading(true);
@@ -326,6 +351,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     await window.electronAPI.setPreference('enableNotifications', enabled.toString());
   }, []);
 
+  // Integrations handlers
+  const handleGitHubLogin = useCallback(async () => {
+    setGithubLoading(true);
+    try {
+      await window.electronAPI.login();
+      const user = await window.electronAPI.getUser();
+      setGithubUser(user);
+    } catch (err) {
+      console.error('GitHub login failed:', err);
+    }
+    setGithubLoading(false);
+  }, []);
+
+  const handleGitHubLogout = useCallback(async () => {
+    setGithubLoading(true);
+    try {
+      await window.electronAPI.logout();
+      setGithubUser(null);
+    } catch (err) {
+      console.error('GitHub logout failed:', err);
+    }
+    setGithubLoading(false);
+  }, []);
+
   if (!isOpen) return null;
 
   return (
@@ -367,6 +416,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               onClick={() => setActiveTab('sound')}
             >
               Sound
+            </button>
+            <button
+              className={`settings-nav-item ${activeTab === 'integrations' ? 'active' : ''}`}
+              onClick={() => setActiveTab('integrations')}
+            >
+              Integrations
             </button>
           </nav>
 
@@ -485,6 +540,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       onChange={e => handleWebglRendererChange(e.target.checked)}
                     />
                     <span className="settings-hint">Use GPU acceleration for terminal (recommended)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'integrations' && (
+              <div className="settings-section">
+                <h3>Integrations</h3>
+                <p className="settings-description">
+                  Connect external services to receive notifications and share sessions.
+                </p>
+
+                <div className="settings-group integration-card">
+                  <div className="integration-header">
+                    <span className={`integration-status-dot ${githubUser ? 'connected' : ''}`} />
+                    <h4>GitHub</h4>
+                  </div>
+                  <p className="integration-status">
+                    {githubUser ? `Connected as ${githubUser.username}` : 'Not connected'}
+                  </p>
+                  <p className="settings-hint">Used for: Session sharing</p>
+                  <div className="settings-actions">
+                    {githubUser ? (
+                      <button
+                        className="btn btn-danger"
+                        onClick={handleGitHubLogout}
+                        disabled={githubLoading}
+                      >
+                        {githubLoading ? 'Signing Out...' : 'Sign Out'}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleGitHubLogin}
+                        disabled={githubLoading}
+                      >
+                        {githubLoading ? 'Signing In...' : 'Sign In'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="settings-group integration-card disabled">
+                  <div className="integration-header">
+                    <span className="integration-status-dot" />
+                    <h4>Microsoft Teams</h4>
+                  </div>
+                  <p className="integration-status">Coming Soon</p>
+                  <p className="settings-hint">Used for: Notifications</p>
+                  <div className="settings-actions">
+                    <button className="btn btn-secondary" disabled>
+                      Coming Soon
+                    </button>
                   </div>
                 </div>
               </div>
