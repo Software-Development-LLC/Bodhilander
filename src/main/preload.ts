@@ -70,6 +70,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('session:select', listener);
   },
 
+  // Settings modal trigger
+  onOpenSettings: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('open-settings', listener);
+    return () => ipcRenderer.removeListener('open-settings', listener);
+  },
+
   // Dialogs
   selectDirectory: (): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectDirectory'),
