@@ -7,7 +7,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile';
+  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile' | 'notifications';
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   // Mobile API state
@@ -309,7 +309,51 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             {activeTab === 'general' && (
               <div className="settings-section">
                 <h3>General Settings</h3>
-                <p className="settings-placeholder">General settings coming soon...</p>
+
+                <div className="settings-group">
+                  <h4>Sessions</h4>
+                  <div className="settings-row">
+                    <label htmlFor="auto-launch-claude">Auto-launch Claude:</label>
+                    <input
+                      id="auto-launch-claude"
+                      type="checkbox"
+                      checked={autoLaunchClaude}
+                      onChange={e => handleAutoLaunchClaudeChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Automatically start Claude when creating new sessions</span>
+                  </div>
+
+                  <div className="settings-row">
+                    <label htmlFor="custom-shell-path">Custom Shell Path:</label>
+                    <input
+                      id="custom-shell-path"
+                      type="text"
+                      className="settings-text-input"
+                      value={customShellPath}
+                      onChange={e => handleCustomShellPathChange(e.target.value)}
+                      placeholder="Auto-detect"
+                    />
+                    <span className="settings-hint">
+                      {window.electronAPI.platform === 'win32'
+                        ? 'e.g., C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+                        : 'e.g., /bin/bash, /bin/zsh'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h4>System</h4>
+                  <div className="settings-row">
+                    <label htmlFor="close-to-tray">Close to Tray:</label>
+                    <input
+                      id="close-to-tray"
+                      type="checkbox"
+                      checked={closeToTray}
+                      onChange={e => handleCloseToTrayChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Minimize to system tray instead of quitting when closing window</span>
+                  </div>
+                </div>
               </div>
             )}
 
