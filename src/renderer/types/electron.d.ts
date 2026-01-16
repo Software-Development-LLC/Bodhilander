@@ -41,6 +41,9 @@ export interface ElectronAPI {
   // Session selection from notifications/tray
   onSessionSelect: (callback: (sessionId: string) => void) => () => void;
 
+  // Settings modal
+  onOpenSettings: (callback: () => void) => () => void;
+
   // Dialogs
   selectDirectory: () => Promise<string | null>;
 

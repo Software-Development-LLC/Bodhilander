@@ -694,6 +694,14 @@ const App: React.FC = () => {
     return () => cleanups.forEach(cleanup => cleanup());
   }, [handleKeyboardNewSession, handleCloseSession, handleNextSession, handlePrevSession, handleNextWaiting, handleSessionSelect]);
 
+  // Listen for settings modal open event
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onOpenSettings(() => {
+      setSettingsOpen(true);
+    });
+    return unsubscribe;
+  }, []);
+
   // Sidebar resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
