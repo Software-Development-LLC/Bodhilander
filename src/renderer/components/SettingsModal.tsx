@@ -46,6 +46,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [showSplash, setShowSplash] = useState(true);
   const [splashDuration, setSplashDuration] = useState(2.5);
 
+  // Terminal settings state
+  const [fontSize, setFontSize] = useState(14);
+  const [webglRenderer, setWebglRenderer] = useState(true);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
@@ -79,6 +83,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           closeToTrayPref,
           showSplashPref,
           splashDurationPref,
+          fontSizePref,
+          webglRendererPref,
         ] = await Promise.all([
           window.electronAPI.getPreference('notificationSound'),
           window.electronAPI.getPreference('soundVolume'),
@@ -92,6 +98,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           window.electronAPI.getPreference('closeToTray'),
           window.electronAPI.getPreference('showSplash'),
           window.electronAPI.getPreference('splashDuration'),
+          window.electronAPI.getPreference('fontSize'),
+          window.electronAPI.getPreference('webglRenderer'),
         ]);
 
         setSoundEnabled(soundEnabledPref !== 'false');
@@ -106,6 +114,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setCloseToTray(closeToTrayPref !== 'false');
         setShowSplash(showSplashPref === 'true');
         setSplashDuration(splashDurationPref ? parseFloat(splashDurationPref) : 2.5);
+        setFontSize(fontSizePref ? parseInt(fontSizePref, 10) : 14);
+        setWebglRenderer(webglRendererPref === 'true');
       } catch (err) {
         console.error('Failed to load API state:', err);
       }
@@ -294,6 +304,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     await window.electronAPI.setPreference('splashDuration', duration.toString());
   }, []);
 
+  // Terminal setting handlers
+  const handleFontSizeChange = useCallback(async (size: number) => {
+    setFontSize(size);
+    await window.electronAPI.setPreference('fontSize', size.toString());
+  }, []);
+
+  const handleWebglRendererChange = useCallback(async (enabled: boolean) => {
+    setWebglRenderer(enabled);
+    await window.electronAPI.setPreference('webglRenderer', enabled.toString());
+  }, []);
+
   if (!isOpen) return null;
 
   return (
@@ -317,6 +338,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               onClick={() => setActiveTab('appearance')}
             >
               Appearance
+            </button>
+            <button
+              className={`settings-nav-item ${activeTab === 'terminal' ? 'active' : ''}`}
+              onClick={() => setActiveTab('terminal')}
+            >
+              Terminal
             </button>
             <button
               className={`settings-nav-item ${activeTab === 'mobile' ? 'active' : ''}`}
@@ -413,6 +440,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       onChange={e => handleSplashDurationChange(parseFloat(e.target.value))}
                     />
                     <span className="range-value">{splashDuration}s</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'terminal' && (
+              <div className="settings-section">
+                <h3>Terminal</h3>
+
+                <div className="settings-group">
+                  <h4>Display</h4>
+                  <div className="settings-row">
+                    <label htmlFor="font-size">Font Size:</label>
+                    <input
+                      type="range"
+                      id="font-size"
+                      min="10"
+                      max="24"
+                      step="1"
+                      value={fontSize}
+                      onChange={e => handleFontSizeChange(parseInt(e.target.value, 10))}
+                    />
+                    <span className="range-value">{fontSize}px</span>
+                  </div>
+
+                  <div className="settings-row">
+                    <label htmlFor="webgl-renderer">Enable WebGL Rendering:</label>
+                    <input
+                      id="webgl-renderer"
+                      type="checkbox"
+                      checked={webglRenderer}
+                      onChange={e => handleWebglRendererChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Use GPU acceleration for terminal (recommended)</span>
                   </div>
                 </div>
               </div>
