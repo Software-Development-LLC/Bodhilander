@@ -806,8 +806,8 @@ body {
 }
 
 .settings-modal {
-  width: 700px;
-  height: 500px;
+  width: 750px;
+  height: 550px;
   display: flex;
   flex-direction: column;
 }
@@ -916,13 +916,15 @@ body {
 
 .settings-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px 12px;
+  margin-bottom: 16px;
 }
 
 .settings-row label {
-  width: 120px;
+  min-width: 150px;
+  flex-shrink: 0;
   color: #888;
   font-size: 13px;
 }
@@ -940,11 +942,15 @@ body {
 .settings-row input[type="checkbox"] {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
 }
 
 .settings-hint {
+  flex-basis: 100%;
   color: #666;
   font-size: 12px;
+  margin-left: 162px;
+  margin-top: -4px;
 }
 
 .settings-actions {
@@ -1229,7 +1235,9 @@ body {
   padding: 8px 12px;
   border-radius: 4px;
   font-size: 13px;
-  width: 300px;
+  flex: 1;
+  min-width: 200px;
+  max-width: 350px;
 }
 
 .settings-text-input:focus {

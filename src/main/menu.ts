@@ -111,15 +111,16 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         { type: 'separator' },
         ...(isMac ? [] : [
           {
+            // Hidden menu item to register Ctrl+, accelerator on Windows/Linux
             label: 'Settings',
             accelerator: 'CmdOrCtrl+,',
+            visible: false,
             click: () => {
               if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('open-settings');
               }
             },
           },
-          { type: 'separator' as const },
           { role: 'quit' as const },
         ]),
       ],
