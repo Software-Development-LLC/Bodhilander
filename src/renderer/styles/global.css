@@ -806,8 +806,8 @@ body {
 }
 
 .settings-modal {
-  width: 700px;
-  height: 500px;
+  width: 750px;
+  height: 550px;
   display: flex;
   flex-direction: column;
 }
@@ -916,13 +916,15 @@ body {
 
 .settings-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px 12px;
+  margin-bottom: 16px;
 }
 
 .settings-row label {
-  width: 120px;
+  min-width: 150px;
+  flex-shrink: 0;
   color: #888;
   font-size: 13px;
 }
@@ -940,11 +942,15 @@ body {
 .settings-row input[type="checkbox"] {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
 }
 
 .settings-hint {
+  flex-basis: 100%;
   color: #666;
   font-size: 12px;
+  margin-left: 162px;
+  margin-top: -4px;
 }
 
 .settings-actions {
@@ -973,6 +979,43 @@ body {
 .api-status.stopped {
   background: rgba(239, 68, 68, 0.2);
   color: #ef4444;
+}
+
+/* Remote Access Status */
+.remote-status {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.remote-status.connected {
+  background: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.remote-status.connecting {
+  background: rgba(250, 204, 21, 0.2);
+  color: #facc15;
+}
+
+.remote-status.disabled {
+  background: rgba(113, 113, 122, 0.2);
+  color: #71717a;
+}
+
+.desktop-id {
+  font-family: 'Consolas', 'Monaco', monospace;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  user-select: all;
+}
+
+.relay-url {
+  font-size: 12px;
+  color: #71717a;
 }
 
 /* Button styles */
@@ -1122,4 +1165,136 @@ body {
 .device-permissions input[type="checkbox"] {
   width: 14px;
   height: 14px;
+}
+
+/* Sound Settings */
+.settings-row select {
+  padding: 6px 10px;
+  background: #3c3c3c;
+  border: 1px solid #555;
+  color: #d4d4d4;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.volume-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.volume-row input[type="range"] {
+  flex: 1;
+  max-width: 200px;
+}
+
+.volume-value {
+  min-width: 40px;
+  text-align: right;
+}
+
+.sound-events-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sound-event-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.sound-event-row:last-child {
+  border-bottom: none;
+}
+
+.sound-event-label {
+  flex: 1;
+  min-width: 120px;
+}
+
+.sound-event-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 60px;
+}
+
+.sound-event-toggle input {
+  margin: 0;
+}
+
+/* Settings text input */
+.settings-text-input {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  color: #d4d4d4;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  flex: 1;
+  min-width: 200px;
+  max-width: 350px;
+}
+
+.settings-text-input:focus {
+  outline: none;
+  border-color: #ff8c00;
+}
+
+.settings-text-input::placeholder {
+  color: #666;
+}
+
+/* Range value display */
+.range-value {
+  font-size: 13px;
+  color: #888;
+  min-width: 50px;
+  text-align: right;
+}
+
+/* Integration cards */
+.integration-card {
+  background: #2d2d2d;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.integration-card.disabled {
+  opacity: 0.5;
+}
+
+.integration-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.integration-header h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.integration-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.integration-status-dot.connected {
+  background: #4ade80;
+}
+
+.integration-status {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 4px;
 }

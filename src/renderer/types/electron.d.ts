@@ -10,6 +10,7 @@ import {
   PairedDevice,
   ApiServerConfig,
   DevicePermissions,
+  RelayConnectionStatus,
 } from '../../shared/types';
 
 interface StateChangeEvent {
@@ -39,6 +40,9 @@ export interface ElectronAPI {
 
   // Session selection from notifications/tray
   onSessionSelect: (callback: (sessionId: string) => void) => () => void;
+
+  // Settings modal
+  onOpenSettings: (callback: () => void) => () => void;
 
   // Dialogs
   selectDirectory: () => Promise<string | null>;
@@ -103,12 +107,29 @@ export interface ElectronAPI {
   apiStart: (config?: ApiServerConfig) => Promise<void>;
   apiStop: () => Promise<void>;
   apiGetStatus: () => Promise<ApiServerStatus>;
-  apiGeneratePairingCode: (options?: DevicePermissions) => Promise<PairingCode>;
+  apiGeneratePairingCode: (options?: DevicePermissions) => Promise<{
+    success: boolean;
+    code?: string;
+    qrCode?: string;
+    expiresAt?: number;
+    addresses?: string[];
+    port?: number;
+    error?: string;
+  }>;
   apiCancelPairing: () => Promise<void>;
   apiGetPairedDevices: () => Promise<PairedDevice[]>;
   apiUnpairDevice: (deviceId: string) => Promise<void>;
   apiUpdateDevicePermissions: (deviceId: string, permissions: DevicePermissions) => Promise<void>;
-  apiHasPairingCode: () => Promise<boolean>;
+  apiHasPairingCode: () => Promise<{ active: boolean }>;
+
+  // Remote access
+  apiEnableRemoteAccess: () => Promise<{
+    success: boolean;
+    status?: RelayConnectionStatus;
+    error?: string;
+  }>;
+  apiDisableRemoteAccess: () => Promise<{ success: boolean; error?: string }>;
+  apiGetRemoteAccessStatus: () => Promise<RelayConnectionStatus>;
 }
 
 declare global {

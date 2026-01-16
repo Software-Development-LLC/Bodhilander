@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { ApiServerStatus, PairedDevice, PairingCode, RelayConnectionStatus } from '../../shared/types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -7,7 +7,8 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'mobile' | 'notifications'>('mobile');
+  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile';
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   // Mobile API state
   const [apiStatus, setApiStatus] = useState<ApiServerStatus>({ running: false });
@@ -17,21 +18,121 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [enableMdns, setEnableMdns] = useState(true);
   const [loading, setLoading] = useState(false);
 
+  // Remote access state
+  const [remoteStatus, setRemoteStatus] = useState<RelayConnectionStatus>({
+    enabled: false,
+    connected: false,
+    desktopId: null,
+    relayUrl: '',
+  });
+  const [remoteLoading, setRemoteLoading] = useState(false);
+
+  // Sound settings state
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundVolume, setSoundVolume] = useState(70);
+  const [debouncePreset, setDebouncePreset] = useState<'fast' | 'normal' | 'relaxed'>('normal');
+  const [soundWaitingEnabled, setSoundWaitingEnabled] = useState(true);
+  const [soundErrorEnabled, setSoundErrorEnabled] = useState(true);
+  const [soundStartEnabled, setSoundStartEnabled] = useState(true);
+  const [soundCompleteEnabled, setSoundCompleteEnabled] = useState(true);
+  const volumeSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // General settings state
+  const [autoLaunchClaude, setAutoLaunchClaude] = useState(true);
+  const [customShellPath, setCustomShellPath] = useState('');
+  const [closeToTray, setCloseToTray] = useState(true);
+
+  // Appearance settings state
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashDuration, setSplashDuration] = useState(2.5);
+
+  // Terminal settings state
+  const [fontSize, setFontSize] = useState(14);
+  const [webglRenderer, setWebglRenderer] = useState(true);
+
+  // Desktop notifications state
+  const [enableNotifications, setEnableNotifications] = useState(true);
+
+  // Integrations state
+  const [githubUser, setGithubUser] = useState<{ username: string } | null>(null);
+  const [githubLoading, setGithubLoading] = useState(false);
+
   // Load initial state
   useEffect(() => {
     if (!isOpen) return;
 
     const loadState = async () => {
       try {
-        const [status, devices, hasPairing] = await Promise.all([
+        const [status, devices, hasPairingResult, remoteAccessStatus] = await Promise.all([
           window.electronAPI.apiGetStatus(),
           window.electronAPI.apiGetPairedDevices(),
           window.electronAPI.apiHasPairingCode(),
+          window.electronAPI.apiGetRemoteAccessStatus(),
         ]);
         setApiStatus(status);
         setPairedDevices(devices);
-        if (!hasPairing) {
+        if (!hasPairingResult.active) {
           setPairingCode(null);
+        }
+        setRemoteStatus(remoteAccessStatus);
+
+        // Load sound settings
+        const [
+          soundEnabledPref,
+          volumePref,
+          debouncePref,
+          waitingPref,
+          errorPref,
+          startPref,
+          completePref,
+          autoLaunchPref,
+          shellPathPref,
+          closeToTrayPref,
+          showSplashPref,
+          splashDurationPref,
+          fontSizePref,
+          webglRendererPref,
+          enableNotificationsPref,
+        ] = await Promise.all([
+          window.electronAPI.getPreference('notificationSound'),
+          window.electronAPI.getPreference('soundVolume'),
+          window.electronAPI.getPreference('soundDebouncePreset'),
+          window.electronAPI.getPreference('soundWaitingEnabled'),
+          window.electronAPI.getPreference('soundErrorEnabled'),
+          window.electronAPI.getPreference('soundStartEnabled'),
+          window.electronAPI.getPreference('soundCompleteEnabled'),
+          window.electronAPI.getPreference('autoLaunchClaude'),
+          window.electronAPI.getPreference('customShellPath'),
+          window.electronAPI.getPreference('closeToTray'),
+          window.electronAPI.getPreference('showSplash'),
+          window.electronAPI.getPreference('splashDuration'),
+          window.electronAPI.getPreference('fontSize'),
+          window.electronAPI.getPreference('webglRenderer'),
+          window.electronAPI.getPreference('enableNotifications'),
+        ]);
+
+        setSoundEnabled(soundEnabledPref !== 'false');
+        setSoundVolume(volumePref ? parseInt(volumePref, 10) : 70);
+        setDebouncePreset((debouncePref as 'fast' | 'normal' | 'relaxed') || 'normal');
+        setSoundWaitingEnabled(waitingPref !== 'false');
+        setSoundErrorEnabled(errorPref !== 'false');
+        setSoundStartEnabled(startPref !== 'false');
+        setSoundCompleteEnabled(completePref !== 'false');
+        setAutoLaunchClaude(autoLaunchPref === 'true');
+        setCustomShellPath(shellPathPref || '');
+        setCloseToTray(closeToTrayPref !== 'false');
+        setShowSplash(showSplashPref === 'true');
+        setSplashDuration(splashDurationPref ? parseFloat(splashDurationPref) : 2.5);
+        setFontSize(fontSizePref ? parseInt(fontSizePref, 10) : 14);
+        setWebglRenderer(webglRendererPref === 'true');
+        setEnableNotifications(enableNotificationsPref !== 'false');
+
+        // Load GitHub user status
+        try {
+          const user = await window.electronAPI.getUser();
+          setGithubUser(user);
+        } catch {
+          setGithubUser(null);
         }
       } catch (err) {
         console.error('Failed to load API state:', err);
@@ -40,6 +141,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
     loadState();
   }, [isOpen]);
+
+  // Listen for GitHub auth changes
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onAuthChanged(async () => {
+      try {
+        const user = await window.electronAPI.getUser();
+        setGithubUser(user);
+      } catch {
+        setGithubUser(null);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   const handleStartServer = useCallback(async () => {
     setLoading(true);
@@ -67,11 +181,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   const handleGeneratePairingCode = useCallback(async () => {
     try {
-      const code = await window.electronAPI.apiGeneratePairingCode({
+      const result = await window.electronAPI.apiGeneratePairingCode({
         canControl: true,
         canModify: false,
       });
-      setPairingCode(code);
+      if (result.success && result.code && result.qrCode && result.expiresAt) {
+        setPairingCode({
+          code: result.code,
+          qrCode: result.qrCode,
+          expiresAt: result.expiresAt,
+          addresses: result.addresses,
+          port: result.port,
+        });
+      } else {
+        console.error('Failed to generate pairing code:', result.error);
+      }
     } catch (err) {
       console.error('Failed to generate pairing code:', err);
     }
@@ -113,6 +237,144 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     }
   }, []);
 
+  const handleEnableRemoteAccess = useCallback(async () => {
+    setRemoteLoading(true);
+    try {
+      const result = await window.electronAPI.apiEnableRemoteAccess();
+      if (result.success && result.status) {
+        setRemoteStatus(result.status);
+      } else {
+        console.error('Failed to enable remote access:', result.error);
+      }
+    } catch (err) {
+      console.error('Failed to enable remote access:', err);
+    }
+    setRemoteLoading(false);
+  }, []);
+
+  const handleDisableRemoteAccess = useCallback(async () => {
+    setRemoteLoading(true);
+    try {
+      const result = await window.electronAPI.apiDisableRemoteAccess();
+      if (result.success) {
+        setRemoteStatus(prev => ({ ...prev, enabled: false, connected: false }));
+      } else {
+        console.error('Failed to disable remote access:', result.error);
+      }
+    } catch (err) {
+      console.error('Failed to disable remote access:', err);
+    }
+    setRemoteLoading(false);
+  }, []);
+
+  // Sound setting handlers
+  const handleSoundEnabledChange = useCallback(async (enabled: boolean) => {
+    setSoundEnabled(enabled);
+    await window.electronAPI.setPreference('notificationSound', enabled.toString());
+  }, []);
+
+  const handleVolumeChange = useCallback((volume: number) => {
+    setSoundVolume(volume);
+    // Debounce preference save to avoid excessive writes during slider drag
+    if (volumeSaveTimerRef.current) {
+      clearTimeout(volumeSaveTimerRef.current);
+    }
+    volumeSaveTimerRef.current = setTimeout(() => {
+      window.electronAPI.setPreference('soundVolume', volume.toString());
+    }, 300);
+  }, []);
+
+  const handleDebouncePresetChange = useCallback(async (preset: 'fast' | 'normal' | 'relaxed') => {
+    setDebouncePreset(preset);
+    await window.electronAPI.setPreference('soundDebouncePreset', preset);
+  }, []);
+
+  const handleSoundToggle = useCallback(async (
+    event: 'waiting' | 'error' | 'start' | 'complete',
+    enabled: boolean
+  ) => {
+    const prefKey = `sound${event.charAt(0).toUpperCase() + event.slice(1)}Enabled`;
+    await window.electronAPI.setPreference(prefKey, enabled.toString());
+
+    switch (event) {
+      case 'waiting': setSoundWaitingEnabled(enabled); break;
+      case 'error': setSoundErrorEnabled(enabled); break;
+      case 'start': setSoundStartEnabled(enabled); break;
+      case 'complete': setSoundCompleteEnabled(enabled); break;
+    }
+  }, []);
+
+  const handleTestSound = useCallback(async (event: 'waiting' | 'error' | 'start' | 'complete') => {
+    await window.electronAPI.testSound(event);
+  }, []);
+
+  // General setting handlers
+  const handleAutoLaunchClaudeChange = useCallback(async (enabled: boolean) => {
+    setAutoLaunchClaude(enabled);
+    await window.electronAPI.setPreference('autoLaunchClaude', enabled.toString());
+  }, []);
+
+  const handleCustomShellPathChange = useCallback(async (path: string) => {
+    setCustomShellPath(path);
+    await window.electronAPI.setPreference('customShellPath', path);
+  }, []);
+
+  const handleCloseToTrayChange = useCallback(async (enabled: boolean) => {
+    setCloseToTray(enabled);
+    await window.electronAPI.setPreference('closeToTray', enabled.toString());
+  }, []);
+
+  // Appearance setting handlers
+  const handleShowSplashChange = useCallback(async (enabled: boolean) => {
+    setShowSplash(enabled);
+    await window.electronAPI.setPreference('showSplash', enabled.toString());
+  }, []);
+
+  const handleSplashDurationChange = useCallback(async (duration: number) => {
+    setSplashDuration(duration);
+    await window.electronAPI.setPreference('splashDuration', duration.toString());
+  }, []);
+
+  // Terminal setting handlers
+  const handleFontSizeChange = useCallback(async (size: number) => {
+    setFontSize(size);
+    await window.electronAPI.setPreference('fontSize', size.toString());
+  }, []);
+
+  const handleWebglRendererChange = useCallback(async (enabled: boolean) => {
+    setWebglRenderer(enabled);
+    await window.electronAPI.setPreference('webglRenderer', enabled.toString());
+  }, []);
+
+  const handleEnableNotificationsChange = useCallback(async (enabled: boolean) => {
+    setEnableNotifications(enabled);
+    await window.electronAPI.setPreference('enableNotifications', enabled.toString());
+  }, []);
+
+  // Integrations handlers
+  const handleGitHubLogin = useCallback(async () => {
+    setGithubLoading(true);
+    try {
+      await window.electronAPI.login();
+      const user = await window.electronAPI.getUser();
+      setGithubUser(user);
+    } catch (err) {
+      console.error('GitHub login failed:', err);
+    }
+    setGithubLoading(false);
+  }, []);
+
+  const handleGitHubLogout = useCallback(async () => {
+    setGithubLoading(true);
+    try {
+      await window.electronAPI.logout();
+      setGithubUser(null);
+    } catch (err) {
+      console.error('GitHub logout failed:', err);
+    }
+    setGithubLoading(false);
+  }, []);
+
   if (!isOpen) return null;
 
   return (
@@ -132,16 +394,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               General
             </button>
             <button
+              className={`settings-nav-item ${activeTab === 'appearance' ? 'active' : ''}`}
+              onClick={() => setActiveTab('appearance')}
+            >
+              Appearance
+            </button>
+            <button
+              className={`settings-nav-item ${activeTab === 'terminal' ? 'active' : ''}`}
+              onClick={() => setActiveTab('terminal')}
+            >
+              Terminal
+            </button>
+            <button
               className={`settings-nav-item ${activeTab === 'mobile' ? 'active' : ''}`}
               onClick={() => setActiveTab('mobile')}
             >
               Mobile App
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'notifications' ? 'active' : ''}`}
-              onClick={() => setActiveTab('notifications')}
+              className={`settings-nav-item ${activeTab === 'sound' ? 'active' : ''}`}
+              onClick={() => setActiveTab('sound')}
             >
-              Notifications
+              Sound
+            </button>
+            <button
+              className={`settings-nav-item ${activeTab === 'integrations' ? 'active' : ''}`}
+              onClick={() => setActiveTab('integrations')}
+            >
+              Integrations
             </button>
           </nav>
 
@@ -149,7 +429,172 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             {activeTab === 'general' && (
               <div className="settings-section">
                 <h3>General Settings</h3>
-                <p className="settings-placeholder">General settings coming soon...</p>
+
+                <div className="settings-group">
+                  <h4>Sessions</h4>
+                  <div className="settings-row">
+                    <label htmlFor="auto-launch-claude">Auto-launch Claude:</label>
+                    <input
+                      id="auto-launch-claude"
+                      type="checkbox"
+                      checked={autoLaunchClaude}
+                      onChange={e => handleAutoLaunchClaudeChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Automatically start Claude when creating new sessions</span>
+                  </div>
+
+                  <div className="settings-row">
+                    <label htmlFor="custom-shell-path">Custom Shell Path:</label>
+                    <input
+                      id="custom-shell-path"
+                      type="text"
+                      className="settings-text-input"
+                      value={customShellPath}
+                      onChange={e => handleCustomShellPathChange(e.target.value)}
+                      placeholder="Auto-detect"
+                    />
+                    <span className="settings-hint">
+                      {window.electronAPI.platform === 'win32'
+                        ? 'e.g., C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+                        : 'e.g., /bin/bash, /bin/zsh'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h4>System</h4>
+                  <div className="settings-row">
+                    <label htmlFor="close-to-tray">Close to Tray:</label>
+                    <input
+                      id="close-to-tray"
+                      type="checkbox"
+                      checked={closeToTray}
+                      onChange={e => handleCloseToTrayChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Minimize to system tray instead of quitting when closing window</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'appearance' && (
+              <div className="settings-section">
+                <h3>Appearance</h3>
+
+                <div className="settings-group">
+                  <h4>Splash Screen</h4>
+                  <div className="settings-row">
+                    <label htmlFor="show-splash">Show Splash Screen:</label>
+                    <input
+                      id="show-splash"
+                      type="checkbox"
+                      checked={showSplash}
+                      onChange={e => handleShowSplashChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Display splash screen on startup</span>
+                  </div>
+
+                  <div className="settings-row">
+                    <label htmlFor="splash-duration">Splash Duration:</label>
+                    <input
+                      type="range"
+                      id="splash-duration"
+                      min="1"
+                      max="5"
+                      step="0.5"
+                      value={splashDuration}
+                      onChange={e => handleSplashDurationChange(parseFloat(e.target.value))}
+                    />
+                    <span className="range-value">{splashDuration}s</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'terminal' && (
+              <div className="settings-section">
+                <h3>Terminal</h3>
+
+                <div className="settings-group">
+                  <h4>Display</h4>
+                  <div className="settings-row">
+                    <label htmlFor="font-size">Font Size:</label>
+                    <input
+                      type="range"
+                      id="font-size"
+                      min="10"
+                      max="24"
+                      step="1"
+                      value={fontSize}
+                      onChange={e => handleFontSizeChange(parseInt(e.target.value, 10))}
+                    />
+                    <span className="range-value">{fontSize}px</span>
+                  </div>
+
+                  <div className="settings-row">
+                    <label htmlFor="webgl-renderer">Enable WebGL Rendering:</label>
+                    <input
+                      id="webgl-renderer"
+                      type="checkbox"
+                      checked={webglRenderer}
+                      onChange={e => handleWebglRendererChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Use GPU acceleration for terminal (recommended)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'integrations' && (
+              <div className="settings-section">
+                <h3>Integrations</h3>
+                <p className="settings-description">
+                  Connect external services to receive notifications and share sessions.
+                </p>
+
+                <div className="settings-group integration-card">
+                  <div className="integration-header">
+                    <span className={`integration-status-dot ${githubUser ? 'connected' : ''}`} />
+                    <h4>GitHub</h4>
+                  </div>
+                  <p className="integration-status">
+                    {githubUser ? `Connected as ${githubUser.username}` : 'Not connected'}
+                  </p>
+                  <p className="settings-hint">Used for: Session sharing</p>
+                  <div className="settings-actions">
+                    {githubUser ? (
+                      <button
+                        className="btn btn-danger"
+                        onClick={handleGitHubLogout}
+                        disabled={githubLoading}
+                      >
+                        {githubLoading ? 'Signing Out...' : 'Sign Out'}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleGitHubLogin}
+                        disabled={githubLoading}
+                      >
+                        {githubLoading ? 'Signing In...' : 'Sign In'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="settings-group integration-card disabled">
+                  <div className="integration-header">
+                    <span className="integration-status-dot" />
+                    <h4>Microsoft Teams</h4>
+                  </div>
+                  <p className="integration-status">Coming Soon</p>
+                  <p className="settings-hint">Used for: Notifications</p>
+                  <div className="settings-actions">
+                    <button className="btn btn-secondary" disabled>
+                      Coming Soon
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -300,13 +745,158 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     </div>
                   )}
                 </div>
+
+                <div className="settings-group">
+                  <h4>Remote Access</h4>
+                  <p className="settings-description">
+                    Enable remote access to connect from outside your local network via the relay server.
+                  </p>
+
+                  <div className="settings-row">
+                    <label>Status:</label>
+                    <span className={`remote-status ${remoteStatus.connected ? 'connected' : remoteStatus.enabled ? 'connecting' : 'disabled'}`}>
+                      {remoteStatus.connected
+                        ? 'Connected to relay'
+                        : remoteStatus.enabled
+                        ? 'Connecting...'
+                        : 'Disabled'}
+                    </span>
+                  </div>
+
+                  {remoteStatus.enabled && remoteStatus.desktopId && (
+                    <div className="settings-row">
+                      <label>Desktop ID:</label>
+                      <code className="desktop-id">{remoteStatus.desktopId}</code>
+                    </div>
+                  )}
+
+                  {remoteStatus.enabled && remoteStatus.relayUrl && (
+                    <div className="settings-row">
+                      <label>Relay Server:</label>
+                      <span className="relay-url">{remoteStatus.relayUrl}</span>
+                    </div>
+                  )}
+
+                  <div className="settings-actions">
+                    {remoteStatus.enabled ? (
+                      <button
+                        className="btn btn-danger"
+                        onClick={handleDisableRemoteAccess}
+                        disabled={remoteLoading}
+                      >
+                        {remoteLoading ? 'Disabling...' : 'Disable Remote Access'}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={handleEnableRemoteAccess}
+                        disabled={remoteLoading}
+                      >
+                        {remoteLoading ? 'Enabling...' : 'Enable Remote Access'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
-            {activeTab === 'notifications' && (
+            {activeTab === 'sound' && (
               <div className="settings-section">
-                <h3>Notification Settings</h3>
-                <p className="settings-placeholder">Notification settings coming soon...</p>
+                <h3>Sound Settings</h3>
+
+                <div className="settings-group">
+                  <h4>Desktop Notifications</h4>
+                  <div className="settings-row">
+                    <label htmlFor="enable-notifications">Enable Notifications:</label>
+                    <input
+                      id="enable-notifications"
+                      type="checkbox"
+                      checked={enableNotifications}
+                      onChange={e => handleEnableNotificationsChange(e.target.checked)}
+                    />
+                    <span className="settings-hint">Show system notifications when sessions need attention</span>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <div className="settings-row">
+                    <label htmlFor="sound-enabled">Enable Sounds:</label>
+                    <input
+                      id="sound-enabled"
+                      type="checkbox"
+                      checked={soundEnabled}
+                      onChange={e => handleSoundEnabledChange(e.target.checked)}
+                    />
+                  </div>
+                </div>
+
+                {soundEnabled && (
+                  <>
+                    <div className="settings-group">
+                      <h4>Sound Frequency</h4>
+                      <p className="settings-description">
+                        Controls how rapidly sounds can play when states change quickly.
+                      </p>
+                      <div className="settings-row">
+                        <label htmlFor="debounce-preset">Preset:</label>
+                        <select
+                          id="debounce-preset"
+                          value={debouncePreset}
+                          onChange={e => handleDebouncePresetChange(e.target.value as 'fast' | 'normal' | 'relaxed')}
+                        >
+                          <option value="fast">Fast (200ms)</option>
+                          <option value="normal">Normal (500ms) - Recommended</option>
+                          <option value="relaxed">Relaxed (1000ms)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="settings-group">
+                      <h4>Master Volume</h4>
+                      <div className="settings-row volume-row">
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={soundVolume}
+                          onChange={e => handleVolumeChange(parseInt(e.target.value, 10))}
+                        />
+                        <span className="volume-value">{soundVolume}%</span>
+                      </div>
+                    </div>
+
+                    <div className="settings-group">
+                      <h4>Individual Sounds</h4>
+                      <div className="sound-events-list">
+                        {[
+                          { event: 'waiting' as const, label: 'Waiting for Input', enabled: soundWaitingEnabled },
+                          { event: 'error' as const, label: 'Error', enabled: soundErrorEnabled },
+                          { event: 'start' as const, label: 'Session Start', enabled: soundStartEnabled },
+                          { event: 'complete' as const, label: 'Task Complete', enabled: soundCompleteEnabled },
+                        ].map(({ event, label, enabled }) => (
+                          <div key={event} className="sound-event-row">
+                            <span className="sound-event-label">{label}</span>
+                            <label className="sound-event-toggle">
+                              <input
+                                type="checkbox"
+                                checked={enabled}
+                                onChange={e => handleSoundToggle(event, e.target.checked)}
+                              />
+                              <span>{enabled ? 'On' : 'Off'}</span>
+                            </label>
+                            <button
+                              className="btn btn-small btn-secondary"
+                              onClick={() => handleTestSound(event)}
+                              disabled={!enabled}
+                            >
+                              Test
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

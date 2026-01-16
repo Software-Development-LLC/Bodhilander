@@ -13,6 +13,7 @@ import { createHttpServer } from './http-server';
 import { createWsServer, WsServer } from './ws-server';
 import { MdnsAdvertiser } from './discovery/mdns-advertiser';
 import { PairingManager } from './pairing/pairing-manager';
+import { getRelayConnection, initRelayHandler, type RelayConnectionStatus } from './relay';
 
 export interface ApiServerConfig {
   port: number;
@@ -26,6 +27,7 @@ export interface ApiServerStatus {
   addresses: string[];
   connectedClients: number;
   pairedDevices: number;
+  relay: RelayConnectionStatus;
 }
 
 const DEFAULT_CONFIG: ApiServerConfig = {
@@ -151,7 +153,38 @@ class ApiServer extends EventEmitter {
       addresses: this._isRunning ? this.getLocalAddresses() : [],
       connectedClients: this.connectedClientCount,
       pairedDevices: this.pairingManager.getDeviceCount(),
+      relay: getRelayConnection().getStatus(),
     };
+  }
+
+  /**
+   * Enable remote access via relay server
+   */
+  async enableRemoteAccess(): Promise<void> {
+    const relay = getRelayConnection();
+    await relay.enable();
+
+    // Initialize relay handler if not already done
+    const handler = initRelayHandler(this.pairingManager);
+    handler.start();
+
+    log.info('[ApiServer] Remote access enabled');
+  }
+
+  /**
+   * Disable remote access via relay server
+   */
+  disableRemoteAccess(): void {
+    const relay = getRelayConnection();
+    relay.disable();
+    log.info('[ApiServer] Remote access disabled');
+  }
+
+  /**
+   * Get remote access status
+   */
+  getRemoteAccessStatus(): RelayConnectionStatus {
+    return getRelayConnection().getStatus();
   }
 
   private getLocalAddresses(): string[] {
@@ -173,13 +206,23 @@ class ApiServer extends EventEmitter {
       }
     }
 
-    return addresses;
+    // Prioritize 192.168.x.x (typical LAN) over 172.x.x (often Docker/WSL/Hyper-V) and 10.x.x
+    return addresses.sort((a, b) => {
+      const score = (ip: string) => {
+        if (ip.startsWith('192.168.')) return 0;
+        if (ip.startsWith('10.')) return 1;
+        if (ip.startsWith('172.')) return 2;
+        return 3;
+      };
+      return score(a) - score(b);
+    });
   }
 
   /**
    * Send terminal output to all subscribed mobile clients
    */
   broadcastTerminalData(sessionId: string, data: string): void {
+    // Send to local WebSocket clients
     if (this.wsServer) {
       this.wsServer.broadcastToSession(sessionId, {
         type: 'terminal:output',
@@ -188,12 +231,22 @@ class ApiServer extends EventEmitter {
         timestamp: Date.now(),
       });
     }
+
+    // Send to relay clients
+    try {
+      const { getRelayHandler } = require('./relay');
+      const handler = getRelayHandler();
+      handler.broadcastTerminalData(sessionId, data);
+    } catch {
+      // Relay handler not initialized, ignore
+    }
   }
 
   /**
    * Broadcast session state change to all connected clients
    */
   broadcastSessionState(sessionId: string, state: string, event?: string): void {
+    // Send to local WebSocket clients
     if (this.wsServer) {
       this.wsServer.broadcast({
         type: 'session:state',
@@ -202,17 +255,36 @@ class ApiServer extends EventEmitter {
         timestamp: Date.now(),
       });
     }
+
+    // Send to relay clients
+    try {
+      const { getRelayHandler } = require('./relay');
+      const handler = getRelayHandler();
+      handler.broadcastSessionState(sessionId, state, event);
+    } catch {
+      // Relay handler not initialized, ignore
+    }
   }
 
   /**
    * Broadcast sessions list update to all connected clients
    */
   broadcastSessionsUpdated(): void {
+    // Send to local WebSocket clients
     if (this.wsServer) {
       this.wsServer.broadcast({
         type: 'sessions:updated',
         timestamp: Date.now(),
       });
+    }
+
+    // Send to relay clients
+    try {
+      const { getRelayHandler } = require('./relay');
+      const handler = getRelayHandler();
+      handler.broadcastSessionsUpdated();
+    } catch {
+      // Relay handler not initialized, ignore
     }
   }
 

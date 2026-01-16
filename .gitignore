@@ -42,4 +42,6 @@ yarn-error.log*
 *.db
 .test-data/
 .screenshot_coms/
-.claude/settings.local.json
+screenshot_coms/
+homebrew-tap/
+.claude/

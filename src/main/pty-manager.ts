@@ -13,11 +13,15 @@ interface PtySession {
   shellInfo: ShellInfo;
   lastState: string;
   outputBuffer: string;
+  scrollbackBuffer: string;  // Larger buffer for terminal history
   idleTimeout: NodeJS.Timeout | null;
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
   lastOutputTime: number;
 }
+
+// Max scrollback buffer size (100KB should be plenty for recent terminal history)
+const MAX_SCROLLBACK_SIZE = 100 * 1024;
 
 class PtyManager extends EventEmitter {
   private sessions: Map<string, PtySession> = new Map();
@@ -112,6 +116,16 @@ class PtyManager extends EventEmitter {
     });
 
     ptyProcess.onData((data) => {
+      // Append to scrollback buffer
+      const session = this.sessions.get(id);
+      if (session) {
+        session.scrollbackBuffer += data;
+        // Trim if too large (keep last MAX_SCROLLBACK_SIZE bytes)
+        if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
+          session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
+        }
+      }
+
       this.emit('data', { id, data });
 
       if (launchClaude) {
@@ -132,6 +146,7 @@ class PtyManager extends EventEmitter {
       shellInfo,
       lastState: 'idle',
       outputBuffer: '',
+      scrollbackBuffer: '',
       idleTimeout: null,
       workingDebounce: null,
       recentOutputBytes: 0,
@@ -169,6 +184,14 @@ class PtyManager extends EventEmitter {
 
   getSession(id: string): PtySession | undefined {
     return this.sessions.get(id);
+  }
+
+  /**
+   * Get the scrollback buffer for a session
+   */
+  getBuffer(id: string): string {
+    const session = this.sessions.get(id);
+    return session?.scrollbackBuffer || '';
   }
 
   private detectClaudeState(id: string, data: string): void {

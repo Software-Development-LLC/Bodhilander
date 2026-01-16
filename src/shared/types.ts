@@ -99,10 +99,18 @@ export interface GuestInfo {
 // Types for the local API server that enables mobile companion app connectivity
 // =============================================================================
 
+export interface RelayConnectionStatus {
+  enabled: boolean;
+  connected: boolean;
+  desktopId: string | null;
+  relayUrl: string;
+}
+
 export interface ApiServerStatus {
   running: boolean;
   port?: number;
   addresses?: string[];
+  relay?: RelayConnectionStatus;
 }
 
 export interface PairingCode {

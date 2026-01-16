@@ -204,5 +204,14 @@ function getLocalAddresses(): string[] {
     }
   }
 
-  return addresses;
+  // Prioritize 192.168.x.x (typical LAN) over 172.x.x (often Docker/WSL/Hyper-V) and 10.x.x
+  return addresses.sort((a, b) => {
+    const score = (ip: string) => {
+      if (ip.startsWith('192.168.')) return 0;
+      if (ip.startsWith('10.')) return 1;
+      if (ip.startsWith('172.')) return 2;
+      return 3;
+    };
+    return score(a) - score(b);
+  });
 }

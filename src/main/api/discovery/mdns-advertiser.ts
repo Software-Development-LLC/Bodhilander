@@ -24,7 +24,9 @@ export class MdnsAdvertiser {
     try {
       this.bonjour = new Bonjour();
 
-      const name = `ClaudeLander on ${hostname()}`;
+      // Use a unique name with random suffix to avoid conflicts
+      const uniqueId = Math.random().toString(36).substring(2, 8);
+      const name = `ClaudeLander-${hostname()}-${uniqueId}`;
 
       this.service = this.bonjour.publish({
         name,
@@ -43,13 +45,14 @@ export class MdnsAdvertiser {
       });
 
       this.service.on('error', (error) => {
-        log.error('[MdnsAdvertiser] Service error:', error);
+        // Handle "already in use" errors gracefully - mDNS is optional for pairing
+        log.warn('[MdnsAdvertiser] Service error (mDNS discovery disabled):', error.message || error);
       });
 
       log.info(`[MdnsAdvertiser] Advertising as "${name}" (_${SERVICE_TYPE}._${SERVICE_PROTOCOL})`);
     } catch (error) {
-      log.error('[MdnsAdvertiser] Failed to start:', error);
-      throw error;
+      // mDNS is optional - log warning but don't throw
+      log.warn('[MdnsAdvertiser] Failed to start mDNS (discovery disabled):', error);
     }
   }
 

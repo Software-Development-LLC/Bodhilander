@@ -6,7 +6,7 @@ import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import { StateMonitor } from './state-monitor';
-import { createApplicationMenu, showSettingsWindow } from './menu';
+import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
@@ -112,6 +112,11 @@ async function handleDeepLink(url: string) {
 
 // Track sessions by state for tray updates
 const sessionStates: Map<string, { name: string; state: string }> = new Map();
+
+// Provide state lookup to sound manager for debounce validation
+soundManager.setSessionStateLookup((sessionId: string) => {
+  return sessionStates.get(sessionId)?.state;
+});
 
 const SPLASH_DURATION = 2500; // 2.5 seconds
 
@@ -293,8 +298,8 @@ function createWindow(): void {
   // Initialize tray manager
   trayManager.initialize(mainWindow);
   trayManager.setShowSettingsHandler(() => {
-    if (mainWindow) {
-      showSettingsWindow(mainWindow);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('open-settings');
     }
   });
 
@@ -752,6 +757,34 @@ ipcMain.handle('api:hasPairingCode', () => {
   return { active: apiServer.pairingManager.hasActivePairingCode() };
 });
 
+// Remote access IPC handlers
+ipcMain.handle('api:enableRemoteAccess', async () => {
+  try {
+    const apiServer = getApiServer();
+    await apiServer.enableRemoteAccess();
+    return { success: true, status: apiServer.getRemoteAccessStatus() };
+  } catch (error) {
+    log.error('Failed to enable remote access:', error);
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.handle('api:disableRemoteAccess', () => {
+  try {
+    const apiServer = getApiServer();
+    apiServer.disableRemoteAccess();
+    return { success: true };
+  } catch (error) {
+    log.error('Failed to disable remote access:', error);
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.handle('api:getRemoteAccessStatus', () => {
+  const apiServer = getApiServer();
+  return apiServer.getRemoteAccessStatus();
+});
+
 function getLocalAddresses(): string[] {
   const { networkInterfaces } = require('os');
   const addresses: string[] = [];
@@ -766,7 +799,16 @@ function getLocalAddresses(): string[] {
       }
     }
   }
-  return addresses;
+  // Prioritize 192.168.x.x (typical LAN) over 172.x.x (often Docker/WSL/Hyper-V) and 10.x.x
+  return addresses.sort((a, b) => {
+    const score = (ip: string) => {
+      if (ip.startsWith('192.168.')) return 0;
+      if (ip.startsWith('10.')) return 1;
+      if (ip.startsWith('172.')) return 2;
+      return 3;
+    };
+    return score(a) - score(b);
+  });
 }
 
 // Forward share manager events to renderer

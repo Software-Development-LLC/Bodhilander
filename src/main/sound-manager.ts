@@ -5,6 +5,14 @@ import { getPreference } from './repositories/preferences';
 
 export type SoundEvent = 'waiting' | 'error' | 'start' | 'complete';
 
+export type DebouncePreset = 'fast' | 'normal' | 'relaxed';
+
+const DEBOUNCE_PRESETS: Record<DebouncePreset, number> = {
+  fast: 200,
+  normal: 500,
+  relaxed: 1000,
+};
+
 interface SoundConfig {
   enabledKey: string;
   customPathKey: string;
@@ -37,6 +45,15 @@ const SOUND_CONFIGS: Record<SoundEvent, SoundConfig> = {
 class SoundManager {
   private mainWindow: BrowserWindow | null = null;
   private lastState: Map<string, string> = new Map();
+  private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private getSessionState: ((sessionId: string) => string | undefined) | null = null;
+
+  /**
+   * Set the session state lookup function (called from index.ts)
+   */
+  setSessionStateLookup(lookup: (sessionId: string) => string | undefined): void {
+    this.getSessionState = lookup;
+  }
 
   setMainWindow(window: BrowserWindow): void {
     this.mainWindow = window;
@@ -66,6 +83,67 @@ class SoundManager {
   isSoundEnabled(): boolean {
     const pref = getPreference('notificationSound');
     return pref !== 'false'; // Default to true
+  }
+
+  /**
+   * Get the current debounce duration in milliseconds
+   */
+  getDebounceDuration(): number {
+    const preset = getPreference('soundDebouncePreset') as DebouncePreset | null;
+    return DEBOUNCE_PRESETS[preset || 'normal'];
+  }
+
+  /**
+   * Check if a sound event is still valid for the current session state
+   */
+  private isEventValidForState(event: SoundEvent, currentState: string | undefined): boolean {
+    if (!currentState) return false;
+
+    switch (event) {
+      case 'waiting':
+        return currentState === 'waiting';
+      case 'error':
+        return currentState === 'error';
+      case 'start':
+        return true; // Start sound always valid (one-time event)
+      case 'complete':
+        return currentState === 'idle'; // Complete fires on working->idle
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Schedule a sound to play after debounce delay
+   * Validates session state before playing
+   */
+  scheduleSound(sessionId: string, event: SoundEvent): void {
+    // Clear any existing timer for this session
+    const existingTimer = this.debounceTimers.get(sessionId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const delay = this.getDebounceDuration();
+
+    const timer = setTimeout(() => {
+      // Clean up timer reference
+      this.debounceTimers.delete(sessionId);
+
+      // Validate session state before playing
+      if (this.getSessionState) {
+        const currentState = this.getSessionState(sessionId);
+        if (!this.isEventValidForState(event, currentState)) {
+          console.debug(`[SoundManager] Skipping ${event} sound - session ${sessionId} state changed to ${currentState}`);
+          return;
+        }
+      }
+
+      // Play the sound
+      this.playSound(event);
+    }, delay);
+
+    this.debounceTimers.set(sessionId, timer);
   }
 
   /**
@@ -167,19 +245,19 @@ class SoundManager {
   }
 
   /**
-   * Handle session state change and play appropriate sound
+   * Handle session state change and schedule appropriate sound
    */
   handleStateChange(sessionId: string, newState: string, previousState?: string): void {
     const lastKnown = previousState || this.lastState.get(sessionId);
 
-    // Determine which sound to play based on state transition
+    // Determine which sound to schedule based on state transition
     if (newState === 'waiting') {
-      this.playSound('waiting');
+      this.scheduleSound(sessionId, 'waiting');
     } else if (newState === 'error') {
-      this.playSound('error');
+      this.scheduleSound(sessionId, 'error');
     } else if (newState === 'idle' && lastKnown === 'working') {
       // Task completed (working -> idle)
-      this.playSound('complete');
+      this.scheduleSound(sessionId, 'complete');
     }
 
     // Update last known state
@@ -188,6 +266,9 @@ class SoundManager {
 
   /**
    * Play the session start sound
+   * Note: This bypasses the debounce system intentionally because start sounds
+   * are one-time events triggered on session creation, not state transitions.
+   * There's no session state to validate against when a session is first created.
    */
   playStartSound(): void {
     this.playSound('start');
@@ -198,6 +279,13 @@ class SoundManager {
    */
   removeSession(sessionId: string): void {
     this.lastState.delete(sessionId);
+
+    // Clear any pending debounce timer
+    const timer = this.debounceTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.debounceTimers.delete(sessionId);
+    }
   }
 }
 

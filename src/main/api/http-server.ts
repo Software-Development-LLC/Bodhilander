@@ -7,6 +7,7 @@
 import { createServer, Server } from 'http';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
+import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import log from 'electron-log';
 import { PairingManager } from './pairing/pairing-manager';
@@ -15,6 +16,7 @@ import { createSessionsRouter } from './routes/sessions';
 import { createGroupsRouter } from './routes/groups';
 import { createSystemRouter } from './routes/system';
 import { createPairingRouter } from './routes/pairing';
+import { createTerminalRouter } from './routes/terminal';
 
 export interface HttpServerConfig {
   port: number;
@@ -87,6 +89,14 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
     crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow cross-origin for mobile app
   }));
 
+  // CORS - allow requests from any origin on local network
+  app.use(cors({
+    origin: true, // Reflect the request origin
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  }));
+
   // Restrict to local network
   app.use(localNetworkOnly);
 
@@ -123,6 +133,7 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   app.use('/api/v1/sessions', generalLimiter, authMiddleware, createSessionsRouter());
   app.use('/api/v1/groups', generalLimiter, authMiddleware, createGroupsRouter());
   app.use('/api/v1/system', generalLimiter, authMiddleware, createSystemRouter());
+  app.use('/api/v1/terminal', generalLimiter, authMiddleware, createTerminalRouter());
 
   // Error handling middleware
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
