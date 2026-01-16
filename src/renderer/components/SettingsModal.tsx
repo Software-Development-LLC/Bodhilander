@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiServerStatus, PairedDevice, PairingCode, RelayConnectionStatus } from '../../shared/types';
 
 interface SettingsModalProps {
@@ -34,6 +34,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [soundErrorEnabled, setSoundErrorEnabled] = useState(true);
   const [soundStartEnabled, setSoundStartEnabled] = useState(true);
   const [soundCompleteEnabled, setSoundCompleteEnabled] = useState(true);
+  const volumeSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load initial state
   useEffect(() => {
@@ -206,9 +207,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     await window.electronAPI.setPreference('notificationSound', enabled.toString());
   }, []);
 
-  const handleVolumeChange = useCallback(async (volume: number) => {
+  const handleVolumeChange = useCallback((volume: number) => {
     setSoundVolume(volume);
-    await window.electronAPI.setPreference('soundVolume', volume.toString());
+    // Debounce preference save to avoid excessive writes during slider drag
+    if (volumeSaveTimerRef.current) {
+      clearTimeout(volumeSaveTimerRef.current);
+    }
+    volumeSaveTimerRef.current = setTimeout(() => {
+      window.electronAPI.setPreference('soundVolume', volume.toString());
+    }, 300);
   }, []);
 
   const handleDebouncePresetChange = useCallback(async (preset: 'fast' | 'normal' | 'relaxed') => {

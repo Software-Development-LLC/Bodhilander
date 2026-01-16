@@ -266,6 +266,9 @@ class SoundManager {
 
   /**
    * Play the session start sound
+   * Note: This bypasses the debounce system intentionally because start sounds
+   * are one-time events triggered on session creation, not state transitions.
+   * There's no session state to validate against when a session is first created.
    */
   playStartSound(): void {
     this.playSound('start');
