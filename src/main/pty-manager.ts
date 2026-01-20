@@ -162,7 +162,15 @@ class PtyManager extends EventEmitter {
     // Write memory file for Claude sessions (for reference, though we inject directly)
     if (launchClaude && groupId) {
       writeMemoryFile(id, groupId, cwd);
-      // Memory injection now happens in detectClaudeState when Claude becomes idle
+      // Memory injection happens in detectClaudeState when Claude becomes idle,
+      // but add a time-based fallback in case state detection doesn't trigger
+      setTimeout(() => {
+        const sess = this.sessions.get(id);
+        if (sess && !sess.memoryInjected) {
+          console.log(`[Memory] Fallback injection for session ${id}`);
+          this.injectMemories(id);
+        }
+      }, 6000);  // 6 second fallback
     }
 
     this.sessions.set(id, {
