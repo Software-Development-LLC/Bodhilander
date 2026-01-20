@@ -46,11 +46,21 @@ body {
   display: grid;
   grid-template-columns: var(--sidebar-width, 260px) 1fr;
   grid-template-rows: 1fr 28px;
+  grid-template-areas:
+    "sidebar content"
+    "footer footer";
   height: 100vh;
 }
 
+.app:has(.panel) {
+  grid-template-columns: var(--sidebar-width, 260px) 1fr auto;
+  grid-template-areas:
+    "sidebar content panel"
+    "footer footer footer";
+}
+
 .sidebar {
-  grid-row: 1 / 2;
+  grid-area: sidebar;
   background: #252526;
   border-right: 1px solid #3c3c3c;
   padding: 12px;
@@ -84,6 +94,7 @@ body {
 }
 
 .main {
+  grid-area: content;
   display: flex;
   flex-direction: column;
 }
@@ -109,7 +120,7 @@ body {
 }
 
 .status-bar {
-  grid-column: 1 / 3;
+  grid-area: footer;
   background: #1e1e1e;
   border-top: 1px solid #3c3c3c;
   display: flex;

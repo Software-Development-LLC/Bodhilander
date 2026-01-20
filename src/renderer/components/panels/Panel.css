@@ -1,9 +1,10 @@
 .panel {
+  grid-area: panel;
   position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  background: #252526;
+  border-left: 1px solid #3c3c3c;
   height: 100%;
   overflow: hidden;
 }
@@ -26,7 +27,7 @@
 
 .panel-resize-handle:hover,
 .panel.resizing .panel-resize-handle {
-  background: var(--accent);
+  background: #007acc;
 }
 
 .panel-header {
@@ -34,8 +35,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  border-bottom: 1px solid #3c3c3c;
+  background: #1e1e1e;
   flex-shrink: 0;
 }
 
@@ -45,7 +46,7 @@
   gap: 8px;
   font-weight: 600;
   font-size: 14px;
-  color: var(--text);
+  color: #d4d4d4;
 }
 
 .panel-icon {
@@ -55,7 +56,7 @@
 .panel-close {
   background: none;
   border: none;
-  color: var(--text-dim);
+  color: #888;
   cursor: pointer;
   font-size: 18px;
   line-height: 1;
@@ -65,8 +66,8 @@
 }
 
 .panel-close:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: #3c3c3c;
+  color: #d4d4d4;
 }
 
 .panel-content {
