@@ -22,6 +22,7 @@ interface PtySession {
   recentOutputBytes: number;
   lastOutputTime: number;
   memoryInjected: boolean;  // Track if memories have been injected
+  hasSeenWorking: boolean;  // Track if Claude has started (seen working state)
 }
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
@@ -158,14 +159,10 @@ class PtyManager extends EventEmitter {
       this.sessions.delete(id);
     });
 
-    // Write memory file for Claude sessions
+    // Write memory file for Claude sessions (for reference, though we inject directly)
     if (launchClaude && groupId) {
       writeMemoryFile(id, groupId, cwd);
-
-      // Inject memories after Claude starts up (delay to let welcome screen appear)
-      setTimeout(() => {
-        this.injectMemories(id);
-      }, 4000);  // 4 second delay for Claude to fully start
+      // Memory injection now happens in detectClaudeState when Claude becomes idle
     }
 
     this.sessions.set(id, {
@@ -183,6 +180,7 @@ class PtyManager extends EventEmitter {
       recentOutputBytes: 0,
       lastOutputTime: 0,
       memoryInjected: false,
+      hasSeenWorking: false,
     });
   }
 
@@ -249,9 +247,9 @@ class PtyManager extends EventEmitter {
       return;
     }
 
-    // Send the memory content to Claude
+    // Send the memory content to Claude as a single message
     console.log(`[Memory] Injecting memories into session ${id}`);
-    session.pty.write(content + '\n');
+    session.pty.write(content + '\r');  // \r sends Enter in PTY
     session.memoryInjected = true;
   }
 
@@ -276,6 +274,10 @@ class PtyManager extends EventEmitter {
             event: 'idle_timeout',
             timestamp: Math.floor(Date.now() / 1000),
           });
+          // Inject memories when Claude first becomes idle after starting
+          if (sess.hasSeenWorking && !sess.memoryInjected) {
+            this.injectMemories(id);
+          }
         }
       }, 2000);
     }
@@ -387,6 +389,7 @@ class PtyManager extends EventEmitter {
           const currentSession = this.sessions.get(id);
           if (currentSession && currentSession.recentOutputBytes > 200) {
             currentSession.lastState = 'working';
+            currentSession.hasSeenWorking = true;  // Mark that Claude has started
             currentSession.workingDebounce = null;
             this.emit('stateChange', {
               sessionId: id,
@@ -408,6 +411,10 @@ class PtyManager extends EventEmitter {
                     event: 'idle_timeout',
                     timestamp: Math.floor(Date.now() / 1000),
                   });
+                  // Inject memories when Claude first becomes idle after starting
+                  if (sess.hasSeenWorking && !sess.memoryInjected) {
+                    this.injectMemories(id);
+                  }
                 }
               }, 2000);
             }
@@ -441,6 +448,10 @@ class PtyManager extends EventEmitter {
             event: 'idle_timeout',
             timestamp: Math.floor(Date.now() / 1000),
           });
+          // Inject memories when Claude first becomes idle after starting
+          if (currentSession.hasSeenWorking && !currentSession.memoryInjected) {
+            this.injectMemories(id);
+          }
         }
       }, 2000);
     }

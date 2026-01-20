@@ -134,6 +134,7 @@ export function hasMemoryFile(workingDir: string): boolean {
 
 /**
  * Get formatted memory content for direct injection into a Claude session.
+ * Returns a concise single-line format suitable for PTY injection.
  * Returns null if no memories to inject.
  */
 export function getMemoryInjectionContent(
@@ -146,54 +147,23 @@ export function getMemoryInjectionContent(
     return null;
   }
 
-  const lines: string[] = [
-    '[ClaudeLander Session Memory - Please remember this context for our conversation:]',
-    '',
-  ];
+  // Create a concise single-line format for PTY injection
+  // This will be sent as a single message to Claude
+  const memoryItems: string[] = [];
 
   // Add pinned memories first (most important)
   const pinnedMemories = memories.filter(m => m.pinned);
-  if (pinnedMemories.length > 0) {
-    lines.push('Important (pinned):');
-    for (const memory of pinnedMemories) {
-      lines.push(`- ${memory.content}`);
-    }
-    lines.push('');
+  for (const memory of pinnedMemories) {
+    memoryItems.push(`[IMPORTANT] ${memory.content}`);
   }
 
-  // Add other memories grouped by type
-  const sectionTitles: Record<MemoryType, string> = {
-    decision: 'Previous decisions',
-    error_fix: 'Error fixes to remember',
-    pattern: 'Patterns/conventions',
-    context: 'Context',
-    note: 'Notes',
-  };
-
-  const sections: Record<MemoryType, Memory[]> = {
-    decision: [],
-    error_fix: [],
-    pattern: [],
-    context: [],
-    note: [],
-  };
-
+  // Add other memories
   for (const memory of memories.filter(m => !m.pinned)) {
-    sections[memory.type].push(memory);
+    memoryItems.push(memory.content);
   }
 
-  for (const [type, title] of Object.entries(sectionTitles)) {
-    const typeMemories = sections[type as MemoryType];
-    if (typeMemories.length > 0) {
-      lines.push(`${title}:`);
-      for (const memory of typeMemories) {
-        lines.push(`- ${memory.content}`);
-      }
-      lines.push('');
-    }
-  }
+  // Format as a single message with semicolons separating memories
+  const memoryList = memoryItems.join('; ');
 
-  lines.push('[End of session memory - please acknowledge briefly and await my request]');
-
-  return lines.join('\n');
+  return `[Session Memory] Please remember for this conversation: ${memoryList}. Acknowledge briefly.`;
 }
