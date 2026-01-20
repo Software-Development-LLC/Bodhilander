@@ -5,13 +5,14 @@ import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
+import * as memoriesRepo from './repositories/memories';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { Group, Session } from '../shared/types';
+import { Group, Session, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
 import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
@@ -458,6 +459,43 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
   }
   sessionsRepo.deleteSession(id);
   getApiServer().broadcastSessionsUpdated();
+});
+
+// Database IPC Handlers - Memories
+ipcMain.handle('db:memories:getBySession', (_, sessionId: string) => {
+  return memoriesRepo.getMemoriesBySession(sessionId);
+});
+
+ipcMain.handle('db:memories:getByGroup', (_, groupId: string) => {
+  return memoriesRepo.getMemoriesByGroup(groupId);
+});
+
+ipcMain.handle('db:memories:getPinned', (_, groupId?: string) => {
+  return memoriesRepo.getPinnedMemories(groupId);
+});
+
+ipcMain.handle('db:memories:search', (_, query: string, groupId?: string) => {
+  return memoriesRepo.searchMemories(query, groupId);
+});
+
+ipcMain.handle('db:memories:create', (_, input: MemoryCreateInput) => {
+  return memoriesRepo.createMemory(input);
+});
+
+ipcMain.handle('db:memories:update', (_, id: string, updates: MemoryUpdateInput) => {
+  memoriesRepo.updateMemory(id, updates);
+});
+
+ipcMain.handle('db:memories:delete', (_, id: string) => {
+  memoriesRepo.deleteMemory(id);
+});
+
+ipcMain.handle('db:memories:getForInjection', (_, sessionId: string, groupId: string) => {
+  return memoriesRepo.getMemoriesForInjection(sessionId, groupId);
+});
+
+ipcMain.handle('db:memories:getById', (_, id: string) => {
+  return memoriesRepo.getMemoryById(id);
 });
 
 // Preferences IPC Handlers

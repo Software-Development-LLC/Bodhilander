@@ -8,6 +8,7 @@ import { JoinSessionModal } from './components/JoinSessionModal';
 import { NamePromptModal } from './components/NamePromptModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
+import { MemoryPanel } from './components/panels/MemoryPanel';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -87,6 +88,8 @@ const App: React.FC = () => {
   // New item choice menu state (for + button on groups)
   const [newItemChoice, setNewItemChoice] = useState<{ x: number; y: number; groupId: string } | null>(null);
 
+  // Memory panel state
+  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
 
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
@@ -108,6 +111,10 @@ const App: React.FC = () => {
   const homedir = window.electronAPI.homedir;
   const counts = getStateCounts();
   const isLoading = groupsLoading || sessionsLoading;
+
+  // Get the active session's group ID for memory panel
+  const activeSession = sessions.find(s => s.id === activeSessionId);
+  const activeGroupId = activeSession?.groupId || null;
 
   // Check sharing status for all sessions
   useEffect(() => {
@@ -761,6 +768,13 @@ const App: React.FC = () => {
           <h2>Groups</h2>
           <div className="sidebar-header-actions">
             <button
+              className={`icon-button ${memoryPanelOpen ? 'active' : ''}`}
+              onClick={() => setMemoryPanelOpen(prev => !prev)}
+              title="Toggle Memory Panel"
+            >
+              *
+            </button>
+            <button
               className="icon-button"
               onClick={() => setSettingsOpen(true)}
               title="Settings"
@@ -1258,6 +1272,14 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
+
+      {/* Memory Panel */}
+      <MemoryPanel
+        isOpen={memoryPanelOpen}
+        onToggle={() => setMemoryPanelOpen(prev => !prev)}
+        sessionId={activeSessionId}
+        groupId={activeGroupId}
+      />
 
       <footer className="status-bar">
         <div className="status-left">
