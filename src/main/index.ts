@@ -381,7 +381,12 @@ function createWindow(): void {
 
 // IPC Handlers
 ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false) => {
-  ptyManager.createSession(id, cwd, launchClaude);
+  // Look up the session to get its groupId for memory extraction
+  const sessions = sessionsRepo.getAllSessions();
+  const session = sessions.find(s => s.id === id);
+  const groupId = session?.groupId || null;
+
+  ptyManager.createSession(id, cwd, launchClaude, groupId);
   // Play session start sound
   soundManager.playStartSound();
 });

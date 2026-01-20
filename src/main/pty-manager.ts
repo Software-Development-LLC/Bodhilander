@@ -4,11 +4,14 @@ import { EventEmitter } from 'events';
 import { getClaudeCommand, getSocketPath } from './claude-launcher';
 import { detectShell, ShellInfo } from './shell-detector';
 import { getPreference } from './repositories/preferences';
+import { bufferAndProcess, cleanupSession as cleanupMemorySession } from './memory/extraction';
+import { writeMemoryFile } from './memory/injector';
 
 interface PtySession {
   id: string;
   pty: pty.IPty;
   cwd: string;
+  groupId: string | null;  // For memory extraction
   isClaudeSession: boolean;
   shellInfo: ShellInfo;
   lastState: string;
@@ -49,7 +52,7 @@ class PtyManager extends EventEmitter {
     return this.getShellInfo();
   }
 
-  createSession(id: string, cwd: string, launchClaude: boolean = false): void {
+  createSession(id: string, cwd: string, launchClaude: boolean = false, groupId: string | null = null): void {
     // Validate cwd exists
     if (!fs.existsSync(cwd)) {
       console.error(`Working directory does not exist: ${cwd}`);
@@ -124,6 +127,21 @@ class PtyManager extends EventEmitter {
         if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
           session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
         }
+
+        // Extract memories from Claude output
+        if (session.isClaudeSession && session.groupId) {
+          // Strip ANSI codes for memory extraction
+          const cleanData = data
+            .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+            .replace(/\x1b\[[0-9;]*[mM]/g, '')
+            .replace(/\x1b\][^\x07]*\x07/g, '')
+            .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, '')
+            .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+
+          if (cleanData.trim().length > 10) {
+            bufferAndProcess(cleanData, id, session.groupId);
+          }
+        }
       }
 
       this.emit('data', { id, data });
@@ -134,14 +152,21 @@ class PtyManager extends EventEmitter {
     });
 
     ptyProcess.onExit(({ exitCode }) => {
+      cleanupMemorySession(id);  // Clean up memory extraction buffers
       this.emit('exit', { id, exitCode });
       this.sessions.delete(id);
     });
+
+    // Write memory file for Claude sessions
+    if (launchClaude && groupId) {
+      writeMemoryFile(id, groupId, cwd);
+    }
 
     this.sessions.set(id, {
       id,
       pty: ptyProcess,
       cwd,
+      groupId,
       isClaudeSession: launchClaude,
       shellInfo,
       lastState: 'idle',
@@ -177,6 +202,7 @@ class PtyManager extends EventEmitter {
       if (session.workingDebounce) {
         clearTimeout(session.workingDebounce);
       }
+      cleanupMemorySession(id);  // Clean up memory extraction buffers
       session.pty.kill();
       this.sessions.delete(id);
     }

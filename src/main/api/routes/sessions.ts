@@ -84,7 +84,7 @@ export function createSessionsRouter(): Router {
 
         // Start PTY if requested
         if (launchClaude) {
-          ptyManager.createSession(id, session.workingDir, true);
+          ptyManager.createSession(id, session.workingDir, true, groupId);
         }
 
         log.info(`[SessionsAPI] Created session: ${id}`);
@@ -181,7 +181,7 @@ export function createSessionsRouter(): Router {
           return;
         }
 
-        ptyManager.createSession(id, session.workingDir, launchClaude ?? false);
+        ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.groupId);
 
         log.info(`[SessionsAPI] Started session: ${id}`);
         res.json({ success: true });
