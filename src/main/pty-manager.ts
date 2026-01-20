@@ -5,7 +5,7 @@ import { getClaudeCommand, getSocketPath } from './claude-launcher';
 import { detectShell, ShellInfo } from './shell-detector';
 import { getPreference } from './repositories/preferences';
 import { bufferAndProcess, cleanupSession as cleanupMemorySession } from './memory/extraction';
-import { writeMemoryFile } from './memory/injector';
+import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 
 interface PtySession {
   id: string;
@@ -21,6 +21,7 @@ interface PtySession {
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
   lastOutputTime: number;
+  memoryInjected: boolean;  // Track if memories have been injected
 }
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
@@ -160,6 +161,11 @@ class PtyManager extends EventEmitter {
     // Write memory file for Claude sessions
     if (launchClaude && groupId) {
       writeMemoryFile(id, groupId, cwd);
+
+      // Inject memories after Claude starts up (delay to let welcome screen appear)
+      setTimeout(() => {
+        this.injectMemories(id);
+      }, 4000);  // 4 second delay for Claude to fully start
     }
 
     this.sessions.set(id, {
@@ -176,6 +182,7 @@ class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
+      memoryInjected: false,
     });
   }
 
@@ -218,6 +225,34 @@ class PtyManager extends EventEmitter {
   getBuffer(id: string): string {
     const session = this.sessions.get(id);
     return session?.scrollbackBuffer || '';
+  }
+
+  /**
+   * Inject memories into a Claude session.
+   * Called after Claude has started up and is ready for input.
+   */
+  private injectMemories(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session || !session.isClaudeSession || !session.groupId) {
+      return;
+    }
+
+    // Only inject once per session
+    if (session.memoryInjected) {
+      return;
+    }
+
+    const content = getMemoryInjectionContent(id, session.groupId);
+    if (!content) {
+      console.log(`[Memory] No memories to inject for session ${id}`);
+      session.memoryInjected = true;
+      return;
+    }
+
+    // Send the memory content to Claude
+    console.log(`[Memory] Injecting memories into session ${id}`);
+    session.pty.write(content + '\n');
+    session.memoryInjected = true;
   }
 
   private detectClaudeState(id: string, data: string): void {

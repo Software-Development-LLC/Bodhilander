@@ -131,3 +131,69 @@ export function hasMemoryFile(workingDir: string): boolean {
   const filePath = path.join(workingDir, MEMORY_FILENAME);
   return fs.existsSync(filePath);
 }
+
+/**
+ * Get formatted memory content for direct injection into a Claude session.
+ * Returns null if no memories to inject.
+ */
+export function getMemoryInjectionContent(
+  sessionId: string,
+  groupId: string
+): string | null {
+  const memories = getMemoriesForInjection(sessionId, groupId);
+
+  if (memories.length === 0) {
+    return null;
+  }
+
+  const lines: string[] = [
+    '[ClaudeLander Session Memory - Please remember this context for our conversation:]',
+    '',
+  ];
+
+  // Add pinned memories first (most important)
+  const pinnedMemories = memories.filter(m => m.pinned);
+  if (pinnedMemories.length > 0) {
+    lines.push('Important (pinned):');
+    for (const memory of pinnedMemories) {
+      lines.push(`- ${memory.content}`);
+    }
+    lines.push('');
+  }
+
+  // Add other memories grouped by type
+  const sectionTitles: Record<MemoryType, string> = {
+    decision: 'Previous decisions',
+    error_fix: 'Error fixes to remember',
+    pattern: 'Patterns/conventions',
+    context: 'Context',
+    note: 'Notes',
+  };
+
+  const sections: Record<MemoryType, Memory[]> = {
+    decision: [],
+    error_fix: [],
+    pattern: [],
+    context: [],
+    note: [],
+  };
+
+  for (const memory of memories.filter(m => !m.pinned)) {
+    sections[memory.type].push(memory);
+  }
+
+  for (const [type, title] of Object.entries(sectionTitles)) {
+    const typeMemories = sections[type as MemoryType];
+    if (typeMemories.length > 0) {
+      lines.push(`${title}:`);
+      for (const memory of typeMemories) {
+        lines.push(`- ${memory.content}`);
+      }
+      lines.push('');
+    }
+  }
+
+  lines.push('[End of session memory - please acknowledge briefly and await my request]');
+
+  return lines.join('\n');
+}
