@@ -248,9 +248,16 @@ class PtyManager extends EventEmitter {
     }
 
     // Send the memory content to Claude as a single message
-    // Use \r\n to handle different terminal types (Windows, Unix, etc.)
+    // Write content first, then send Enter separately after a small delay
+    // This mimics human typing behavior which Claude Code expects
     console.log(`[Memory] Injecting memories into session ${id}`);
-    session.pty.write(content + '\r\n');
+    session.pty.write(content);
+    setTimeout(() => {
+      const sess = this.sessions.get(id);
+      if (sess) {
+        sess.pty.write('\r');  // Send Enter key
+      }
+    }, 100);
     session.memoryInjected = true;
   }
 
