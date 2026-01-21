@@ -140,17 +140,19 @@ export function searchMemories(query: string, groupId?: string): Memory[] {
 
 /**
  * Get memories for injection into a session.
- * Returns session-specific memories + pinned memories from the group.
+ * Only returns manually-created memories (source = 'manual').
+ * Claude can search MCP-added memories on demand.
  * Limited to 8KB total to avoid overwhelming Claude.
  */
 export function getMemoriesForInjection(sessionId: string, groupId: string): Memory[] {
   const db = getDatabase();
   const MAX_SIZE = 8 * 1024; // 8KB limit
 
-  // Get session-specific memories and pinned group memories
+  // Only inject manually-created memories - Claude can search MCP-added ones via tools
   const rows = db.prepare(`
     SELECT * FROM memories
-    WHERE (session_id = ? OR (group_id = ? AND pinned = 1))
+    WHERE source = 'manual'
+      AND (session_id = ? OR group_id = ?)
     ORDER BY pinned DESC, created_at DESC
   `).all(sessionId, groupId) as MemoryRow[];
 
