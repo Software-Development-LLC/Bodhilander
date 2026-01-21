@@ -22,7 +22,7 @@
     "claudelander-memory-server": "./dist/mcp-server/index.js"
   },
   "scripts": {
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-rebuild -o better-sqlite3,sodium-native",
     "build:main": "tsc -p tsconfig.main.json",
     "build:mcp": "tsc -p tsconfig.mcp.json",
     "build:renderer": "webpack --mode production",
