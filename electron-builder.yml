@@ -10,6 +10,10 @@ files:
   - dist/**/*
   - package.json
 
+# Unpack MCP server from asar so Node can execute it directly
+asarUnpack:
+  - dist/mcp-server/**/*
+
 # Include icon files for tray icon and sound files
 extraResources:
   - from: build/icon.png

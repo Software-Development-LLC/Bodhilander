@@ -17,6 +17,7 @@ import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
+import { registerMcpServer } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
 
@@ -222,6 +223,16 @@ function createSplashWindow(): void {
 function createWindow(): void {
   // Initialize database
   getDatabase();
+
+  // Register MCP server with Claude Code (auto-configure on startup)
+  const mcpResult = registerMcpServer();
+  if (mcpResult.success) {
+    if (mcpResult.action !== 'unchanged') {
+      log.info(`MCP server ${mcpResult.action}: ${mcpResult.path}`);
+    }
+  } else {
+    log.warn('MCP server registration failed:', mcpResult.error);
+  }
 
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
