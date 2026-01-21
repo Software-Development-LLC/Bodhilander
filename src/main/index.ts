@@ -392,7 +392,7 @@ function createWindow(): void {
 
 // IPC Handlers
 ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false) => {
-  // Look up the session to get its groupId for memory extraction
+  // Look up the session to get its groupId for memory injection
   const sessions = sessionsRepo.getAllSessions();
   const session = sessions.find(s => s.id === id);
   const groupId = session?.groupId || null;
