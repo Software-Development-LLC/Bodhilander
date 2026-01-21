@@ -49,50 +49,45 @@ function getMcpServerPath(): string {
 }
 
 /**
- * Get the path to Claude Code's settings file
+ * Get the path to Claude Code's config file
+ * MCP servers are stored in ~/.claude.json (not ~/.claude/settings.json)
  */
-function getClaudeSettingsPath(): string {
+function getClaudeConfigPath(): string {
   const homeDir = os.homedir();
 
-  // Claude Code stores settings in ~/.claude/settings.json on all platforms
-  return path.join(homeDir, '.claude', 'settings.json');
+  // Claude Code stores MCP servers in ~/.claude.json on all platforms
+  return path.join(homeDir, '.claude.json');
 }
 
 /**
- * Read Claude Code settings, creating default if doesn't exist
+ * Read Claude Code config, returning empty object if doesn't exist
  */
-function readClaudeSettings(): ClaudeSettings {
-  const settingsPath = getClaudeSettingsPath();
+function readClaudeConfig(): ClaudeSettings {
+  const configPath = getClaudeConfigPath();
 
   try {
-    if (fs.existsSync(settingsPath)) {
-      const content = fs.readFileSync(settingsPath, 'utf-8');
+    if (fs.existsSync(configPath)) {
+      const content = fs.readFileSync(configPath, 'utf-8');
       return JSON.parse(content);
     }
   } catch (err) {
-    log.warn('[MCP Config] Failed to read Claude settings:', err);
+    log.warn('[MCP Config] Failed to read Claude config:', err);
   }
 
   return {};
 }
 
 /**
- * Write Claude Code settings
+ * Write Claude Code config
  */
-function writeClaudeSettings(settings: ClaudeSettings): boolean {
-  const settingsPath = getClaudeSettingsPath();
-  const settingsDir = path.dirname(settingsPath);
+function writeClaudeConfig(settings: ClaudeSettings): boolean {
+  const configPath = getClaudeConfigPath();
 
   try {
-    // Ensure .claude directory exists
-    if (!fs.existsSync(settingsDir)) {
-      fs.mkdirSync(settingsDir, { recursive: true });
-    }
-
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    fs.writeFileSync(configPath, JSON.stringify(settings, null, 2), 'utf-8');
     return true;
   } catch (err) {
-    log.error('[MCP Config] Failed to write Claude settings:', err);
+    log.error('[MCP Config] Failed to write Claude config:', err);
     return false;
   }
 }
@@ -123,7 +118,7 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
       return { success: false, action: 'error', error: `MCP server not found at ${mcpServerPath}` };
     }
 
-    const settings = readClaudeSettings();
+    const settings = readClaudeConfig();
 
     // Check if already configured correctly
     if (isServerConfigured(settings, mcpServerPath)) {
@@ -145,7 +140,7 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
     };
 
     // Write the updated settings
-    if (writeClaudeSettings(settings)) {
+    if (writeClaudeConfig(settings)) {
       log.info(`[MCP Config] MCP server ${action} successfully:`, mcpServerPath);
       return { success: true, action, path: mcpServerPath };
     } else {
@@ -163,7 +158,7 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
  */
 export function unregisterMcpServer(): boolean {
   try {
-    const settings = readClaudeSettings();
+    const settings = readClaudeConfig();
 
     if (settings.mcpServers?.[MCP_SERVER_NAME]) {
       delete settings.mcpServers[MCP_SERVER_NAME];
@@ -173,7 +168,7 @@ export function unregisterMcpServer(): boolean {
         delete settings.mcpServers;
       }
 
-      if (writeClaudeSettings(settings)) {
+      if (writeClaudeConfig(settings)) {
         log.info('[MCP Config] MCP server unregistered successfully');
         return true;
       }
@@ -192,7 +187,7 @@ export function unregisterMcpServer(): boolean {
 export function getMcpServerStatus(): { configured: boolean; path?: string; expectedPath?: string } {
   try {
     const expectedPath = getMcpServerPath();
-    const settings = readClaudeSettings();
+    const settings = readClaudeConfig();
     const serverConfig = settings.mcpServers?.[MCP_SERVER_NAME];
 
     if (!serverConfig) {
