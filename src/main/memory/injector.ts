@@ -135,17 +135,18 @@ export function hasMemoryFile(workingDir: string): boolean {
 /**
  * Get formatted memory content for direct injection into a Claude session.
  * Returns a concise single-line format suitable for PTY injection.
- * Returns null if no memories to inject.
+ * Always includes the group_id so Claude knows where to save new memories.
+ * Returns null only if groupId is not provided.
  */
 export function getMemoryInjectionContent(
   sessionId: string,
   groupId: string
 ): string | null {
-  const memories = getMemoriesForInjection(sessionId, groupId);
-
-  if (memories.length === 0) {
+  if (!groupId) {
     return null;
   }
+
+  const memories = getMemoriesForInjection(sessionId, groupId);
 
   // Create a concise single-line format for PTY injection
   // This will be sent as a single message to Claude
@@ -162,8 +163,16 @@ export function getMemoryInjectionContent(
     memoryItems.push(memory.content);
   }
 
+  // Always include group_id context so Claude knows where to save new memories
+  const groupContext = `[Memory Group: ${groupId}]`;
+
+  if (memoryItems.length === 0) {
+    // No memories yet, but still tell Claude the group_id for saving new ones
+    return `${groupContext} No saved memories for this session yet. When saving memories via MCP, use group_id: ${groupId}. Acknowledge briefly.`;
+  }
+
   // Format as a single message with semicolons separating memories
   const memoryList = memoryItems.join('; ');
 
-  return `[Session Memory] Please remember for this conversation: ${memoryList}. Acknowledge briefly.`;
+  return `${groupContext} Please remember for this conversation: ${memoryList}. When saving memories via MCP, use group_id: ${groupId}. Acknowledge briefly.`;
 }

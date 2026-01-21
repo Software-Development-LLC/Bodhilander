@@ -90,17 +90,28 @@ export function getMemoriesBySession(sessionId: string): Memory[] {
 }
 
 export function getMemoriesByGroup(
-  groupId: string,
+  groupId?: string,
   type?: MemoryType,
   limit: number = 50
 ): Memory[] {
   const db = getDatabase();
-  let sql = 'SELECT * FROM memories WHERE group_id = ?';
-  const params: (string | number)[] = [groupId];
+  let sql = 'SELECT * FROM memories';
+  const params: (string | number)[] = [];
+  const conditions: string[] = [];
+
+  // Only filter by group if provided
+  if (groupId) {
+    conditions.push('group_id = ?');
+    params.push(groupId);
+  }
 
   if (type) {
-    sql += ' AND type = ?';
+    conditions.push('type = ?');
     params.push(type);
+  }
+
+  if (conditions.length > 0) {
+    sql += ' WHERE ' + conditions.join(' AND ');
   }
 
   sql += ' ORDER BY pinned DESC, created_at DESC LIMIT ?';

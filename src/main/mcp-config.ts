@@ -1,8 +1,8 @@
 /**
- * MCP Server Auto-Configuration
+ * MCP Server and Hooks Auto-Configuration
  *
- * Automatically registers the ClaudeLander Memory MCP server with Claude Code
- * so users don't need to manually configure it.
+ * Automatically registers the ClaudeLander Memory MCP server and hooks with Claude Code
+ * so users don't need to manually configure them.
  */
 
 import * as fs from 'fs';
@@ -17,12 +17,28 @@ interface McpServerConfig {
   env?: Record<string, string>;
 }
 
-interface ClaudeSettings {
+interface HookConfig {
+  matcher: string;
+  hooks: string[];
+}
+
+interface ClaudeMcpConfig {
   mcpServers?: Record<string, McpServerConfig>;
   [key: string]: unknown;
 }
 
+interface ClaudeSettingsConfig {
+  hooks?: {
+    PostToolUse?: HookConfig[];
+    Stop?: HookConfig[];
+    Notification?: HookConfig[];
+    [key: string]: HookConfig[] | undefined;
+  };
+  [key: string]: unknown;
+}
+
 const MCP_SERVER_NAME = 'claudelander-memory';
+const HOOK_IDENTIFIER = 'claudelander-hook';
 
 /**
  * Get the path to the MCP server script
@@ -60,9 +76,9 @@ function getClaudeConfigPath(): string {
 }
 
 /**
- * Read Claude Code config, returning empty object if doesn't exist
+ * Read Claude Code MCP config (~/.claude.json), returning empty object if doesn't exist
  */
-function readClaudeConfig(): ClaudeSettings {
+function readClaudeMcpConfig(): ClaudeMcpConfig {
   const configPath = getClaudeConfigPath();
 
   try {
@@ -71,37 +87,122 @@ function readClaudeConfig(): ClaudeSettings {
       return JSON.parse(content);
     }
   } catch (err) {
-    log.warn('[MCP Config] Failed to read Claude config:', err);
+    log.warn('[MCP Config] Failed to read Claude MCP config:', err);
   }
 
   return {};
 }
 
 /**
- * Write Claude Code config
+ * Write Claude Code MCP config
  */
-function writeClaudeConfig(settings: ClaudeSettings): boolean {
+function writeClaudeMcpConfig(config: ClaudeMcpConfig): boolean {
   const configPath = getClaudeConfigPath();
 
   try {
-    fs.writeFileSync(configPath, JSON.stringify(settings, null, 2), 'utf-8');
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
     return true;
   } catch (err) {
-    log.error('[MCP Config] Failed to write Claude config:', err);
+    log.error('[MCP Config] Failed to write Claude MCP config:', err);
     return false;
   }
 }
 
 /**
+ * Get path to Claude Code settings file (~/.claude/settings.json)
+ * This is where hooks are configured
+ */
+function getClaudeSettingsPath(): string {
+  const homeDir = os.homedir();
+  return path.join(homeDir, '.claude', 'settings.json');
+}
+
+/**
+ * Read Claude Code settings (~/.claude/settings.json)
+ */
+function readClaudeSettings(): ClaudeSettingsConfig {
+  const settingsPath = getClaudeSettingsPath();
+
+  try {
+    if (fs.existsSync(settingsPath)) {
+      const content = fs.readFileSync(settingsPath, 'utf-8');
+      return JSON.parse(content);
+    }
+  } catch (err) {
+    log.warn('[Hooks Config] Failed to read Claude settings:', err);
+  }
+
+  return {};
+}
+
+/**
+ * Write Claude Code settings
+ */
+function writeClaudeSettings(settings: ClaudeSettingsConfig): boolean {
+  const settingsPath = getClaudeSettingsPath();
+
+  try {
+    // Ensure .claude directory exists
+    const claudeDir = path.dirname(settingsPath);
+    if (!fs.existsSync(claudeDir)) {
+      fs.mkdirSync(claudeDir, { recursive: true });
+    }
+
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    log.error('[Hooks Config] Failed to write Claude settings:', err);
+    return false;
+  }
+}
+
+/**
+ * Get the path to the hook handler script
+ */
+function getHookScriptPath(): string {
+  if (!app.isPackaged) {
+    return path.join(app.getAppPath(), 'dist', 'hooks', 'claudelander-hook.js');
+  }
+
+  const resourcesPath = process.resourcesPath;
+
+  // Check for unpacked location first
+  const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked', 'dist', 'hooks', 'claudelander-hook.js');
+  if (fs.existsSync(unpackedPath)) {
+    return unpackedPath;
+  }
+
+  return path.join(resourcesPath, 'app', 'dist', 'hooks', 'claudelander-hook.js');
+}
+
+/**
  * Check if our MCP server is already configured with the correct path
  */
-function isServerConfigured(settings: ClaudeSettings, expectedPath: string): boolean {
-  const serverConfig = settings.mcpServers?.[MCP_SERVER_NAME];
+function isServerConfigured(config: ClaudeMcpConfig, expectedPath: string): boolean {
+  const serverConfig = config.mcpServers?.[MCP_SERVER_NAME];
   if (!serverConfig) return false;
 
   // Check if the path matches
   const configuredPath = serverConfig.args?.[0];
   return configuredPath === expectedPath;
+}
+
+/**
+ * Check if our hooks are already configured
+ */
+function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: string): boolean {
+  const hooks = settings.hooks;
+  if (!hooks) return false;
+
+  // Check if any hook contains our identifier
+  const checkHookType = (hookConfigs: HookConfig[] | undefined): boolean => {
+    if (!hookConfigs) return false;
+    return hookConfigs.some(config =>
+      config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes(hookScriptPath))
+    );
+  };
+
+  return checkHookType(hooks.PostToolUse) || checkHookType(hooks.Stop);
 }
 
 /**
@@ -118,33 +219,33 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
       return { success: false, action: 'error', error: `MCP server not found at ${mcpServerPath}` };
     }
 
-    const settings = readClaudeConfig();
+    const config = readClaudeMcpConfig();
 
     // Check if already configured correctly
-    if (isServerConfigured(settings, mcpServerPath)) {
+    if (isServerConfigured(config, mcpServerPath)) {
       log.info('[MCP Config] MCP server already configured correctly');
       return { success: true, action: 'unchanged', path: mcpServerPath };
     }
 
     // Determine if we're adding or updating
-    const action = settings.mcpServers?.[MCP_SERVER_NAME] ? 'updated' : 'added';
+    const action = config.mcpServers?.[MCP_SERVER_NAME] ? 'updated' : 'added';
 
     // Add or update the MCP server configuration
-    if (!settings.mcpServers) {
-      settings.mcpServers = {};
+    if (!config.mcpServers) {
+      config.mcpServers = {};
     }
 
-    settings.mcpServers[MCP_SERVER_NAME] = {
+    config.mcpServers[MCP_SERVER_NAME] = {
       command: 'node',
       args: [mcpServerPath],
     };
 
-    // Write the updated settings
-    if (writeClaudeConfig(settings)) {
+    // Write the updated config
+    if (writeClaudeMcpConfig(config)) {
       log.info(`[MCP Config] MCP server ${action} successfully:`, mcpServerPath);
       return { success: true, action, path: mcpServerPath };
     } else {
-      return { success: false, action: 'error', error: 'Failed to write settings file' };
+      return { success: false, action: 'error', error: 'Failed to write config file' };
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -154,21 +255,92 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
 }
 
 /**
+ * Register ClaudeLander hooks with Claude Code
+ * Adds hooks for PostToolUse (git commits) and Stop (session summaries)
+ */
+export function registerHooks(): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; error?: string } {
+  try {
+    const hookScriptPath = getHookScriptPath();
+
+    // Verify the hook script exists
+    if (!fs.existsSync(hookScriptPath)) {
+      log.warn('[Hooks Config] Hook script not found at:', hookScriptPath);
+      return { success: false, action: 'error', error: `Hook script not found at ${hookScriptPath}` };
+    }
+
+    const settings = readClaudeSettings();
+
+    // Check if already configured
+    if (areHooksConfigured(settings, hookScriptPath)) {
+      log.info('[Hooks Config] Hooks already configured');
+      return { success: true, action: 'unchanged' };
+    }
+
+    // Determine if we're adding or updating
+    const action = settings.hooks ? 'updated' : 'added';
+
+    // Initialize hooks object if needed
+    if (!settings.hooks) {
+      settings.hooks = {};
+    }
+
+    // Build the hook command - needs to work cross-platform
+    const nodeCmd = process.platform === 'win32' ? 'node' : 'node';
+
+    // PostToolUse hook for Bash (captures git commits)
+    const postToolUseHook: HookConfig = {
+      matcher: 'Bash',
+      hooks: [`${nodeCmd} "${hookScriptPath}" PostToolUse`],
+    };
+
+    // Stop hook (captures session summaries after significant work)
+    const stopHook: HookConfig = {
+      matcher: '',  // Match all stops
+      hooks: [`${nodeCmd} "${hookScriptPath}" Stop`],
+    };
+
+    // Remove any existing ClaudeLander hooks first
+    const filterOurHooks = (configs: HookConfig[] | undefined): HookConfig[] => {
+      if (!configs) return [];
+      return configs.filter(config =>
+        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('claudelander'))
+      );
+    };
+
+    // Add our hooks
+    settings.hooks.PostToolUse = [...filterOurHooks(settings.hooks.PostToolUse), postToolUseHook];
+    settings.hooks.Stop = [...filterOurHooks(settings.hooks.Stop), stopHook];
+
+    // Write the updated settings
+    if (writeClaudeSettings(settings)) {
+      log.info(`[Hooks Config] Hooks ${action} successfully`);
+      return { success: true, action };
+    } else {
+      return { success: false, action: 'error', error: 'Failed to write settings file' };
+    }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    log.error('[Hooks Config] Error registering hooks:', errorMsg);
+    return { success: false, action: 'error', error: errorMsg };
+  }
+}
+
+/**
  * Unregister the ClaudeLander Memory MCP server from Claude Code
  */
 export function unregisterMcpServer(): boolean {
   try {
-    const settings = readClaudeConfig();
+    const config = readClaudeMcpConfig();
 
-    if (settings.mcpServers?.[MCP_SERVER_NAME]) {
-      delete settings.mcpServers[MCP_SERVER_NAME];
+    if (config.mcpServers?.[MCP_SERVER_NAME]) {
+      delete config.mcpServers[MCP_SERVER_NAME];
 
       // Clean up empty mcpServers object
-      if (Object.keys(settings.mcpServers).length === 0) {
-        delete settings.mcpServers;
+      if (Object.keys(config.mcpServers).length === 0) {
+        delete config.mcpServers;
       }
 
-      if (writeClaudeConfig(settings)) {
+      if (writeClaudeMcpConfig(config)) {
         log.info('[MCP Config] MCP server unregistered successfully');
         return true;
       }
@@ -182,13 +354,56 @@ export function unregisterMcpServer(): boolean {
 }
 
 /**
+ * Unregister ClaudeLander hooks from Claude Code
+ */
+export function unregisterHooks(): boolean {
+  try {
+    const settings = readClaudeSettings();
+
+    if (!settings.hooks) return false;
+
+    let modified = false;
+
+    // Remove our hooks from each hook type
+    const filterOurHooks = (configs: HookConfig[] | undefined): HookConfig[] | undefined => {
+      if (!configs) return undefined;
+      const filtered = configs.filter(config =>
+        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('claudelander'))
+      );
+      if (filtered.length !== configs.length) modified = true;
+      return filtered.length > 0 ? filtered : undefined;
+    };
+
+    settings.hooks.PostToolUse = filterOurHooks(settings.hooks.PostToolUse);
+    settings.hooks.Stop = filterOurHooks(settings.hooks.Stop);
+
+    // Clean up empty hooks object
+    if (settings.hooks.PostToolUse === undefined) delete settings.hooks.PostToolUse;
+    if (settings.hooks.Stop === undefined) delete settings.hooks.Stop;
+    if (Object.keys(settings.hooks).length === 0) {
+      delete settings.hooks;
+    }
+
+    if (modified && writeClaudeSettings(settings)) {
+      log.info('[Hooks Config] Hooks unregistered successfully');
+      return true;
+    }
+
+    return false;
+  } catch (err) {
+    log.error('[Hooks Config] Error unregistering hooks:', err);
+    return false;
+  }
+}
+
+/**
  * Get the current MCP server configuration status
  */
 export function getMcpServerStatus(): { configured: boolean; path?: string; expectedPath?: string } {
   try {
     const expectedPath = getMcpServerPath();
-    const settings = readClaudeConfig();
-    const serverConfig = settings.mcpServers?.[MCP_SERVER_NAME];
+    const config = readClaudeMcpConfig();
+    const serverConfig = config.mcpServers?.[MCP_SERVER_NAME];
 
     if (!serverConfig) {
       return { configured: false, expectedPath };
@@ -201,6 +416,22 @@ export function getMcpServerStatus(): { configured: boolean; path?: string; expe
     };
   } catch (err) {
     log.error('[MCP Config] Error getting MCP server status:', err);
+    return { configured: false };
+  }
+}
+
+/**
+ * Get the current hooks configuration status
+ */
+export function getHooksStatus(): { configured: boolean; hookScriptPath?: string } {
+  try {
+    const hookScriptPath = getHookScriptPath();
+    const settings = readClaudeSettings();
+    const configured = areHooksConfigured(settings, hookScriptPath);
+
+    return { configured, hookScriptPath };
+  } catch (err) {
+    log.error('[Hooks Config] Error getting hooks status:', err);
     return { configured: false };
   }
 }

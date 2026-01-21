@@ -17,7 +17,7 @@ import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
-import { registerMcpServer } from './mcp-config';
+import { registerMcpServer, registerHooks } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
 
@@ -234,6 +234,16 @@ function createWindow(): void {
     log.warn('MCP server registration failed:', mcpResult.error);
   }
 
+  // Register hooks with Claude Code (auto-configure on startup)
+  const hooksResult = registerHooks();
+  if (hooksResult.success) {
+    if (hooksResult.action !== 'unchanged') {
+      log.info(`Hooks ${hooksResult.action}`);
+    }
+  } else {
+    log.warn('Hooks registration failed:', hooksResult.error);
+  }
+
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
 
@@ -317,6 +327,13 @@ function createWindow(): void {
 
   // Initialize Teams auth service
   teamsAuthService.initialize();
+
+  // Auto-start API server for MCP memory access
+  getApiServer().start().then(({ port }) => {
+    log.info(`[Main] API server auto-started on port ${port}`);
+  }).catch((err) => {
+    log.error('[Main] Failed to auto-start API server:', err);
+  });
 
   // PTY data forwarding
   ptyManager.on('data', ({ id, data }) => {

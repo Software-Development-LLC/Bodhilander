@@ -42,7 +42,7 @@ export function createMemoriesRouter(): Router {
       const { group_id, type, limit } = req.query;
 
       const memories = memoriesRepo.getMemoriesByGroup(
-        group_id as string | undefined || '',
+        group_id as string | undefined,
         type as MemoryType | undefined,
         limit ? parseInt(limit as string, 10) : 50
       );

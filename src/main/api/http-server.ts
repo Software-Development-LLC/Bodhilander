@@ -18,6 +18,7 @@ import { createSystemRouter } from './routes/system';
 import { createPairingRouter } from './routes/pairing';
 import { createTerminalRouter } from './routes/terminal';
 import { createMemoriesRouter } from './routes/memories';
+import { createHooksRouter } from './routes/hooks';
 
 export interface HttpServerConfig {
   port: number;
@@ -131,6 +132,9 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
 
   // Memory routes for MCP server (localhost-only, no device auth needed)
   app.use('/api/v1/memories', generalLimiter, createMemoriesRouter());
+
+  // Hook routes for Claude Code hooks (localhost-only, no device auth needed)
+  app.use('/api/v1/hooks', generalLimiter, createHooksRouter());
 
   // Protected routes (require device authentication)
   const authMiddleware = authenticateDevice(config.pairingManager);

@@ -22,6 +22,8 @@ interface PtySession {
   lastOutputTime: number;
   memoryInjected: boolean;  // Track if memories have been injected
   hasSeenWorking: boolean;  // Track if Claude has started (seen working state)
+  lastCompactTime: number;  // Track last compaction to avoid multiple re-injections
+  compactReinjectionTimeout: NodeJS.Timeout | null;  // Pending re-injection after compact
 }
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
@@ -172,6 +174,8 @@ class PtyManager extends EventEmitter {
       lastOutputTime: 0,
       memoryInjected: false,
       hasSeenWorking: false,
+      lastCompactTime: 0,
+      compactReinjectionTimeout: null,
     });
   }
 
@@ -197,6 +201,9 @@ class PtyManager extends EventEmitter {
       }
       if (session.workingDebounce) {
         clearTimeout(session.workingDebounce);
+      }
+      if (session.compactReinjectionTimeout) {
+        clearTimeout(session.compactReinjectionTimeout);
       }
       session.pty.kill();
       this.sessions.delete(id);
@@ -232,7 +239,7 @@ class PtyManager extends EventEmitter {
 
     const content = getMemoryInjectionContent(id, session.groupId);
     if (!content) {
-      console.log(`[Memory] No memories to inject for session ${id}`);
+      console.log(`[Memory] No group context for session ${id}, skipping injection`);
       session.memoryInjected = true;
       return;
     }
@@ -320,6 +327,44 @@ class PtyManager extends EventEmitter {
     }
     session.recentOutputBytes += printableContent.length;
     session.lastOutputTime = now;
+
+    // Detect conversation compacting/summarization
+    // Claude Code outputs messages like "Auto-compacting conversation..." when context gets long
+    const compactingPatterns = [
+      /auto[- ]?compact/i,
+      /compacting conversation/i,
+      /summarizing (conversation|context|history)/i,
+      /context (limit|window).*(compact|summar)/i,
+      /conversation.*(compact|summar)/i,
+    ];
+
+    const isCompacting = compactingPatterns.some(pattern => pattern.test(cleanData));
+
+    if (isCompacting && session.memoryInjected) {
+      const timeSinceLastCompact = now - session.lastCompactTime;
+
+      // Only trigger re-injection if we haven't done so recently (within 30 seconds)
+      if (timeSinceLastCompact > 30000) {
+        console.log(`[Memory] Detected conversation compacting for session ${id}, scheduling re-injection`);
+        session.lastCompactTime = now;
+
+        // Clear any pending re-injection timeout
+        if (session.compactReinjectionTimeout) {
+          clearTimeout(session.compactReinjectionTimeout);
+        }
+
+        // Schedule re-injection after compacting completes (wait for next idle state)
+        // We wait a bit to let the compacting finish, then re-inject
+        session.compactReinjectionTimeout = setTimeout(() => {
+          const sess = this.sessions.get(id);
+          if (sess && sess.isClaudeSession && sess.groupId) {
+            console.log(`[Memory] Re-injecting memories after compacting for session ${id}`);
+            sess.memoryInjected = false;  // Reset flag to allow re-injection
+            this.injectMemories(id);
+          }
+        }, 3000);  // Wait 3 seconds for compacting to finish
+      }
+    }
 
     // Detect waiting for user input patterns (check recent buffer)
     const recentBuffer = session.outputBuffer.slice(-500);

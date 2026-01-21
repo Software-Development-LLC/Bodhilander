@@ -10,9 +10,10 @@ files:
   - dist/**/*
   - package.json
 
-# Unpack MCP server from asar so Node can execute it directly
+# Unpack MCP server and hooks from asar so Node can execute them directly
 asarUnpack:
   - dist/mcp-server/**/*
+  - dist/hooks/**/*
 
 # Include icon files for tray icon and sound files
 extraResources:
