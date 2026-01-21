@@ -46,6 +46,14 @@ Share live sessions with collaborators using `SYCLX-` codes:
 - **Time-limited codes** - Auto-expire for security
 - **Real-time sync** - See terminal output as it happens
 
+### **Session Memory**
+Automatically captures and persists knowledge across sessions:
+- **Auto-extraction** - Detects decisions, fixes, and patterns from Claude output
+- **Memory injection** - Injects relevant context when sessions start
+- **MCP Server** - Claude can search and manage memories on demand
+
+See [MCP Memory Server Documentation](docs/mcp-memory-server.md) for Claude Code integration.
+
 ### **Auto-Update**
 New versions download automatically.
 
