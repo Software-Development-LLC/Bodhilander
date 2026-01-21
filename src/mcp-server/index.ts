@@ -3,6 +3,8 @@
  * ClaudeLander Memory MCP Server
  *
  * Provides Claude with tools to access and manage session memories.
+ * Communicates with ClaudeLander via HTTP API (no native dependencies).
+ *
  * Run as: node dist/mcp-server/index.js
  *
  * Tools exposed:
@@ -17,176 +19,163 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import Database from 'better-sqlite3';
-import * as path from 'path';
-import * as os from 'os';
-import * as fs from 'fs';
+
+// ClaudeLander API configuration
+const API_BASE = process.env.CLAUDELANDER_API_URL || 'http://127.0.0.1:8443';
+const API_PREFIX = '/api/v1/memories';
 
 // Types
 interface Memory {
   id: string;
-  session_id: string | null;
-  group_id: string;
+  sessionId: string | null;
+  groupId: string;
   type: string;
   content: string;
   source: string;
-  tags: string | null;
-  pinned: number;
-  created_at: string;
-  updated_at: string | null;
+  tags: string[];
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string | null;
 }
 
-// Find ClaudeLander database
-function findDatabase(): string {
-  const possiblePaths = [
-    // Standard app data location (Windows)
-    path.join(os.homedir(), 'AppData', 'Roaming', 'claudelander', 'claudelander.db'),
-    // Linux
-    path.join(os.homedir(), '.config', 'claudelander', 'claudelander.db'),
-    // Mac App Support
-    path.join(os.homedir(), 'Library', 'Application Support', 'claudelander', 'claudelander.db'),
-    // Development - current directory
-    path.join(process.cwd(), 'claudelander.db'),
-  ];
-
-  // Check environment variable first
-  if (process.env.CLAUDELANDER_DB) {
-    if (fs.existsSync(process.env.CLAUDELANDER_DB)) {
-      return process.env.CLAUDELANDER_DB;
-    }
-  }
-
-  for (const dbPath of possiblePaths) {
-    if (fs.existsSync(dbPath)) {
-      return dbPath;
-    }
-  }
-
-  throw new Error(
-    'ClaudeLander database not found. Make sure ClaudeLander has been run at least once, ' +
-    'or set CLAUDELANDER_DB environment variable to the database path.'
-  );
+interface Group {
+  id: string;
+  name: string;
 }
 
-// Initialize database connection
-let db: Database.Database;
-
-function initDatabase(): void {
-  const dbPath = findDatabase();
-  console.error(`[MCP Memory] Connecting to database: ${dbPath}`);
-  db = new Database(dbPath, { readonly: false });
+// HTTP client helpers
+async function apiGet<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${API_PREFIX}${path}`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+    throw new Error(errorData.error || `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<T>;
 }
 
-// Memory operations
-function searchMemories(query: string, groupId?: string, type?: string, limit: number = 20): Memory[] {
-  let sql: string;
-  const params: (string | number)[] = [];
-
-  if (query.trim()) {
-    // Try FTS first, fall back to LIKE
-    sql = `SELECT * FROM memories WHERE content LIKE ?`;
-    params.push(`%${query}%`);
-  } else {
-    sql = `SELECT * FROM memories WHERE 1=1`;
+async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${API_PREFIX}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+    throw new Error(errorData.error || `HTTP ${response.status}`);
   }
-
-  if (groupId) {
-    sql += ` AND group_id = ?`;
-    params.push(groupId);
-  }
-
-  if (type) {
-    sql += ` AND type = ?`;
-    params.push(type);
-  }
-
-  sql += ` ORDER BY pinned DESC, created_at DESC LIMIT ?`;
-  params.push(limit);
-
-  return db.prepare(sql).all(...params) as Memory[];
+  return response.json() as Promise<T>;
 }
 
-function addMemory(
+async function apiDelete(path: string): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE}${API_PREFIX}${path}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+    throw new Error(errorData.error || `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<{ success: boolean }>;
+}
+
+async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${API_PREFIX}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+    throw new Error(errorData.error || `HTTP ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+// Memory operations via API
+async function searchMemories(
+  query: string,
+  groupId?: string,
+  type?: string,
+  limit: number = 20
+): Promise<Memory[]> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  if (groupId) params.set('group_id', groupId);
+  if (type) params.set('type', type);
+
+  const result = await apiGet<{ memories: Memory[] }>(`/search?${params}`);
+  return result.memories;
+}
+
+async function addMemory(
   content: string,
   type: string,
   groupId: string,
   sessionId?: string,
   tags?: string[]
-): Memory {
-  const id = crypto.randomUUID();
-  const now = new Date().toISOString();
-
-  const sql = `
-    INSERT INTO memories (id, session_id, group_id, type, content, source, tags, pinned, created_at)
-    VALUES (?, ?, ?, ?, ?, 'claude', ?, 0, ?)
-  `;
-
-  db.prepare(sql).run(
-    id,
-    sessionId || null,
-    groupId,
-    type,
+): Promise<Memory> {
+  const result = await apiPost<{ memory: Memory }>('/', {
     content,
-    tags ? JSON.stringify(tags) : null,
-    now
-  );
-
-  return {
-    id,
-    session_id: sessionId || null,
+    type,
     group_id: groupId,
-    type,
-    content,
-    source: 'claude',
-    tags: tags ? JSON.stringify(tags) : null,
-    pinned: 0,
-    created_at: now,
-    updated_at: null,
-  };
+    session_id: sessionId,
+    tags,
+  });
+  return result.memory;
 }
 
-function listMemories(groupId?: string, type?: string, limit: number = 50): Memory[] {
-  let sql = `SELECT * FROM memories WHERE 1=1`;
-  const params: (string | number)[] = [];
+async function listMemories(
+  groupId?: string,
+  type?: string,
+  limit: number = 50
+): Promise<Memory[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (groupId) params.set('group_id', groupId);
+  if (type) params.set('type', type);
 
-  if (groupId) {
-    sql += ` AND group_id = ?`;
-    params.push(groupId);
+  const result = await apiGet<{ memories: Memory[] }>(`?${params}`);
+  return result.memories;
+}
+
+async function deleteMemory(id: string): Promise<boolean> {
+  try {
+    await apiDelete(`/${id}`);
+    return true;
+  } catch {
+    return false;
   }
+}
 
-  if (type) {
-    sql += ` AND type = ?`;
-    params.push(type);
+async function pinMemory(id: string, pinned: boolean): Promise<boolean> {
+  try {
+    await apiPatch(`/${id}/pin`, { pinned });
+    return true;
+  } catch {
+    return false;
   }
-
-  sql += ` ORDER BY pinned DESC, created_at DESC LIMIT ?`;
-  params.push(limit);
-
-  return db.prepare(sql).all(...params) as Memory[];
 }
 
-function deleteMemory(id: string): boolean {
-  const result = db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
-  return result.changes > 0;
+async function getGroups(): Promise<Group[]> {
+  const result = await apiGet<{ groups: Group[] }>('/groups');
+  return result.groups;
 }
 
-function pinMemory(id: string, pinned: boolean): boolean {
-  const result = db.prepare(`UPDATE memories SET pinned = ? WHERE id = ?`).run(pinned ? 1 : 0, id);
-  return result.changes > 0;
-}
-
-function getGroups(): Array<{ id: string; name: string }> {
-  return db.prepare(`SELECT id, name FROM groups ORDER BY name`).all() as Array<{ id: string; name: string }>;
+// Check if ClaudeLander is running
+async function checkConnection(): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/api/v1/health`);
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 // Create and run server
 async function main() {
-  // Initialize database
-  try {
-    initDatabase();
-  } catch (err) {
-    console.error(`[MCP Memory] Failed to initialize database: ${err}`);
-    process.exit(1);
+  // Check if ClaudeLander is running
+  const isConnected = await checkConnection();
+  if (!isConnected) {
+    console.error('[MCP Memory] Warning: ClaudeLander is not running. Memory tools will not work until ClaudeLander is started.');
+  } else {
+    console.error('[MCP Memory] Connected to ClaudeLander API');
   }
 
   // Create MCP server
@@ -200,7 +189,7 @@ async function main() {
     'search_memories',
     {
       title: 'Search Memories',
-      description: 'Search for memories by keyword or phrase. Use this to find relevant context from past sessions.',
+      description: 'Search for memories by keyword or phrase. Use this to find relevant context from past sessions. Requires ClaudeLander to be running.',
       inputSchema: {
         query: z.string().describe('Search query - keywords or phrases to find in memories'),
         group_id: z.string().optional().describe('Filter by group ID. Use list_groups to see available groups.'),
@@ -209,13 +198,18 @@ async function main() {
       },
     },
     async ({ query, group_id, type, limit }) => {
-      const memories = searchMemories(query, group_id, type, limit || 20);
-      const text = memories.length > 0
-        ? `Found ${memories.length} memories:\n\n${memories
-            .map(m => `[${m.type}] ${m.content}${m.pinned ? ' (pinned)' : ''}\n  ID: ${m.id} | Created: ${m.created_at}`)
-            .join('\n\n')}`
-        : 'No memories found matching your query.';
-      return { content: [{ type: 'text', text }] };
+      try {
+        const memories = await searchMemories(query, group_id, type, limit || 20);
+        const text = memories.length > 0
+          ? `Found ${memories.length} memories:\n\n${memories
+              .map(m => `[${m.type}] ${m.content}${m.pinned ? ' (pinned)' : ''}\n  ID: ${m.id} | Created: ${m.createdAt}`)
+              .join('\n\n')}`
+          : 'No memories found matching your query.';
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error searching memories: ${msg}. Is ClaudeLander running?` }] };
+      }
     }
   );
 
@@ -224,7 +218,7 @@ async function main() {
     'add_memory',
     {
       title: 'Add Memory',
-      description: 'Store a new memory for future reference. Use this to save important decisions, fixes, patterns, or context.',
+      description: 'Store a new memory for future reference. Use this to save important decisions, fixes, patterns, or context. Requires ClaudeLander to be running.',
       inputSchema: {
         content: z.string().describe('The content of the memory to store'),
         type: z.enum(['decision', 'error_fix', 'pattern', 'context', 'note']).describe('Type of memory'),
@@ -234,13 +228,18 @@ async function main() {
       },
     },
     async ({ content, type, group_id, session_id, tags }) => {
-      const memory = addMemory(content, type, group_id, session_id, tags);
-      return {
-        content: [{
-          type: 'text',
-          text: `Memory stored successfully!\nID: ${memory.id}\nType: ${memory.type}\nContent: ${memory.content}`,
-        }],
-      };
+      try {
+        const memory = await addMemory(content, type, group_id, session_id, tags);
+        return {
+          content: [{
+            type: 'text',
+            text: `Memory stored successfully!\nID: ${memory.id}\nType: ${memory.type}\nContent: ${memory.content}`,
+          }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error adding memory: ${msg}. Is ClaudeLander running?` }] };
+      }
     }
   );
 
@@ -249,7 +248,7 @@ async function main() {
     'list_memories',
     {
       title: 'List Memories',
-      description: 'List recent memories, optionally filtered by group or type.',
+      description: 'List recent memories, optionally filtered by group or type. Requires ClaudeLander to be running.',
       inputSchema: {
         group_id: z.string().optional().describe('Filter by group ID'),
         type: z.enum(['decision', 'error_fix', 'pattern', 'context', 'note']).optional().describe('Filter by memory type'),
@@ -257,13 +256,18 @@ async function main() {
       },
     },
     async ({ group_id, type, limit }) => {
-      const memories = listMemories(group_id, type, limit || 50);
-      const text = memories.length > 0
-        ? `Found ${memories.length} memories:\n\n${memories
-            .map(m => `[${m.type}] ${m.content}${m.pinned ? ' (pinned)' : ''}\n  ID: ${m.id} | Group: ${m.group_id} | Created: ${m.created_at}`)
-            .join('\n\n')}`
-        : 'No memories found.';
-      return { content: [{ type: 'text', text }] };
+      try {
+        const memories = await listMemories(group_id, type, limit || 50);
+        const text = memories.length > 0
+          ? `Found ${memories.length} memories:\n\n${memories
+              .map(m => `[${m.type}] ${m.content}${m.pinned ? ' (pinned)' : ''}\n  ID: ${m.id} | Group: ${m.groupId} | Created: ${m.createdAt}`)
+              .join('\n\n')}`
+          : 'No memories found.';
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error listing memories: ${msg}. Is ClaudeLander running?` }] };
+      }
     }
   );
 
@@ -272,19 +276,24 @@ async function main() {
     'delete_memory',
     {
       title: 'Delete Memory',
-      description: 'Delete a memory by ID.',
+      description: 'Delete a memory by ID. Requires ClaudeLander to be running.',
       inputSchema: {
         id: z.string().describe('The ID of the memory to delete'),
       },
     },
     async ({ id }) => {
-      const success = deleteMemory(id);
-      return {
-        content: [{
-          type: 'text',
-          text: success ? `Memory ${id} deleted successfully.` : `Memory ${id} not found.`,
-        }],
-      };
+      try {
+        const success = await deleteMemory(id);
+        return {
+          content: [{
+            type: 'text',
+            text: success ? `Memory ${id} deleted successfully.` : `Memory ${id} not found.`,
+          }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error deleting memory: ${msg}. Is ClaudeLander running?` }] };
+      }
     }
   );
 
@@ -293,22 +302,27 @@ async function main() {
     'pin_memory',
     {
       title: 'Pin Memory',
-      description: 'Pin or unpin a memory. Pinned memories appear first in listings.',
+      description: 'Pin or unpin a memory. Pinned memories appear first in listings. Requires ClaudeLander to be running.',
       inputSchema: {
         id: z.string().describe('The ID of the memory to pin/unpin'),
         pinned: z.boolean().describe('True to pin, false to unpin'),
       },
     },
     async ({ id, pinned }) => {
-      const success = pinMemory(id, pinned);
-      return {
-        content: [{
-          type: 'text',
-          text: success
-            ? `Memory ${id} ${pinned ? 'pinned' : 'unpinned'} successfully.`
-            : `Memory ${id} not found.`,
-        }],
-      };
+      try {
+        const success = await pinMemory(id, pinned);
+        return {
+          content: [{
+            type: 'text',
+            text: success
+              ? `Memory ${id} ${pinned ? 'pinned' : 'unpinned'} successfully.`
+              : `Memory ${id} not found.`,
+          }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error updating memory: ${msg}. Is ClaudeLander running?` }] };
+      }
     }
   );
 
@@ -317,15 +331,20 @@ async function main() {
     'list_groups',
     {
       title: 'List Groups',
-      description: 'List available memory groups. Groups organize memories by project/context.',
+      description: 'List available memory groups. Groups organize memories by project/context. Requires ClaudeLander to be running.',
       inputSchema: {},
     },
     async () => {
-      const groups = getGroups();
-      const text = groups.length > 0
-        ? `Available groups:\n${groups.map(g => `- ${g.name} (ID: ${g.id})`).join('\n')}`
-        : 'No groups found. Create a group in ClaudeLander first.';
-      return { content: [{ type: 'text', text }] };
+      try {
+        const groups = await getGroups();
+        const text = groups.length > 0
+          ? `Available groups:\n${groups.map(g => `- ${g.name} (ID: ${g.id})`).join('\n')}`
+          : 'No groups found. Create a group in ClaudeLander first.';
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error listing groups: ${msg}. Is ClaudeLander running?` }] };
+      }
     }
   );
 

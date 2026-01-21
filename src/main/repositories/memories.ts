@@ -43,7 +43,7 @@ export function createMemory(input: MemoryCreateInput): Memory {
   return getMemoryById(input.id)!;
 }
 
-export function updateMemory(id: string, updates: MemoryUpdateInput): void {
+export function updateMemory(id: string, updates: MemoryUpdateInput): boolean {
   const db = getDatabase();
   const now = new Date().toISOString();
   const sets: string[] = ['updated_at = ?'];
@@ -67,12 +67,14 @@ export function updateMemory(id: string, updates: MemoryUpdateInput): void {
   }
 
   values.push(id);
-  db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  const result = db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  return result.changes > 0;
 }
 
-export function deleteMemory(id: string): void {
+export function deleteMemory(id: string): boolean {
   const db = getDatabase();
-  db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+  const result = db.prepare('DELETE FROM memories WHERE id = ?').run(id);
+  return result.changes > 0;
 }
 
 export function getMemoryById(id: string): Memory | null {
@@ -87,9 +89,24 @@ export function getMemoriesBySession(sessionId: string): Memory[] {
   return rows.map(rowToMemory);
 }
 
-export function getMemoriesByGroup(groupId: string): Memory[] {
+export function getMemoriesByGroup(
+  groupId: string,
+  type?: MemoryType,
+  limit: number = 50
+): Memory[] {
   const db = getDatabase();
-  const rows = db.prepare('SELECT * FROM memories WHERE group_id = ? ORDER BY created_at DESC').all(groupId) as MemoryRow[];
+  let sql = 'SELECT * FROM memories WHERE group_id = ?';
+  const params: (string | number)[] = [groupId];
+
+  if (type) {
+    sql += ' AND type = ?';
+    params.push(type);
+  }
+
+  sql += ' ORDER BY pinned DESC, created_at DESC LIMIT ?';
+  params.push(limit);
+
+  const rows = db.prepare(sql).all(...params) as MemoryRow[];
   return rows.map(rowToMemory);
 }
 
@@ -104,37 +121,34 @@ export function getPinnedMemories(groupId?: string): Memory[] {
   return rows.map(rowToMemory);
 }
 
-export function searchMemories(query: string, groupId?: string): Memory[] {
+export function searchMemories(
+  query: string,
+  groupId?: string,
+  type?: MemoryType,
+  limit: number = 20
+): Memory[] {
   const db = getDatabase();
   let rows: MemoryRow[];
 
-  // Try FTS5 search first, fall back to LIKE if it fails
-  try {
-    if (groupId) {
-      rows = db.prepare(`
-        SELECT m.* FROM memories m
-        JOIN memories_fts fts ON m.rowid = fts.rowid
-        WHERE memories_fts MATCH ? AND m.group_id = ?
-        ORDER BY rank
-      `).all(query, groupId) as MemoryRow[];
-    } else {
-      rows = db.prepare(`
-        SELECT m.* FROM memories m
-        JOIN memories_fts fts ON m.rowid = fts.rowid
-        WHERE memories_fts MATCH ?
-        ORDER BY rank
-      `).all(query) as MemoryRow[];
-    }
-  } catch {
-    // Fallback to LIKE search
-    const likeQuery = `%${query}%`;
-    if (groupId) {
-      rows = db.prepare('SELECT * FROM memories WHERE content LIKE ? AND group_id = ? ORDER BY created_at DESC').all(likeQuery, groupId) as MemoryRow[];
-    } else {
-      rows = db.prepare('SELECT * FROM memories WHERE content LIKE ? ORDER BY created_at DESC').all(likeQuery) as MemoryRow[];
-    }
+  // Use LIKE search (simpler and works without FTS setup)
+  const likeQuery = `%${query}%`;
+  let sql = 'SELECT * FROM memories WHERE content LIKE ?';
+  const params: (string | number)[] = [likeQuery];
+
+  if (groupId) {
+    sql += ' AND group_id = ?';
+    params.push(groupId);
   }
 
+  if (type) {
+    sql += ' AND type = ?';
+    params.push(type);
+  }
+
+  sql += ' ORDER BY pinned DESC, created_at DESC LIMIT ?';
+  params.push(limit);
+
+  rows = db.prepare(sql).all(...params) as MemoryRow[];
   return rows.map(rowToMemory);
 }
 

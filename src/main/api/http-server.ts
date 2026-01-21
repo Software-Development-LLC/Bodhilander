@@ -17,6 +17,7 @@ import { createGroupsRouter } from './routes/groups';
 import { createSystemRouter } from './routes/system';
 import { createPairingRouter } from './routes/pairing';
 import { createTerminalRouter } from './routes/terminal';
+import { createMemoriesRouter } from './routes/memories';
 
 export interface HttpServerConfig {
   port: number;
@@ -127,6 +128,9 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
 
   // Pairing routes (rate limited, no auth required for initiation)
   app.use('/api/v1/pairing', pairingLimiter, createPairingRouter(config.pairingManager));
+
+  // Memory routes for MCP server (localhost-only, no device auth needed)
+  app.use('/api/v1/memories', generalLimiter, createMemoriesRouter());
 
   // Protected routes (require device authentication)
   const authMiddleware = authenticateDevice(config.pairingManager);
