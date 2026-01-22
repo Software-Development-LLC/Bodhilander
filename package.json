@@ -1,6 +1,6 @@
 {
   "name": "claudelander",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "description": "Cross-platform Claude Code session manager",
   "homepage": "https://github.com/William-Long-II/claudelander",
   "author": {
@@ -22,7 +22,7 @@
     "claudelander-memory-server": "./dist/mcp-server/index.js"
   },
   "scripts": {
-    "postinstall": "electron-rebuild -o better-sqlite3,sodium-native",
+    "postinstall": "electron-rebuild -o better-sqlite3,sodium-native,node-pty && node node_modules/node-pty/scripts/post-install.js",
     "build:main": "tsc -p tsconfig.main.json",
     "build:mcp": "esbuild src/mcp-server/index.ts --bundle --platform=node --target=node18 --outfile=dist/mcp-server/index.js --sourcemap --format=cjs",
     "build:renderer": "webpack --mode production",
