@@ -4,7 +4,7 @@ import { EventEmitter } from 'events';
 import { getClaudeCommand, getSocketPath } from './claude-launcher';
 import { detectShell, ShellInfo } from './shell-detector';
 import { getPreference } from './repositories/preferences';
-import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
+import { writeMemoryFile, getMemoryInjectionContent, escapeForShell } from './memory/injector';
 
 interface PtySession {
   id: string;
@@ -83,29 +83,37 @@ class PtyManager extends EventEmitter {
         socketPath: this.socketPath,
       });
 
+      // Get memory content for system prompt injection
+      let claudeCmd = 'claude';
+      if (groupId) {
+        const memoryContent = getMemoryInjectionContent(id, groupId);
+        if (memoryContent) {
+          const escapedContent = escapeForShell(memoryContent);
+          claudeCmd = `claude --append-system-prompt "${escapedContent}"`;
+        }
+      }
+
       if (shellInfo.isWSL) {
         // Launch Claude inside WSL
         shell = 'wsl.exe';
-        args = [...shellInfo.args, '--', 'claude'];
+        args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
         env = { ...env, ...claudeConfig.env } as { [key: string]: string };
       } else if (process.platform === 'win32') {
         // On Windows without WSL, run Claude through the shell
-        // node-pty needs full paths, so use shell to resolve PATH
         shell = shellInfo.shell;
         if (shellInfo.shell.toLowerCase().includes('powershell')) {
-          args = ['-NoLogo', '-Command', 'claude'];
+          args = ['-NoLogo', '-Command', claudeCmd];
         } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
-          args = ['/c', 'claude'];
+          args = ['/c', claudeCmd];
         } else {
           // Assume bash-like shell (Git Bash, etc.)
-          args = ['-c', 'claude'];
+          args = ['-c', claudeCmd];
         }
         env = { ...env, ...claudeConfig.env } as { [key: string]: string };
       } else {
-        // macOS/Linux: run Claude through interactive login shell so PATH is resolved
-        // -l = login shell (loads .zprofile), -i = interactive (loads .zshrc)
+        // macOS/Linux: run Claude through interactive login shell
         shell = shellInfo.shell;
-        args = ['-l', '-i', '-c', 'claude'];
+        args = ['-l', '-i', '-c', claudeCmd];
         env = { ...env, ...claudeConfig.env } as { [key: string]: string };
       }
     } else {
@@ -163,18 +171,9 @@ class PtyManager extends EventEmitter {
       this.sessions.delete(id);
     });
 
-    // Write memory file for Claude sessions (for reference, though we inject directly)
+    // Write memory file for Claude sessions (for reference)
     if (launchClaude && groupId) {
       writeMemoryFile(id, groupId, cwd);
-      // Memory injection happens in detectClaudeState when Claude becomes idle,
-      // but add a time-based fallback in case state detection doesn't trigger
-      setTimeout(() => {
-        const sess = this.sessions.get(id);
-        if (sess && !sess.memoryInjected) {
-          console.log(`[Memory] Fallback injection for session ${id}`);
-          this.injectMemories(id);
-        }
-      }, 6000);  // 6 second fallback
     }
 
     this.sessions.set(id, {
