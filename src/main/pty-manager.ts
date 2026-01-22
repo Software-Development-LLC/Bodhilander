@@ -20,10 +20,6 @@ interface PtySession {
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
   lastOutputTime: number;
-  memoryInjected: boolean;  // Track if memories have been injected
-  hasSeenWorking: boolean;  // Track if Claude has started (seen working state)
-  lastCompactTime: number;  // Track last compaction to avoid multiple re-injections
-  compactReinjectionTimeout: NodeJS.Timeout | null;  // Pending re-injection after compact
 }
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
@@ -83,30 +79,55 @@ class PtyManager extends EventEmitter {
         socketPath: this.socketPath,
       });
 
+      // Get memory content for system prompt injection
+      // Pass via environment variable to avoid shell escaping issues with newlines
+      let claudeCmd = 'claude';
+      let processEnv = { ...env, ...claudeConfig.env } as { [key: string]: string };
+
+      if (groupId) {
+        const memoryContent = getMemoryInjectionContent(id, groupId);
+        if (memoryContent) {
+          processEnv.CLAUDELANDER_SYSTEM_PROMPT = memoryContent;
+        }
+      }
+
       if (shellInfo.isWSL) {
         // Launch Claude inside WSL
         shell = 'wsl.exe';
-        args = [...shellInfo.args, '--', 'claude'];
-        env = { ...env, ...claudeConfig.env } as { [key: string]: string };
+        if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+          claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+        }
+        args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
+        env = processEnv;
       } else if (process.platform === 'win32') {
         // On Windows without WSL, run Claude through the shell
-        // node-pty needs full paths, so use shell to resolve PATH
         shell = shellInfo.shell;
         if (shellInfo.shell.toLowerCase().includes('powershell')) {
-          args = ['-NoLogo', '-Command', 'claude'];
+          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt $env:CLAUDELANDER_SYSTEM_PROMPT';
+          }
+          args = ['-NoLogo', '-Command', claudeCmd];
         } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
-          args = ['/c', 'claude'];
+          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt "%CLAUDELANDER_SYSTEM_PROMPT%"';
+          }
+          args = ['/c', claudeCmd];
         } else {
           // Assume bash-like shell (Git Bash, etc.)
-          args = ['-c', 'claude'];
+          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+          }
+          args = ['-c', claudeCmd];
         }
-        env = { ...env, ...claudeConfig.env } as { [key: string]: string };
+        env = processEnv;
       } else {
-        // macOS/Linux: run Claude through interactive login shell so PATH is resolved
-        // -l = login shell (loads .zprofile), -i = interactive (loads .zshrc)
+        // macOS/Linux: run Claude through interactive login shell
         shell = shellInfo.shell;
-        args = ['-l', '-i', '-c', 'claude'];
-        env = { ...env, ...claudeConfig.env } as { [key: string]: string };
+        if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+          claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+        }
+        args = ['-l', '-i', '-c', claudeCmd];
+        env = processEnv;
       }
     } else {
       shell = shellInfo.shell;
@@ -163,18 +184,9 @@ class PtyManager extends EventEmitter {
       this.sessions.delete(id);
     });
 
-    // Write memory file for Claude sessions (for reference, though we inject directly)
+    // Write memory file for Claude sessions (for reference)
     if (launchClaude && groupId) {
       writeMemoryFile(id, groupId, cwd);
-      // Memory injection happens in detectClaudeState when Claude becomes idle,
-      // but add a time-based fallback in case state detection doesn't trigger
-      setTimeout(() => {
-        const sess = this.sessions.get(id);
-        if (sess && !sess.memoryInjected) {
-          console.log(`[Memory] Fallback injection for session ${id}`);
-          this.injectMemories(id);
-        }
-      }, 6000);  // 6 second fallback
     }
 
     this.sessions.set(id, {
@@ -191,10 +203,6 @@ class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
-      memoryInjected: false,
-      hasSeenWorking: false,
-      lastCompactTime: 0,
-      compactReinjectionTimeout: null,
     });
   }
 
@@ -221,9 +229,6 @@ class PtyManager extends EventEmitter {
       if (session.workingDebounce) {
         clearTimeout(session.workingDebounce);
       }
-      if (session.compactReinjectionTimeout) {
-        clearTimeout(session.compactReinjectionTimeout);
-      }
       session.pty.kill();
       this.sessions.delete(id);
     }
@@ -239,42 +244,6 @@ class PtyManager extends EventEmitter {
   getBuffer(id: string): string {
     const session = this.sessions.get(id);
     return session?.scrollbackBuffer || '';
-  }
-
-  /**
-   * Inject memories into a Claude session.
-   * Called after Claude has started up and is ready for input.
-   */
-  private injectMemories(id: string): void {
-    const session = this.sessions.get(id);
-    if (!session || !session.isClaudeSession || !session.groupId) {
-      return;
-    }
-
-    // Only inject once per session
-    if (session.memoryInjected) {
-      return;
-    }
-
-    const content = getMemoryInjectionContent(id, session.groupId);
-    if (!content) {
-      console.log(`[Memory] No group context for session ${id}, skipping injection`);
-      session.memoryInjected = true;
-      return;
-    }
-
-    // Send the memory content to Claude as a single message
-    // Write content first, then send Enter separately after a small delay
-    // This mimics human typing behavior which Claude Code expects
-    console.log(`[Memory] Injecting memories into session ${id}`);
-    session.pty.write(content);
-    setTimeout(() => {
-      const sess = this.sessions.get(id);
-      if (sess) {
-        sess.pty.write('\r');  // Send Enter key
-      }
-    }, 100);
-    session.memoryInjected = true;
   }
 
   private detectClaudeState(id: string, data: string): void {
@@ -298,10 +267,6 @@ class PtyManager extends EventEmitter {
             event: 'idle_timeout',
             timestamp: Math.floor(Date.now() / 1000),
           });
-          // Inject memories when Claude first becomes idle after starting
-          if (sess.hasSeenWorking && !sess.memoryInjected) {
-            this.injectMemories(id);
-          }
         }
       }, 2000);
     }
@@ -346,44 +311,6 @@ class PtyManager extends EventEmitter {
     }
     session.recentOutputBytes += printableContent.length;
     session.lastOutputTime = now;
-
-    // Detect conversation compacting/summarization
-    // Claude Code outputs messages like "Auto-compacting conversation..." when context gets long
-    const compactingPatterns = [
-      /auto[- ]?compact/i,
-      /compacting conversation/i,
-      /summarizing (conversation|context|history)/i,
-      /context (limit|window).*(compact|summar)/i,
-      /conversation.*(compact|summar)/i,
-    ];
-
-    const isCompacting = compactingPatterns.some(pattern => pattern.test(cleanData));
-
-    if (isCompacting && session.memoryInjected) {
-      const timeSinceLastCompact = now - session.lastCompactTime;
-
-      // Only trigger re-injection if we haven't done so recently (within 30 seconds)
-      if (timeSinceLastCompact > 30000) {
-        console.log(`[Memory] Detected conversation compacting for session ${id}, scheduling re-injection`);
-        session.lastCompactTime = now;
-
-        // Clear any pending re-injection timeout
-        if (session.compactReinjectionTimeout) {
-          clearTimeout(session.compactReinjectionTimeout);
-        }
-
-        // Schedule re-injection after compacting completes (wait for next idle state)
-        // We wait a bit to let the compacting finish, then re-inject
-        session.compactReinjectionTimeout = setTimeout(() => {
-          const sess = this.sessions.get(id);
-          if (sess && sess.isClaudeSession && sess.groupId) {
-            console.log(`[Memory] Re-injecting memories after compacting for session ${id}`);
-            sess.memoryInjected = false;  // Reset flag to allow re-injection
-            this.injectMemories(id);
-          }
-        }, 3000);  // Wait 3 seconds for compacting to finish
-      }
-    }
 
     // Detect waiting for user input patterns (check recent buffer)
     const recentBuffer = session.outputBuffer.slice(-500);
@@ -451,7 +378,6 @@ class PtyManager extends EventEmitter {
           const currentSession = this.sessions.get(id);
           if (currentSession && currentSession.recentOutputBytes > 200) {
             currentSession.lastState = 'working';
-            currentSession.hasSeenWorking = true;  // Mark that Claude has started
             currentSession.workingDebounce = null;
             this.emit('stateChange', {
               sessionId: id,
@@ -473,10 +399,6 @@ class PtyManager extends EventEmitter {
                     event: 'idle_timeout',
                     timestamp: Math.floor(Date.now() / 1000),
                   });
-                  // Inject memories when Claude first becomes idle after starting
-                  if (sess.hasSeenWorking && !sess.memoryInjected) {
-                    this.injectMemories(id);
-                  }
                 }
               }, 2000);
             }
@@ -510,10 +432,6 @@ class PtyManager extends EventEmitter {
             event: 'idle_timeout',
             timestamp: Math.floor(Date.now() / 1000),
           });
-          // Inject memories when Claude first becomes idle after starting
-          if (currentSession.hasSeenWorking && !currentSession.memoryInjected) {
-            this.injectMemories(id);
-          }
         }
       }, 2000);
     }
