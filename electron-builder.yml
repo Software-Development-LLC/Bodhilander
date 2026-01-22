@@ -10,10 +10,13 @@ files:
   - dist/**/*
   - package.json
 
-# Unpack MCP server and hooks from asar so Node can execute them directly
+# Unpack MCP server, hooks, and native modules from asar
 asarUnpack:
   - dist/mcp-server/**/*
   - dist/hooks/**/*
+  - node_modules/node-pty/**/*
+  - node_modules/better-sqlite3/**/*
+  - node_modules/sodium-native/**/*
 
 # Include icon files for tray icon and sound files
 extraResources:
