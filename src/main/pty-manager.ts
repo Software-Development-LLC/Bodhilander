@@ -119,20 +119,39 @@ class PtyManager extends EventEmitter {
       rows: 24,
       cwd: shellInfo.isWSL && !launchClaude ? undefined : cwd,
       env: env,
+      // Windows ConPTY options to reduce race conditions (error 299)
+      ...(process.platform === 'win32' ? {
+        useConptyDll: true,  // Use bundled ConPTY DLL from Windows Terminal (often newer/more stable)
+        conptyInheritCursor: false,  // Don't inherit cursor - cleaner startup
+      } : {}),
     });
 
     ptyProcess.onData((data) => {
+      // Filter out Windows ConPTY error messages
+      // Win32 error 299 (ERROR_PARTIAL_COPY) is a race condition when reading from
+      // a terminating process. Using useConptyDll should reduce these occurrences.
+      // We still filter the error message text if it appears.
+      let filteredData = data;
+      if (process.platform === 'win32') {
+        // Remove "windows pid XXXXX, Win32 error NNN" error messages
+        filteredData = filteredData.replace(/windows pid \d+, Win32 error \d+/gi, '');
+        // If the entire chunk was just the error message, skip emitting
+        if (filteredData.trim() === '') {
+          return;
+        }
+      }
+
       // Append to scrollback buffer
       const session = this.sessions.get(id);
       if (session) {
-        session.scrollbackBuffer += data;
+        session.scrollbackBuffer += filteredData;
         // Trim if too large (keep last MAX_SCROLLBACK_SIZE bytes)
         if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
           session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
         }
       }
 
-      this.emit('data', { id, data });
+      this.emit('data', { id, data: filteredData });
 
       if (launchClaude) {
         this.detectClaudeState(id, data);
