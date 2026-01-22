@@ -4,7 +4,7 @@ import { EventEmitter } from 'events';
 import { getClaudeCommand, getSocketPath } from './claude-launcher';
 import { detectShell, ShellInfo } from './shell-detector';
 import { getPreference } from './repositories/preferences';
-import { writeMemoryFile, getMemoryInjectionContent, escapeForShell } from './memory/injector';
+import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 
 interface PtySession {
   id: string;
@@ -80,37 +80,54 @@ class PtyManager extends EventEmitter {
       });
 
       // Get memory content for system prompt injection
+      // Pass via environment variable to avoid shell escaping issues with newlines
       let claudeCmd = 'claude';
+      let processEnv = { ...env, ...claudeConfig.env } as { [key: string]: string };
+
       if (groupId) {
         const memoryContent = getMemoryInjectionContent(id, groupId);
         if (memoryContent) {
-          const escapedContent = escapeForShell(memoryContent);
-          claudeCmd = `claude --append-system-prompt "${escapedContent}"`;
+          processEnv.CLAUDELANDER_SYSTEM_PROMPT = memoryContent;
         }
       }
 
       if (shellInfo.isWSL) {
         // Launch Claude inside WSL
         shell = 'wsl.exe';
+        if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+          claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+        }
         args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
-        env = { ...env, ...claudeConfig.env } as { [key: string]: string };
+        env = processEnv;
       } else if (process.platform === 'win32') {
         // On Windows without WSL, run Claude through the shell
         shell = shellInfo.shell;
         if (shellInfo.shell.toLowerCase().includes('powershell')) {
+          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt $env:CLAUDELANDER_SYSTEM_PROMPT';
+          }
           args = ['-NoLogo', '-Command', claudeCmd];
         } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
+          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt "%CLAUDELANDER_SYSTEM_PROMPT%"';
+          }
           args = ['/c', claudeCmd];
         } else {
           // Assume bash-like shell (Git Bash, etc.)
+          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+          }
           args = ['-c', claudeCmd];
         }
-        env = { ...env, ...claudeConfig.env } as { [key: string]: string };
+        env = processEnv;
       } else {
         // macOS/Linux: run Claude through interactive login shell
         shell = shellInfo.shell;
+        if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
+          claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+        }
         args = ['-l', '-i', '-c', claudeCmd];
-        env = { ...env, ...claudeConfig.env } as { [key: string]: string };
+        env = processEnv;
       }
     } else {
       shell = shellInfo.shell;

@@ -3,20 +3,6 @@ import * as path from 'path';
 import { Memory, MemoryType } from '../../shared/types';
 import { getMemoriesForInjection } from '../repositories/memories';
 
-/**
- * Escape content for use in double-quoted shell command arguments.
- * Escapes backslashes, double quotes, backticks, and dollar signs.
- */
-export function escapeForShell(content: string): string {
-  // For Windows cmd/powershell and Unix shells, double-quote escaping works
-  // Escape backslashes first, then double quotes
-  return content
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/`/g, '\\`')
-    .replace(/\$/g, '\\$');
-}
-
 const MEMORY_FILENAME = '.claudelander-memory.md';
 const MAX_FILE_SIZE = 8 * 1024; // 8KB limit
 
