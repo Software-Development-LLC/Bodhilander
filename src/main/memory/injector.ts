@@ -133,10 +133,10 @@ export function hasMemoryFile(workingDir: string): boolean {
 }
 
 /**
- * Get formatted memory content for direct injection into a Claude session.
- * Returns a concise single-line format suitable for PTY injection.
- * Always includes the group_id so Claude knows where to save new memories.
- * Returns null only if groupId is not provided.
+ * Get formatted memory content for system prompt injection.
+ * Returns content suitable for --append-system-prompt CLI flag.
+ * Returns null if no groupId provided, otherwise returns XML-wrapped content
+ * with either existing memories or a placeholder for saving new ones.
  */
 export function getMemoryInjectionContent(
   sessionId: string,
@@ -148,31 +148,33 @@ export function getMemoryInjectionContent(
 
   const memories = getMemoriesForInjection(sessionId, groupId);
 
-  // Create a concise single-line format for PTY injection
-  // This will be sent as a single message to Claude
+  // Build memory list with pinned items marked
   const memoryItems: string[] = [];
 
   // Add pinned memories first (most important)
   const pinnedMemories = memories.filter(m => m.pinned);
   for (const memory of pinnedMemories) {
-    memoryItems.push(`[IMPORTANT] ${memory.content}`);
+    memoryItems.push(`- ${memory.content} [PINNED]`);
   }
 
   // Add other memories
   for (const memory of memories.filter(m => !m.pinned)) {
-    memoryItems.push(memory.content);
+    memoryItems.push(`- ${memory.content}`);
   }
-
-  // Always include group_id context so Claude knows where to save new memories
-  const groupContext = `[Memory Group: ${groupId}]`;
 
   if (memoryItems.length === 0) {
-    // No memories yet, but still tell Claude the group_id for saving new ones
-    return `${groupContext} No saved memories for this session yet. When saving memories via MCP, use group_id: ${groupId}. Acknowledge briefly.`;
+    // No memories yet, just provide group_id for saving new ones
+    return `<session-memories>
+No saved memories for this session yet.
+To save new memories, use the MCP tool with group_id: ${groupId}
+</session-memories>`;
   }
 
-  // Format as a single message with semicolons separating memories
-  const memoryList = memoryItems.join('; ');
+  // Format as multi-line system prompt content
+  return `<session-memories>
+You have saved memories from previous sessions in this workspace:
+${memoryItems.join('\n')}
 
-  return `${groupContext} Please remember for this conversation: ${memoryList}. When saving memories via MCP, use group_id: ${groupId}. Acknowledge briefly.`;
+To save new memories, use the MCP tool with group_id: ${groupId}
+</session-memories>`;
 }
