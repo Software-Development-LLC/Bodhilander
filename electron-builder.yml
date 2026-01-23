@@ -49,6 +49,9 @@ mac:
         - x64
         - arm64
 
+# Copy conpty.dll for Windows PTY support (runs after packing)
+afterPack: scripts/copy-conpty.js
+
 # Notarization (runs after signing)
 afterSign: scripts/notarize.js
 
