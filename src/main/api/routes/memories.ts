@@ -9,6 +9,7 @@ import { Router, Request, Response } from 'express';
 import * as memoriesRepo from '../../repositories/memories';
 import * as groupsRepo from '../../repositories/groups';
 import { MemoryType } from '../../../shared/types';
+import { getStringParam } from '../middleware/validation';
 import log from 'electron-log';
 
 /**
@@ -125,7 +126,7 @@ export function createMemoriesRouter(): Router {
    */
   router.delete('/:id', (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = getStringParam(req.params.id);
 
       const success = memoriesRepo.deleteMemory(id);
 
@@ -146,7 +147,7 @@ export function createMemoriesRouter(): Router {
    */
   router.patch('/:id/pin', (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = getStringParam(req.params.id);
       const { pinned } = req.body;
 
       if (typeof pinned !== 'boolean') {
