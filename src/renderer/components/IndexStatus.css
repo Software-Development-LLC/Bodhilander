@@ -1,0 +1,112 @@
+.index-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #888;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.index-status-indicator:hover {
+  background: #2a2a2a;
+  border-color: #4c4c4c;
+}
+
+.index-status-indicator.compact {
+  padding: 2px 4px;
+  gap: 4px;
+}
+
+.index-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.index-status-indicator.compact .index-icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* Status-specific styles */
+.index-status-indicator.not-indexed {
+  color: #888;
+  border-color: #3c3c3c;
+}
+
+.index-status-indicator.not-indexed:hover {
+  color: #ff8c00;
+  border-color: #ff8c00;
+}
+
+.index-status-indicator.not-indexed .index-icon {
+  color: #666;
+}
+
+.index-status-indicator.not-indexed:hover .index-icon {
+  color: #ff8c00;
+}
+
+.index-status-indicator.indexing {
+  color: #ff8c00;
+  border-color: #5c4020;
+  background: #2a2215;
+}
+
+.index-status-indicator.indexing .index-icon {
+  color: #ff8c00;
+}
+
+.index-status-indicator.ready {
+  color: #6a6;
+  border-color: #2a5020;
+  background: #1a2a1a;
+}
+
+.index-status-indicator.ready:hover {
+  color: #8c8;
+  border-color: #4a7040;
+  background: #2a3a2a;
+}
+
+.index-status-indicator.ready .index-icon {
+  color: #6a6;
+}
+
+.index-status-indicator.error {
+  color: #f66;
+  border-color: #502020;
+  background: #2a1515;
+}
+
+.index-status-indicator.error:hover {
+  color: #f88;
+  border-color: #704040;
+}
+
+.index-status-indicator.error .index-icon {
+  color: #f66;
+}
+
+/* Spinning animation */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.index-icon.spinning {
+  animation: spin 1s linear infinite;
+}
+
+.status-text {
+  white-space: nowrap;
+}
