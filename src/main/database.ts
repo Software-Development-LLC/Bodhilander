@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import { app } from 'electron';
+import * as sqliteVec from 'sqlite-vec';
 
 let db: Database.Database | null = null;
 
@@ -13,7 +14,11 @@ export function getDatabase(): Database.Database {
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
 
+  // Load sqlite-vec extension for vector search
+  sqliteVec.load(db);
+
   initializeTables(db);
+  initializeCodeSearchTables(db);
 
   return db;
 }
@@ -120,6 +125,92 @@ function initializeTables(database: Database.Database): void {
       INSERT INTO groups (id, name, color, working_dir, "order")
       VALUES ('default', 'Default', '#e06c75', '', 0)
     `).run();
+  }
+}
+
+function initializeCodeSearchTables(database: Database.Database): void {
+  // Code indexes table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS code_indexes (
+      id TEXT PRIMARY KEY,
+      directory_path TEXT UNIQUE NOT NULL,
+      last_indexed_at TEXT,
+      status TEXT CHECK(status IN ('pending', 'indexing', 'ready', 'error')) DEFAULT 'pending',
+      file_count INTEGER DEFAULT 0,
+      chunk_count INTEGER DEFAULT 0,
+      model_name TEXT DEFAULT 'default',
+      embedding_dimensions INTEGER DEFAULT 384,
+      error_message TEXT
+    )
+  `);
+
+  // Indexed files table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS indexed_files (
+      id TEXT PRIMARY KEY,
+      index_id TEXT NOT NULL REFERENCES code_indexes(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      mtime INTEGER NOT NULL,
+      file_hash TEXT,
+      chunk_count INTEGER DEFAULT 0,
+      UNIQUE(index_id, file_path)
+    )
+  `);
+
+  // Code chunks table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS code_chunks (
+      id TEXT PRIMARY KEY,
+      index_id TEXT NOT NULL REFERENCES code_indexes(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      start_line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      chunk_type TEXT,
+      embedding BLOB,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Symbols table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS symbols (
+      id TEXT PRIMARY KEY,
+      index_id TEXT NOT NULL REFERENCES code_indexes(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      symbol_type TEXT CHECK(symbol_type IN ('function', 'class', 'method', 'variable', 'interface', 'type')),
+      file_path TEXT NOT NULL,
+      line INTEGER NOT NULL,
+      "column" INTEGER NOT NULL,
+      parent_symbol_id TEXT REFERENCES symbols(id),
+      signature TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Indexes for fast lookups
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_chunks_index_id ON code_chunks(index_id);
+    CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON code_chunks(file_path);
+    CREATE INDEX IF NOT EXISTS idx_chunks_index_file ON code_chunks(index_id, file_path);
+    CREATE INDEX IF NOT EXISTS idx_symbols_index_id ON symbols(index_id);
+    CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+    CREATE INDEX IF NOT EXISTS idx_symbols_file_path ON symbols(file_path);
+    CREATE INDEX IF NOT EXISTS idx_files_index_id ON indexed_files(index_id);
+    CREATE INDEX IF NOT EXISTS idx_files_mtime ON indexed_files(mtime);
+  `);
+
+  // Vector table for similarity search (384 dimensions for all-MiniLM-L6-v2)
+  try {
+    database.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS code_chunks_vec USING vec0(
+        chunk_id TEXT PRIMARY KEY,
+        embedding FLOAT[384]
+      )
+    `);
+  } catch (e) {
+    // vec0 table might already exist
+    console.log('Vector table setup (may already exist):', e);
   }
 }
 
