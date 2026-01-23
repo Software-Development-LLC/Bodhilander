@@ -33,11 +33,17 @@ A self-contained semantic code search system for ClaudeLander that enables Claud
 ├─────────────────────────────────────────────────────────────────┤
 │  Main Process                                                    │
 │  ├── VectorSearchManager (new)                                  │
-│  │   ├── Indexer (tree-sitter + ONNX embeddings)               │
-│  │   ├── FileWatcher (chokidar)                                │
-│  │   └── SearchEngine (sqlite-vec queries)                     │
+│  │   ├── SearchEngine (sqlite-vec queries)                     │
+│  │   └── FileWatcher coordinator (chokidar)                    │
 │  ├── database.ts (extended with vector tables)                  │
 │  └── pty-manager.ts (unchanged)                                 │
+│                                                                  │
+│  Worker Thread / Utility Process (new)                          │
+│  └── IndexingWorker                                             │
+│      ├── FileDiscovery (gitignore parsing)                     │
+│      ├── Parser (tree-sitter)                                  │
+│      ├── Chunker (syntax-aware + fallback)                     │
+│      └── EmbeddingProvider (ONNX inference)                    │
 │                                                                  │
 │  MCP Server                                                      │
 │  └── search_code, find_symbol tools (new)                       │
@@ -46,6 +52,18 @@ A self-contained semantic code search system for ClaudeLander that enables Claud
 │  └── CodeSearchModal (new)                                      │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Concurrency Model
+
+**Why a separate worker?**
+- ONNX inference and tree-sitter parsing are CPU-intensive
+- Running on main process would freeze the UI during indexing
+- Electron's `utilityProcess` (preferred) or `worker_threads` isolate this work
+
+**Communication:**
+- Main → Worker: index requests, cancel signals
+- Worker → Main: progress updates, completion, errors
+- Uses structured clone for data transfer (no serialization overhead for typed arrays)
 
 ### Data Flow
 
@@ -83,8 +101,19 @@ CREATE TABLE code_indexes (
   file_count INTEGER DEFAULT 0,
   chunk_count INTEGER DEFAULT 0,
   model_name TEXT DEFAULT 'default',
-  embedding_dimensions INTEGER DEFAULT 384,
+  embedding_dimensions INTEGER DEFAULT 768,
   error_message TEXT
+);
+
+-- Tracked files for incremental updates
+CREATE TABLE indexed_files (
+  id TEXT PRIMARY KEY,
+  index_id TEXT NOT NULL REFERENCES code_indexes(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  mtime INTEGER NOT NULL,          -- Unix timestamp for change detection
+  file_hash TEXT,                  -- Optional: content-based invalidation
+  chunk_count INTEGER DEFAULT 0,
+  UNIQUE(index_id, file_path)
 );
 
 -- Code chunks with embeddings
@@ -117,15 +146,36 @@ CREATE TABLE symbols (
 -- Indexes for fast lookups
 CREATE INDEX idx_chunks_index_id ON code_chunks(index_id);
 CREATE INDEX idx_chunks_file_path ON code_chunks(file_path);
+CREATE INDEX idx_chunks_index_file ON code_chunks(index_id, file_path);
 CREATE INDEX idx_symbols_index_id ON symbols(index_id);
 CREATE INDEX idx_symbols_name ON symbols(name);
 CREATE INDEX idx_symbols_file_path ON symbols(file_path);
+CREATE INDEX idx_files_index_id ON indexed_files(index_id);
+CREATE INDEX idx_files_mtime ON indexed_files(mtime);
 
 -- Vector similarity search (sqlite-vec)
 CREATE VIRTUAL TABLE code_chunks_vec USING vec0(
   chunk_id TEXT PRIMARY KEY,
-  embedding FLOAT[384]
+  embedding FLOAT[768]
 );
+
+-- Triggers to keep vec table in sync with chunks table
+CREATE TRIGGER chunks_insert_vec AFTER INSERT ON code_chunks
+WHEN NEW.embedding IS NOT NULL BEGIN
+  INSERT INTO code_chunks_vec(chunk_id, embedding)
+  VALUES (NEW.id, NEW.embedding);
+END;
+
+CREATE TRIGGER chunks_update_vec AFTER UPDATE OF embedding ON code_chunks
+WHEN NEW.embedding IS NOT NULL BEGIN
+  DELETE FROM code_chunks_vec WHERE chunk_id = OLD.id;
+  INSERT INTO code_chunks_vec(chunk_id, embedding)
+  VALUES (NEW.id, NEW.embedding);
+END;
+
+CREATE TRIGGER chunks_delete_vec AFTER DELETE ON code_chunks BEGIN
+  DELETE FROM code_chunks_vec WHERE chunk_id = OLD.id;
+END;
 ```
 
 ---
@@ -187,6 +237,18 @@ Working Directory
 | Branch switch | Detect >50 files changed → full re-index |
 | Manual button | User-triggered re-index |
 
+### Startup Reconciliation
+
+On session open (if index exists), run a reconciliation phase:
+
+1. Scan directory for current file list
+2. Compare against `indexed_files` table
+3. Queue deletions for files no longer present
+4. Queue re-index for files with changed `mtime`
+5. Queue index for new files not in table
+
+This handles files changed while ClaudeLander was closed.
+
 ### Resource Limits
 
 ```typescript
@@ -217,7 +279,9 @@ interface EmbeddingProvider {
 ### V1 Implementation
 
 - `OnnxEmbeddingProvider` - Default, ships with app, works offline
-- Code-specialized model (~100-400MB)
+- Code-specialized 768-dim model (~400MB) - quality over size
+- Candidates: `codebert-base`, `all-mpnet-base-v2`, or similar
+- Final model selection during implementation based on benchmarking
 
 ### Future Providers (v2)
 
@@ -436,9 +500,9 @@ Index is keyed by **canonical directory path**, not by group or session.
 
 ### Storage Estimates
 
-- 1 chunk ≈ 1.5 KB (384-dim embeddings)
-- Typical file: 30 chunks ≈ 45 KB
-- 1,000 file codebase: ~45 MB vector data
+- 1 chunk ≈ 3 KB (768-dim embeddings, quality model)
+- Typical file: 30 chunks ≈ 90 KB
+- 1,000 file codebase: ~90 MB vector data
 - Fits comfortably in SQLite
 
 ---
