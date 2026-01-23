@@ -191,3 +191,87 @@ export interface MemoryEvent {
   };
   timestamp: number;
 }
+
+// =============================================================================
+// Code Search Types
+// =============================================================================
+// Types for semantic code search and symbol lookup feature
+// =============================================================================
+
+export type ChunkType = 'function' | 'class' | 'method' | 'interface' | 'type' | 'block';
+export type SymbolType = 'function' | 'class' | 'method' | 'variable' | 'interface' | 'type';
+export type IndexStatus = 'pending' | 'indexing' | 'ready' | 'error';
+
+export interface CodeIndex {
+  id: string;
+  directoryPath: string;
+  lastIndexedAt: Date | null;
+  status: IndexStatus;
+  fileCount: number;
+  chunkCount: number;
+  modelName: string;
+  embeddingDimensions: number;
+  errorMessage: string | null;
+}
+
+export interface IndexedFile {
+  id: string;
+  indexId: string;
+  filePath: string;
+  mtime: number;
+  fileHash: string | null;
+  chunkCount: number;
+}
+
+export interface CodeChunk {
+  id: string;
+  indexId: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  content: string;
+  chunkType: ChunkType | null;
+  embedding: number[] | null;
+  createdAt: Date;
+}
+
+export interface CodeSymbol {
+  id: string;
+  indexId: string;
+  name: string;
+  symbolType: SymbolType;
+  filePath: string;
+  line: number;
+  column: number;
+  parentSymbolId: string | null;
+  signature: string | null;
+  createdAt: Date;
+}
+
+export interface CodeSearchResult {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  content: string;
+  score: number;
+  chunkType: ChunkType | null;
+}
+
+export interface SymbolSearchResult {
+  name: string;
+  symbolType: SymbolType;
+  filePath: string;
+  line: number;
+  column: number;
+  signature: string | null;
+}
+
+export interface IndexProgress {
+  indexId: string;
+  directoryPath: string;
+  status: IndexStatus;
+  filesTotal: number;
+  filesIndexed: number;
+  currentFile: string | null;
+  error: string | null;
+}
