@@ -162,6 +162,11 @@ export interface ElectronAPI {
   onIndexingProgress: (callback: (progress: IndexProgress) => void) => () => void;
   onIndexingComplete: (callback: (data: { indexId: string }) => void) => () => void;
   onIndexingError: (callback: (data: { indexId: string; error: string }) => void) => () => void;
+
+  // Editor Integration
+  openInEditor: (filePath: string, line?: number, column?: number) => Promise<{ success: boolean; error?: string }>;
+  detectAvailableEditors: () => Promise<string[]>;
+  getEditorOptions: () => Promise<{ value: string; label: string }[]>;
 }
 
 declare global {

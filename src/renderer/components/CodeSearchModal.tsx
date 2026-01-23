@@ -88,6 +88,19 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
     onResultClick?.(result);
   };
 
+  const handleOpenInEditor = async (e: React.MouseEvent, filePath: string, line: number, column: number = 1) => {
+    e.stopPropagation();
+    const result = await window.electronAPI.openInEditor(filePath, line, column);
+    if (!result.success) {
+      console.error('Failed to open in editor:', result.error);
+    }
+  };
+
+  const handleCopyPath = (e: React.MouseEvent, filePath: string, line: number) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(`${filePath}:${line}`);
+  };
+
   const results = searchMode === 'code' ? searchResults : symbolResults;
   const isReady = index?.status === 'ready';
   const needsIndex = !index || index.status === 'error';
@@ -208,6 +221,22 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
                         <span className="file-path">{result.filePath}</span>
                         <span className="line-range">:{result.startLine}-{result.endLine}</span>
                         <span className="score">{Math.round(result.score * 100)}%</span>
+                        <div className="result-actions">
+                          <button
+                            className="action-btn"
+                            onClick={(e) => handleOpenInEditor(e, result.filePath, result.startLine)}
+                            title="Open in Editor"
+                          >
+                            Open
+                          </button>
+                          <button
+                            className="action-btn"
+                            onClick={(e) => handleCopyPath(e, result.filePath, result.startLine)}
+                            title="Copy Path"
+                          >
+                            Copy
+                          </button>
+                        </div>
                       </div>
                       <pre className="result-preview">{result.content.slice(0, 200)}</pre>
                     </li>
@@ -223,6 +252,22 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
                           {result.symbolType}
                         </span>
                         <span className="symbol-name">{result.name}</span>
+                        <div className="result-actions">
+                          <button
+                            className="action-btn"
+                            onClick={(e) => handleOpenInEditor(e, result.filePath, result.line, result.column)}
+                            title="Open in Editor"
+                          >
+                            Open
+                          </button>
+                          <button
+                            className="action-btn"
+                            onClick={(e) => handleCopyPath(e, result.filePath, result.line)}
+                            title="Copy Path"
+                          >
+                            Copy
+                          </button>
+                        </div>
                       </div>
                       <div className="symbol-location">
                         {result.filePath}:{result.line}:{result.column}

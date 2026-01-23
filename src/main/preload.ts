@@ -289,4 +289,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('vector-search:error', listener);
     return () => ipcRenderer.removeListener('vector-search:error', listener);
   },
+
+  // Editor Integration
+  openInEditor: (filePath: string, line?: number, column?: number): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('editor:open', filePath, line, column),
+
+  detectAvailableEditors: (): Promise<string[]> =>
+    ipcRenderer.invoke('editor:detectAvailable'),
+
+  getEditorOptions: (): Promise<{ value: string; label: string }[]> =>
+    ipcRenderer.invoke('editor:getOptions'),
 });

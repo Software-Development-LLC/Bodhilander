@@ -21,6 +21,7 @@ import { registerMcpServer, registerHooks } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
+import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 
 // Use separate userData directory for development to avoid cache conflicts
 if (!app.isPackaged) {
@@ -905,6 +906,23 @@ ipcMain.handle('vector-search:cancel-indexing', (_, indexId: string) => {
 ipcMain.handle('vector-search:delete-index', (_, directoryPath: string) => {
   getVectorSearchManager().deleteIndex(directoryPath);
   return { success: true };
+});
+
+// ============================================================================
+// Editor Integration IPC Handlers
+// ============================================================================
+
+ipcMain.handle('editor:open', async (_, filePath: string, line?: number, column?: number) => {
+  const preferredEditor = prefsRepo.getPreference('preferredEditor') as EditorType | null;
+  return openInEditor(filePath, line ?? 1, column ?? 1, preferredEditor ?? undefined);
+});
+
+ipcMain.handle('editor:detectAvailable', async () => {
+  return detectAvailableEditors();
+});
+
+ipcMain.handle('editor:getOptions', () => {
+  return getEditorOptions();
 });
 
 function getLocalAddresses(): string[] {
