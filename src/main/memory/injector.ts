@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Memory, MemoryType } from '../../shared/types';
 import { getMemoriesForInjection } from '../repositories/memories';
+import * as codeSearchRepo from '../repositories/code-search';
 
 const MEMORY_FILENAME = '.claudelander-memory.md';
 const MAX_FILE_SIZE = 8 * 1024; // 8KB limit
@@ -140,7 +141,8 @@ export function hasMemoryFile(workingDir: string): boolean {
  */
 export function getMemoryInjectionContent(
   sessionId: string,
-  groupId: string
+  groupId: string,
+  workingDir?: string
 ): string | null {
   if (!groupId) {
     return null;
@@ -162,12 +164,29 @@ export function getMemoryInjectionContent(
     memoryItems.push(`- ${memory.content}`);
   }
 
+  // Check if code search index is available
+  let codeSearchHint = '';
+  if (workingDir) {
+    try {
+      const index = codeSearchRepo.getIndexByDirectory(workingDir);
+      if (index && index.status === 'ready') {
+        codeSearchHint = `\n\n<code-search-available>
+This codebase has been indexed for semantic search (${index.fileCount} files, ${index.chunkCount} chunks).
+You can use the search_code MCP tool to find relevant code using natural language queries.
+You can use the find_symbol MCP tool to locate function, class, or method definitions.
+</code-search-available>`;
+      }
+    } catch {
+      // Ignore errors - code search is optional
+    }
+  }
+
   if (memoryItems.length === 0) {
     // No memories yet, just provide group_id for saving new ones
     return `<session-memories>
 No saved memories for this session yet.
 To save new memories, use the MCP tool with group_id: ${groupId}
-</session-memories>`;
+</session-memories>${codeSearchHint}`;
   }
 
   // Format as multi-line system prompt content
@@ -176,5 +195,5 @@ You have saved memories from previous sessions in this workspace:
 ${memoryItems.join('\n')}
 
 To save new memories, use the MCP tool with group_id: ${groupId}
-</session-memories>`;
+</session-memories>${codeSearchHint}`;
 }
