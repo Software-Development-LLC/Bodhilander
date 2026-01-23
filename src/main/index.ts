@@ -20,6 +20,7 @@ import { teamsNotifier } from './teams/teams-notifier';
 import { registerMcpServer, registerHooks } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
+import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 
 // Use separate userData directory for development to avoid cache conflicts
 if (!app.isPackaged) {
@@ -333,6 +334,21 @@ function createWindow(): void {
     log.info(`[Main] API server auto-started on port ${port}`);
   }).catch((err) => {
     log.error('[Main] Failed to auto-start API server:', err);
+  });
+
+  // Vector search event forwarding
+  const vsManager = getVectorSearchManager();
+
+  vsManager.on('indexing-progress', (progress) => {
+    mainWindow?.webContents.send('vector-search:progress', progress);
+  });
+
+  vsManager.on('indexing-complete', (data) => {
+    mainWindow?.webContents.send('vector-search:complete', data);
+  });
+
+  vsManager.on('indexing-error', (data) => {
+    mainWindow?.webContents.send('vector-search:error', data);
   });
 
   // PTY data forwarding
@@ -856,6 +872,41 @@ ipcMain.handle('api:getRemoteAccessStatus', () => {
   return apiServer.getRemoteAccessStatus();
 });
 
+// ============================================================================
+// Vector Search IPC Handlers
+// ============================================================================
+
+ipcMain.handle('vector-search:get-index-status', (_, directoryPath: string) => {
+  return getVectorSearchManager().getIndexStatus(directoryPath);
+});
+
+ipcMain.handle('vector-search:get-all-indexes', () => {
+  return getVectorSearchManager().getAllIndexes();
+});
+
+ipcMain.handle('vector-search:start-indexing', async (_, directoryPath: string) => {
+  await getVectorSearchManager().startIndexing(directoryPath);
+  return { success: true };
+});
+
+ipcMain.handle('vector-search:search-code', async (_, directoryPath: string, query: string, limit?: number) => {
+  return getVectorSearchManager().searchCode(directoryPath, query, limit);
+});
+
+ipcMain.handle('vector-search:search-symbols', (_, directoryPath: string, name: string, symbolType?: string, limit?: number) => {
+  return getVectorSearchManager().searchSymbols(directoryPath, name, symbolType as any, limit);
+});
+
+ipcMain.handle('vector-search:cancel-indexing', (_, indexId: string) => {
+  getVectorSearchManager().cancelIndexing(indexId);
+  return { success: true };
+});
+
+ipcMain.handle('vector-search:delete-index', (_, directoryPath: string) => {
+  getVectorSearchManager().deleteIndex(directoryPath);
+  return { success: true };
+});
+
 function getLocalAddresses(): string[] {
   const { networkInterfaces } = require('os');
   const addresses: string[] = [];
@@ -924,6 +975,9 @@ app.on('before-quit', async () => {
   } catch (e) {
     log.error('Error stopping shares on quit:', e);
   }
+
+  // Cleanup vector search manager
+  disposeVectorSearchManager();
 
   trayManager.destroy();
   stateMonitor?.stop();
