@@ -348,6 +348,108 @@ async function main() {
     }
   );
 
+  // Register search_code tool (semantic code search)
+  server.registerTool(
+    'search_code',
+    {
+      title: 'Semantic Code Search',
+      description: 'Search the codebase semantically using natural language queries. Returns relevant code chunks ranked by similarity. The codebase must be indexed first. Requires ClaudeLander to be running.',
+      inputSchema: {
+        query: z.string().describe('Natural language query describing what code to find'),
+        path: z.string().optional().describe('Directory path to search in. Defaults to current working directory.'),
+        limit: z.number().optional().default(10).describe('Maximum results to return'),
+      },
+    },
+    async ({ query, path, limit }) => {
+      try {
+        const searchPath = path || process.cwd();
+        const params = new URLSearchParams({
+          q: query,
+          path: searchPath,
+          limit: String(limit || 10),
+        });
+
+        const response = await fetch(`${API_BASE}/api/v1/code/search?${params}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        const { results } = await response.json() as { results: any[] };
+
+        if (results.length === 0) {
+          return {
+            content: [{ type: 'text', text: 'No matching code found. Make sure the directory is indexed.' }],
+          };
+        }
+
+        const formatted = results.map((r, i) =>
+          `### Result ${i + 1} (${Math.round(r.score * 100)}% match)\n` +
+          `**File:** ${r.filePath}:${r.startLine}-${r.endLine}\n` +
+          `\`\`\`\n${r.content}\n\`\`\``
+        ).join('\n\n');
+
+        return {
+          content: [{ type: 'text', text: formatted }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error searching code: ${msg}. Is ClaudeLander running?` }] };
+      }
+    }
+  );
+
+  // Register find_symbol tool
+  server.registerTool(
+    'find_symbol',
+    {
+      title: 'Find Symbol Definition',
+      description: 'Find where a function, class, method, or other symbol is defined in the codebase. The codebase must be indexed first. Requires ClaudeLander to be running.',
+      inputSchema: {
+        name: z.string().describe('Name of the symbol to find (function, class, method, variable, interface, or type)'),
+        path: z.string().optional().describe('Directory path to search in. Defaults to current working directory.'),
+        symbol_type: z.enum(['function', 'class', 'method', 'variable', 'interface', 'type']).optional()
+          .describe('Type of symbol to find'),
+        limit: z.number().optional().default(20).describe('Maximum results to return'),
+      },
+    },
+    async ({ name, path, symbol_type, limit }) => {
+      try {
+        const searchPath = path || process.cwd();
+        const params = new URLSearchParams({
+          name,
+          path: searchPath,
+          limit: String(limit || 20),
+        });
+        if (symbol_type) params.set('type', symbol_type);
+
+        const response = await fetch(`${API_BASE}/api/v1/code/symbols?${params}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        const { results } = await response.json() as { results: any[] };
+
+        if (results.length === 0) {
+          return {
+            content: [{ type: 'text', text: `No symbol named "${name}" found. Make sure the directory is indexed.` }],
+          };
+        }
+
+        const formatted = results.map(r =>
+          `- **${r.symbolType}** \`${r.name}\` at ${r.filePath}:${r.line}:${r.column}` +
+          (r.signature ? `\n  Signature: \`${r.signature}\`` : '')
+        ).join('\n');
+
+        return {
+          content: [{ type: 'text', text: `Found ${results.length} definition(s):\n\n${formatted}` }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error finding symbol: ${msg}. Is ClaudeLander running?` }] };
+      }
+    }
+  );
+
   // Connect via stdio
   const transport = new StdioServerTransport();
   await server.connect(transport);
