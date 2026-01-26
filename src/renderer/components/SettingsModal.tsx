@@ -41,6 +41,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [autoLaunchClaude, setAutoLaunchClaude] = useState(true);
   const [customShellPath, setCustomShellPath] = useState('');
   const [closeToTray, setCloseToTray] = useState(true);
+  const [preferredEditor, setPreferredEditor] = useState('');
+  const [editorOptions, setEditorOptions] = useState<{ value: string; label: string }[]>([]);
 
   // Appearance settings state
   const [showSplash, setShowSplash] = useState(true);
@@ -133,6 +135,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           setGithubUser(user);
         } catch {
           setGithubUser(null);
+        }
+
+        // Load editor options and preference
+        try {
+          const [options, editorPref] = await Promise.all([
+            window.electronAPI.getEditorOptions(),
+            window.electronAPI.getPreference('preferredEditor'),
+          ]);
+          setEditorOptions(options);
+          setPreferredEditor(editorPref || '');
+        } catch {
+          // Editor options are optional
         }
       } catch (err) {
         console.error('Failed to load API state:', err);
@@ -324,6 +338,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     await window.electronAPI.setPreference('closeToTray', enabled.toString());
   }, []);
 
+  const handlePreferredEditorChange = useCallback(async (editor: string) => {
+    setPreferredEditor(editor);
+    await window.electronAPI.setPreference('preferredEditor', editor);
+  }, []);
+
   // Appearance setting handlers
   const handleShowSplashChange = useCallback(async (enabled: boolean) => {
     setShowSplash(enabled);
@@ -458,6 +477,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                         ? 'e.g., C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
                         : 'e.g., /bin/bash, /bin/zsh'}
                     </span>
+                  </div>
+
+                  <div className="settings-row">
+                    <label htmlFor="preferred-editor">Preferred Editor:</label>
+                    <select
+                      id="preferred-editor"
+                      className="settings-select"
+                      value={preferredEditor}
+                      onChange={e => handlePreferredEditorChange(e.target.value)}
+                    >
+                      <option value="">Auto-detect</option>
+                      {editorOptions.map(option => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="settings-hint">Editor to use when opening files from code search results</span>
                   </div>
                 </div>
 

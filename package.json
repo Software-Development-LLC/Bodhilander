@@ -29,6 +29,8 @@
     "build": "npm run build:main && npm run build:mcp && npm run build:renderer",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
+    "clean:db": "node -e \"const p=require('path'),f=require('fs'),d=p.join(process.env.APPDATA||process.env.HOME,'claudelander');['claudelander.db','claudelander.db-shm','claudelander.db-wal'].forEach(n=>{const fp=p.join(d,n);try{f.unlinkSync(fp);console.log('Deleted:',fp)}catch(e){if(e.code!=='ENOENT')console.error('Failed:',fp,e.message)}})\"",
+    "dev:clean": "npm run clean:db && npm run dev",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",

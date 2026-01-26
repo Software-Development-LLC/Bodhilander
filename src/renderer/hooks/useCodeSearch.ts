@@ -23,6 +23,7 @@ export interface UseCodeSearchState {
 export interface UseCodeSearchActions {
   startIndexing: () => Promise<void>;
   cancelIndexing: () => Promise<void>;
+  retryIndexing: () => Promise<void>;
   deleteIndex: () => Promise<void>;
   searchCode: (query: string, limit?: number) => Promise<CodeSearchResult[]>;
   searchSymbols: (name: string, symbolType?: SymbolType, limit?: number) => Promise<SymbolSearchResult[]>;
@@ -64,19 +65,21 @@ export function useCodeSearch(directoryPath: string | null): UseCodeSearchState 
       }
     });
 
-    const unsubComplete = window.electronAPI.onIndexingComplete(({ indexId }) => {
-      if (index?.id === indexId) {
+    const unsubComplete = window.electronAPI.onIndexingComplete((data) => {
+      // Check by index ID or directoryPath (for re-index case where ID changes)
+      if (index?.id === data.indexId || (directoryPath && data.directoryPath === directoryPath)) {
         setIsIndexing(false);
         setIndexProgress(null);
         refreshIndex();
       }
     });
 
-    const unsubError = window.electronAPI.onIndexingError(({ indexId, error }) => {
-      if (index?.id === indexId) {
+    const unsubError = window.electronAPI.onIndexingError((data) => {
+      // Check by index ID or directoryPath (for re-index case where ID changes)
+      if (index?.id === data.indexId || (directoryPath && data.directoryPath === directoryPath)) {
         setIsIndexing(false);
         setIndexProgress(null);
-        setSearchError(error);
+        setSearchError(data.error);
         refreshIndex();
       }
     });
@@ -93,15 +96,46 @@ export function useCodeSearch(directoryPath: string | null): UseCodeSearchState 
     refreshIndex();
   }, [refreshIndex]);
 
+  // Auto-start indexing if directory has no index, is pending, or has stale 'indexing' status
+  useEffect(() => {
+    // Only auto-index if we have a directory
+    if (!directoryPath) return;
+
+    // Wait for initial load - index will be null initially, then set after refresh
+    // We use a small delay to ensure refreshIndex has completed
+    const timer = setTimeout(async () => {
+      const currentStatus = await window.electronAPI.getIndexStatus(directoryPath);
+
+      // Auto-start if no index exists, status is pending, or stuck in 'indexing' (stale)
+      const shouldAutoIndex = !currentStatus ||
+        currentStatus.status === 'pending' ||
+        currentStatus.status === 'indexing'; // Stale indexing from interrupted session
+
+      if (shouldAutoIndex) {
+        console.log('[useCodeSearch] Auto-starting indexing for:', directoryPath, 'status:', currentStatus?.status ?? 'none');
+        startIndexing();
+      }
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [directoryPath]); // Only run when directoryPath changes, not on every startIndexing change
+
   // Start indexing
   const startIndexing = useCallback(async () => {
-    if (!directoryPath) return;
+    if (!directoryPath) {
+      console.warn('[useCodeSearch] No directoryPath provided');
+      return;
+    }
 
     setIsIndexing(true);
     setSearchError(null);
 
     try {
-      await window.electronAPI.startIndexing(directoryPath);
+      const result = await window.electronAPI.startIndexing(directoryPath);
+      if (!result.success) {
+        setIsIndexing(false);
+        setSearchError(result.error ?? 'Failed to start indexing');
+      }
     } catch (err) {
       setIsIndexing(false);
       setSearchError(err instanceof Error ? err.message : 'Failed to start indexing');
@@ -121,6 +155,25 @@ export function useCodeSearch(directoryPath: string | null): UseCodeSearchState 
       console.error('Failed to cancel indexing:', err);
     }
   }, [index?.id, refreshIndex]);
+
+  // Retry indexing after an error
+  const retryIndexing = useCallback(async () => {
+    if (!directoryPath) return;
+
+    setIsIndexing(true);
+    setSearchError(null);
+
+    try {
+      const result = await window.electronAPI.retryIndexing(directoryPath);
+      if (!result.success) {
+        setIsIndexing(false);
+        setSearchError(result.error ?? 'Failed to retry indexing');
+      }
+    } catch (err) {
+      setIsIndexing(false);
+      setSearchError(err instanceof Error ? err.message : 'Failed to retry indexing');
+    }
+  }, [directoryPath]);
 
   // Delete index
   const deleteIndex = useCallback(async () => {
@@ -203,6 +256,7 @@ export function useCodeSearch(directoryPath: string | null): UseCodeSearchState 
     // Actions
     startIndexing,
     cancelIndexing,
+    retryIndexing,
     deleteIndex,
     searchCode,
     searchSymbols,

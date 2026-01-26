@@ -51,8 +51,8 @@ export function getAllIndexes(): CodeIndex[] {
 
 export function createIndex(
   directoryPath: string,
-  modelName: string = 'default',
-  dimensions: number = 384
+  modelName: string = 'bge-base-en-v1.5',
+  dimensions: number = 768
 ): CodeIndex {
   const db = getDatabase();
   const id = randomUUID();
@@ -304,10 +304,11 @@ export function searchSymbols(
 ): SymbolSearchResult[] {
   const db = getDatabase();
 
+  // Use case-insensitive LIKE with LOWER()
   let query = `
     SELECT name, symbol_type, file_path, line, "column", signature
     FROM symbols
-    WHERE index_id = ? AND name LIKE ?
+    WHERE index_id = ? AND LOWER(name) LIKE LOWER(?)
   `;
   const params: any[] = [indexId, `%${name}%`];
 
@@ -320,6 +321,8 @@ export function searchSymbols(
   params.push(limit);
 
   const rows = db.prepare(query).all(...params) as any[];
+
+  console.log(`[CodeSearch] Symbol search for "${name}" in index ${indexId}: found ${rows.length} results`);
 
   return rows.map(row => ({
     name: row.name,
@@ -334,6 +337,11 @@ export function searchSymbols(
 // ============ Mappers ============
 
 function mapRowToCodeIndex(row: any): CodeIndex {
+  // Count symbols for this index
+  const db = getDatabase();
+  const symbolCountRow = db.prepare('SELECT COUNT(*) as count FROM symbols WHERE index_id = ?').get(row.id) as any;
+  const symbolCount = symbolCountRow?.count ?? 0;
+
   return {
     id: row.id,
     directoryPath: row.directory_path,
@@ -341,6 +349,7 @@ function mapRowToCodeIndex(row: any): CodeIndex {
     status: row.status,
     fileCount: row.file_count,
     chunkCount: row.chunk_count,
+    symbolCount,
     modelName: row.model_name,
     embeddingDimensions: row.embedding_dimensions,
     errorMessage: row.error_message,

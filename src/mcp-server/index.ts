@@ -483,13 +483,14 @@ async function main() {
           };
         }
 
-        const statusEmoji = {
+        const statusEmojiMap: Record<string, string> = {
           ready: '✅',
           indexing: '🔄',
           pending: '⏳',
           error: '❌',
           stale: '⚠️',
-        }[index.status] || '❓';
+        };
+        const statusEmoji = statusEmojiMap[index.status as string] || '❓';
 
         const text = `Index Status for: ${path}\n\n` +
           `${statusEmoji} Status: ${index.status}\n` +
@@ -531,14 +532,15 @@ async function main() {
           };
         }
 
+        const statusEmojiMap: Record<string, string> = {
+          ready: '✅',
+          indexing: '🔄',
+          pending: '⏳',
+          error: '❌',
+          stale: '⚠️',
+        };
         const formatted = indexes.map(idx => {
-          const statusEmoji = {
-            ready: '✅',
-            indexing: '🔄',
-            pending: '⏳',
-            error: '❌',
-            stale: '⚠️',
-          }[idx.status] || '❓';
+          const statusEmoji = statusEmojiMap[idx.status as string] || '❓';
           return `${statusEmoji} ${idx.directoryPath}\n   Status: ${idx.status} | Files: ${idx.fileCount} | Chunks: ${idx.chunkCount}`;
         }).join('\n\n');
 

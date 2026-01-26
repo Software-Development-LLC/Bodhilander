@@ -22,7 +22,7 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
   const [searchMode, setSearchMode] = useState<SearchMode>('code');
   const [symbolType, setSymbolType] = useState<SymbolType | ''>('');
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<NodeJS.Timeout>();
+  const debounceRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const {
     index,
@@ -34,6 +34,8 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
     searchError,
     startIndexing,
     cancelIndexing,
+    retryIndexing,
+    deleteIndex,
     searchCode,
     searchSymbols,
     clearResults,
@@ -103,7 +105,10 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
 
   const results = searchMode === 'code' ? searchResults : symbolResults;
   const isReady = index?.status === 'ready';
-  const needsIndex = !index || index.status === 'error';
+  // Show "needs index" when not currently indexing and index is missing, pending, errored,
+  // or stuck in 'indexing' status (stale from interrupted indexing)
+  const isStaleIndexing = index?.status === 'indexing' && !isIndexing;
+  const needsIndex = !isIndexing && (!index || index.status === 'pending' || index.status === 'error' || isStaleIndexing);
 
   if (!isOpen) return null;
 
@@ -141,12 +146,16 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
         {isIndexing && indexProgress && (
           <div className="index-status indexing">
             <div className="progress-info">
-              <span>Indexing: {indexProgress.currentFile}</span>
+              <span>
+                {indexProgress.phase === 'embedding'
+                  ? `Generating embeddings: ${indexProgress.currentFile}`
+                  : `Parsing: ${indexProgress.currentFile}`}
+              </span>
               <span>{indexProgress.filesIndexed} / {indexProgress.filesTotal} files</span>
             </div>
             <div className="progress-bar">
               <div
-                className="progress-fill"
+                className={`progress-fill ${indexProgress.phase === 'embedding' ? 'embedding-phase' : ''}`}
                 style={{
                   width: indexProgress.filesTotal > 0
                     ? `${(indexProgress.filesIndexed / indexProgress.filesTotal) * 100}%`
@@ -158,9 +167,27 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
           </div>
         )}
 
-        {index?.status === 'ready' && (
+        {index?.status === 'ready' && !isIndexing && (
           <div className="index-status ready">
-            <span>{index.fileCount} files indexed ({index.chunkCount} chunks)</span>
+            <span>{index.fileCount} files, {index.chunkCount} chunks, {index.symbolCount} symbols</span>
+            <button className="reindex-btn" onClick={async () => {
+              await deleteIndex();
+              await startIndexing();
+            }}>
+              Re-index
+            </button>
+          </div>
+        )}
+
+        {index?.status === 'error' && (
+          <div className="index-status error">
+            <div className="error-info">
+              <span className="error-title">Indexing failed</span>
+              {index.errorMessage && <span className="error-message">{index.errorMessage}</span>}
+            </div>
+            <button className="retry-btn" onClick={retryIndexing} disabled={isIndexing}>
+              {isIndexing ? 'Retrying...' : 'Retry'}
+            </button>
           </div>
         )}
 

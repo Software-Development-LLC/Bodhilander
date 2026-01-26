@@ -135,11 +135,11 @@ function initializeCodeSearchTables(database: Database.Database): void {
       id TEXT PRIMARY KEY,
       directory_path TEXT UNIQUE NOT NULL,
       last_indexed_at TEXT,
-      status TEXT CHECK(status IN ('pending', 'indexing', 'ready', 'error')) DEFAULT 'pending',
+      status TEXT CHECK(status IN ('pending', 'indexing', 'ready', 'error', 'stale')) DEFAULT 'pending',
       file_count INTEGER DEFAULT 0,
       chunk_count INTEGER DEFAULT 0,
-      model_name TEXT DEFAULT 'default',
-      embedding_dimensions INTEGER DEFAULT 384,
+      model_name TEXT DEFAULT 'bge-base-en-v1.5',
+      embedding_dimensions INTEGER DEFAULT 768,
       error_message TEXT
     )
   `);
@@ -200,17 +200,51 @@ function initializeCodeSearchTables(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_files_mtime ON indexed_files(mtime);
   `);
 
-  // Vector table for similarity search (384 dimensions for all-MiniLM-L6-v2)
+  // Vector table for similarity search (768 dimensions for bge-base-en-v1.5)
+  // Check if we need to migrate from old 384-dimension table
   try {
-    database.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS code_chunks_vec USING vec0(
-        chunk_id TEXT PRIMARY KEY,
-        embedding FLOAT[384]
-      )
-    `);
+    // Try to detect if table exists with wrong dimensions by checking if it exists at all
+    const tableExists = database.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='code_chunks_vec'
+    `).get();
+
+    if (tableExists) {
+      // Try a test insert with 768 dimensions to see if it fails
+      // If it does, we need to recreate the table
+      try {
+        const testEmbedding = Buffer.from(new Float32Array(768).buffer);
+        database.prepare(`INSERT INTO code_chunks_vec (chunk_id, embedding) VALUES ('__dimension_test__', ?)`).run(testEmbedding);
+        // Clean up test row
+        database.prepare(`DELETE FROM code_chunks_vec WHERE chunk_id = '__dimension_test__'`).run();
+        console.log('Vector table already has correct dimensions (768)');
+      } catch (dimError: any) {
+        if (dimError.message && dimError.message.includes('Dimension mismatch')) {
+          console.log('Migrating vector table from 384 to 768 dimensions...');
+          // Drop old table and recreate with new dimensions
+          database.exec('DROP TABLE code_chunks_vec');
+          database.exec(`
+            CREATE VIRTUAL TABLE code_chunks_vec USING vec0(
+              chunk_id TEXT PRIMARY KEY,
+              embedding FLOAT[768]
+            )
+          `);
+          console.log('Vector table migrated successfully');
+        } else {
+          throw dimError;
+        }
+      }
+    } else {
+      // Create new table with 768 dimensions
+      database.exec(`
+        CREATE VIRTUAL TABLE code_chunks_vec USING vec0(
+          chunk_id TEXT PRIMARY KEY,
+          embedding FLOAT[768]
+        )
+      `);
+      console.log('Vector table created with 768 dimensions');
+    }
   } catch (e) {
-    // vec0 table might already exist
-    console.log('Vector table setup (may already exist):', e);
+    console.error('Vector table setup error:', e);
   }
 }
 

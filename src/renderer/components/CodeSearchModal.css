@@ -117,6 +117,16 @@
   transition: width 0.3s ease;
 }
 
+.progress-fill.embedding-phase {
+  background: linear-gradient(90deg, #4fc3f7, #29b6f6);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 .index-status .cancel-btn {
   padding: 4px 8px;
   background: #3c3c3c;
@@ -131,6 +141,71 @@
   background: #1a2e1a;
   border: 1px solid #2a5020;
   color: #6a6;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.index-status .reindex-btn {
+  padding: 4px 10px;
+  background: #2a5020;
+  border: 1px solid #3a6030;
+  border-radius: 4px;
+  color: #8c8;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.index-status .reindex-btn:hover {
+  background: #3a6030;
+  color: #afa;
+}
+
+.index-status.error {
+  background: #2e1a1a;
+  border: 1px solid #502020;
+  color: #c66;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.index-status.error .error-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.index-status.error .error-title {
+  font-weight: 500;
+}
+
+.index-status.error .error-message {
+  font-size: 11px;
+  color: #999;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.index-status .retry-btn {
+  padding: 6px 12px;
+  background: #502020;
+  border: 1px solid #703030;
+  border-radius: 4px;
+  color: #faa;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.index-status .retry-btn:hover {
+  background: #603030;
+}
+
+.index-status .retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Search Input */
