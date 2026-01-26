@@ -256,7 +256,7 @@
 
       try {
         await window.electronAPI.downloadUpdate();
-        status.textContent = 'Download started - check for notification when complete';
+        status.textContent = 'Downloading... 0%';
       } catch (e) {
         status.className = 'update-status error';
         status.textContent = 'Failed to start download';
@@ -264,6 +264,45 @@
         downloadBtn.textContent = 'Download Update';
       }
     }
+
+    function restartAndUpdate() {
+      window.electronAPI.restartAndUpdate();
+    }
+
+    // Listen for download progress
+    window.electronAPI.onDownloadProgress((percent) => {
+      const status = document.getElementById('updateStatus');
+      status.className = 'update-status checking';
+      status.textContent = `Downloading... ${percent.toFixed(0)}%`;
+    });
+
+    // Listen for download completion
+    window.electronAPI.onUpdateDownloaded((version) => {
+      const downloadBtn = document.getElementById('downloadBtn');
+      const status = document.getElementById('updateStatus');
+
+      status.className = 'update-status available';
+      status.textContent = `Version ${version} downloaded! Ready to install.`;
+
+      downloadBtn.textContent = 'Restart Now';
+      downloadBtn.className = 'btn download-btn';
+      downloadBtn.disabled = false;
+      downloadBtn.onclick = restartAndUpdate;
+      downloadBtn.style.display = 'inline-block';
+    });
+
+    // Listen for errors
+    window.electronAPI.onDownloadError((error) => {
+      const downloadBtn = document.getElementById('downloadBtn');
+      const status = document.getElementById('updateStatus');
+
+      status.className = 'update-status error';
+      status.textContent = `Download failed: ${error}`;
+
+      downloadBtn.textContent = 'Retry Download';
+      downloadBtn.disabled = false;
+      downloadBtn.onclick = downloadUpdate;
+    });
   </script>
 </body>
 </html>

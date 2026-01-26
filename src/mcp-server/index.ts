@@ -2,18 +2,25 @@
 /**
  * ClaudeLander Memory MCP Server
  *
- * Provides Claude with tools to access and manage session memories.
+ * Provides Claude with tools to access and manage session memories and code search.
  * Communicates with ClaudeLander via HTTP API (no native dependencies).
  *
  * Run as: node dist/mcp-server/index.js
  *
- * Tools exposed:
+ * Memory Tools:
  * - search_memories: Search for memories by query
  * - add_memory: Add a new memory
  * - list_memories: List recent memories
  * - delete_memory: Delete a memory
  * - pin_memory: Pin/unpin a memory
  * - list_groups: List available groups
+ *
+ * Code Search Tools:
+ * - search_code: Semantic code search using natural language
+ * - find_symbol: Find function/class/method definitions
+ * - get_index_status: Check if a directory is indexed
+ * - list_indexes: List all available code indexes
+ * - start_indexing: Start indexing a directory for code search
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -446,6 +453,139 @@ async function main() {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         return { content: [{ type: 'text', text: `Error finding symbol: ${msg}. Is ClaudeLander running?` }] };
+      }
+    }
+  );
+
+  // Register get_index_status tool
+  server.registerTool(
+    'get_index_status',
+    {
+      title: 'Get Code Index Status',
+      description: 'Check if a directory has been indexed for semantic code search. Use this before search_code to verify the codebase is ready for searching. Requires ClaudeLander to be running.',
+      inputSchema: {
+        path: z.string().describe('Directory path to check. Use the working directory of the current project.'),
+      },
+    },
+    async ({ path }) => {
+      try {
+        const params = new URLSearchParams({ path });
+        const response = await fetch(`${API_BASE}/api/v1/code/index/status?${params}`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        const { index } = await response.json() as { index: any | null };
+
+        if (!index) {
+          return {
+            content: [{ type: 'text', text: `Directory "${path}" has not been indexed.\n\nUse start_indexing to index this codebase for semantic search.` }],
+          };
+        }
+
+        const statusEmoji = {
+          ready: '✅',
+          indexing: '🔄',
+          pending: '⏳',
+          error: '❌',
+          stale: '⚠️',
+        }[index.status] || '❓';
+
+        const text = `Index Status for: ${path}\n\n` +
+          `${statusEmoji} Status: ${index.status}\n` +
+          `📁 Files: ${index.fileCount}\n` +
+          `📦 Chunks: ${index.chunkCount}\n` +
+          `🔣 Symbols: ${index.symbolCount}\n` +
+          `🤖 Model: ${index.modelName}\n` +
+          (index.lastIndexedAt ? `📅 Last indexed: ${index.lastIndexedAt}\n` : '') +
+          (index.errorMessage ? `\n⚠️ Error: ${index.errorMessage}` : '');
+
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error checking index status: ${msg}. Is ClaudeLander running?` }] };
+      }
+    }
+  );
+
+  // Register list_indexes tool
+  server.registerTool(
+    'list_indexes',
+    {
+      title: 'List Code Indexes',
+      description: 'List all available code indexes. Shows which directories have been indexed for semantic code search. Requires ClaudeLander to be running.',
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/code/indexes`);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        const { indexes } = await response.json() as { indexes: any[] };
+
+        if (indexes.length === 0) {
+          return {
+            content: [{ type: 'text', text: 'No code indexes found.\n\nUse start_indexing to index a codebase for semantic search.' }],
+          };
+        }
+
+        const formatted = indexes.map(idx => {
+          const statusEmoji = {
+            ready: '✅',
+            indexing: '🔄',
+            pending: '⏳',
+            error: '❌',
+            stale: '⚠️',
+          }[idx.status] || '❓';
+          return `${statusEmoji} ${idx.directoryPath}\n   Status: ${idx.status} | Files: ${idx.fileCount} | Chunks: ${idx.chunkCount}`;
+        }).join('\n\n');
+
+        return {
+          content: [{ type: 'text', text: `Found ${indexes.length} code index(es):\n\n${formatted}` }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error listing indexes: ${msg}. Is ClaudeLander running?` }] };
+      }
+    }
+  );
+
+  // Register start_indexing tool
+  server.registerTool(
+    'start_indexing',
+    {
+      title: 'Start Code Indexing',
+      description: 'Start indexing a directory for semantic code search. WARNING: Indexing can be resource-intensive (CPU, memory) and may take several minutes for large codebases. The index will be built in the background. Use get_index_status to check progress. Requires ClaudeLander to be running.',
+      inputSchema: {
+        path: z.string().describe('Directory path to index. This should be the root of the codebase you want to search.'),
+      },
+    },
+    async ({ path }) => {
+      try {
+        const response = await fetch(`${API_BASE}/api/v1/code/index`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: `🚀 Indexing started for: ${path}\n\n` +
+              `Indexing runs in the background. This may take several minutes for large codebases.\n\n` +
+              `Use get_index_status to check progress.\n` +
+              `Once status is "ready", you can use search_code and find_symbol.`,
+          }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { content: [{ type: 'text', text: `Error starting indexing: ${msg}. Is ClaudeLander running?` }] };
       }
     }
   );

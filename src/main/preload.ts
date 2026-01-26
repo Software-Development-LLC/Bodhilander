@@ -120,6 +120,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:memories:getForInjection', sessionId, groupId),
   getMemoryById: (id: string): Promise<Memory | null> =>
     ipcRenderer.invoke('db:memories:getById', id),
+  getGlobalContextMemories: (): Promise<Memory[]> =>
+    ipcRenderer.invoke('db:memories:getGlobal'),
   onMemoryExtracted: (callback: (memory: Memory) => void) => {
     const listener = (_: Electron.IpcRendererEvent, memory: Memory) => callback(memory);
     ipcRenderer.on('memory:extracted', listener);
@@ -271,6 +273,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   deleteCodeIndex: (directoryPath: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('vector-search:delete-index', directoryPath),
+
+  retryIndexing: (directoryPath: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('vector-search:retry-indexing', directoryPath),
 
   onIndexingProgress: (callback: (progress: IndexProgress) => void) => {
     const listener = (_: Electron.IpcRendererEvent, progress: IndexProgress) => callback(progress);

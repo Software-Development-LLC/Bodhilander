@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Memory, MemoryType } from '../../shared/types';
+import { Memory, MemoryType, GLOBAL_CONTEXT_GROUP_ID } from '../../shared/types';
 import { getMemoriesForInjection } from '../repositories/memories';
 import * as codeSearchRepo from '../repositories/code-search';
 
@@ -150,18 +150,27 @@ export function getMemoryInjectionContent(
 
   const memories = getMemoriesForInjection(sessionId, groupId);
 
-  // Build memory list with pinned items marked
-  const memoryItems: string[] = [];
+  // Separate global context from project context
+  const globalMemories = memories.filter(m => m.groupId === GLOBAL_CONTEXT_GROUP_ID);
+  const projectMemories = memories.filter(m => m.groupId !== GLOBAL_CONTEXT_GROUP_ID);
 
-  // Add pinned memories first (most important)
-  const pinnedMemories = memories.filter(m => m.pinned);
-  for (const memory of pinnedMemories) {
-    memoryItems.push(`- ${memory.content} [PINNED]`);
+  // Build global context items
+  const globalItems: string[] = [];
+  for (const memory of globalMemories) {
+    const prefix = memory.pinned ? '[PINNED] ' : '';
+    globalItems.push(`- ${prefix}${memory.content}`);
   }
 
-  // Add other memories
-  for (const memory of memories.filter(m => !m.pinned)) {
-    memoryItems.push(`- ${memory.content}`);
+  // Build project context items
+  const projectItems: string[] = [];
+  const pinnedProject = projectMemories.filter(m => m.pinned);
+  const otherProject = projectMemories.filter(m => !m.pinned);
+
+  for (const memory of pinnedProject) {
+    projectItems.push(`- ${memory.content} [PINNED]`);
+  }
+  for (const memory of otherProject) {
+    projectItems.push(`- ${memory.content}`);
   }
 
   // Check if code search index is available
@@ -181,19 +190,36 @@ You can use the find_symbol MCP tool to locate function, class, or method defini
     }
   }
 
-  if (memoryItems.length === 0) {
+  const sections: string[] = [];
+
+  // Add global context section if present
+  if (globalItems.length > 0) {
+    sections.push(`Global context (applies to all projects):
+${globalItems.join('\n')}`);
+  }
+
+  // Add project context section if present
+  if (projectItems.length > 0) {
+    sections.push(`Project context:
+${projectItems.join('\n')}`);
+  }
+
+  if (sections.length === 0) {
     // No memories yet, just provide group_id for saving new ones
     return `<session-memories>
-No saved memories for this session yet.
-To save new memories, use the MCP tool with group_id: ${groupId}
+No saved context for this session yet.
+To save new context, use the MCP tool with group_id: ${groupId}
+For global context (all projects), use group_id: ${GLOBAL_CONTEXT_GROUP_ID}
 </session-memories>${codeSearchHint}`;
   }
 
   // Format as multi-line system prompt content
   return `<session-memories>
-You have saved memories from previous sessions in this workspace:
-${memoryItems.join('\n')}
+You have saved context from previous sessions:
 
-To save new memories, use the MCP tool with group_id: ${groupId}
+${sections.join('\n\n')}
+
+To save new context, use the MCP tool with group_id: ${groupId}
+For global context (all projects), use group_id: ${GLOBAL_CONTEXT_GROUP_ID}
 </session-memories>${codeSearchHint}`;
 }

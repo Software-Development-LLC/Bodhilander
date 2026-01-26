@@ -9,6 +9,7 @@ import { NamePromptModal } from './components/NamePromptModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { MemoryPanel } from './components/panels/MemoryPanel';
+import { CodeSearchModal } from './components/CodeSearchModal';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -90,6 +91,9 @@ const App: React.FC = () => {
 
   // Memory panel state
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+
+  // Code search modal state
+  const [codeSearchOpen, setCodeSearchOpen] = useState(false);
 
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
@@ -174,18 +178,15 @@ const App: React.FC = () => {
   };
 
   // Actually create the group after name is confirmed
-  const handleConfirmGroup = async (name: string) => {
+  const handleConfirmGroup = async (name: string, path?: string) => {
     setGroupPrompt(null);
 
     // Create the group first
     const newGroup = await createGroup(name);
 
-    // Prompt for directory (optional)
-    const dir = await window.electronAPI.selectDirectory();
-
-    // If directory was selected, update the group
-    if (dir) {
-      await updateGroup(newGroup.id, { workingDir: dir });
+    // If path was selected during creation, update the group
+    if (path) {
+      await updateGroup(newGroup.id, { workingDir: path });
     }
   };
 
@@ -199,9 +200,13 @@ const App: React.FC = () => {
   };
 
   // Actually create the sub-group after name is confirmed
-  const handleConfirmSubGroup = async (name: string) => {
+  const handleConfirmSubGroup = async (name: string, path?: string) => {
     if (!subGroupPrompt) return;
-    await createGroup(name, subGroupPrompt.parentId);
+    const newGroup = await createGroup(name, subGroupPrompt.parentId);
+    // If path was selected, update the subgroup (overrides inherited parent path)
+    if (path && newGroup) {
+      await updateGroup(newGroup.id, { workingDir: path });
+    }
     setSubGroupPrompt(null);
   };
 
@@ -661,6 +666,10 @@ const App: React.FC = () => {
     }
   }, [focusedItemType, focusedItemId, groups, handleCreateSubGroup]);
 
+  const handleCodeSearch = useCallback(() => {
+    setCodeSearchOpen(true);
+  }, []);
+
   const shortcutHandlers = useMemo(() => ({
     onNewSession: handleKeyboardNewSession,
     onNextSession: handleNextSession,
@@ -675,7 +684,8 @@ const App: React.FC = () => {
     onCollapse: handleCollapse,
     onExpand: handleExpand,
     onSelect: handleSelect,
-  }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect]);
+    onCodeSearch: handleCodeSearch,
+  }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect, handleCodeSearch]);
 
   useKeyboardShortcuts(shortcutHandlers);
 
@@ -773,6 +783,13 @@ const App: React.FC = () => {
               title="Toggle Memory Panel"
             >
               *
+            </button>
+            <button
+              className="icon-button"
+              onClick={() => setCodeSearchOpen(true)}
+              title="Code Search (Ctrl+Shift+F)"
+            >
+              🔍
             </button>
             <button
               className="icon-button"
@@ -1352,6 +1369,7 @@ const App: React.FC = () => {
         defaultValue={groupPrompt?.defaultName || ''}
         onConfirm={handleConfirmGroup}
         onCancel={() => setGroupPrompt(null)}
+        showPathSelector={true}
       />
 
       <NamePromptModal
@@ -1361,6 +1379,8 @@ const App: React.FC = () => {
         defaultValue={subGroupPrompt?.defaultName || ''}
         onConfirm={handleConfirmSubGroup}
         onCancel={() => setSubGroupPrompt(null)}
+        showPathSelector={true}
+        pathLabel="Working Directory (optional, inherits from parent)"
       />
 
       {/* Choice menu for + button on groups */}
@@ -1387,6 +1407,13 @@ const App: React.FC = () => {
       <SettingsModal
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+      />
+
+      {/* Code Search modal */}
+      <CodeSearchModal
+        isOpen={codeSearchOpen}
+        directoryPath={activeSession?.workingDir || null}
+        onClose={() => setCodeSearchOpen(false)}
       />
     </div>
   );

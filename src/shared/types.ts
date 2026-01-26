@@ -147,6 +147,12 @@ export interface DevicePermissions {
 // Types for session memory/knowledge persistence feature
 // =============================================================================
 
+/**
+ * Reserved group ID for global context that applies to all projects.
+ * Memories with this group_id are injected into every session.
+ */
+export const GLOBAL_CONTEXT_GROUP_ID = '__global__';
+
 export type MemoryType = 'decision' | 'error_fix' | 'pattern' | 'context' | 'note';
 export type MemorySource = 'auto' | 'manual' | 'claude';
 
@@ -200,7 +206,7 @@ export interface MemoryEvent {
 
 export type ChunkType = 'function' | 'class' | 'method' | 'interface' | 'type' | 'block';
 export type SymbolType = 'function' | 'class' | 'method' | 'variable' | 'interface' | 'type';
-export type IndexStatus = 'pending' | 'indexing' | 'ready' | 'error';
+export type IndexStatus = 'pending' | 'indexing' | 'ready' | 'error' | 'stale';
 
 export interface CodeIndex {
   id: string;
@@ -209,6 +215,7 @@ export interface CodeIndex {
   status: IndexStatus;
   fileCount: number;
   chunkCount: number;
+  symbolCount: number;
   modelName: string;
   embeddingDimensions: number;
   errorMessage: string | null;
@@ -266,10 +273,13 @@ export interface SymbolSearchResult {
   signature: string | null;
 }
 
+export type IndexPhase = 'parsing' | 'embedding';
+
 export interface IndexProgress {
   indexId: string;
   directoryPath: string;
   status: IndexStatus;
+  phase: IndexPhase;
   filesTotal: number;
   filesIndexed: number;
   currentFile: string | null;

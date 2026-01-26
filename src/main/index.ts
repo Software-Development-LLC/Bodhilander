@@ -548,6 +548,10 @@ ipcMain.handle('db:memories:getById', (_, id: string) => {
   return memoriesRepo.getMemoryById(id);
 });
 
+ipcMain.handle('db:memories:getGlobal', () => {
+  return memoriesRepo.getGlobalContextMemories();
+});
+
 // Preferences IPC Handlers
 ipcMain.handle('prefs:get', async (_, key: string) => {
   return prefsRepo.getPreference(key);
@@ -651,6 +655,12 @@ ipcMain.handle('app:check-for-update', async () => {
 // App update download (for About dialog)
 ipcMain.handle('app:download-update', async () => {
   downloadUpdate();
+});
+
+// App restart and update (for About dialog)
+ipcMain.handle('app:restart-and-update', async () => {
+  const { autoUpdater } = await import('electron-updater');
+  autoUpdater.quitAndInstall(false, true);
 });
 
 // Sharing IPC handlers (host)
@@ -886,8 +896,14 @@ ipcMain.handle('vector-search:get-all-indexes', () => {
 });
 
 ipcMain.handle('vector-search:start-indexing', async (_, directoryPath: string) => {
-  await getVectorSearchManager().startIndexing(directoryPath);
-  return { success: true };
+  try {
+    log.info('[VectorSearch] Starting indexing for:', directoryPath);
+    await getVectorSearchManager().startIndexing(directoryPath);
+    return { success: true };
+  } catch (error) {
+    log.error('[VectorSearch] Failed to start indexing:', error);
+    return { success: false, error: (error as Error).message };
+  }
 });
 
 ipcMain.handle('vector-search:search-code', async (_, directoryPath: string, query: string, limit?: number) => {
@@ -906,6 +922,15 @@ ipcMain.handle('vector-search:cancel-indexing', (_, indexId: string) => {
 ipcMain.handle('vector-search:delete-index', (_, directoryPath: string) => {
   getVectorSearchManager().deleteIndex(directoryPath);
   return { success: true };
+});
+
+ipcMain.handle('vector-search:retry-indexing', async (_, directoryPath: string) => {
+  try {
+    await getVectorSearchManager().retryIndexing(directoryPath);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
 });
 
 // ============================================================================
