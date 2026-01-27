@@ -9,6 +9,7 @@ interface WorkerMessage {
   type: 'start' | 'cancel';
   indexId?: string;
   directoryPath?: string;
+  cacheDir?: string;
 }
 
 interface ChunkWithEmbedding {
@@ -47,6 +48,27 @@ let embeddingProvider: HuggingFaceEmbeddingProvider | null = null;
 
 let cancelled = false;
 
+// Track current indexId for global error handlers
+let currentIndexId: string | null = null;
+
+// Global error handlers to catch native module crashes and unhandled rejections
+process.on('uncaughtException', (err) => {
+  console.error('[IndexingWorker] Uncaught exception:', err);
+  if (currentIndexId) {
+    sendError(currentIndexId, `Uncaught exception: ${err.message}`);
+  }
+  // Give the message time to send before the process terminates
+  setTimeout(() => process.exit(1), 100);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error('[IndexingWorker] Unhandled rejection:', msg);
+  if (currentIndexId) {
+    sendError(currentIndexId, `Unhandled rejection: ${msg}`);
+  }
+});
+
 parentPort?.on('message', async (message: WorkerMessage) => {
   if (message.type === 'cancel') {
     cancelled = true;
@@ -55,7 +77,21 @@ parentPort?.on('message', async (message: WorkerMessage) => {
 
   if (message.type === 'start') {
     cancelled = false;
+    currentIndexId = message.indexId!;
+
+    // Configure HuggingFace cache directory if provided
+    if (message.cacheDir) {
+      try {
+        // Set environment variable for @huggingface/transformers cache
+        process.env.HF_HOME = message.cacheDir;
+        process.env.TRANSFORMERS_CACHE = path.join(message.cacheDir, 'models');
+      } catch (e) {
+        console.warn('[IndexingWorker] Failed to set cache dir:', e);
+      }
+    }
+
     await runIndexing(message.indexId!, message.directoryPath!);
+    currentIndexId = null;
   }
 });
 
@@ -67,13 +103,16 @@ async function runIndexing(
     // Initialize embedding provider if not already done
     if (!embeddingProvider) {
       sendProgress(indexId, directoryPath, 0, 0, 'parsing', 'Loading embedding model...');
+      console.log('[IndexingWorker] Initializing embedding provider...');
       embeddingProvider = new HuggingFaceEmbeddingProvider();
       await embeddingProvider.initialize();
+      console.log('[IndexingWorker] Embedding provider initialized successfully');
     }
 
     // Discover files
     sendProgress(indexId, directoryPath, 0, 0, 'parsing', 'Discovering files...');
     const files = await discoverFiles(directoryPath);
+    console.log(`[IndexingWorker] Discovered ${files.length} files in ${directoryPath}`);
 
     if (cancelled) return;
 
@@ -112,7 +151,7 @@ async function runIndexing(
             });
           } catch (embErr) {
             // If embedding fails, still include chunk without embedding
-            console.warn(`Embedding failed for chunk in ${file.path}:`, embErr);
+            console.warn(`[IndexingWorker] Embedding failed for chunk in ${file.path}:`, embErr);
             chunksWithEmbeddings.push({
               ...chunk,
               embedding: null,
@@ -125,7 +164,7 @@ async function runIndexing(
 
       } catch (err) {
         // Log error but continue with other files
-        console.error(`Error processing file ${file.path}:`, err);
+        console.error(`[IndexingWorker] Error processing file ${file.path}:`, err);
       }
 
       filesIndexed++;
@@ -134,7 +173,9 @@ async function runIndexing(
     sendComplete(indexId);
 
   } catch (err) {
-    sendError(indexId, err instanceof Error ? err.message : String(err));
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.error('[IndexingWorker] Indexing failed:', errorMsg);
+    sendError(indexId, errorMsg);
   }
 }
 

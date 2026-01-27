@@ -108,7 +108,8 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
   // Show "needs index" when not currently indexing and index is missing, pending, errored,
   // or stuck in 'indexing' status (stale from interrupted indexing)
   const isStaleIndexing = index?.status === 'indexing' && !isIndexing;
-  const needsIndex = !isIndexing && (!index || index.status === 'pending' || index.status === 'error' || isStaleIndexing);
+  const hasError = !isIndexing && index?.status === 'error';
+  const needsIndex = !isIndexing && !hasError && (!index || index.status === 'pending' || isStaleIndexing);
 
   if (!isOpen) return null;
 
@@ -179,11 +180,11 @@ export const CodeSearchModal: React.FC<CodeSearchModalProps> = ({
           </div>
         )}
 
-        {index?.status === 'error' && (
+        {hasError && (
           <div className="index-status error">
             <div className="error-info">
               <span className="error-title">Indexing failed</span>
-              {index.errorMessage && <span className="error-message">{index.errorMessage}</span>}
+              {index?.errorMessage && <span className="error-message">{index.errorMessage}</span>}
             </div>
             <button className="retry-btn" onClick={retryIndexing} disabled={isIndexing}>
               {isIndexing ? 'Retrying...' : 'Retry'}

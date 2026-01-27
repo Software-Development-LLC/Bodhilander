@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as chokidar from 'chokidar';
 import { EventEmitter } from 'events';
+import { app } from 'electron';
 import * as codeSearchRepo from '../repositories/code-search';
 import { getEmbeddingProvider } from './embedding-provider';
 import { ParsedSymbol } from './parser';
@@ -40,14 +41,47 @@ interface WorkerResult {
   error?: string;
 }
 
+// Timeout for model initialization (downloading 110MB model + loading ONNX runtime)
+const WORKER_INIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
 export class VectorSearchManager extends EventEmitter {
   private workers: Map<string, Worker> = new Map();
   private watchers: Map<string, chokidar.FSWatcher> = new Map();
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private cancelledIndexes: Set<string> = new Set();
+  private workerTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   constructor() {
     super();
+  }
+
+  /**
+   * Get the path to the indexing worker script.
+   * Worker threads cannot load from inside asar archives, so in packaged
+   * builds we resolve to the app.asar.unpacked directory.
+   */
+  private getWorkerPath(): string {
+    if (!app.isPackaged) {
+      return path.join(__dirname, 'indexing-worker.js');
+    }
+
+    // In production, use the unpacked path
+    const unpackedPath = path.join(
+      process.resourcesPath,
+      'app.asar.unpacked',
+      'dist',
+      'main',
+      'vector-search',
+      'indexing-worker.js'
+    );
+
+    if (fs.existsSync(unpackedPath)) {
+      return unpackedPath;
+    }
+
+    // Fallback to __dirname (will likely fail in asar, but log will show the issue)
+    console.warn('[VectorSearch] Unpacked worker not found at:', unpackedPath);
+    return path.join(__dirname, 'indexing-worker.js');
   }
 
   // ============ Index Management ============
@@ -157,7 +191,9 @@ export class VectorSearchManager extends EventEmitter {
     codeSearchRepo.updateIndexStatus(index.id, 'indexing');
 
     // Start worker - embeddings are now generated in the worker thread
-    const workerPath = path.join(__dirname, 'indexing-worker.js');
+    // In packaged apps, worker_threads cannot load from inside asar archives,
+    // so we must use the unpacked path
+    const workerPath = this.getWorkerPath();
     const worker = new Worker(workerPath);
 
     this.workers.set(index.id, worker);
@@ -167,28 +203,69 @@ export class VectorSearchManager extends EventEmitter {
     });
 
     worker.on('error', (err: Error) => {
-      console.error('Worker error:', err);
-      codeSearchRepo.updateIndexStatus(index.id, 'error', err.message);
+      console.error('[VectorSearch] Worker error:', err);
+      const errorMsg = err.message || 'Worker thread error';
+      codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
       this.workers.delete(index.id);
+      this.emit('indexing-error', {
+        indexId: index.id,
+        error: errorMsg,
+        directoryPath: index.directoryPath,
+      });
     });
 
     worker.on('exit', (code) => {
       this.workers.delete(index.id);
       if (code !== 0 && !this.cancelledIndexes.has(index.id)) {
-        codeSearchRepo.updateIndexStatus(index.id, 'error', `Worker exited with code ${code}`);
+        const errorMsg = `Worker exited with code ${code}`;
+        console.error('[VectorSearch]', errorMsg);
+        codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
+        this.emit('indexing-error', {
+          indexId: index.id,
+          error: errorMsg,
+          directoryPath: index.directoryPath,
+        });
       }
     });
 
+    // Set a timeout for worker initialization (model download can take a while)
+    const timeout = setTimeout(() => {
+      if (this.workers.has(index.id)) {
+        const errorMsg = 'Worker timed out during initialization (model download may have failed)';
+        console.error('[VectorSearch]', errorMsg);
+        this.cancelIndexing(index.id);
+        codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
+        this.emit('indexing-error', {
+          indexId: index.id,
+          error: errorMsg,
+          directoryPath: index.directoryPath,
+        });
+      }
+    }, WORKER_INIT_TIMEOUT_MS);
+    this.workerTimeouts.set(index.id, timeout);
+
+    // Pass cache directory so the worker can configure model caching
+    const cacheDir = path.join(app.getPath('userData'), 'huggingface');
     worker.postMessage({
       type: 'start',
       indexId: index.id,
       directoryPath,
+      cacheDir,
     });
+  }
+
+  private clearWorkerTimeout(indexId: string): void {
+    const timeout = this.workerTimeouts.get(indexId);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.workerTimeouts.delete(indexId);
+    }
   }
 
   cancelIndexing(indexId: string): void {
     // Mark as cancelled so worker knows to stop
     this.cancelledIndexes.add(indexId);
+    this.clearWorkerTimeout(indexId);
 
     const worker = this.workers.get(indexId);
     if (worker) {
@@ -225,6 +302,8 @@ export class VectorSearchManager extends EventEmitter {
         break;
 
       case 'file-parsed':
+        // First file-parsed means initialization succeeded - clear the timeout
+        this.clearWorkerTimeout(indexId);
         // File comes with embeddings already generated in worker
         // Just insert into DB (fast operation, won't block main thread)
         if (result.fileData) {
@@ -233,12 +312,14 @@ export class VectorSearchManager extends EventEmitter {
         break;
 
       case 'complete':
+        this.clearWorkerTimeout(indexId);
         if (!this.cancelledIndexes.has(indexId)) {
           this.handleIndexingComplete(indexId);
         }
         break;
 
       case 'error':
+        this.clearWorkerTimeout(indexId);
         const errorIndex = codeSearchRepo.getIndexById(indexId);
         codeSearchRepo.updateIndexStatus(indexId, 'error', result.error ?? 'Unknown error');
         this.emit('indexing-error', { indexId, error: result.error, directoryPath: errorIndex?.directoryPath });
@@ -457,6 +538,11 @@ export class VectorSearchManager extends EventEmitter {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+
+    for (const timeout of this.workerTimeouts.values()) {
+      clearTimeout(timeout);
+    }
+    this.workerTimeouts.clear();
 
     this.cancelledIndexes.clear();
     // Note: We don't dispose the embedding provider here because it may still be needed

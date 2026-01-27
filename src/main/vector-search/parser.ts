@@ -1,9 +1,24 @@
-import Parser from 'tree-sitter';
-import TypeScript from 'tree-sitter-typescript';
-import JavaScript from 'tree-sitter-javascript';
-import Python from 'tree-sitter-python';
-import CSharp from 'tree-sitter-c-sharp';
 import type { ChunkType, SymbolType } from '../../shared/types';
+
+// Tree-sitter is a native module that may not be rebuilt for Electron.
+// Use dynamic imports so a load failure doesn't crash the entire worker.
+let Parser: any = null;
+let TypeScript: any = null;
+let JavaScript: any = null;
+let Python: any = null;
+let CSharp: any = null;
+let treeSitterAvailable = false;
+
+try {
+  Parser = require('tree-sitter');
+  TypeScript = require('tree-sitter-typescript');
+  JavaScript = require('tree-sitter-javascript');
+  Python = require('tree-sitter-python');
+  CSharp = require('tree-sitter-c-sharp');
+  treeSitterAvailable = true;
+} catch (err) {
+  console.warn('[Parser] tree-sitter not available, using fallback parser:', (err as Error).message);
+}
 
 export interface ParsedChunk {
   content: string;
@@ -26,39 +41,46 @@ export interface ParseResult {
   symbols: ParsedSymbol[];
 }
 
-const parsers: Map<string, Parser> = new Map();
+const parsers: Map<string, any> = new Map();
 
-function getParser(language: string): Parser | null {
+function getParser(language: string): any | null {
+  if (!treeSitterAvailable) return null;
+
   if (parsers.has(language)) {
     return parsers.get(language)!;
   }
 
-  const parser = new Parser();
-  let lang: any;
+  try {
+    const parser = new Parser();
+    let lang: any;
 
-  switch (language) {
-    case 'typescript':
-      lang = TypeScript.typescript;
-      break;
-    case 'tsx':
-      lang = TypeScript.tsx;
-      break;
-    case 'javascript':
-      lang = JavaScript;
-      break;
-    case 'python':
-      lang = Python;
-      break;
-    case 'c_sharp':
-      lang = CSharp;
-      break;
-    default:
-      return null;
+    switch (language) {
+      case 'typescript':
+        lang = TypeScript.typescript;
+        break;
+      case 'tsx':
+        lang = TypeScript.tsx;
+        break;
+      case 'javascript':
+        lang = JavaScript;
+        break;
+      case 'python':
+        lang = Python;
+        break;
+      case 'c_sharp':
+        lang = CSharp;
+        break;
+      default:
+        return null;
+    }
+
+    parser.setLanguage(lang);
+    parsers.set(language, parser);
+    return parser;
+  } catch (err) {
+    console.warn(`[Parser] Failed to create parser for ${language}:`, (err as Error).message);
+    return null;
   }
-
-  parser.setLanguage(lang);
-  parsers.set(language, parser);
-  return parser;
 }
 
 export function parseCode(content: string, language: string): ParseResult {
@@ -68,22 +90,27 @@ export function parseCode(content: string, language: string): ParseResult {
     return fallbackParse(content);
   }
 
-  const tree = parser.parse(content);
-  const chunks: ParsedChunk[] = [];
-  const symbols: ParsedSymbol[] = [];
+  try {
+    const tree = parser.parse(content);
+    const chunks: ParsedChunk[] = [];
+    const symbols: ParsedSymbol[] = [];
 
-  extractNodes(tree.rootNode, content, chunks, symbols, language);
+    extractNodes(tree.rootNode, content, chunks, symbols, language);
 
-  // If no chunks found, use fallback
-  if (chunks.length === 0) {
+    // If no chunks found, use fallback
+    if (chunks.length === 0) {
+      return fallbackParse(content);
+    }
+
+    return { chunks, symbols };
+  } catch (err) {
+    console.warn(`[Parser] tree-sitter parse failed, using fallback:`, (err as Error).message);
     return fallbackParse(content);
   }
-
-  return { chunks, symbols };
 }
 
 function extractNodes(
-  node: Parser.SyntaxNode,
+  node: any,
   content: string,
   chunks: ParsedChunk[],
   symbols: ParsedSymbol[],
@@ -232,15 +259,15 @@ function getRelevantNodeTypes(language: string): {
   }
 }
 
-function getNodeName(node: Parser.SyntaxNode, language: string): string | null {
+function getNodeName(node: any, language: string): string | null {
   // Try common name field patterns
   const nameNode = node.childForFieldName('name') ??
-                   node.children.find(c => c.type === 'identifier' || c.type === 'property_identifier');
+                   node.children.find((c: any) => c.type === 'identifier' || c.type === 'property_identifier');
 
   return nameNode?.text ?? null;
 }
 
-function getSignature(node: Parser.SyntaxNode, content: string): string | null {
+function getSignature(node: any, content: string): string | null {
   // Get first line as signature (simplified)
   const firstLineEnd = node.text.indexOf('\n');
   if (firstLineEnd === -1) return node.text;
