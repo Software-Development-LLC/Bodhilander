@@ -12,7 +12,18 @@ autoUpdater.autoInstallOnAppQuit = true;
 
 let mainWindow: BrowserWindow | null = null;
 let isDownloading = false;
-let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string }) => void) | null = null;
+let isDialogOpen = false;
+let isDownloadingFromAbout = false;
+let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string; error?: string }) => void) | null = null;
+
+// Broadcast event to all windows (including About dialog)
+function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(channel, ...args);
+    }
+  });
+}
 
 export function initAutoUpdater(window: BrowserWindow): void {
   mainWindow = window;
@@ -54,30 +65,18 @@ export function downloadUpdate(): void {
   }
 
   isDownloading = true;
+  isDownloadingFromAbout = true;
   log.info('Starting update download from About dialog...');
-
-  if (Notification.isSupported()) {
-    new Notification({
-      title: 'Downloading Update',
-      body: 'ClaudeLander is downloading the update in the background...',
-    }).show();
-  }
 
   autoUpdater.downloadUpdate().catch((err) => {
     log.error('Download failed:', err);
     isDownloading = false;
-    if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'error',
-        title: 'Download Failed',
-        message: 'Failed to download update',
-        detail: `Error: ${err.message}\n\nPlease try again later or download manually from GitHub.`,
-        buttons: ['OK'],
-      });
-    }
+    isDownloadingFromAbout = false;
+    // Broadcast error to all windows (so About dialog can show it)
+    broadcastToAllWindows('update:error', err.message);
   });
 
-  mainWindow?.webContents.send('update:downloading');
+  broadcastToAllWindows('update:downloading');
 }
 
 // Update available
@@ -93,6 +92,13 @@ autoUpdater.on('update-available', (info: UpdateInfo) => {
 
   if (!mainWindow) return;
 
+  // Prevent stacking dialogs if one is already open
+  if (isDialogOpen) {
+    log.info('Update dialog already open, skipping');
+    return;
+  }
+
+  isDialogOpen = true;
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'Update Available',
@@ -101,6 +107,7 @@ autoUpdater.on('update-available', (info: UpdateInfo) => {
     buttons: ['Download', 'Later'],
     defaultId: 0,
   }).then((result) => {
+    isDialogOpen = false;
     if (result.response === 0) {
       // User clicked Download
       isDownloading = true;
@@ -147,16 +154,24 @@ autoUpdater.on('update-not-available', () => {
 // Download progress
 autoUpdater.on('download-progress', (progress) => {
   log.info(`Download progress: ${progress.percent.toFixed(1)}%`);
-  mainWindow?.webContents.send('update:progress', progress.percent);
+  broadcastToAllWindows('update:progress', progress.percent);
 });
 
 // Update downloaded
 autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
   log.info('Update downloaded:', info.version);
   isDownloading = false;
+  const wasFromAbout = isDownloadingFromAbout;
+  isDownloadingFromAbout = false;
 
-  if (!mainWindow) return;
+  // Broadcast to all windows (so About dialog can show restart button)
+  broadcastToAllWindows('update:downloaded', info.version);
 
+  // If download was from About dialog, don't show mainWindow dialog
+  // (About dialog will show inline UI for restart)
+  if (wasFromAbout || !mainWindow) return;
+
+  isDialogOpen = true;
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'Update Ready',
@@ -165,6 +180,7 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     buttons: ['Restart Now', 'Later'],
     defaultId: 0,
   }).then((result) => {
+    isDialogOpen = false;
     if (result.response === 0) {
       // User clicked Restart Now
       autoUpdater.quitAndInstall(false, true);
@@ -175,10 +191,28 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
 // Error handling
 autoUpdater.on('error', (err) => {
   log.error('Auto-updater error:', err);
+  const wasDownloading = isDownloading;
+  const wasFromAbout = isDownloadingFromAbout;
   isDownloading = false;
+  isDownloadingFromAbout = false;
+  isDialogOpen = false;
 
-  // Show error if we were actively downloading
-  if (mainWindow) {
+  // Resolve manual check promise if pending (network error during check)
+  if (manualCheckResolver) {
+    manualCheckResolver({ updateAvailable: false, error: err.message });
+    manualCheckResolver = null;
+    return; // Don't show dialog - About window will handle it
+  }
+
+  // If downloading from About dialog, broadcast error to all windows
+  if (wasFromAbout) {
+    broadcastToAllWindows('update:error', err.message);
+    return; // About dialog will show the error inline
+  }
+
+  // Only show error dialog if we were actively downloading
+  // Silent failure for background update checks (e.g., no internet)
+  if (wasDownloading && mainWindow) {
     dialog.showMessageBox(mainWindow, {
       type: 'error',
       title: 'Update Error',

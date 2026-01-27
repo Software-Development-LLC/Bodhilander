@@ -1,5 +1,5 @@
 import { getDatabase } from '../database';
-import { Memory, MemoryCreateInput, MemoryUpdateInput, MemoryType } from '../../shared/types';
+import { Memory, MemoryCreateInput, MemoryUpdateInput, MemoryType, GLOBAL_CONTEXT_GROUP_ID } from '../../shared/types';
 
 interface MemoryRow {
   id: string;
@@ -166,6 +166,7 @@ export function searchMemories(
 /**
  * Get memories for injection into a session.
  * Only returns manually-created memories (source = 'manual').
+ * Includes both project-specific memories and global context.
  * Claude can search MCP-added memories on demand.
  * Limited to 8KB total to avoid overwhelming Claude.
  */
@@ -174,12 +175,16 @@ export function getMemoriesForInjection(sessionId: string, groupId: string): Mem
   const MAX_SIZE = 8 * 1024; // 8KB limit
 
   // Only inject manually-created memories - Claude can search MCP-added ones via tools
+  // Include both project-specific memories AND global context
   const rows = db.prepare(`
     SELECT * FROM memories
     WHERE source = 'manual'
-      AND (session_id = ? OR group_id = ?)
-    ORDER BY pinned DESC, created_at DESC
-  `).all(sessionId, groupId) as MemoryRow[];
+      AND (session_id = ? OR group_id = ? OR group_id = ?)
+    ORDER BY
+      CASE WHEN group_id = ? THEN 0 ELSE 1 END,
+      pinned DESC,
+      created_at DESC
+  `).all(sessionId, groupId, GLOBAL_CONTEXT_GROUP_ID, GLOBAL_CONTEXT_GROUP_ID) as MemoryRow[];
 
   const memories: Memory[] = [];
   let totalSize = 0;
@@ -197,6 +202,20 @@ export function getMemoriesForInjection(sessionId: string, groupId: string): Mem
   }
 
   return memories;
+}
+
+/**
+ * Get global context memories only.
+ */
+export function getGlobalContextMemories(): Memory[] {
+  const db = getDatabase();
+  const rows = db.prepare(`
+    SELECT * FROM memories
+    WHERE group_id = ?
+    ORDER BY pinned DESC, created_at DESC
+    LIMIT 50
+  `).all(GLOBAL_CONTEXT_GROUP_ID) as MemoryRow[];
+  return rows.map(rowToMemory);
 }
 
 /**

@@ -20,6 +20,8 @@ import { teamsNotifier } from './teams/teams-notifier';
 import { registerMcpServer, registerHooks } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
+import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
+import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 
 // Use separate userData directory for development to avoid cache conflicts
 if (!app.isPackaged) {
@@ -335,6 +337,21 @@ function createWindow(): void {
     log.error('[Main] Failed to auto-start API server:', err);
   });
 
+  // Vector search event forwarding
+  const vsManager = getVectorSearchManager();
+
+  vsManager.on('indexing-progress', (progress) => {
+    mainWindow?.webContents.send('vector-search:progress', progress);
+  });
+
+  vsManager.on('indexing-complete', (data) => {
+    mainWindow?.webContents.send('vector-search:complete', data);
+  });
+
+  vsManager.on('indexing-error', (data) => {
+    mainWindow?.webContents.send('vector-search:error', data);
+  });
+
   // PTY data forwarding
   ptyManager.on('data', ({ id, data }) => {
     mainWindow?.webContents.send('pty:data', id, data);
@@ -531,6 +548,10 @@ ipcMain.handle('db:memories:getById', (_, id: string) => {
   return memoriesRepo.getMemoryById(id);
 });
 
+ipcMain.handle('db:memories:getGlobal', () => {
+  return memoriesRepo.getGlobalContextMemories();
+});
+
 // Preferences IPC Handlers
 ipcMain.handle('prefs:get', async (_, key: string) => {
   return prefsRepo.getPreference(key);
@@ -634,6 +655,12 @@ ipcMain.handle('app:check-for-update', async () => {
 // App update download (for About dialog)
 ipcMain.handle('app:download-update', async () => {
   downloadUpdate();
+});
+
+// App restart and update (for About dialog)
+ipcMain.handle('app:restart-and-update', async () => {
+  const { autoUpdater } = await import('electron-updater');
+  autoUpdater.quitAndInstall(false, true);
 });
 
 // Sharing IPC handlers (host)
@@ -856,6 +883,73 @@ ipcMain.handle('api:getRemoteAccessStatus', () => {
   return apiServer.getRemoteAccessStatus();
 });
 
+// ============================================================================
+// Vector Search IPC Handlers
+// ============================================================================
+
+ipcMain.handle('vector-search:get-index-status', (_, directoryPath: string) => {
+  return getVectorSearchManager().getIndexStatus(directoryPath);
+});
+
+ipcMain.handle('vector-search:get-all-indexes', () => {
+  return getVectorSearchManager().getAllIndexes();
+});
+
+ipcMain.handle('vector-search:start-indexing', async (_, directoryPath: string) => {
+  try {
+    log.info('[VectorSearch] Starting indexing for:', directoryPath);
+    await getVectorSearchManager().startIndexing(directoryPath);
+    return { success: true };
+  } catch (error) {
+    log.error('[VectorSearch] Failed to start indexing:', error);
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.handle('vector-search:search-code', async (_, directoryPath: string, query: string, limit?: number) => {
+  return getVectorSearchManager().searchCode(directoryPath, query, limit);
+});
+
+ipcMain.handle('vector-search:search-symbols', (_, directoryPath: string, name: string, symbolType?: string, limit?: number) => {
+  return getVectorSearchManager().searchSymbols(directoryPath, name, symbolType as any, limit);
+});
+
+ipcMain.handle('vector-search:cancel-indexing', (_, indexId: string) => {
+  getVectorSearchManager().cancelIndexing(indexId);
+  return { success: true };
+});
+
+ipcMain.handle('vector-search:delete-index', (_, directoryPath: string) => {
+  getVectorSearchManager().deleteIndex(directoryPath);
+  return { success: true };
+});
+
+ipcMain.handle('vector-search:retry-indexing', async (_, directoryPath: string) => {
+  try {
+    await getVectorSearchManager().retryIndexing(directoryPath);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+// ============================================================================
+// Editor Integration IPC Handlers
+// ============================================================================
+
+ipcMain.handle('editor:open', async (_, filePath: string, line?: number, column?: number) => {
+  const preferredEditor = prefsRepo.getPreference('preferredEditor') as EditorType | null;
+  return openInEditor(filePath, line ?? 1, column ?? 1, preferredEditor ?? undefined);
+});
+
+ipcMain.handle('editor:detectAvailable', async () => {
+  return detectAvailableEditors();
+});
+
+ipcMain.handle('editor:getOptions', () => {
+  return getEditorOptions();
+});
+
 function getLocalAddresses(): string[] {
   const { networkInterfaces } = require('os');
   const addresses: string[] = [];
@@ -924,6 +1018,9 @@ app.on('before-quit', async () => {
   } catch (e) {
     log.error('Error stopping shares on quit:', e);
   }
+
+  // Cleanup vector search manager
+  disposeVectorSearchManager();
 
   trayManager.destroy();
   stateMonitor?.stop();

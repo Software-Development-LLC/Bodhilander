@@ -162,6 +162,32 @@ export function validateIdParam(req: Request, res: Response, next: NextFunction)
 }
 
 /**
+ * Helper to get a string param value (Express 5.x can have string | string[])
+ */
+export function getStringParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) {
+    return value[0] ?? '';
+  }
+  return value ?? '';
+}
+
+/**
+ * Helper to get a string query value (Express 5.x can have string | string[] | ParsedQs | ParsedQs[])
+ */
+export function getStringQuery(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value) && typeof value[0] === 'string') {
+    return value[0];
+  }
+  return undefined;
+}
+
+/**
  * Validate pairing confirmation request
  */
 export function validatePairingConfirm(req: Request, res: Response, next: NextFunction): void {

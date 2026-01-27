@@ -14,6 +14,11 @@ import {
   Memory,
   MemoryCreateInput,
   MemoryUpdateInput,
+  CodeIndex,
+  CodeSearchResult,
+  SymbolSearchResult,
+  IndexProgress,
+  SymbolType,
 } from '../../shared/types';
 
 interface StateChangeEvent {
@@ -72,6 +77,7 @@ export interface ElectronAPI {
   deleteMemory: (id: string) => Promise<void>;
   getMemoriesForInjection: (sessionId: string, groupId: string) => Promise<Memory[]>;
   getMemoryById: (id: string) => Promise<Memory | null>;
+  getGlobalContextMemories: () => Promise<Memory[]>;
   onMemoryExtracted: (callback: (memory: Memory) => void) => () => void;
 
   // Preferences
@@ -145,6 +151,24 @@ export interface ElectronAPI {
   }>;
   apiDisableRemoteAccess: () => Promise<{ success: boolean; error?: string }>;
   apiGetRemoteAccessStatus: () => Promise<RelayConnectionStatus>;
+
+  // Vector Search
+  getIndexStatus: (directoryPath: string) => Promise<CodeIndex | null>;
+  getAllIndexes: () => Promise<CodeIndex[]>;
+  startIndexing: (directoryPath: string) => Promise<{ success: boolean; error?: string }>;
+  searchCode: (directoryPath: string, query: string, limit?: number) => Promise<CodeSearchResult[]>;
+  searchSymbols: (directoryPath: string, name: string, symbolType?: SymbolType, limit?: number) => Promise<SymbolSearchResult[]>;
+  cancelIndexing: (indexId: string) => Promise<{ success: boolean }>;
+  deleteCodeIndex: (directoryPath: string) => Promise<{ success: boolean }>;
+  retryIndexing: (directoryPath: string) => Promise<{ success: boolean; error?: string }>;
+  onIndexingProgress: (callback: (progress: IndexProgress) => void) => () => void;
+  onIndexingComplete: (callback: (data: { indexId: string; directoryPath?: string }) => void) => () => void;
+  onIndexingError: (callback: (data: { indexId: string; error: string; directoryPath?: string }) => void) => () => void;
+
+  // Editor Integration
+  openInEditor: (filePath: string, line?: number, column?: number) => Promise<{ success: boolean; error?: string }>;
+  detectAvailableEditors: () => Promise<string[]>;
+  getEditorOptions: () => Promise<{ value: string; label: string }[]>;
 }
 
 declare global {

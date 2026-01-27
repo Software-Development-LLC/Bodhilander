@@ -13,6 +13,7 @@ import {
   validateIdParam,
   validateCreateSession,
   validateUpdateSession,
+  getStringParam,
 } from '../middleware/validation';
 import { isValidUUID } from '../../validation';
 import { Session } from '../../../shared/types';
@@ -106,7 +107,7 @@ export function createSessionsRouter(): Router {
     validateUpdateSession,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
         const updates = req.body;
 
         // Check session exists
@@ -138,7 +139,7 @@ export function createSessionsRouter(): Router {
     validateIdParam,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
 
         // Stop PTY if running
         if (ptyManager.getSession(id)) {
@@ -165,7 +166,7 @@ export function createSessionsRouter(): Router {
     validateIdParam,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
         const { launchClaude } = req.body;
 
         const sessions = sessionsRepo.getAllSessions();
@@ -201,7 +202,7 @@ export function createSessionsRouter(): Router {
     validateIdParam,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
 
         if (!ptyManager.getSession(id)) {
           res.status(400).json({ error: 'Session is not running' });
@@ -228,7 +229,7 @@ export function createSessionsRouter(): Router {
     validateIdParam,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
         const { cols, rows } = req.body;
 
         if (typeof cols !== 'number' || typeof rows !== 'number' || cols < 1 || rows < 1) {

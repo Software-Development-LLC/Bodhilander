@@ -19,6 +19,7 @@ import { createPairingRouter } from './routes/pairing';
 import { createTerminalRouter } from './routes/terminal';
 import { createMemoriesRouter } from './routes/memories';
 import { createHooksRouter } from './routes/hooks';
+import { createCodeSearchRouter } from './routes/code-search';
 
 export interface HttpServerConfig {
   port: number;
@@ -135,6 +136,9 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
 
   // Hook routes for Claude Code hooks (localhost-only, no device auth needed)
   app.use('/api/v1/hooks', generalLimiter, createHooksRouter());
+
+  // Code search routes for MCP server (localhost-only, no device auth needed)
+  app.use('/api/v1/code', generalLimiter, createCodeSearchRouter());
 
   // Protected routes (require device authentication)
   const authMiddleware = authenticateDevice(config.pairingManager);

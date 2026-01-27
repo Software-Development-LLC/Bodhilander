@@ -12,6 +12,7 @@ import {
   validateIdParam,
   validateCreateGroup,
   validateUpdateGroup,
+  getStringParam,
 } from '../middleware/validation';
 import { Group } from '../../../shared/types';
 
@@ -112,7 +113,7 @@ export function createGroupsRouter(): Router {
     validateUpdateGroup,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
         const updates = req.body;
 
         // Check group exists
@@ -158,7 +159,7 @@ export function createGroupsRouter(): Router {
     validateIdParam,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
 
         // Note: Sessions in this group will be orphaned or cascade deleted
         // depending on database constraints
@@ -181,7 +182,7 @@ export function createGroupsRouter(): Router {
     validateIdParam,
     (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const id = getStringParam(req.params.id);
 
         const groups = groupsRepo.getAllGroups();
         const group = groups.find(g => g.id === id);

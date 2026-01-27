@@ -9,7 +9,7 @@ import QRCode from 'qrcode';
 import { networkInterfaces, hostname } from 'os';
 import log from 'electron-log';
 import { PairingManager } from '../pairing/pairing-manager';
-import { validatePairingConfirm } from '../middleware/validation';
+import { validatePairingConfirm, getStringParam } from '../middleware/validation';
 import { authenticateDevice } from '../middleware/auth';
 
 export function createPairingRouter(pairingManager: PairingManager): Router {
@@ -160,7 +160,7 @@ export function createPairingRouter(pairingManager: PairingManager): Router {
    */
   router.delete('/devices/:id', authenticateDevice(pairingManager), (req: Request, res: Response) => {
     try {
-      const { id } = req.params;
+      const id = getStringParam(req.params.id);
 
       // Don't allow device to unpair itself
       if (req.device?.id === id) {
