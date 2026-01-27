@@ -17,6 +17,10 @@ asarUnpack:
   - node_modules/node-pty/**/*
   - node_modules/better-sqlite3/**/*
   - node_modules/sodium-native/**/*
+  - node_modules/tree-sitter/**/*
+  - node_modules/tree-sitter-*/**/*
+  - node_modules/sqlite-vec/**/*
+  - node_modules/@huggingface/**/*
 
 # Include icon files for tray icon and sound files
 extraResources:

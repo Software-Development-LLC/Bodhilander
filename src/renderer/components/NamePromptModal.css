@@ -67,3 +67,41 @@
 .name-prompt-modal .confirm-btn:hover {
   opacity: 0.9;
 }
+
+/* Path selector */
+.name-prompt-modal .path-selector {
+  margin-top: 16px;
+}
+
+.name-prompt-modal .path-selector label {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 6px;
+}
+
+.name-prompt-modal .path-selector-row {
+  display: flex;
+  gap: 8px;
+}
+
+.name-prompt-modal .path-input {
+  flex: 1;
+  background: #1e1e1e !important;
+  cursor: default;
+}
+
+.name-prompt-modal .path-input::placeholder {
+  color: #555;
+  font-style: italic;
+}
+
+.name-prompt-modal .browse-btn {
+  background: #3c3c3c;
+  color: #d4d4d4;
+  white-space: nowrap;
+}
+
+.name-prompt-modal .browse-btn:hover {
+  background: #4c4c4c;
+}

@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Memory, MemoryType } from '../../shared/types';
+import { Memory, MemoryType, GLOBAL_CONTEXT_GROUP_ID } from '../../shared/types';
 import { getMemoriesForInjection } from '../repositories/memories';
+import * as codeSearchRepo from '../repositories/code-search';
 
 const MEMORY_FILENAME = '.claudelander-memory.md';
 const MAX_FILE_SIZE = 8 * 1024; // 8KB limit
@@ -140,7 +141,8 @@ export function hasMemoryFile(workingDir: string): boolean {
  */
 export function getMemoryInjectionContent(
   sessionId: string,
-  groupId: string
+  groupId: string,
+  workingDir?: string
 ): string | null {
   if (!groupId) {
     return null;
@@ -148,33 +150,76 @@ export function getMemoryInjectionContent(
 
   const memories = getMemoriesForInjection(sessionId, groupId);
 
-  // Build memory list with pinned items marked
-  const memoryItems: string[] = [];
+  // Separate global context from project context
+  const globalMemories = memories.filter(m => m.groupId === GLOBAL_CONTEXT_GROUP_ID);
+  const projectMemories = memories.filter(m => m.groupId !== GLOBAL_CONTEXT_GROUP_ID);
 
-  // Add pinned memories first (most important)
-  const pinnedMemories = memories.filter(m => m.pinned);
-  for (const memory of pinnedMemories) {
-    memoryItems.push(`- ${memory.content} [PINNED]`);
+  // Build global context items
+  const globalItems: string[] = [];
+  for (const memory of globalMemories) {
+    const prefix = memory.pinned ? '[PINNED] ' : '';
+    globalItems.push(`- ${prefix}${memory.content}`);
   }
 
-  // Add other memories
-  for (const memory of memories.filter(m => !m.pinned)) {
-    memoryItems.push(`- ${memory.content}`);
+  // Build project context items
+  const projectItems: string[] = [];
+  const pinnedProject = projectMemories.filter(m => m.pinned);
+  const otherProject = projectMemories.filter(m => !m.pinned);
+
+  for (const memory of pinnedProject) {
+    projectItems.push(`- ${memory.content} [PINNED]`);
+  }
+  for (const memory of otherProject) {
+    projectItems.push(`- ${memory.content}`);
   }
 
-  if (memoryItems.length === 0) {
+  // Check if code search index is available
+  let codeSearchHint = '';
+  if (workingDir) {
+    try {
+      const index = codeSearchRepo.getIndexByDirectory(workingDir);
+      if (index && index.status === 'ready') {
+        codeSearchHint = `\n\n<code-search-available>
+This codebase has been indexed for semantic search (${index.fileCount} files, ${index.chunkCount} chunks).
+You can use the search_code MCP tool to find relevant code using natural language queries.
+You can use the find_symbol MCP tool to locate function, class, or method definitions.
+</code-search-available>`;
+      }
+    } catch {
+      // Ignore errors - code search is optional
+    }
+  }
+
+  const sections: string[] = [];
+
+  // Add global context section if present
+  if (globalItems.length > 0) {
+    sections.push(`Global context (applies to all projects):
+${globalItems.join('\n')}`);
+  }
+
+  // Add project context section if present
+  if (projectItems.length > 0) {
+    sections.push(`Project context:
+${projectItems.join('\n')}`);
+  }
+
+  if (sections.length === 0) {
     // No memories yet, just provide group_id for saving new ones
     return `<session-memories>
-No saved memories for this session yet.
-To save new memories, use the MCP tool with group_id: ${groupId}
-</session-memories>`;
+No saved context for this session yet.
+To save new context, use the MCP tool with group_id: ${groupId}
+For global context (all projects), use group_id: ${GLOBAL_CONTEXT_GROUP_ID}
+</session-memories>${codeSearchHint}`;
   }
 
   // Format as multi-line system prompt content
   return `<session-memories>
-You have saved memories from previous sessions in this workspace:
-${memoryItems.join('\n')}
+You have saved context from previous sessions:
 
-To save new memories, use the MCP tool with group_id: ${groupId}
-</session-memories>`;
+${sections.join('\n\n')}
+
+To save new context, use the MCP tool with group_id: ${groupId}
+For global context (all projects), use group_id: ${GLOBAL_CONTEXT_GROUP_ID}
+</session-memories>${codeSearchHint}`;
 }

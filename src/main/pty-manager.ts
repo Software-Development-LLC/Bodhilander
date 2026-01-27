@@ -85,7 +85,7 @@ class PtyManager extends EventEmitter {
       let processEnv = { ...env, ...claudeConfig.env } as { [key: string]: string };
 
       if (groupId) {
-        const memoryContent = getMemoryInjectionContent(id, groupId);
+        const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
         if (memoryContent) {
           processEnv.CLAUDELANDER_SYSTEM_PROMPT = memoryContent;
         }

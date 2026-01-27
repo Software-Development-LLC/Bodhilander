@@ -14,6 +14,7 @@ interface ShortcutHandlers {
   onCollapse?: () => void;
   onExpand?: () => void;
   onSelect?: () => void;
+  onCodeSearch?: () => void;
 }
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
@@ -81,6 +82,12 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
     }
     if (e.key === 'Enter' && handlers.onSelect) {
       handlers.onSelect();
+    }
+
+    // Ctrl+Shift+F = Code search
+    if (isMod && e.shiftKey && key === 'f') {
+      e.preventDefault();
+      handlers.onCodeSearch?.();
     }
   }, [handlers]);
 

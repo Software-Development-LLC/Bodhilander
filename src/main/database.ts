@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import { app } from 'electron';
+import * as sqliteVec from 'sqlite-vec';
 
 let db: Database.Database | null = null;
 
@@ -13,7 +14,11 @@ export function getDatabase(): Database.Database {
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
 
+  // Load sqlite-vec extension for vector search
+  sqliteVec.load(db);
+
   initializeTables(db);
+  initializeCodeSearchTables(db);
 
   return db;
 }
@@ -120,6 +125,126 @@ function initializeTables(database: Database.Database): void {
       INSERT INTO groups (id, name, color, working_dir, "order")
       VALUES ('default', 'Default', '#e06c75', '', 0)
     `).run();
+  }
+}
+
+function initializeCodeSearchTables(database: Database.Database): void {
+  // Code indexes table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS code_indexes (
+      id TEXT PRIMARY KEY,
+      directory_path TEXT UNIQUE NOT NULL,
+      last_indexed_at TEXT,
+      status TEXT CHECK(status IN ('pending', 'indexing', 'ready', 'error', 'stale')) DEFAULT 'pending',
+      file_count INTEGER DEFAULT 0,
+      chunk_count INTEGER DEFAULT 0,
+      model_name TEXT DEFAULT 'bge-base-en-v1.5',
+      embedding_dimensions INTEGER DEFAULT 768,
+      error_message TEXT
+    )
+  `);
+
+  // Indexed files table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS indexed_files (
+      id TEXT PRIMARY KEY,
+      index_id TEXT NOT NULL REFERENCES code_indexes(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      mtime INTEGER NOT NULL,
+      file_hash TEXT,
+      chunk_count INTEGER DEFAULT 0,
+      UNIQUE(index_id, file_path)
+    )
+  `);
+
+  // Code chunks table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS code_chunks (
+      id TEXT PRIMARY KEY,
+      index_id TEXT NOT NULL REFERENCES code_indexes(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      start_line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      chunk_type TEXT,
+      embedding BLOB,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Symbols table
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS symbols (
+      id TEXT PRIMARY KEY,
+      index_id TEXT NOT NULL REFERENCES code_indexes(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      symbol_type TEXT CHECK(symbol_type IN ('function', 'class', 'method', 'variable', 'interface', 'type')),
+      file_path TEXT NOT NULL,
+      line INTEGER NOT NULL,
+      "column" INTEGER NOT NULL,
+      parent_symbol_id TEXT REFERENCES symbols(id),
+      signature TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Indexes for fast lookups
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_chunks_index_id ON code_chunks(index_id);
+    CREATE INDEX IF NOT EXISTS idx_chunks_file_path ON code_chunks(file_path);
+    CREATE INDEX IF NOT EXISTS idx_chunks_index_file ON code_chunks(index_id, file_path);
+    CREATE INDEX IF NOT EXISTS idx_symbols_index_id ON symbols(index_id);
+    CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+    CREATE INDEX IF NOT EXISTS idx_symbols_file_path ON symbols(file_path);
+    CREATE INDEX IF NOT EXISTS idx_files_index_id ON indexed_files(index_id);
+    CREATE INDEX IF NOT EXISTS idx_files_mtime ON indexed_files(mtime);
+  `);
+
+  // Vector table for similarity search (768 dimensions for bge-base-en-v1.5)
+  // Check if we need to migrate from old 384-dimension table
+  try {
+    // Try to detect if table exists with wrong dimensions by checking if it exists at all
+    const tableExists = database.prepare(`
+      SELECT name FROM sqlite_master WHERE type='table' AND name='code_chunks_vec'
+    `).get();
+
+    if (tableExists) {
+      // Try a test insert with 768 dimensions to see if it fails
+      // If it does, we need to recreate the table
+      try {
+        const testEmbedding = Buffer.from(new Float32Array(768).buffer);
+        database.prepare(`INSERT INTO code_chunks_vec (chunk_id, embedding) VALUES ('__dimension_test__', ?)`).run(testEmbedding);
+        // Clean up test row
+        database.prepare(`DELETE FROM code_chunks_vec WHERE chunk_id = '__dimension_test__'`).run();
+        console.log('Vector table already has correct dimensions (768)');
+      } catch (dimError: any) {
+        if (dimError.message && dimError.message.includes('Dimension mismatch')) {
+          console.log('Migrating vector table from 384 to 768 dimensions...');
+          // Drop old table and recreate with new dimensions
+          database.exec('DROP TABLE code_chunks_vec');
+          database.exec(`
+            CREATE VIRTUAL TABLE code_chunks_vec USING vec0(
+              chunk_id TEXT PRIMARY KEY,
+              embedding FLOAT[768]
+            )
+          `);
+          console.log('Vector table migrated successfully');
+        } else {
+          throw dimError;
+        }
+      }
+    } else {
+      // Create new table with 768 dimensions
+      database.exec(`
+        CREATE VIRTUAL TABLE code_chunks_vec USING vec0(
+          chunk_id TEXT PRIMARY KEY,
+          embedding FLOAT[768]
+        )
+      `);
+      console.log('Vector table created with 768 dimensions');
+    }
+  } catch (e) {
+    console.error('Vector table setup error:', e);
   }
 }
 

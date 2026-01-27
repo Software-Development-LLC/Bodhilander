@@ -22,10 +22,10 @@ Managing multiple Claude Code terminal sessions across different projects can be
 
 ## Features
 
-### **Session Management**
+### Session Management
 All your Claude Code sessions in one application. No more hunting through terminal windows.
 
-### **Real-Time Status Detection**
+### Real-Time Status Detection
 See at a glance which sessions are:
 - **Waiting** - Claude awaits your command
 - **Working** - Processing your request
@@ -33,31 +33,70 @@ See at a glance which sessions are:
 - **Error** - Something went wrong
 - **Stopped** - Session ended
 
-### **Session Groups**
-Organize sessions into groups by project, client, or workflow. Color-code for quick identification.
+### Session Groups
+Organize sessions into groups and subgroups by project, client, or workflow. Color-code for quick identification.
 
-### **Persistent Sessions**
+### Persistent Sessions
 Sessions survive app restarts. Your context is preserved.
 
-### **Session Sharing**
+### Session Sharing
 Share live sessions with collaborators using `SYCLX-` codes:
 - **End-to-end encryption** - X25519 + XChaCha20-Poly1305
 - **Permission controls** - Read-only or read-write access
-- **Time-limited codes** - Auto-expire for security
+- **Time-limited codes** - Configurable expiration (30 min, 1 hour, 4 hours, or unlimited)
+- **Usage limits** - Set max uses per share code
 - **Real-time sync** - See terminal output as it happens
+- **Tier-based limits** - Free, Pro, and Admin tiers
 
-### **Session Memory**
+### Session Memory
 Automatically captures and persists knowledge across sessions:
 - **Auto-extraction** - Detects decisions, fixes, and patterns from Claude output
 - **Memory injection** - Injects relevant context when sessions start
+- **Memory types** - Decisions, error fixes, patterns, context, and notes
+- **Pin & search** - Pin important memories and search across all captured knowledge
 - **MCP Server** - Claude can search and manage memories on demand
 
 See [MCP Memory Server Documentation](docs/mcp-memory-server.md) for Claude Code integration.
 
-### **Auto-Update**
-New versions download automatically.
+### Semantic Code Search
+AI-powered code search with vector embeddings:
+- **Semantic search** - Find code by meaning using natural language queries
+- **Symbol lookup** - Search for functions, classes, interfaces, and other definitions
+- **Background indexing** - Tree-sitter parsing with ONNX embeddings and sqlite-vec storage
+- **File watching** - Automatic re-indexing when files change
+- **Editor integration** - Open results directly in VS Code, Cursor, Sublime, Vim, Emacs, and more
+- **MCP tools** - Claude can use `search_code` and `find_symbol` tools directly
 
-### **Cross-Platform Support**
+### Notifications & Sound
+Stay informed without watching the window:
+- **Desktop notifications** - Alerts when sessions need attention
+- **Configurable sounds** - Per-event audio for waiting, error, start, and complete states
+- **Volume & debounce controls** - Master volume, per-event toggles, debounce presets
+- **Custom sounds** - Use your own audio files for each event type
+
+### System Tray
+- Minimize to tray with close-to-tray option
+- Badge showing count of waiting sessions
+- Quick access to waiting sessions from the tray context menu
+
+### Mobile Companion
+Connect to your sessions from a mobile device:
+- **Local API server** with HTTPS/TLS
+- **Pairing codes** with QR code generation
+- **Device management** with per-device permissions
+- **Network discovery** via mDNS/Bonjour
+- **Remote access** via relay server for outside-network connections
+
+### Microsoft Teams Integration
+Receive session event notifications in Microsoft Teams:
+- Configurable notification types (waiting, error, complete)
+- Per-event toggles
+- OAuth authentication via Microsoft Graph API
+
+### Auto-Update
+New versions download and install automatically via GitHub Releases.
+
+### Cross-Platform Support
 - Windows (native + WSL)
 - macOS (Intel + Apple Silicon)
 - Linux (AppImage + .deb)
@@ -116,7 +155,24 @@ npm run dist:win     # Windows
 | Next Session | `Ctrl/Cmd + Tab` |
 | Previous Session | `Ctrl/Cmd + Shift + Tab` |
 | Next Waiting | `Ctrl/Cmd + Shift + W` |
+| Code Search | `Ctrl/Cmd + Shift + F` |
+| New Group | `Ctrl/Cmd + G` |
+| New Sub-group | `Ctrl/Cmd + Shift + G` |
+| Focus Sidebar | `Ctrl/Cmd + Q` |
 | Settings | `Ctrl/Cmd + ,` |
+
+---
+
+## Settings
+
+ClaudeLander offers extensive configuration across multiple tabs:
+
+- **General** - Auto-launch Claude, custom shell path, preferred editor, close-to-tray
+- **Appearance** - Splash screen toggle and duration
+- **Terminal** - Font size, WebGL renderer acceleration
+- **Sound** - Master toggle, per-event sounds, volume, debounce frequency, custom audio files
+- **Mobile** - API server, pairing, device management, remote access
+- **Integrations** - GitHub authentication, Microsoft Teams notifications
 
 ---
 
@@ -128,6 +184,10 @@ npm run dist:win     # Windows
 - **xterm.js** - Terminal emulation
 - **node-pty** - Pseudo-terminal management
 - **better-sqlite3** - Persistent storage
+- **sqlite-vec** - Vector similarity search
+- **tree-sitter** - Code parsing and symbol extraction
+- **onnxruntime-node** - Local embedding inference
+- **sodium-native** - E2E encryption
 - **electron-updater** - Auto-updates
 
 ---
@@ -137,8 +197,9 @@ npm run dist:win     # Windows
 | Phase | Status | Features |
 |-------|--------|----------|
 | **1 (MVP)** | Complete | Multi-session management, state detection, groups, persistence, auto-update |
-| **2** | Complete | E2E encrypted session sharing (`SYCLX-` codes) |
-| **3** | Future | Teams, mobile companion, AI session summaries |
+| **2** | Complete | E2E encrypted session sharing, memory system, notifications & sound, settings |
+| **3** | Complete | Semantic code search, Teams integration, mobile companion, editor integration |
+| **4** | Future | AI session summaries, advanced analytics |
 
 ---
 

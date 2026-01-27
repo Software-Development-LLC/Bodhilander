@@ -6,8 +6,11 @@ interface NamePromptModalProps {
   title: string;
   placeholder: string;
   defaultValue: string;
-  onConfirm: (name: string) => void;
+  onConfirm: (name: string, path?: string) => void;
   onCancel: () => void;
+  /** Show an optional path selector for group creation */
+  showPathSelector?: boolean;
+  pathLabel?: string;
 }
 
 export const NamePromptModal: React.FC<NamePromptModalProps> = ({
@@ -17,13 +20,17 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
   defaultValue,
   onConfirm,
   onCancel,
+  showPathSelector = false,
+  pathLabel = 'Working Directory (optional)',
 }) => {
   const [value, setValue] = useState(defaultValue);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setValue(defaultValue);
+      setSelectedPath(null);
       // Focus and select input after modal opens
       setTimeout(() => {
         inputRef.current?.focus();
@@ -36,15 +43,22 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
     e.preventDefault();
     const trimmed = value.trim();
     if (trimmed) {
-      onConfirm(trimmed);
+      onConfirm(trimmed, selectedPath || undefined);
     } else {
-      onConfirm(defaultValue);
+      onConfirm(defaultValue, selectedPath || undefined);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       onCancel();
+    }
+  };
+
+  const handleSelectPath = async () => {
+    const dir = await window.electronAPI.selectDirectory();
+    if (dir) {
+      setSelectedPath(dir);
     }
   };
 
@@ -64,6 +78,27 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
             placeholder={placeholder}
             autoFocus
           />
+          {showPathSelector && (
+            <div className="path-selector">
+              <label>{pathLabel}</label>
+              <div className="path-selector-row">
+                <input
+                  type="text"
+                  value={selectedPath || ''}
+                  placeholder="No path selected"
+                  readOnly
+                  className="path-input"
+                />
+                <button
+                  type="button"
+                  onClick={handleSelectPath}
+                  className="browse-btn"
+                >
+                  Browse...
+                </button>
+              </div>
+            </div>
+          )}
           <div className="modal-buttons">
             <button type="button" className="cancel-btn" onClick={onCancel}>
               Cancel

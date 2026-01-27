@@ -1,8 +1,10 @@
 import React, { useState, useCallback } from 'react';
 import { Panel } from './Panel';
 import { useMemories } from '../../store/memories';
-import { Memory, MemoryType } from '../../../shared/types';
+import { Memory, MemoryType, GLOBAL_CONTEXT_GROUP_ID } from '../../../shared/types';
 import './MemoryPanel.css';
+
+type ContextMode = 'project' | 'global';
 
 interface MemoryPanelProps {
   isOpen: boolean;
@@ -28,6 +30,12 @@ const MEMORY_TYPE_ICONS: Record<MemoryType, string> = {
 };
 
 export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPanelProps) {
+  const [contextMode, setContextMode] = useState<ContextMode>('project');
+
+  // Use the appropriate groupId based on context mode
+  const effectiveGroupId = contextMode === 'global' ? GLOBAL_CONTEXT_GROUP_ID : groupId;
+  const effectiveSessionId = contextMode === 'global' ? null : sessionId;
+
   const {
     memories,
     pinnedMemories,
@@ -41,7 +49,7 @@ export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPane
     togglePin,
     search,
     clearSearch,
-  } = useMemories(sessionId, groupId);
+  } = useMemories(effectiveSessionId, effectiveGroupId);
 
   const [isAdding, setIsAdding] = useState(false);
   const [newContent, setNewContent] = useState('');
@@ -154,15 +162,33 @@ export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPane
     <Panel
       isOpen={isOpen}
       onToggle={onToggle}
-      title="Memories"
+      title="Context"
       icon="*"
     >
       <div className="memory-panel">
+        {/* Context mode toggle */}
+        <div className="context-mode-toggle">
+          <button
+            className={`mode-btn ${contextMode === 'project' ? 'active' : ''}`}
+            onClick={() => setContextMode('project')}
+            title="Context for current project only"
+          >
+            Project
+          </button>
+          <button
+            className={`mode-btn ${contextMode === 'global' ? 'active' : ''}`}
+            onClick={() => setContextMode('global')}
+            title="Context for all projects"
+          >
+            Global
+          </button>
+        </div>
+
         {/* Search */}
         <div className="memory-search">
           <input
             type="text"
-            placeholder="Search memories..."
+            placeholder={`Search ${contextMode} context...`}
             value={searchQuery}
             onChange={handleSearch}
           />
@@ -177,7 +203,7 @@ export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPane
             onClick={() => setIsAdding(!isAdding)}
             className="btn-add-memory"
           >
-            {isAdding ? 'Cancel' : '+ Add Memory'}
+            {isAdding ? 'Cancel' : '+ Add Context'}
           </button>
         </div>
 
@@ -193,7 +219,7 @@ export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPane
               ))}
             </select>
             <textarea
-              placeholder="Enter memory content..."
+              placeholder="Enter content..."
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
               rows={3}
@@ -204,7 +230,7 @@ export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPane
               disabled={!newContent.trim()}
               className="btn-save-memory"
             >
-              Save Memory
+              Save
             </button>
           </div>
         )}
@@ -213,15 +239,15 @@ export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPane
         {loading && <div className="memory-loading">Loading...</div>}
         {error && <div className="memory-error">{error}</div>}
 
-        {/* No group selected */}
-        {!groupId && !loading && (
+        {/* No group selected (only applies to project mode) */}
+        {contextMode === 'project' && !groupId && !loading && (
           <div className="memory-empty">
-            Select a session to view memories
+            Select a session to view project context
           </div>
         )}
 
         {/* Memories list */}
-        {!loading && groupId && (
+        {!loading && effectiveGroupId && (
           <div className="memory-list">
             {/* Pinned section */}
             {pinnedMemories.length > 0 && !searchResults && (
@@ -253,14 +279,14 @@ export function MemoryPanel({ isOpen, onToggle, sessionId, groupId }: MemoryPane
             {/* Empty state */}
             {displayMemories.length === 0 && !searchResults && (
               <div className="memory-empty">
-                No memories yet. Add one above.
+                No context yet. Add one above.
               </div>
             )}
 
             {/* No search results */}
             {searchResults && searchResults.length === 0 && (
               <div className="memory-empty">
-                No memories match "{searchQuery}"
+                No context matches "{searchQuery}"
               </div>
             )}
           </div>

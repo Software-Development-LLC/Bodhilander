@@ -6,6 +6,7 @@
 
 import { Router, Request, Response } from 'express';
 import { ptyManager } from '../../pty-manager';
+import { getStringParam } from '../middleware/validation';
 
 export function createTerminalRouter(): Router {
   const router = Router();
@@ -15,7 +16,7 @@ export function createTerminalRouter(): Router {
    * Send input to terminal
    */
   router.post('/:sessionId/input', (req: Request, res: Response) => {
-    const { sessionId } = req.params;
+    const sessionId = getStringParam(req.params.sessionId);
     const { data } = req.body;
 
     if (!data || typeof data !== 'string') {
@@ -38,7 +39,7 @@ export function createTerminalRouter(): Router {
    * Resize terminal
    */
   router.post('/:sessionId/resize', (req: Request, res: Response) => {
-    const { sessionId } = req.params;
+    const sessionId = getStringParam(req.params.sessionId);
     const { cols, rows } = req.body;
 
     if (!cols || !rows || typeof cols !== 'number' || typeof rows !== 'number') {
@@ -61,7 +62,7 @@ export function createTerminalRouter(): Router {
    * Get terminal scrollback buffer (recent output history)
    */
   router.get('/:sessionId/buffer', (req: Request, res: Response) => {
-    const { sessionId } = req.params;
+    const sessionId = getStringParam(req.params.sessionId);
 
     const session = ptyManager.getSession(sessionId);
     if (!session) {
