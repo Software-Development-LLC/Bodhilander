@@ -224,7 +224,18 @@ function createSplashWindow(): void {
 
 function createWindow(): void {
   // Initialize database
-  getDatabase();
+  try {
+    getDatabase();
+  } catch (error) {
+    log.error('Failed to initialize database:', error);
+    dialog.showErrorBox(
+      'Database Initialization Failed',
+      `ClaudeLander failed to initialize the database.\n\n${error instanceof Error ? error.message : String(error)}\n\nThe app will now close.`
+    );
+    if (splashWindow) splashWindow.close();
+    app.quit();
+    return;
+  }
 
   // Register MCP server with Claude Code (auto-configure on startup)
   const mcpResult = registerMcpServer();
