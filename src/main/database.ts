@@ -21,8 +21,26 @@ export function getDatabase(): Database.Database {
 
   // Try to load sqlite-vec extension for vector search (optional)
   try {
-    const sqliteVec = require('sqlite-vec');
-    sqliteVec.load(db);
+    if (app.isPackaged) {
+      // In packaged builds, sqlite-vec's index.cjs resolves the DLL using __dirname
+      // which points inside the asar archive. But the native binary is in app.asar.unpacked.
+      // We must manually resolve the path to the unpacked extension.
+      const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
+      const arch = process.arch;
+      const packageName = `sqlite-vec-${platform}-${arch}`;
+      const vecPath = path.join(
+        process.resourcesPath,
+        'app.asar.unpacked',
+        'node_modules',
+        packageName,
+        'vec0'
+      );
+      log.info('Loading sqlite-vec from unpacked path:', vecPath);
+      db.loadExtension(vecPath);
+    } else {
+      const sqliteVec = require('sqlite-vec');
+      sqliteVec.load(db);
+    }
     sqliteVecAvailable = true;
     log.info('sqlite-vec extension loaded successfully');
   } catch (e) {
