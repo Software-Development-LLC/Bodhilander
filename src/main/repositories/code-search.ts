@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { getDatabase } from '../database';
+import { getDatabase, isSqliteVecAvailable } from '../database';
 import type {
   CodeIndex,
   IndexedFile,
@@ -96,8 +96,10 @@ export function updateIndexCounts(id: string, fileCount: number, chunkCount: num
 
 export function deleteIndex(id: string): void {
   const db = getDatabase();
-  // Delete from vector table first
-  db.prepare('DELETE FROM code_chunks_vec WHERE chunk_id IN (SELECT id FROM code_chunks WHERE index_id = ?)').run(id);
+  // Delete from vector table first (if available)
+  if (isSqliteVecAvailable()) {
+    db.prepare('DELETE FROM code_chunks_vec WHERE chunk_id IN (SELECT id FROM code_chunks WHERE index_id = ?)').run(id);
+  }
   // CASCADE will handle the rest
   db.prepare('DELETE FROM code_indexes WHERE id = ?').run(id);
 }
@@ -180,15 +182,14 @@ export function createChunk(
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, indexId, filePath, startLine, endLine, content, chunkType ?? null, embeddingBlob);
 
-  // Insert into vector table if embedding exists
-  if (embedding) {
+  // Insert into vector table if embedding exists and sqlite-vec is available
+  if (embedding && isSqliteVecAvailable()) {
     try {
       db.prepare(`
         INSERT INTO code_chunks_vec (chunk_id, embedding)
         VALUES (?, ?)
       `).run(id, embeddingBlob);
     } catch (e) {
-      // Vector insert might fail, log but continue
       console.error('Failed to insert into vector table:', e);
     }
   }
@@ -208,11 +209,13 @@ export function createChunk(
 
 export function deleteChunksByFile(indexId: string, filePath: string): void {
   const db = getDatabase();
-  // Delete from vector table first
-  db.prepare(`
-    DELETE FROM code_chunks_vec
-    WHERE chunk_id IN (SELECT id FROM code_chunks WHERE index_id = ? AND file_path = ?)
-  `).run(indexId, filePath);
+  // Delete from vector table first (if available)
+  if (isSqliteVecAvailable()) {
+    db.prepare(`
+      DELETE FROM code_chunks_vec
+      WHERE chunk_id IN (SELECT id FROM code_chunks WHERE index_id = ? AND file_path = ?)
+    `).run(indexId, filePath);
+  }
   // Then delete chunks
   db.prepare('DELETE FROM code_chunks WHERE index_id = ? AND file_path = ?')
     .run(indexId, filePath);
@@ -223,6 +226,10 @@ export function searchChunksByVector(
   queryEmbedding: number[],
   limit: number = 10
 ): CodeSearchResult[] {
+  if (!isSqliteVecAvailable()) {
+    return [];
+  }
+
   const db = getDatabase();
   const embeddingBlob = Buffer.from(new Float32Array(queryEmbedding).buffer);
 

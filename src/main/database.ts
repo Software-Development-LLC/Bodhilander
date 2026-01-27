@@ -1,9 +1,14 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import { app } from 'electron';
-import * as sqliteVec from 'sqlite-vec';
+import log from 'electron-log';
 
 let db: Database.Database | null = null;
+let sqliteVecAvailable = false;
+
+export function isSqliteVecAvailable(): boolean {
+  return sqliteVecAvailable;
+}
 
 export function getDatabase(): Database.Database {
   if (db) return db;
@@ -14,8 +19,15 @@ export function getDatabase(): Database.Database {
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
 
-  // Load sqlite-vec extension for vector search
-  sqliteVec.load(db);
+  // Try to load sqlite-vec extension for vector search (optional)
+  try {
+    const sqliteVec = require('sqlite-vec');
+    sqliteVec.load(db);
+    sqliteVecAvailable = true;
+    log.info('sqlite-vec extension loaded successfully');
+  } catch (e) {
+    log.warn('sqlite-vec extension not available — vector code search will be disabled:', (e as Error).message);
+  }
 
   initializeTables(db);
   initializeCodeSearchTables(db);
@@ -201,9 +213,14 @@ function initializeCodeSearchTables(database: Database.Database): void {
   `);
 
   // Vector table for similarity search (768 dimensions for bge-base-en-v1.5)
-  // Check if we need to migrate from old 384-dimension table
+  // Only create if sqlite-vec extension is available
+  if (!sqliteVecAvailable) {
+    log.info('Skipping vector table setup — sqlite-vec not available');
+    return;
+  }
+
   try {
-    // Try to detect if table exists with wrong dimensions by checking if it exists at all
+    // Check if we need to migrate from old 384-dimension table
     const tableExists = database.prepare(`
       SELECT name FROM sqlite_master WHERE type='table' AND name='code_chunks_vec'
     `).get();
@@ -216,11 +233,10 @@ function initializeCodeSearchTables(database: Database.Database): void {
         database.prepare(`INSERT INTO code_chunks_vec (chunk_id, embedding) VALUES ('__dimension_test__', ?)`).run(testEmbedding);
         // Clean up test row
         database.prepare(`DELETE FROM code_chunks_vec WHERE chunk_id = '__dimension_test__'`).run();
-        console.log('Vector table already has correct dimensions (768)');
+        log.info('Vector table already has correct dimensions (768)');
       } catch (dimError: any) {
         if (dimError.message && dimError.message.includes('Dimension mismatch')) {
-          console.log('Migrating vector table from 384 to 768 dimensions...');
-          // Drop old table and recreate with new dimensions
+          log.info('Migrating vector table from 384 to 768 dimensions...');
           database.exec('DROP TABLE code_chunks_vec');
           database.exec(`
             CREATE VIRTUAL TABLE code_chunks_vec USING vec0(
@@ -228,23 +244,22 @@ function initializeCodeSearchTables(database: Database.Database): void {
               embedding FLOAT[768]
             )
           `);
-          console.log('Vector table migrated successfully');
+          log.info('Vector table migrated successfully');
         } else {
           throw dimError;
         }
       }
     } else {
-      // Create new table with 768 dimensions
       database.exec(`
         CREATE VIRTUAL TABLE code_chunks_vec USING vec0(
           chunk_id TEXT PRIMARY KEY,
           embedding FLOAT[768]
         )
       `);
-      console.log('Vector table created with 768 dimensions');
+      log.info('Vector table created with 768 dimensions');
     }
   } catch (e) {
-    console.error('Vector table setup error:', e);
+    log.error('Vector table setup error:', e);
   }
 }
 
