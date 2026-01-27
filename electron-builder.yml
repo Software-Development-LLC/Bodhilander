@@ -97,5 +97,8 @@ linux:
       arch:
         - x64
 
-# Rebuild native modules for node-pty and better-sqlite3
-npmRebuild: true
+# Disable electron-builder's native module rebuild - it tries to rebuild ALL
+# native modules including tree-sitter which is incompatible with Electron's V8.
+# The postinstall script handles rebuilding only compatible modules
+# (better-sqlite3, sodium-native, node-pty) via electron-rebuild.
+npmRebuild: false
