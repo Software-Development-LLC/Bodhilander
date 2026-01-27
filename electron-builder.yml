@@ -20,6 +20,7 @@ asarUnpack:
   - node_modules/tree-sitter/**/*
   - node_modules/tree-sitter-*/**/*
   - node_modules/sqlite-vec/**/*
+  - node_modules/sqlite-vec-*/**/*
   - node_modules/@huggingface/**/*
 
 # Include icon files for tray icon and sound files
