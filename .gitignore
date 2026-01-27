@@ -44,4 +44,5 @@ yarn-error.log*
 .screenshot_coms/
 screenshot_coms/
 homebrew-tap/
-.claude/
+.claude/.claudelander-memory.md
+nul
