@@ -192,9 +192,26 @@ export class VectorSearchManager extends EventEmitter {
 
     // Start worker - embeddings are now generated in the worker thread
     // In packaged apps, worker_threads cannot load from inside asar archives,
-    // so we must use the unpacked path
+    // so we must use the unpacked path for both the script and module resolution
     const workerPath = this.getWorkerPath();
-    const worker = new Worker(workerPath);
+    const workerOptions: any = {};
+
+    if (app.isPackaged) {
+      // Worker's require() resolves modules from inside the asar by default.
+      // Native modules (onnxruntime-node, etc.) are in app.asar.unpacked,
+      // so we prepend the unpacked node_modules to NODE_PATH.
+      const unpackedModules = path.join(
+        process.resourcesPath,
+        'app.asar.unpacked',
+        'node_modules'
+      );
+      workerOptions.env = {
+        ...process.env,
+        NODE_PATH: unpackedModules,
+      };
+    }
+
+    const worker = new Worker(workerPath, workerOptions);
 
     this.workers.set(index.id, worker);
 
