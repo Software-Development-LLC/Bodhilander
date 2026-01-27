@@ -22,6 +22,8 @@ asarUnpack:
   - node_modules/sqlite-vec/**/*
   - node_modules/sqlite-vec-*/**/*
   - node_modules/@huggingface/**/*
+  - node_modules/onnxruntime-node/**/*
+  - node_modules/onnxruntime-common/**/*
 
 # Include icon files for tray icon and sound files
 extraResources:

@@ -138,6 +138,15 @@ function initializeTables(database: Database.Database): void {
       VALUES ('default', 'Default', '#e06c75', '', 0)
     `).run();
   }
+
+  // Ensure __global__ group exists for global context memories
+  const globalGroup = database.prepare('SELECT id FROM groups WHERE id = ?').get('__global__');
+  if (!globalGroup) {
+    database.prepare(`
+      INSERT INTO groups (id, name, color, working_dir, "order")
+      VALUES ('__global__', 'Global Context', '#61afef', '', -1)
+    `).run();
+  }
 }
 
 function initializeCodeSearchTables(database: Database.Database): void {
