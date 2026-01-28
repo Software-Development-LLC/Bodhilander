@@ -1,4 +1,21 @@
-import { pipeline, FeatureExtractionPipeline } from '@huggingface/transformers';
+console.log('[EmbeddingProvider] Loading @huggingface/transformers...');
+
+// Import types for TypeScript, runtime value loaded dynamically
+import type { FeatureExtractionPipeline as FeatureExtractionPipelineType } from '@huggingface/transformers';
+
+let pipeline: typeof import('@huggingface/transformers').pipeline;
+
+try {
+  const transformers = require('@huggingface/transformers');
+  pipeline = transformers.pipeline;
+  console.log('[EmbeddingProvider] @huggingface/transformers loaded successfully');
+} catch (e) {
+  console.error('[EmbeddingProvider] Failed to load @huggingface/transformers:', e);
+  throw e;
+}
+
+// Alias for use in class
+type FeatureExtractionPipeline = FeatureExtractionPipelineType;
 
 export interface EmbeddingProvider {
   name: string;

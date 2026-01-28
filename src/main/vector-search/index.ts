@@ -199,15 +199,28 @@ export class VectorSearchManager extends EventEmitter {
     if (app.isPackaged) {
       // Worker's require() resolves modules from inside the asar by default.
       // Native modules (onnxruntime-node, etc.) are in app.asar.unpacked,
-      // so we prepend the unpacked node_modules to NODE_PATH.
+      // so we PREPEND the unpacked node_modules to NODE_PATH.
+      // We must preserve existing NODE_PATH so the worker can still access
+      // non-native modules from inside the asar archive.
       const unpackedModules = path.join(
         process.resourcesPath,
         'app.asar.unpacked',
         'node_modules'
       );
+      const asarModules = path.join(
+        process.resourcesPath,
+        'app.asar',
+        'node_modules'
+      );
+      const existingNodePath = process.env.NODE_PATH || '';
+      const pathSep = process.platform === 'win32' ? ';' : ':';
+      // Prepend unpacked (for native), then asar (for regular modules)
+      const newNodePath = [unpackedModules, asarModules, existingNodePath]
+        .filter(Boolean)
+        .join(pathSep);
       workerOptions.env = {
         ...process.env,
-        NODE_PATH: unpackedModules,
+        NODE_PATH: newNodePath,
       };
     }
 

@@ -1,9 +1,52 @@
+// Log early to catch startup issues in packaged builds
+console.log('[IndexingWorker] Starting worker thread...');
+console.log('[IndexingWorker] NODE_PATH:', process.env.NODE_PATH);
+console.log('[IndexingWorker] __dirname:', __dirname);
+
 import { parentPort } from 'worker_threads';
 import * as fs from 'fs';
 import * as path from 'path';
-import { discoverFiles, getLanguageFromExtension } from './file-discovery';
-import { parseCode, ParsedSymbol } from './parser';
-import { HuggingFaceEmbeddingProvider } from './embedding-provider';
+
+// Import types for TypeScript (compile-time only)
+import type { HuggingFaceEmbeddingProvider as HuggingFaceEmbeddingProviderType } from './embedding-provider';
+import type { ParsedSymbol } from './parser';
+
+// Wrap imports that depend on native modules in try/catch to log failures
+let discoverFiles: typeof import('./file-discovery').discoverFiles;
+let getLanguageFromExtension: typeof import('./file-discovery').getLanguageFromExtension;
+let parseCode: typeof import('./parser').parseCode;
+let HuggingFaceEmbeddingProviderClass: typeof import('./embedding-provider').HuggingFaceEmbeddingProvider;
+
+try {
+  console.log('[IndexingWorker] Loading file-discovery module...');
+  const fileDiscovery = require('./file-discovery');
+  discoverFiles = fileDiscovery.discoverFiles;
+  getLanguageFromExtension = fileDiscovery.getLanguageFromExtension;
+  console.log('[IndexingWorker] file-discovery loaded successfully');
+} catch (e) {
+  console.error('[IndexingWorker] Failed to load file-discovery:', e);
+  throw e;
+}
+
+try {
+  console.log('[IndexingWorker] Loading parser module...');
+  const parser = require('./parser');
+  parseCode = parser.parseCode;
+  console.log('[IndexingWorker] parser loaded successfully');
+} catch (e) {
+  console.error('[IndexingWorker] Failed to load parser:', e);
+  throw e;
+}
+
+try {
+  console.log('[IndexingWorker] Loading embedding-provider module...');
+  const embeddingModule = require('./embedding-provider');
+  HuggingFaceEmbeddingProviderClass = embeddingModule.HuggingFaceEmbeddingProvider;
+  console.log('[IndexingWorker] embedding-provider loaded successfully');
+} catch (e) {
+  console.error('[IndexingWorker] Failed to load embedding-provider:', e);
+  throw e;
+}
 
 interface WorkerMessage {
   type: 'start' | 'cancel';
@@ -44,7 +87,7 @@ interface WorkerResult {
 }
 
 // Embedding provider instance for this worker
-let embeddingProvider: HuggingFaceEmbeddingProvider | null = null;
+let embeddingProvider: HuggingFaceEmbeddingProviderType | null = null;
 
 let cancelled = false;
 
@@ -104,7 +147,7 @@ async function runIndexing(
     if (!embeddingProvider) {
       sendProgress(indexId, directoryPath, 0, 0, 'parsing', 'Loading embedding model...');
       console.log('[IndexingWorker] Initializing embedding provider...');
-      embeddingProvider = new HuggingFaceEmbeddingProvider();
+      embeddingProvider = new HuggingFaceEmbeddingProviderClass();
       await embeddingProvider.initialize();
       console.log('[IndexingWorker] Embedding provider initialized successfully');
     }
