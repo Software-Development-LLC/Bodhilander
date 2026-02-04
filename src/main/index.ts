@@ -1011,11 +1011,6 @@ app.whenReady().then(() => {
   log.error('[Main] Failed to initialize app:', error);
 });
 
-// Handle GPU process crashes
-app.on('gpu-process-crashed', (event, killed) => {
-  log.error('[Main] GPU process crashed, killed:', killed);
-});
-
 // Handle render process crashes (if any child window crashes)
 app.on('render-process-gone', (event, webContents, details) => {
   log.error('[Main] Render process gone:', details.reason, details.exitCode);
