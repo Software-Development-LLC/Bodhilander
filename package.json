@@ -24,7 +24,7 @@
   "scripts": {
     "postinstall": "electron-rebuild -o better-sqlite3,sodium-native,sqlite-vec,node-pty && node node_modules/node-pty/scripts/post-install.js",
     "build:main": "tsc -p tsconfig.main.json",
-    "build:worker": "esbuild src/main/vector-search/indexing-worker.ts --bundle --platform=node --target=node18 --outfile=dist/main/vector-search/indexing-worker.js --sourcemap --format=cjs --external:tree-sitter --external:tree-sitter-* --external:onnxruntime-node --external:onnxruntime-common --external:sharp",
+    "build:worker": "esbuild src/main/vector-search/indexing-worker.ts --bundle --platform=node --target=node18 --outfile=dist/main/vector-search/indexing-worker.js --sourcemap --format=cjs --external:tree-sitter --external:tree-sitter-* --external:onnxruntime-node --external:onnxruntime-common --alias:sharp=./src/main/vector-search/sharp-stub.js",
     "build:mcp": "esbuild src/mcp-server/index.ts --bundle --platform=node --target=node18 --outfile=dist/mcp-server/index.js --sourcemap --format=cjs",
     "build:renderer": "webpack --mode production",
     "build": "npm run build:main && npm run build:worker && npm run build:mcp && npm run build:renderer",

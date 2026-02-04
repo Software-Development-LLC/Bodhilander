@@ -23,6 +23,20 @@ import { getApiServer } from './api';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 
+// Global error handlers to catch uncaught exceptions and prevent silent crashes
+process.on('uncaughtException', (error: Error) => {
+  log.error('[Main] Uncaught exception:', error);
+  log.error('[Main] Stack:', error.stack);
+  // Don't exit immediately - let the error be logged
+  // The process may still crash, but at least we'll have a log
+});
+
+process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
+  const errorMsg = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  log.error('[Main] Unhandled rejection:', errorMsg);
+  log.error('[Main] Promise:', promise);
+});
+
 // Use separate userData directory for development to avoid cache conflicts
 if (!app.isPackaged) {
   const devUserData = path.join(app.getPath('userData'), 'dev');
@@ -426,14 +440,19 @@ function createWindow(): void {
 
 // IPC Handlers
 ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false) => {
-  // Look up the session to get its groupId for memory injection
-  const sessions = sessionsRepo.getAllSessions();
-  const session = sessions.find(s => s.id === id);
-  const groupId = session?.groupId || null;
+  try {
+    // Look up the session to get its groupId for memory injection
+    const sessions = sessionsRepo.getAllSessions();
+    const session = sessions.find(s => s.id === id);
+    const groupId = session?.groupId || null;
 
-  ptyManager.createSession(id, cwd, launchClaude, groupId);
-  // Play session start sound
-  soundManager.playStartSound();
+    ptyManager.createSession(id, cwd, launchClaude, groupId);
+    // Play session start sound
+    soundManager.playStartSound();
+  } catch (error) {
+    log.error('[Main] Failed to create PTY session:', error);
+    throw error; // Re-throw so renderer knows it failed
+  }
 });
 
 ipcMain.on('pty:write', (_, id: string, data: string) => {
@@ -988,6 +1007,23 @@ shareManager.on('guestLeft', (info) => {
 app.whenReady().then(() => {
   createSplashWindow();
   createWindow();
+}).catch((error) => {
+  log.error('[Main] Failed to initialize app:', error);
+});
+
+// Handle GPU process crashes
+app.on('gpu-process-crashed', (event, killed) => {
+  log.error('[Main] GPU process crashed, killed:', killed);
+});
+
+// Handle render process crashes (if any child window crashes)
+app.on('render-process-gone', (event, webContents, details) => {
+  log.error('[Main] Render process gone:', details.reason, details.exitCode);
+});
+
+// Handle child process crashes
+app.on('child-process-gone', (event, details) => {
+  log.error('[Main] Child process gone:', details.type, details.reason, details.exitCode);
 });
 
 app.on('window-all-closed', () => {
