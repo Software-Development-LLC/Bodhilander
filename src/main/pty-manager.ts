@@ -204,6 +204,7 @@ class PtyManager extends EventEmitter {
       recentOutputBytes: 0,
       lastOutputTime: 0,
     });
+
   }
 
   write(id: string, data: string): void {
