@@ -224,9 +224,27 @@ export class VectorSearchManager extends EventEmitter {
       };
     }
 
+    // Capture worker stdout/stderr for debugging
+    workerOptions.stdout = true;
+    workerOptions.stderr = true;
+
     const worker = new Worker(workerPath, workerOptions);
 
     this.workers.set(index.id, worker);
+
+    // Forward worker stdout to console
+    if (worker.stdout) {
+      worker.stdout.on('data', (data: Buffer) => {
+        console.log('[VectorSearch Worker]', data.toString().trim());
+      });
+    }
+
+    // Forward worker stderr to console
+    if (worker.stderr) {
+      worker.stderr.on('data', (data: Buffer) => {
+        console.error('[VectorSearch Worker Error]', data.toString().trim());
+      });
+    }
 
     worker.on('message', (result: WorkerResult) => {
       this.handleWorkerMessage(index.id, result);
@@ -234,6 +252,7 @@ export class VectorSearchManager extends EventEmitter {
 
     worker.on('error', (err: Error) => {
       console.error('[VectorSearch] Worker error:', err);
+      console.error('[VectorSearch] Worker error stack:', err.stack);
       const errorMsg = err.message || 'Worker thread error';
       codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
       this.workers.delete(index.id);
