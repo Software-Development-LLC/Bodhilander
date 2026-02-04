@@ -160,6 +160,15 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
 
     // Create PTY session with error handling
     window.electronAPI.createSession(sessionId, cwd, launchClaude)
+      .then(() => {
+        // Immediately send resize after PTY creation to fix Windows ConPTY race condition
+        // where input doesn't register until a resize event syncs the terminal
+        if (fitAddonRef.current && xtermRef.current) {
+          fitAddonRef.current.fit();
+          const { cols, rows } = xtermRef.current;
+          window.electronAPI.resizeSession(sessionId, cols, rows);
+        }
+      })
       .catch((err) => {
         const errorMsg = err?.message || 'Failed to start session';
         console.error('Failed to create PTY session:', err);
