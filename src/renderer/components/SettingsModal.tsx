@@ -456,7 +456,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       >
         <div className="modal-header">
           <h2 id="settings-modal-title">Settings</h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close settings">x</button>
+          <button className="modal-close" onClick={onClose} aria-label="Close settings">&times;</button>
         </div>
 
         <div className="settings-layout">

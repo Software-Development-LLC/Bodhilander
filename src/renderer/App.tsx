@@ -127,6 +127,29 @@ const App: React.FC = () => {
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const activeGroupId = activeSession?.groupId || null;
 
+  // Dismiss color picker on Escape or click-outside
+  useEffect(() => {
+    if (!colorPickerGroupId) return;
+
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setColorPickerGroupId(null);
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.color-picker') && !target.closest('.group-color')) {
+        setColorPickerGroupId(null);
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [colorPickerGroupId]);
+
   // Check sharing status for all sessions
   useEffect(() => {
     const checkSharingStatus = async () => {

@@ -88,7 +88,7 @@ export const JoinSessionModal: React.FC<JoinSessionModalProps> = ({
       >
         <div className="modal-header">
           <h2 id="join-modal-title">Join Shared Session</h2>
-          <button className="close-btn" onClick={onClose} aria-label="Close join dialog">x</button>
+          <button className="close-btn" onClick={onClose} aria-label="Close join dialog">&times;</button>
         </div>
 
         <div className="modal-body">

@@ -739,17 +739,17 @@ body {
 }
 
 .btn.primary {
-  background: #4ade80;
-  color: #000;
+  background: #007acc;
+  color: #fff;
 }
 
 .btn.primary:hover {
-  background: #22c55e;
+  background: #0069b3;
 }
 
 .btn.primary:disabled {
-  background: #666;
-  color: #999;
+  background: #555;
+  color: #888;
   cursor: not-allowed;
 }
 
@@ -818,7 +818,8 @@ body {
 
 .settings-modal {
   width: 750px;
-  height: 550px;
+  min-height: 400px;
+  max-height: 90vh;
   display: flex;
   flex-direction: column;
 }
