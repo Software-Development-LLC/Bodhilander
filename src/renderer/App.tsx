@@ -762,6 +762,7 @@ const App: React.FC = () => {
         className={`sidebar ${sidebarFocused ? 'focused' : ''}`}
         ref={sidebarRef}
         tabIndex={0}
+        aria-label="Session navigation"
         onFocus={() => setSidebarFocused(true)}
         onBlur={(e) => {
           // Only blur if focus moved outside sidebar
@@ -781,6 +782,7 @@ const App: React.FC = () => {
               className={`icon-button ${memoryPanelOpen ? 'active' : ''}`}
               onClick={() => setMemoryPanelOpen(prev => !prev)}
               title="Toggle Memory Panel"
+              aria-label="Toggle Memory Panel"
             >
               *
             </button>
@@ -788,6 +790,7 @@ const App: React.FC = () => {
               className="icon-button"
               onClick={() => setCodeSearchOpen(true)}
               title="Code Search (Ctrl+Shift+F)"
+              aria-label="Code Search"
             >
               🔍
             </button>
@@ -795,6 +798,7 @@ const App: React.FC = () => {
               className="icon-button"
               onClick={() => setSettingsOpen(true)}
               title="Settings"
+              aria-label="Settings"
             >
               ⚙
             </button>
@@ -802,6 +806,7 @@ const App: React.FC = () => {
               className="icon-button"
               onClick={() => setJoinModalOpen(true)}
               title={isAuthenticated ? 'Join Shared Session' : 'Sign in to join sessions'}
+              aria-label="Join Shared Session"
               disabled={!isAuthenticated}
             >
               ⇄
@@ -810,6 +815,7 @@ const App: React.FC = () => {
               className="icon-button"
               onClick={handleCreateGroup}
               title="New Group"
+              aria-label="New Group"
             >
               +
             </button>
@@ -839,6 +845,7 @@ const App: React.FC = () => {
                     toggleCollapse(group.id);
                   }}
                   title={group.collapsed ? 'Expand' : 'Collapse'}
+                  aria-label={group.collapsed ? 'Expand group' : 'Collapse group'}
                 >
                   {group.collapsed ? '▶' : '▼'}
                 </button>
@@ -847,6 +854,7 @@ const App: React.FC = () => {
                   style={{ background: group.color }}
                   onClick={() => setColorPickerGroupId(colorPickerGroupId === group.id ? null : group.id)}
                   title="Change color"
+                  aria-label="Change group color"
                 />
                 {colorPickerGroupId === group.id && (
                   <div className="color-picker">
@@ -856,6 +864,7 @@ const App: React.FC = () => {
                         className={`color-option ${color === group.color ? 'selected' : ''}`}
                         style={{ background: color }}
                         onClick={() => handleColorSelect(group.id, color)}
+                        aria-label={`Set color to ${color}`}
                       />
                     ))}
                   </div>
@@ -890,6 +899,7 @@ const App: React.FC = () => {
                     className="group-folder"
                     onClick={() => handleSetGroupDirectory(group.id)}
                     title={group.workingDir || 'Set working directory'}
+                    aria-label="Set working directory"
                   >
                     ⌂
                   </button>
@@ -897,6 +907,7 @@ const App: React.FC = () => {
                     className="group-delete"
                     onClick={() => handleDeleteGroup(group.id)}
                     title={getSessionsByGroup(group.id).length > 0 ? "Close all sessions first" : "Delete group"}
+                    aria-label="Delete group"
                     disabled={getSessionsByGroup(group.id).length > 0}
                   >
                     ×
@@ -909,6 +920,7 @@ const App: React.FC = () => {
                     setNewItemChoice({ x: rect.left, y: rect.bottom + 4, groupId: group.id });
                   }}
                   title="Add to group"
+                  aria-label="Add to group"
                 >
                   +
                 </button>
@@ -974,6 +986,7 @@ const App: React.FC = () => {
                         handleRemoveSession(session.id);
                       }}
                       title="Close session"
+                      aria-label="Close session"
                     >
                       ×
                     </button>
@@ -1006,6 +1019,7 @@ const App: React.FC = () => {
                       toggleCollapse(subGroup.id);
                     }}
                     title={subGroup.collapsed ? 'Expand' : 'Collapse'}
+                    aria-label={subGroup.collapsed ? 'Expand sub-group' : 'Collapse sub-group'}
                   >
                     {subGroup.collapsed ? '▶' : '▼'}
                   </button>
@@ -1014,6 +1028,7 @@ const App: React.FC = () => {
                     style={{ borderColor: subGroup.color }}
                     onClick={() => setColorPickerGroupId(colorPickerGroupId === subGroup.id ? null : subGroup.id)}
                     title="Change color"
+                    aria-label="Change sub-group color"
                   />
                   {colorPickerGroupId === subGroup.id && (
                     <div className="color-picker">
@@ -1023,6 +1038,7 @@ const App: React.FC = () => {
                           className={`color-option ${color === subGroup.color ? 'selected' : ''}`}
                           style={{ background: color }}
                           onClick={() => handleColorSelect(subGroup.id, color)}
+                          aria-label={`Set color to ${color}`}
                         />
                       ))}
                     </div>
@@ -1057,6 +1073,7 @@ const App: React.FC = () => {
                       className="group-folder"
                       onClick={() => handleSetGroupDirectory(subGroup.id)}
                       title={subGroup.workingDir || 'Set working directory'}
+                      aria-label="Set working directory"
                     >
                       ⌂
                     </button>
@@ -1064,6 +1081,7 @@ const App: React.FC = () => {
                       className="group-delete"
                       onClick={() => handleDeleteGroup(subGroup.id)}
                       title={getSessionsByGroup(subGroup.id).length > 0 ? "Close all sessions first" : "Delete group"}
+                      aria-label="Delete sub-group"
                       disabled={getSessionsByGroup(subGroup.id).length > 0}
                     >
                       ×
@@ -1073,6 +1091,7 @@ const App: React.FC = () => {
                     className="icon-button small"
                     onClick={() => handleNewSession(subGroup.id)}
                     title="New Session"
+                    aria-label="New Session"
                   >
                     +
                   </button>
@@ -1137,6 +1156,7 @@ const App: React.FC = () => {
                           handleRemoveSession(session.id);
                         }}
                         title="Close session"
+                        aria-label="Close session"
                       >
                         ×
                       </button>
@@ -1198,6 +1218,7 @@ const App: React.FC = () => {
                             }
                           }}
                           title="Leave session"
+                          aria-label="Leave session"
                         >
                           x
                         </button>
