@@ -95,6 +95,13 @@ const App: React.FC = () => {
   // Code search modal state
   const [codeSearchOpen, setCodeSearchOpen] = useState(false);
 
+  // Destructive action confirmation state
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'closeSession' | 'deleteGroup';
+    id: string;
+    message: string;
+  } | null>(null);
+
   const GROUP_COLORS = [
     '#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2',
     '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da',
@@ -223,14 +230,22 @@ const App: React.FC = () => {
     setEditingGroupName('');
   };
 
-  const handleDeleteGroup = async (groupId: string) => {
+  const doDeleteGroup = useCallback(async (groupId: string) => {
+    await removeGroup(groupId);
+  }, [removeGroup]);
+
+  const handleDeleteGroup = useCallback((groupId: string) => {
     const sessionsInGroup = getSessionsByGroup(groupId);
     if (sessionsInGroup.length > 0) {
       // Don't delete groups with active sessions
       return;
     }
-    await removeGroup(groupId);
-  };
+    setConfirmAction({
+      type: 'deleteGroup',
+      id: groupId,
+      message: 'Delete this group? This cannot be undone.',
+    });
+  }, [getSessionsByGroup]);
 
   const handleSetGroupDirectory = async (groupId: string) => {
     const dir = await window.electronAPI.selectDirectory();
@@ -315,9 +330,22 @@ const App: React.FC = () => {
     setEditingSessionName('');
   };
 
-  const handleRemoveSession = useCallback(async (id: string) => {
+  const doRemoveSession = useCallback(async (id: string) => {
     await removeSession(id);
   }, [removeSession]);
+
+  const handleRemoveSession = useCallback((id: string) => {
+    const session = sessions.find(s => s.id === id);
+    if (session && (session.state === 'working' || session.state === 'waiting')) {
+      setConfirmAction({
+        type: 'closeSession',
+        id,
+        message: `This session is currently ${session.state}. Close it anyway?`,
+      });
+      return;
+    }
+    doRemoveSession(id);
+  }, [sessions, doRemoveSession]);
 
   // Drag and drop handlers
   const handleGroupDragStart = (e: React.DragEvent, groupId: string) => {
@@ -1299,13 +1327,22 @@ const App: React.FC = () => {
           ))}
           {sessions.length === 0 && remoteSessions.length === 0 && (
             <div className="no-session">
-              <p>No active session</p>
-              <button
-                onClick={() => groups[0] && handleNewSession(groups[0].id)}
-                disabled={!groups.length}
-              >
-                Create Session
-              </button>
+              {!groups.length ? (
+                <>
+                  <h2>Welcome to ClaudeLander</h2>
+                  <p>Create a group to organize your Claude Code sessions.</p>
+                  <button onClick={handleCreateGroup}>
+                    Create Your First Group
+                  </button>
+                </>
+              ) : (
+                <>
+                  <p>Select a session or create a new one</p>
+                  <button onClick={() => handleNewSession(groups[0].id)}>
+                    Create Session
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1436,6 +1473,29 @@ const App: React.FC = () => {
         directoryPath={activeSession?.workingDir || null}
         onClose={() => setCodeSearchOpen(false)}
       />
+
+      {/* Destructive action confirmation dialog */}
+      {confirmAction && (
+        <div className="modal-overlay" onClick={() => setConfirmAction(null)}>
+          <div
+            className="modal-content confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-describedby="confirm-message"
+            onClick={e => e.stopPropagation()}
+          >
+            <p id="confirm-message">{confirmAction.message}</p>
+            <div className="confirm-actions">
+              <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={() => {
+                if (confirmAction.type === 'closeSession') doRemoveSession(confirmAction.id);
+                if (confirmAction.type === 'deleteGroup') doDeleteGroup(confirmAction.id);
+                setConfirmAction(null);
+              }}>Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
