@@ -742,7 +742,16 @@ ipcMain.handle('share:write', (_, code: string, data: string) => {
 
 // Open external URL
 ipcMain.handle('shell:openExternal', (_, url: string) => {
-  shell.openExternal(url);
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      log.warn('[Main] Blocked shell:openExternal for non-HTTP URL:', url);
+      return;
+    }
+    shell.openExternal(url);
+  } catch {
+    log.warn('[Main] Invalid URL passed to shell:openExternal:', url);
+  }
 });
 
 // ============================================================================
