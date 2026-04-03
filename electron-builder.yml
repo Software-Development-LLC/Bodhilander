@@ -1,5 +1,5 @@
-appId: com.claudelander.app
-productName: ClaudeLander
+appId: com.bodhilander.app
+productName: Bodhilander
 copyright: Copyright © 2024-2025
 
 directories:
@@ -36,8 +36,8 @@ extraResources:
 # Auto-update configuration
 publish:
   provider: github
-  owner: William-Long-II
-  repo: claudelander
+  owner: Software-Development-LLC
+  repo: bodhilander
 
 # macOS configuration
 mac:

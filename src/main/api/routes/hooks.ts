@@ -89,7 +89,7 @@ export function createHooksRouter(): Router {
         const outputStr = typeof tool_output === 'string' ? tool_output : JSON.stringify(tool_output);
 
         // Skip our own MCP memory tool calls to avoid recursion/double-processing
-        if (inputStr.includes('claudelander-memory') || inputStr.includes('mcp-cli call claudelander')) {
+        if (inputStr.includes('bodhilander-memory') || inputStr.includes('mcp-cli call bodhilander')) {
           log.debug('[HooksAPI] Skipping own MCP memory call');
           res.json({ saved: false, reason: 'own_mcp_call' });
           return;

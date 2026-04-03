@@ -99,15 +99,15 @@ class PtyManager extends EventEmitter {
       if (groupId) {
         const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
         if (memoryContent) {
-          processEnv.CLAUDELANDER_SYSTEM_PROMPT = memoryContent;
+          processEnv.BODHILANDER_SYSTEM_PROMPT = memoryContent;
         }
       }
 
       if (shellInfo.isWSL) {
         // Launch Claude inside WSL
         shell = 'wsl.exe';
-        if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
-          claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+        if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
+          claudeCmd = 'claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"';
         }
         args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
         env = processEnv;
@@ -115,19 +115,19 @@ class PtyManager extends EventEmitter {
         // On Windows without WSL, run Claude through the shell
         shell = shellInfo.shell;
         if (shellInfo.shell.toLowerCase().includes('powershell')) {
-          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
-            claudeCmd = 'claude --append-system-prompt $env:CLAUDELANDER_SYSTEM_PROMPT';
+          if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt $env:BODHILANDER_SYSTEM_PROMPT';
           }
           args = ['-NoLogo', '-Command', claudeCmd];
         } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
-          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
-            claudeCmd = 'claude --append-system-prompt "%CLAUDELANDER_SYSTEM_PROMPT%"';
+          if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt "%BODHILANDER_SYSTEM_PROMPT%"';
           }
           args = ['/c', claudeCmd];
         } else {
           // Assume bash-like shell (Git Bash, etc.)
-          if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
-            claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+          if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
+            claudeCmd = 'claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"';
           }
           args = ['-c', claudeCmd];
         }
@@ -135,8 +135,8 @@ class PtyManager extends EventEmitter {
       } else {
         // macOS/Linux: run Claude through interactive login shell
         shell = shellInfo.shell;
-        if (processEnv.CLAUDELANDER_SYSTEM_PROMPT) {
-          claudeCmd = 'claude --append-system-prompt "$CLAUDELANDER_SYSTEM_PROMPT"';
+        if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
+          claudeCmd = 'claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"';
         }
         args = ['-l', '-i', '-c', claudeCmd];
         env = processEnv;

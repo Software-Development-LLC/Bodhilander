@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug or unexpected behavior in ClaudeLander
+description: Report a bug or unexpected behavior in Bodhilander
 title: "[Bug]: "
 labels: ["bug"]
 body:
@@ -23,7 +23,7 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce this issue?
       placeholder: |
-        1. Open ClaudeLander
+        1. Open Bodhilander
         2. Click on '...'
         3. See error
     validations:
@@ -51,7 +51,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: ClaudeLander Version
+      label: Bodhilander Version
       description: "Find this in Help > About or the title bar"
       placeholder: "e.g., 1.4.3"
     validations:
@@ -61,7 +61,7 @@ body:
     id: area
     attributes:
       label: Affected Area
-      description: What part of ClaudeLander is affected?
+      description: What part of Bodhilander is affected?
       options:
         - Session Management
         - Groups/Organization

@@ -40,7 +40,7 @@ export function createPairingRouter(pairingManager: PairingManager): Router {
 
       // Build QR code data
       const qrData = {
-        type: 'claudelander-pair',
+        type: 'bodhilander-pair',
         host: primaryAddress,
         port: parseInt(port),
         code: pairingInfo.code,

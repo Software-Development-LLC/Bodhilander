@@ -20,7 +20,7 @@ export function createSystemRouter(): Router {
     try {
       res.json({
         app: {
-          name: 'ClaudeLander',
+          name: 'Bodhilander',
           version: app.getVersion(),
         },
         platform: {

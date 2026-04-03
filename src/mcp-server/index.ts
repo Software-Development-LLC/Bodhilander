@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * ClaudeLander Memory MCP Server
+ * Bodhilander Memory MCP Server
  *
  * Provides Claude with tools to access and manage session memories and code search.
- * Communicates with ClaudeLander via HTTP API (no native dependencies).
+ * Communicates with Bodhilander via HTTP API (no native dependencies).
  *
  * Run as: node dist/mcp-server/index.js
  *
@@ -27,8 +27,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-// ClaudeLander API configuration
-const API_BASE = process.env.CLAUDELANDER_API_URL || 'http://127.0.0.1:8443';
+// Bodhilander API configuration
+const API_BASE = process.env.BODHILANDER_API_URL || 'http://127.0.0.1:8443';
 const API_PREFIX = '/api/v1/memories';
 
 // Types
@@ -165,7 +165,7 @@ async function getGroups(): Promise<Group[]> {
   return result.groups;
 }
 
-// Check if ClaudeLander is running
+// Check if Bodhilander is running
 async function checkConnection(): Promise<boolean> {
   try {
     const response = await fetch(`${API_BASE}/api/v1/health`);
@@ -177,17 +177,17 @@ async function checkConnection(): Promise<boolean> {
 
 // Create and run server
 async function main() {
-  // Check if ClaudeLander is running
+  // Check if Bodhilander is running
   const isConnected = await checkConnection();
   if (!isConnected) {
-    console.error('[MCP Memory] Warning: ClaudeLander is not running. Memory tools will not work until ClaudeLander is started.');
+    console.error('[MCP Memory] Warning: Bodhilander is not running. Memory tools will not work until Bodhilander is started.');
   } else {
-    console.error('[MCP Memory] Connected to ClaudeLander API');
+    console.error('[MCP Memory] Connected to Bodhilander API');
   }
 
   // Create MCP server
   const server = new McpServer({
-    name: 'claudelander-memory',
+    name: 'bodhilander-memory',
     version: '1.0.0',
   });
 
@@ -196,7 +196,7 @@ async function main() {
     'search_memories',
     {
       title: 'Search Memories',
-      description: 'Search for memories by keyword or phrase. Use this to find relevant context from past sessions. Requires ClaudeLander to be running.',
+      description: 'Search for memories by keyword or phrase. Use this to find relevant context from past sessions. Requires Bodhilander to be running.',
       inputSchema: {
         query: z.string().describe('Search query - keywords or phrases to find in memories'),
         group_id: z.string().optional().describe('Filter by group ID. Use list_groups to see available groups.'),
@@ -215,7 +215,7 @@ async function main() {
         return { content: [{ type: 'text', text }] };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error searching memories: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error searching memories: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -225,7 +225,7 @@ async function main() {
     'add_memory',
     {
       title: 'Add Memory',
-      description: 'Store a new memory for future reference. Use this to save important decisions, fixes, patterns, or context. Requires ClaudeLander to be running.',
+      description: 'Store a new memory for future reference. Use this to save important decisions, fixes, patterns, or context. Requires Bodhilander to be running.',
       inputSchema: {
         content: z.string().describe('The content of the memory to store'),
         type: z.enum(['decision', 'error_fix', 'pattern', 'context', 'note']).describe('Type of memory'),
@@ -245,7 +245,7 @@ async function main() {
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error adding memory: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error adding memory: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -255,7 +255,7 @@ async function main() {
     'list_memories',
     {
       title: 'List Memories',
-      description: 'List recent memories, optionally filtered by group or type. Requires ClaudeLander to be running.',
+      description: 'List recent memories, optionally filtered by group or type. Requires Bodhilander to be running.',
       inputSchema: {
         group_id: z.string().optional().describe('Filter by group ID'),
         type: z.enum(['decision', 'error_fix', 'pattern', 'context', 'note']).optional().describe('Filter by memory type'),
@@ -273,7 +273,7 @@ async function main() {
         return { content: [{ type: 'text', text }] };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error listing memories: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error listing memories: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -283,7 +283,7 @@ async function main() {
     'delete_memory',
     {
       title: 'Delete Memory',
-      description: 'Delete a memory by ID. Requires ClaudeLander to be running.',
+      description: 'Delete a memory by ID. Requires Bodhilander to be running.',
       inputSchema: {
         id: z.string().describe('The ID of the memory to delete'),
       },
@@ -299,7 +299,7 @@ async function main() {
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error deleting memory: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error deleting memory: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -309,7 +309,7 @@ async function main() {
     'pin_memory',
     {
       title: 'Pin Memory',
-      description: 'Pin or unpin a memory. Pinned memories appear first in listings. Requires ClaudeLander to be running.',
+      description: 'Pin or unpin a memory. Pinned memories appear first in listings. Requires Bodhilander to be running.',
       inputSchema: {
         id: z.string().describe('The ID of the memory to pin/unpin'),
         pinned: z.boolean().describe('True to pin, false to unpin'),
@@ -328,7 +328,7 @@ async function main() {
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error updating memory: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error updating memory: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -338,7 +338,7 @@ async function main() {
     'list_groups',
     {
       title: 'List Groups',
-      description: 'List available memory groups. Groups organize memories by project/context. Requires ClaudeLander to be running.',
+      description: 'List available memory groups. Groups organize memories by project/context. Requires Bodhilander to be running.',
       inputSchema: {},
     },
     async () => {
@@ -346,11 +346,11 @@ async function main() {
         const groups = await getGroups();
         const text = groups.length > 0
           ? `Available groups:\n${groups.map(g => `- ${g.name} (ID: ${g.id})`).join('\n')}`
-          : 'No groups found. Create a group in ClaudeLander first.';
+          : 'No groups found. Create a group in Bodhilander first.';
         return { content: [{ type: 'text', text }] };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error listing groups: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error listing groups: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -360,7 +360,7 @@ async function main() {
     'search_code',
     {
       title: 'Semantic Code Search',
-      description: 'Search the codebase semantically using natural language queries. Returns relevant code chunks ranked by similarity. The codebase must be indexed first. Requires ClaudeLander to be running.',
+      description: 'Search the codebase semantically using natural language queries. Returns relevant code chunks ranked by similarity. The codebase must be indexed first. Requires Bodhilander to be running.',
       inputSchema: {
         query: z.string().describe('Natural language query describing what code to find'),
         path: z.string().optional().describe('Directory path to search in. Defaults to current working directory.'),
@@ -400,7 +400,7 @@ async function main() {
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error searching code: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error searching code: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -410,7 +410,7 @@ async function main() {
     'find_symbol',
     {
       title: 'Find Symbol Definition',
-      description: 'Find where a function, class, method, or other symbol is defined in the codebase. The codebase must be indexed first. Requires ClaudeLander to be running.',
+      description: 'Find where a function, class, method, or other symbol is defined in the codebase. The codebase must be indexed first. Requires Bodhilander to be running.',
       inputSchema: {
         name: z.string().describe('Name of the symbol to find (function, class, method, variable, interface, or type)'),
         path: z.string().optional().describe('Directory path to search in. Defaults to current working directory.'),
@@ -452,7 +452,7 @@ async function main() {
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error finding symbol: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error finding symbol: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -462,7 +462,7 @@ async function main() {
     'get_index_status',
     {
       title: 'Get Code Index Status',
-      description: 'Check if a directory has been indexed for semantic code search. Use this before search_code to verify the codebase is ready for searching. Requires ClaudeLander to be running.',
+      description: 'Check if a directory has been indexed for semantic code search. Use this before search_code to verify the codebase is ready for searching. Requires Bodhilander to be running.',
       inputSchema: {
         path: z.string().describe('Directory path to check. Use the working directory of the current project.'),
       },
@@ -504,7 +504,7 @@ async function main() {
         return { content: [{ type: 'text', text }] };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error checking index status: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error checking index status: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -514,7 +514,7 @@ async function main() {
     'list_indexes',
     {
       title: 'List Code Indexes',
-      description: 'List all available code indexes. Shows which directories have been indexed for semantic code search. Requires ClaudeLander to be running.',
+      description: 'List all available code indexes. Shows which directories have been indexed for semantic code search. Requires Bodhilander to be running.',
       inputSchema: {},
     },
     async () => {
@@ -549,7 +549,7 @@ async function main() {
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error listing indexes: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error listing indexes: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );
@@ -559,7 +559,7 @@ async function main() {
     'start_indexing',
     {
       title: 'Start Code Indexing',
-      description: 'Start indexing a directory for semantic code search. WARNING: Indexing can be resource-intensive (CPU, memory) and may take several minutes for large codebases. The index will be built in the background. Use get_index_status to check progress. Requires ClaudeLander to be running.',
+      description: 'Start indexing a directory for semantic code search. WARNING: Indexing can be resource-intensive (CPU, memory) and may take several minutes for large codebases. The index will be built in the background. Use get_index_status to check progress. Requires Bodhilander to be running.',
       inputSchema: {
         path: z.string().describe('Directory path to index. This should be the root of the codebase you want to search.'),
       },
@@ -587,7 +587,7 @@ async function main() {
         };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: `Error starting indexing: ${msg}. Is ClaudeLander running?` }] };
+        return { content: [{ type: 'text', text: `Error starting indexing: ${msg}. Is Bodhilander running?` }] };
       }
     }
   );

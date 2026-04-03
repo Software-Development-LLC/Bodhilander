@@ -1,5 +1,5 @@
 name: Feature Request
-description: Suggest a new feature or enhancement for ClaudeLander
+description: Suggest a new feature or enhancement for Bodhilander
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
@@ -39,7 +39,7 @@ body:
     id: area
     attributes:
       label: Feature Area
-      description: What part of ClaudeLander does this relate to?
+      description: What part of Bodhilander does this relate to?
       options:
         - Session Management
         - Groups/Organization

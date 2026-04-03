@@ -127,7 +127,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.check-version.outputs.version }}
-          name: ClaudeLander v${{ needs.check-version.outputs.version }}
+          name: Bodhilander v${{ needs.check-version.outputs.version }}
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -154,8 +154,8 @@ jobs:
       - name: Download macOS release assets
         run: |
           VERSION="${{ needs.check-version.outputs.version }}"
-          curl -L -o intel.zip "https://github.com/William-Long-II/claudelander/releases/download/v${VERSION}/ClaudeLander-${VERSION}-mac.zip"
-          curl -L -o arm64.zip "https://github.com/William-Long-II/claudelander/releases/download/v${VERSION}/ClaudeLander-${VERSION}-arm64-mac.zip"
+          curl -L -o intel.zip "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v${VERSION}/Bodhilander-${VERSION}-mac.zip"
+          curl -L -o arm64.zip "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v${VERSION}/Bodhilander-${VERSION}-arm64-mac.zip"
 
       - name: Calculate SHA256 hashes
         id: hashes
@@ -166,7 +166,7 @@ jobs:
       - name: Checkout Homebrew tap
         uses: actions/checkout@v4
         with:
-          repository: William-Long-II/homebrew-claudelander
+          repository: Software-Development-LLC/homebrew-Bodhilander
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
@@ -176,43 +176,43 @@ jobs:
           INTEL_SHA="${{ steps.hashes.outputs.intel_sha256 }}"
           ARM64_SHA="${{ steps.hashes.outputs.arm64_sha256 }}"
 
-          cat > homebrew-tap/Casks/claudelander.rb << 'CASKEOF'
-          cask "claudelander" do
+          cat > homebrew-tap/Casks/bodhilander.rb << 'CASKEOF'
+          cask "bodhilander" do
             version "VERSION_PLACEHOLDER"
 
             on_intel do
               sha256 "INTEL_SHA256_PLACEHOLDER"
-              url "https://github.com/William-Long-II/claudelander/releases/download/v#{version}/ClaudeLander-#{version}-mac.zip"
+              url "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v#{version}/Bodhilander-#{version}-mac.zip"
             end
 
             on_arm do
               sha256 "ARM64_SHA256_PLACEHOLDER"
-              url "https://github.com/William-Long-II/claudelander/releases/download/v#{version}/ClaudeLander-#{version}-arm64-mac.zip"
+              url "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v#{version}/Bodhilander-#{version}-arm64-mac.zip"
             end
 
-            name "ClaudeLander"
+            name "Bodhilander"
             desc "Cross-platform Claude Code session manager"
-            homepage "https://github.com/William-Long-II/claudelander"
+            homepage "https://github.com/Software-Development-LLC/Bodhilander"
 
-            app "ClaudeLander.app"
+            app "Bodhilander.app"
 
             zap trash: [
-              "~/Library/Application Support/claudelander",
-              "~/Library/Preferences/com.claudelander.app.plist",
-              "~/Library/Saved Application State/com.claudelander.app.savedState",
+              "~/Library/Application Support/bodhilander",
+              "~/Library/Preferences/com.bodhilander.app.plist",
+              "~/Library/Saved Application State/com.bodhilander.app.savedState",
             ]
           end
           CASKEOF
 
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" homebrew-tap/Casks/claudelander.rb
-          sed -i "s/INTEL_SHA256_PLACEHOLDER/${INTEL_SHA}/g" homebrew-tap/Casks/claudelander.rb
-          sed -i "s/ARM64_SHA256_PLACEHOLDER/${ARM64_SHA}/g" homebrew-tap/Casks/claudelander.rb
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" homebrew-tap/Casks/bodhilander.rb
+          sed -i "s/INTEL_SHA256_PLACEHOLDER/${INTEL_SHA}/g" homebrew-tap/Casks/bodhilander.rb
+          sed -i "s/ARM64_SHA256_PLACEHOLDER/${ARM64_SHA}/g" homebrew-tap/Casks/bodhilander.rb
 
       - name: Commit and push
         run: |
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/claudelander.rb
-          git commit -m "Update claudelander to v${{ needs.check-version.outputs.version }}"
+          git add Casks/bodhilander.rb
+          git commit -m "Update bodhilander to v${{ needs.check-version.outputs.version }}"
           git push

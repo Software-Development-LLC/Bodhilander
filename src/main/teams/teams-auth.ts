@@ -102,7 +102,7 @@ class TeamsAuthService {
 
         if (code) {
           res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end('<html><body><h1>Authentication Successful</h1><p>You can close this window and return to ClaudeLander.</p><script>window.close()</script></body></html>');
+          res.end('<html><body><h1>Authentication Successful</h1><p>You can close this window and return to Bodhilander.</p><script>window.close()</script></body></html>');
 
           try {
             const user = await this.handleCallback(code);

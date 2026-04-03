@@ -45,7 +45,7 @@ if (!app.isPackaged) {
 
 // Set app name for Windows notifications
 if (process.platform === 'win32') {
-  app.setAppUserModelId('ClaudeLander');
+  app.setAppUserModelId('Bodhilander');
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -56,12 +56,12 @@ let isQuitting = false;
 // Register deep link protocol
 if (process.defaultApp) {
   if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('claudelander', process.execPath, [
+    app.setAsDefaultProtocolClient('bodhilander', process.execPath, [
       path.resolve(process.argv[1]),
     ]);
   }
 } else {
-  app.setAsDefaultProtocolClient('claudelander');
+  app.setAsDefaultProtocolClient('bodhilander');
 }
 
 // Handle deep link on macOS
@@ -76,7 +76,7 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', (event, commandLine) => {
-    const url = commandLine.find((arg) => arg.startsWith('claudelander://'));
+    const url = commandLine.find((arg) => arg.startsWith('bodhilander://'));
     if (url) {
       handleDeepLink(url);
     }
@@ -830,7 +830,7 @@ ipcMain.handle('api:generatePairingCode', async (_, options?: { canControl?: boo
     const primaryAddress = addresses[0] || '127.0.0.1';
 
     const qrData = {
-      type: 'claudelander-pair',
+      type: 'bodhilander-pair',
       host: primaryAddress,
       port: apiServer.port,
       code: pairingInfo.code,

@@ -1,8 +1,8 @@
 #!/bin/bash
-# Claudelander hook script - reports Claude state to main process
+# Bodhilander hook script - reports Claude state to main process
 
-SESSION_ID="${CLAUDELANDER_SESSION_ID}"
-SOCKET_PATH="${CLAUDELANDER_SOCKET}"
+SESSION_ID="${BODHILANDER_SESSION_ID}"
+SOCKET_PATH="${BODHILANDER_SOCKET}"
 
 report_state() {
     local state="$1"

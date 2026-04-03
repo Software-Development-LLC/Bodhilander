@@ -17,8 +17,8 @@ export function getClaudeCommand(config: ClaudeLaunchConfig): { command: string;
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    CLAUDELANDER_SESSION_ID: config.sessionId,
-    CLAUDELANDER_SOCKET: config.socketPath,
+    BODHILANDER_SESSION_ID: config.sessionId,
+    BODHILANDER_SOCKET: config.socketPath,
     // Point Claude to use our hook
     CLAUDE_HOOKS_DIR: path.dirname(hookScriptPath),
     // Enable experimental MCP CLI features
@@ -34,7 +34,7 @@ export function getClaudeCommand(config: ClaudeLaunchConfig): { command: string;
 
 function getHookScriptPath(): string {
   const userDataPath = app.getPath('userData');
-  return path.join(userDataPath, 'hooks', 'claudelander-hook.sh');
+  return path.join(userDataPath, 'hooks', 'bodhilander-hook.sh');
 }
 
 function ensureHookScript(hookPath: string): void {
@@ -47,10 +47,10 @@ function ensureHookScript(hookPath: string): void {
 
     // Copy hook script from resources or create it
     const hookContent = `#!/bin/bash
-# Claudelander hook script - reports Claude state to main process
+# Bodhilander hook script - reports Claude state to main process
 
-SESSION_ID="\${CLAUDELANDER_SESSION_ID}"
-SOCKET_PATH="\${CLAUDELANDER_SOCKET}"
+SESSION_ID="\${BODHILANDER_SESSION_ID}"
+SOCKET_PATH="\${BODHILANDER_SOCKET}"
 
 report_state() {
     local state="$1"
@@ -92,9 +92,9 @@ exit 0
 export function getSocketPath(): string {
   if (process.platform === 'win32') {
     // Use Windows named pipes
-    return `\\\\.\\pipe\\claudelander-${process.pid}`;
+    return `\\\\.\\pipe\\bodhilander-${process.pid}`;
   }
   // Use Unix domain sockets on macOS/Linux
   const tmpDir = os.tmpdir();
-  return path.join(tmpDir, `claudelander-${process.pid}.sock`);
+  return path.join(tmpDir, `bodhilander-${process.pid}.sock`);
 }

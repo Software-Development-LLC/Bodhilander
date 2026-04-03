@@ -700,7 +700,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <div className="settings-section">
                 <h3>Mobile Companion App</h3>
                 <p className="settings-description">
-                  Enable the local API server to connect the ClaudeLander mobile app.
+                  Enable the local API server to connect the Bodhilander mobile app.
                   Your mobile device must be on the same network.
                 </p>
 
@@ -778,7 +778,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                           <strong>{pairingCode.code}</strong>
                         </div>
                         <p className="pairing-hint">
-                          Scan this QR code with the ClaudeLander mobile app, or enter the code manually.
+                          Scan this QR code with the Bodhilander mobile app, or enter the code manually.
                         </p>
                         <button className="btn btn-secondary" onClick={handleCancelPairing}>
                           Cancel

@@ -177,20 +177,20 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
       label: 'Help',
       submenu: [
         {
-          label: 'About ClaudeLander',
+          label: 'About Bodhilander',
           click: () => showAboutWindow(mainWindow),
         },
         { type: 'separator' },
         {
           label: 'Documentation',
           click: async () => {
-            await shell.openExternal('https://github.com/William-Long-II/claudelander');
+            await shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander');
           },
         },
         {
           label: 'Report Issue',
           click: async () => {
-            await shell.openExternal('https://github.com/William-Long-II/claudelander/issues');
+            await shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander/issues');
           },
         },
       ],

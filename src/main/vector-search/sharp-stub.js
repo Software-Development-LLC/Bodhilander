@@ -8,7 +8,7 @@
 function sharpStub() {
   throw new Error(
     'sharp is not available - image processing is disabled. ' +
-    'ClaudeLander only supports text embeddings.'
+    'Bodhilander only supports text embeddings.'
   );
 }
 

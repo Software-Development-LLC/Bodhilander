@@ -17,7 +17,7 @@ export function useSharing() {
     const loadUser = async () => {
       try {
         // Try to load saved token
-        const savedToken = localStorage.getItem('claudelander_auth_token');
+        const savedToken = localStorage.getItem('bodhilander_auth_token');
         if (savedToken) {
           const user = await window.electronAPI.setAuthToken(savedToken);
           if (user) {
@@ -38,7 +38,7 @@ export function useSharing() {
       setState({ user: data.user, isLoading: false });
       if (data.token) {
         try {
-          localStorage.setItem('claudelander_auth_token', data.token);
+          localStorage.setItem('bodhilander_auth_token', data.token);
         } catch (e) {
           console.error('Failed to save auth token:', e);
         }
@@ -64,7 +64,7 @@ export function useSharing() {
   const logout = useCallback(() => {
     window.electronAPI.logout();
     try {
-      localStorage.removeItem('claudelander_auth_token');
+      localStorage.removeItem('bodhilander_auth_token');
     } catch (e) {
       console.error('Failed to remove auth token:', e);
     }

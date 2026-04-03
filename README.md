@@ -1,8 +1,8 @@
-# ClaudeLander
+# Bodhilander
 
 <div align="center">
 
-[![Release](https://img.shields.io/github/v/release/William-Long-II/claudelander?style=for-the-badge&color=gold)](https://github.com/William-Long-II/claudelander/releases)
+[![Release](https://img.shields.io/github/v/release/Software-Development-LLC/Bodhilander?style=for-the-badge&color=gold)](https://github.com/Software-Development-LLC/Bodhilander/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)]()
 
@@ -18,7 +18,7 @@
 
 ## Overview
 
-Managing multiple Claude Code terminal sessions across different projects can be challenging. **ClaudeLander** provides a unified interface to organize, monitor, and manage all your Claude Code sessions in one place.
+Managing multiple Claude Code terminal sessions across different projects can be challenging. **Bodhilander** provides a unified interface to organize, monitor, and manage all your Claude Code sessions in one place.
 
 ## Features
 
@@ -107,30 +107,30 @@ New versions download and install automatically via GitHub Releases.
 
 ### macOS (Recommended)
 ```bash
-brew tap William-Long-II/claudelander
-brew install --cask claudelander
+brew tap Software-Development-LLC/Bodhilander
+brew install --cask bodhilander
 ```
 
 ### Download
-Grab the latest release for your platform from [Releases](https://github.com/William-Long-II/claudelander/releases).
+Grab the latest release for your platform from [Releases](https://github.com/Software-Development-LLC/Bodhilander/releases).
 
 | Platform | File |
 |----------|------|
-| Windows | `ClaudeLander-Setup-x.x.x.exe` |
-| macOS | `ClaudeLander-x.x.x.dmg` |
-| Linux | `ClaudeLander-x.x.x.AppImage` or `.deb` |
+| Windows | `Bodhilander-Setup-x.x.x.exe` |
+| macOS | `Bodhilander-x.x.x.dmg` |
+| Linux | `Bodhilander-x.x.x.AppImage` or `.deb` |
 
 > **macOS Note:** If downloading directly (not via Homebrew), the app is unsigned. Run this before opening:
 > ```bash
-> xattr -cr /Applications/ClaudeLander.app
+> xattr -cr /Applications/Bodhilander.app
 > ```
 
 ### Build from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/William-Long-II/claudelander.git
-cd claudelander
+git clone https://github.com/Software-Development-LLC/Bodhilander.git
+cd bodhilander
 
 # Install dependencies
 npm install
@@ -165,7 +165,7 @@ npm run dist:win     # Windows
 
 ## Settings
 
-ClaudeLander offers extensive configuration across multiple tabs:
+Bodhilander offers extensive configuration across multiple tabs:
 
 - **General** - Auto-launch Claude, custom shell path, preferred editor, close-to-tray
 - **Appearance** - Splash screen toggle and duration
@@ -217,7 +217,7 @@ Created by **Will Long II** and **Claude** (Anthropic)
 
 <div align="center">
 
-**[Download Now](https://github.com/William-Long-II/claudelander/releases)**
+**[Download Now](https://github.com/Software-Development-LLC/Bodhilander/releases)**
 
 </div>
 

@@ -14,7 +14,7 @@ export function getDatabase(): Database.Database {
   if (db) return db;
 
   const userDataPath = app.getPath('userData');
-  const dbPath = path.join(userDataPath, 'claudelander.db');
+  const dbPath = path.join(userDataPath, 'bodhilander.db');
 
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');

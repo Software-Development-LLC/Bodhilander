@@ -1,6 +1,6 @@
-# ClaudeLander Memory MCP Server
+# Bodhilander Memory MCP Server
 
-The ClaudeLander Memory MCP Server gives Claude Code direct access to search, add, and manage memories stored in ClaudeLander's database. This enables Claude to use memories as long-term knowledge that persists across sessions.
+The Bodhilander Memory MCP Server gives Claude Code direct access to search, add, and manage memories stored in Bodhilander's database. This enables Claude to use memories as long-term knowledge that persists across sessions.
 
 ## Available Tools
 
@@ -17,7 +17,7 @@ The ClaudeLander Memory MCP Server gives Claude Code direct access to search, ad
 
 ### Option 1: Using the built-in binary (after npm install)
 
-If you've cloned and built ClaudeLander, the MCP server is available at:
+If you've cloned and built Bodhilander, the MCP server is available at:
 ```
 ./dist/mcp-server/index.js
 ```
@@ -27,9 +27,9 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.cla
 ```json
 {
   "mcpServers": {
-    "claudelander-memory": {
+    "bodhilander-memory": {
       "command": "node",
-      "args": ["D:/Projects/claudelander/dist/mcp-server/index.js"]
+      "args": ["D:/Projects/bodhilander/dist/mcp-server/index.js"]
     }
   }
 }
@@ -38,11 +38,11 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.cla
 ### Option 2: Global installation
 
 ```bash
-# From the ClaudeLander directory
+# From the Bodhilander directory
 npm link
 
 # Or install globally when published
-npm install -g claudelander
+npm install -g bodhilander
 ```
 
 Then configure Claude Code:
@@ -50,8 +50,8 @@ Then configure Claude Code:
 ```json
 {
   "mcpServers": {
-    "claudelander-memory": {
-      "command": "claudelander-memory-server"
+    "bodhilander-memory": {
+      "command": "bodhilander-memory-server"
     }
   }
 }
@@ -59,16 +59,16 @@ Then configure Claude Code:
 
 ### Option 3: Custom database path
 
-Set the `CLAUDELANDER_DB` environment variable to specify a custom database location:
+Set the `BODHILANDER_DB` environment variable to specify a custom database location:
 
 ```json
 {
   "mcpServers": {
-    "claudelander-memory": {
+    "bodhilander-memory": {
       "command": "node",
-      "args": ["D:/Projects/claudelander/dist/mcp-server/index.js"],
+      "args": ["D:/Projects/bodhilander/dist/mcp-server/index.js"],
       "env": {
-        "CLAUDELANDER_DB": "C:/path/to/your/claudelander.db"
+        "BODHILANDER_DB": "C:/path/to/your/bodhilander.db"
       }
     }
   }
@@ -77,11 +77,11 @@ Set the `CLAUDELANDER_DB` environment variable to specify a custom database loca
 
 ## Database Locations
 
-The MCP server automatically searches for the ClaudeLander database in these locations:
+The MCP server automatically searches for the Bodhilander database in these locations:
 
-- **Windows**: `%APPDATA%/claudelander/claudelander.db`
-- **macOS**: `~/Library/Application Support/claudelander/claudelander.db`
-- **Linux**: `~/.config/claudelander/claudelander.db`
+- **Windows**: `%APPDATA%/bodhilander/bodhilander.db`
+- **macOS**: `~/Library/Application Support/bodhilander/bodhilander.db`
+- **Linux**: `~/.config/bodhilander/bodhilander.db`
 
 ## Usage Examples
 
@@ -109,5 +109,5 @@ Claude, list all my pinned memories
 
 ## Prerequisites
 
-- ClaudeLander must have been run at least once to create the database
-- At least one group must exist in ClaudeLander to store memories
+- Bodhilander must have been run at least once to create the database
+- At least one group must exist in Bodhilander to store memories

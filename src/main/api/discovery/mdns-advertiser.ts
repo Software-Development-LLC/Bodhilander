@@ -1,7 +1,7 @@
 /**
  * mDNS/Bonjour Service Advertiser
  *
- * Advertises the ClaudeLander API server on the local network
+ * Advertises the Bodhilander API server on the local network
  * so mobile companion apps can discover it automatically.
  */
 
@@ -10,7 +10,7 @@ import { hostname } from 'os';
 import { app } from 'electron';
 import log from 'electron-log';
 
-const SERVICE_TYPE = 'claudelander';
+const SERVICE_TYPE = 'bodhilander';
 const SERVICE_PROTOCOL = 'tcp';
 
 export class MdnsAdvertiser {
@@ -26,7 +26,7 @@ export class MdnsAdvertiser {
 
       // Use a unique name with random suffix to avoid conflicts
       const uniqueId = Math.random().toString(36).substring(2, 8);
-      const name = `ClaudeLander-${hostname()}-${uniqueId}`;
+      const name = `Bodhilander-${hostname()}-${uniqueId}`;
 
       this.service = this.bonjour.publish({
         name,
@@ -92,7 +92,7 @@ export class MdnsAdvertiser {
 }
 
 /**
- * Discover ClaudeLander instances on the local network
+ * Discover Bodhilander instances on the local network
  * (Useful for mobile app, but can also be used for testing)
  */
 export class MdnsDiscovery {
@@ -131,7 +131,7 @@ export class MdnsDiscovery {
       log.info(`[MdnsDiscovery] Lost: ${service.name}`);
     });
 
-    log.info('[MdnsDiscovery] Started scanning for ClaudeLander instances');
+    log.info('[MdnsDiscovery] Started scanning for Bodhilander instances');
   }
 
   stop(): void {

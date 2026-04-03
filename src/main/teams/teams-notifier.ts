@@ -114,7 +114,7 @@ class TeamsNotifier {
         body: JSON.stringify({
           body: {
             contentType: 'html',
-            content: `<b>${icon} ClaudeLander</b><br/><b>${payload.sessionName}</b> ${message}<br/><i>${payload.projectPath}</i>`,
+            content: `<b>${icon} Bodhilander</b><br/><b>${payload.sessionName}</b> ${message}<br/><i>${payload.projectPath}</i>`,
           },
         }),
       });

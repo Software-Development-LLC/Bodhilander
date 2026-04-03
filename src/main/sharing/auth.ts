@@ -36,7 +36,7 @@ class AuthService {
 
   /**
    * Handle the OAuth callback with token
-   * Called when deep link claudelander://auth?token=xxx is received
+   * Called when deep link bodhilander://auth?token=xxx is received
    */
   async handleCallback(token: string): Promise<ShareUser> {
     this.state.token = token;

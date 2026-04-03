@@ -9,9 +9,9 @@
 
 1. Go to Azure Portal → Azure Active Directory → App registrations
 2. Click "New registration"
-3. Name: "ClaudeLander"
+3. Name: "Bodhilander"
 4. Supported account types: "Accounts in any organizational directory and personal Microsoft accounts"
-5. Redirect URI: Select "Public client/native" and enter: `https://claudelander.app/auth/teams/callback`
+5. Redirect URI: Select "Public client/native" and enter: `https://bodhilander.app/auth/teams/callback`
 6. Click "Register"
 
 ## Step 2: Configure API Permissions
@@ -27,7 +27,7 @@
 ## Step 3: Configure Teams Activity Types
 
 1. Go to "Expose an API"
-2. Set Application ID URI (e.g., `api://claudelander`)
+2. Set Application ID URI (e.g., `api://bodhilander`)
 3. Create manifest file for Teams activity types (see below)
 
 ## Step 4: Get Client ID

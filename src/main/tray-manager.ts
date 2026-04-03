@@ -27,7 +27,7 @@ class TrayManager {
     const trayIcon = this.baseIcon.resize({ width: 16, height: 16 });
 
     this.tray = new Tray(trayIcon);
-    this.tray.setToolTip('ClaudeLander');
+    this.tray.setToolTip('Bodhilander');
 
     // Single click shows/hides window
     this.tray.on('click', () => {
@@ -130,7 +130,7 @@ class TrayManager {
 
     const menuItems: MenuItemConstructorOptions[] = [
       {
-        label: 'ClaudeLander',
+        label: 'Bodhilander',
         enabled: false, // Header, non-clickable
       },
       { type: 'separator' },
@@ -152,7 +152,7 @@ class TrayManager {
     // Standard menu items
     menuItems.push(
       {
-        label: 'Show ClaudeLander',
+        label: 'Show Bodhilander',
         click: () => {
           this.showWindow();
         },
@@ -168,7 +168,7 @@ class TrayManager {
       },
       { type: 'separator' },
       {
-        label: 'Quit ClaudeLander',
+        label: 'Quit Bodhilander',
         click: () => {
           // Set flag to actually quit (bypass close-to-tray)
           app.quit();
@@ -188,12 +188,12 @@ class TrayManager {
     if (count === 0) {
       // No badge - use base icon
       this.tray.setImage(this.baseIcon.resize({ width: 16, height: 16 }));
-      this.tray.setToolTip('ClaudeLander');
+      this.tray.setToolTip('Bodhilander');
     } else {
       // Draw badge on icon
       const badgeIcon = this.createBadgeIcon(count);
       this.tray.setImage(badgeIcon);
-      this.tray.setToolTip(`ClaudeLander - ${count} waiting`);
+      this.tray.setToolTip(`Bodhilander - ${count} waiting`);
     }
   }
 

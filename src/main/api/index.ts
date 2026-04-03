@@ -1,7 +1,7 @@
 /**
  * API Server Module
  *
- * Exposes ClaudeLander functionality over HTTP/WebSocket for mobile companion app access.
+ * Exposes Bodhilander functionality over HTTP/WebSocket for mobile companion app access.
  * Supports both local P2P connections (same network) and relay server fallback.
  */
 

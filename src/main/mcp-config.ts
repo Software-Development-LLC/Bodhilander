@@ -1,7 +1,7 @@
 /**
  * MCP Server and Hooks Auto-Configuration
  *
- * Automatically registers the ClaudeLander Memory MCP server and hooks with Claude Code
+ * Automatically registers the Bodhilander Memory MCP server and hooks with Claude Code
  * so users don't need to manually configure them.
  */
 
@@ -37,8 +37,8 @@ interface ClaudeSettingsConfig {
   [key: string]: unknown;
 }
 
-const MCP_SERVER_NAME = 'claudelander-memory';
-const HOOK_IDENTIFIER = 'claudelander-hook';
+const MCP_SERVER_NAME = 'bodhilander-memory';
+const HOOK_IDENTIFIER = 'bodhilander-hook';
 
 /**
  * Get the path to the MCP server script
@@ -161,18 +161,18 @@ function writeClaudeSettings(settings: ClaudeSettingsConfig): boolean {
  */
 function getHookScriptPath(): string {
   if (!app.isPackaged) {
-    return path.join(app.getAppPath(), 'dist', 'hooks', 'claudelander-hook.js');
+    return path.join(app.getAppPath(), 'dist', 'hooks', 'bodhilander-hook.js');
   }
 
   const resourcesPath = process.resourcesPath;
 
   // Check for unpacked location first
-  const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked', 'dist', 'hooks', 'claudelander-hook.js');
+  const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked', 'dist', 'hooks', 'bodhilander-hook.js');
   if (fs.existsSync(unpackedPath)) {
     return unpackedPath;
   }
 
-  return path.join(resourcesPath, 'app', 'dist', 'hooks', 'claudelander-hook.js');
+  return path.join(resourcesPath, 'app', 'dist', 'hooks', 'bodhilander-hook.js');
 }
 
 /**
@@ -206,7 +206,7 @@ function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: stri
 }
 
 /**
- * Register the ClaudeLander Memory MCP server with Claude Code
+ * Register the Bodhilander Memory MCP server with Claude Code
  * Returns true if configuration was added/updated, false if already configured
  */
 export function registerMcpServer(): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; path?: string; error?: string } {
@@ -255,7 +255,7 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
 }
 
 /**
- * Register ClaudeLander hooks with Claude Code
+ * Register Bodhilander hooks with Claude Code
  * Adds hooks for PostToolUse (git commits) and Stop (session summaries)
  */
 export function registerHooks(): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; error?: string } {
@@ -299,11 +299,11 @@ export function registerHooks(): { success: boolean; action: 'added' | 'updated'
       hooks: [`${nodeCmd} "${hookScriptPath}" Stop`],
     };
 
-    // Remove any existing ClaudeLander hooks first
+    // Remove any existing Bodhilander hooks first
     const filterOurHooks = (configs: HookConfig[] | undefined): HookConfig[] => {
       if (!configs) return [];
       return configs.filter(config =>
-        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('claudelander'))
+        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('bodhilander'))
       );
     };
 
@@ -326,7 +326,7 @@ export function registerHooks(): { success: boolean; action: 'added' | 'updated'
 }
 
 /**
- * Unregister the ClaudeLander Memory MCP server from Claude Code
+ * Unregister the Bodhilander Memory MCP server from Claude Code
  */
 export function unregisterMcpServer(): boolean {
   try {
@@ -354,7 +354,7 @@ export function unregisterMcpServer(): boolean {
 }
 
 /**
- * Unregister ClaudeLander hooks from Claude Code
+ * Unregister Bodhilander hooks from Claude Code
  */
 export function unregisterHooks(): boolean {
   try {
@@ -368,7 +368,7 @@ export function unregisterHooks(): boolean {
     const filterOurHooks = (configs: HookConfig[] | undefined): HookConfig[] | undefined => {
       if (!configs) return undefined;
       const filtered = configs.filter(config =>
-        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('claudelander'))
+        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('bodhilander'))
       );
       if (filtered.length !== configs.length) modified = true;
       return filtered.length > 0 ? filtered : undefined;

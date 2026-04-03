@@ -1352,7 +1352,7 @@ const App: React.FC = () => {
             <div className="no-session">
               {!groups.length ? (
                 <>
-                  <h2>Welcome to ClaudeLander</h2>
+                  <h2>Welcome to Bodhilander</h2>
                   <p>Create a group to organize your Claude Code sessions.</p>
                   <button onClick={handleCreateGroup}>
                     Create Your First Group

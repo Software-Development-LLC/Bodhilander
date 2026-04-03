@@ -102,7 +102,7 @@ autoUpdater.on('update-available', (info: UpdateInfo) => {
   dialog.showMessageBox(mainWindow, {
     type: 'info',
     title: 'Update Available',
-    message: `A new version of ClaudeLander is available!`,
+    message: `A new version of Bodhilander is available!`,
     detail: `Version ${info.version} is ready to download.\n\nWould you like to download it now?`,
     buttons: ['Download', 'Later'],
     defaultId: 0,
@@ -117,7 +117,7 @@ autoUpdater.on('update-available', (info: UpdateInfo) => {
       if (Notification.isSupported()) {
         new Notification({
           title: 'Downloading Update',
-          body: 'ClaudeLander is downloading the update in the background...',
+          body: 'Bodhilander is downloading the update in the background...',
         }).show();
       }
 
@@ -217,7 +217,7 @@ autoUpdater.on('error', (err) => {
       type: 'error',
       title: 'Update Error',
       message: 'Update failed',
-      detail: `${err.message}\n\nYou can download updates manually from:\nhttps://github.com/William-Long-II/claudelander/releases`,
+      detail: `${err.message}\n\nYou can download updates manually from:\nhttps://github.com/Software-Development-LLC/Bodhilander/releases`,
       buttons: ['OK'],
     });
   }

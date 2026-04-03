@@ -1,4 +1,4 @@
-# ClaudeLander - Project Notes for Claude
+# Bodhilander - Project Notes for Claude
 
 ## Branching Strategy
 
@@ -47,4 +47,4 @@ The GitHub Actions workflow (`release.yml`) checks if the tag exists:
 
 ## Claude Code Workarounds
 
-- **File modification bug**: Always use complete absolute Windows paths with drive letters and backslashes for ALL file operations (Read, Edit, Write tools). Example: `D:\Projects\claudelander\src\file.ts` not `D:/Projects/claudelander/src/file.ts`
+- **File modification bug**: Always use complete absolute Windows paths with drive letters and backslashes for ALL file operations (Read, Edit, Write tools). Example: `D:\Projects\bodhilander\src\file.ts` not `D:/Projects/bodhilander/src/file.ts`

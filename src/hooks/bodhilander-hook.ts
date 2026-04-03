@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * ClaudeLander Hook Handler
+ * Bodhilander Hook Handler
  *
  * This script is called by Claude Code hooks to capture events and save memories.
- * It receives hook data on stdin and calls the ClaudeLander API.
+ * It receives hook data on stdin and calls the Bodhilander API.
  *
- * Usage: node claudelander-hook.js <hook-type> [--group-id <id>] [--session-id <id>]
+ * Usage: node bodhilander-hook.js <hook-type> [--group-id <id>] [--session-id <id>]
  *
  * Hook types: PostToolUse, Stop, Notification
  */
 
-const API_BASE = process.env.CLAUDELANDER_API_URL || 'http://127.0.0.1:8443';
+const API_BASE = process.env.BODHILANDER_API_URL || 'http://127.0.0.1:8443';
 const API_PREFIX = '/api/v1/hooks';
 
 interface HookInput {
@@ -61,7 +61,7 @@ async function readStdin(): Promise<string> {
 }
 
 /**
- * Call the ClaudeLander API
+ * Call the Bodhilander API
  */
 async function callApi(endpoint: string, data: Record<string, unknown>): Promise<unknown> {
   try {
@@ -78,9 +78,9 @@ async function callApi(endpoint: string, data: Record<string, unknown>): Promise
 
     return response.json();
   } catch (error) {
-    // Don't fail loudly - ClaudeLander might not be running
+    // Don't fail loudly - Bodhilander might not be running
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[ClaudeLander Hook] API call failed: ${message}`);
+    console.error(`[Bodhilander Hook] API call failed: ${message}`);
     return null;
   }
 }
@@ -211,7 +211,7 @@ async function main(): Promise<void> {
   try {
     inputData = await readStdin();
   } catch (error) {
-    console.error('[ClaudeLander Hook] Failed to read stdin:', error);
+    console.error('[Bodhilander Hook] Failed to read stdin:', error);
     return;
   }
 
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
   try {
     input = inputData.trim() ? JSON.parse(inputData) : {};
   } catch (error) {
-    console.error('[ClaudeLander Hook] Failed to parse JSON input:', error);
+    console.error('[Bodhilander Hook] Failed to parse JSON input:', error);
     return;
   }
 
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
       await handleNotification(input, groupId, sessionId);
       break;
     default:
-      console.error(`[ClaudeLander Hook] Unknown hook type: ${hookType}`);
+      console.error(`[Bodhilander Hook] Unknown hook type: ${hookType}`);
   }
 
   // Output empty JSON to indicate success (Claude Code expects this)
@@ -244,6 +244,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error('[ClaudeLander Hook] Fatal error:', error);
+  console.error('[Bodhilander Hook] Fatal error:', error);
   process.exit(1);
 });
