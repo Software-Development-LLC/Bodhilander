@@ -37,7 +37,7 @@ const RemoteTerminal: React.FC<RemoteTerminalProps> = ({ code, permission, isAct
         foreground: '#d4d4d4',
         cursor: permission === 'control' ? '#d4d4d4' : '#666666',
         cursorAccent: '#1e1e1e',
-        selectionBackground: '#264f78',
+        selectionBackground: '#2a3570',
       },
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 14,

@@ -27,7 +27,7 @@
 }
 
 .name-prompt-modal input:focus {
-  border-color: #ff8c00;
+  border-color: #69ADFF;
 }
 
 .name-prompt-modal input::placeholder {
@@ -59,8 +59,8 @@
 }
 
 .name-prompt-modal .confirm-btn {
-  background: linear-gradient(135deg, #ffd700 0%, #ff8c00 100%);
-  color: #1e1e1e;
+  background: linear-gradient(135deg, #4d65ff 0%, #69ADFF 100%);
+  color: #ffffff;
   font-weight: 500;
 }
 

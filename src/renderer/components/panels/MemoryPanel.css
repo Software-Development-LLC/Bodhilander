@@ -33,7 +33,7 @@
 }
 
 .context-mode-toggle .mode-btn.active {
-  background: #007acc;
+  background: #4d65ff;
   color: white;
 }
 
@@ -54,7 +54,7 @@
 
 .memory-search input:focus {
   outline: none;
-  border-color: #007acc;
+  border-color: #4d65ff;
 }
 
 .memory-search input::placeholder {
@@ -86,7 +86,7 @@
 
 .btn-add-memory {
   padding: 6px 12px;
-  background: #007acc;
+  background: #4d65ff;
   color: white;
   border: none;
   border-radius: 4px;
@@ -133,12 +133,12 @@
 .memory-add-form textarea:focus,
 .memory-add-form select:focus {
   outline: none;
-  border-color: #007acc;
+  border-color: #4d65ff;
 }
 
 .btn-save-memory {
   padding: 8px 16px;
-  background: #007acc;
+  background: #4d65ff;
   color: white;
   border: none;
   border-radius: 4px;
@@ -234,8 +234,8 @@
 }
 
 .memory-item.pinned {
-  border-color: #007acc;
-  background: rgba(0, 122, 204, 0.1);
+  border-color: #4d65ff;
+  background: rgba(77, 101, 255, 0.1);
 }
 
 .memory-item:hover {
@@ -302,9 +302,9 @@
 }
 
 .btn-pin.active {
-  background: #007acc;
+  background: #4d65ff;
   color: white;
-  border-color: #007acc;
+  border-color: #4d65ff;
 }
 
 .btn-delete:hover {
@@ -332,7 +332,7 @@
 
 .memory-edit textarea:focus {
   outline: none;
-  border-color: #007acc;
+  border-color: #4d65ff;
 }
 
 .memory-edit-actions {
@@ -350,7 +350,7 @@
 }
 
 .btn-save {
-  background: #007acc;
+  background: #4d65ff;
   color: white;
 }
 

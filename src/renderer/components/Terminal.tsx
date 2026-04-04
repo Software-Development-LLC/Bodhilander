@@ -142,7 +142,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         foreground: '#d4d4d4',
         cursor: '#d4d4d4',
         cursorAccent: '#1e1e1e',
-        selectionBackground: '#264f78',
+        selectionBackground: '#2a3570',
       },
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 14,

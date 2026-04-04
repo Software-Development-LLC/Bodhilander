@@ -23,7 +23,7 @@
 }
 
 .context-menu-item:hover:not(.disabled) {
-  background: #094771;
+  background: #1a2a6e;
 }
 
 .context-menu-item.danger:hover:not(.disabled) {

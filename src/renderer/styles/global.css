@@ -82,7 +82,7 @@ body {
 
 .sidebar-resize-handle:hover,
 .sidebar-resize-handle.resizing {
-  background: #007acc;
+  background: #4d65ff;
 }
 
 .sidebar h2 {
@@ -290,7 +290,7 @@ body {
   font-size: 13px;
   font-weight: 500;
   background: #3c3c3c;
-  border: 1px solid #007acc;
+  border: 1px solid #4d65ff;
   color: #d4d4d4;
   padding: 2px 4px;
   border-radius: 2px;
@@ -365,7 +365,7 @@ body {
 }
 
 .session.active {
-  background: #094771;
+  background: #1a2a6e;
 }
 
 .session-info {
@@ -386,7 +386,7 @@ body {
   flex: 1;
   font-size: 13px;
   background: #3c3c3c;
-  border: 1px solid #007acc;
+  border: 1px solid #4d65ff;
   color: #d4d4d4;
   padding: 2px 4px;
   border-radius: 2px;
@@ -408,7 +408,7 @@ body {
 }
 
 .status-pill.working {
-  background: #264f78;
+  background: #2a3570;
   color: #61afef;
 }
 
@@ -477,7 +477,7 @@ body {
 
 .no-session button {
   padding: 8px 16px;
-  background: #007acc;
+  background: #4d65ff;
   border: none;
   color: #fff;
   border-radius: 4px;
@@ -515,20 +515,20 @@ body {
 }
 
 .group.drop-before {
-  border-top: 2px solid #007acc;
+  border-top: 2px solid #4d65ff;
 }
 
 .group.drop-after {
-  border-bottom: 2px solid #007acc;
+  border-bottom: 2px solid #4d65ff;
 }
 
 .session.drop-before {
-  border-top: 2px solid #007acc;
+  border-top: 2px solid #4d65ff;
   margin-top: -2px;
 }
 
 .session.drop-after {
-  border-bottom: 2px solid #007acc;
+  border-bottom: 2px solid #4d65ff;
   margin-bottom: -2px;
 }
 
@@ -585,7 +585,7 @@ body {
 
 .sidebar.focused .group-header.item-focused,
 .sidebar.focused .session.item-focused {
-  outline: 1px dashed #007acc;
+  outline: 1px dashed #4d65ff;
   outline-offset: -1px;
 }
 
@@ -627,7 +627,7 @@ body {
   font-size: 13px;
   font-weight: 500;
   background: #3c3c3c;
-  border: 1px solid #007acc;
+  border: 1px solid #4d65ff;
   color: #d4d4d4;
   padding: 2px 6px;
   border-radius: 2px;
@@ -739,12 +739,12 @@ body {
 }
 
 .btn.primary {
-  background: #007acc;
+  background: #4d65ff;
   color: #fff;
 }
 
 .btn.primary:hover {
-  background: #0069b3;
+  background: #3a52e0;
 }
 
 .btn.primary:disabled {
@@ -885,7 +885,7 @@ body {
 }
 
 .settings-nav-item.active {
-  background: #094771;
+  background: #1a2a6e;
   color: #fff;
 }
 
@@ -1042,12 +1042,12 @@ body {
 }
 
 .btn-primary {
-  background: #007acc;
+  background: #4d65ff;
   color: #fff;
 }
 
 .btn-primary:hover {
-  background: #0069b3;
+  background: #3a52e0;
 }
 
 .btn-primary:disabled {
@@ -1254,7 +1254,7 @@ body {
 
 .settings-text-input:focus {
   outline: none;
-  border-color: #ff8c00;
+  border-color: #69ADFF;
 }
 
 .settings-text-input::placeholder {

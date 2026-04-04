@@ -63,7 +63,7 @@
 
 .terminal-stopped button {
   padding: 10px 24px;
-  background: #0e639c;
+  background: #4d65ff;
   border: none;
   color: #fff;
   border-radius: 4px;
@@ -72,7 +72,7 @@
 }
 
 .terminal-stopped button:hover {
-  background: #1177bb;
+  background: #5a75ff;
 }
 
 .terminal-error {
@@ -122,7 +122,7 @@
 
 .terminal-error button {
   padding: 8px 20px;
-  background: #0e639c;
+  background: #4d65ff;
   border: none;
   color: #fff;
   border-radius: 4px;
@@ -131,7 +131,7 @@
 }
 
 .terminal-error button:hover {
-  background: #1177bb;
+  background: #5a75ff;
 }
 
 /* Terminal context menu */
@@ -160,7 +160,7 @@
 }
 
 .terminal-context-menu button:hover {
-  background: #094771;
+  background: #1a2a6e;
 }
 
 .terminal-context-menu button.disabled {

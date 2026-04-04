@@ -216,6 +216,7 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 
 function createSplashWindow(): void {
   splashWindow = new BrowserWindow({
+    icon: path.join(__dirname, '../../build/icon.png'),
     width: 500,
     height: 450,
     frame: false,
@@ -285,6 +286,7 @@ function createWindow(): void {
   // Restore saved window bounds or use defaults
   const savedBounds = prefsRepo.getWindowBounds();
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
+    icon: path.join(__dirname, '../../build/icon.png'),
     width: savedBounds?.width || 1200,
     height: savedBounds?.height || 800,
     show: false, // Don't show until splash is done

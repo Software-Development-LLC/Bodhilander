@@ -40,8 +40,8 @@
 }
 
 .index-status-indicator.not-indexed:hover {
-  color: #ff8c00;
-  border-color: #ff8c00;
+  color: #69ADFF;
+  border-color: #69ADFF;
 }
 
 .index-status-indicator.not-indexed .index-icon {
@@ -49,17 +49,17 @@
 }
 
 .index-status-indicator.not-indexed:hover .index-icon {
-  color: #ff8c00;
+  color: #69ADFF;
 }
 
 .index-status-indicator.indexing {
-  color: #ff8c00;
-  border-color: #5c4020;
-  background: #2a2215;
+  color: #69ADFF;
+  border-color: #3a4a80;
+  background: #1a2040;
 }
 
 .index-status-indicator.indexing .index-icon {
-  color: #ff8c00;
+  color: #69ADFF;
 }
 
 .index-status-indicator.ready {
