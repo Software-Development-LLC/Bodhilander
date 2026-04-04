@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('update:error', (_event, error) => callback(error));
   },
   restartAndUpdate: () => ipcRenderer.invoke('app:restart-and-update'),
+  closeWindow: () => ipcRenderer.send('about:close'),
 });

@@ -63,6 +63,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('menu:next-waiting', callback);
   },
 
+  // Edit menu events
+  onMenuCopy: (callback: () => void) => {
+    ipcRenderer.on('menu:copy', callback);
+    return () => ipcRenderer.removeListener('menu:copy', callback);
+  },
+  onMenuPaste: (callback: () => void) => {
+    ipcRenderer.on('menu:paste', callback);
+    return () => ipcRenderer.removeListener('menu:paste', callback);
+  },
+  onMenuSelectAll: (callback: () => void) => {
+    ipcRenderer.on('menu:selectAll', callback);
+    return () => ipcRenderer.removeListener('menu:selectAll', callback);
+  },
+  onMenuClearTerminal: (callback: () => void) => {
+    ipcRenderer.on('menu:clearTerminal', callback);
+    return () => ipcRenderer.removeListener('menu:clearTerminal', callback);
+  },
+  onMenuFind: (callback: () => void) => {
+    ipcRenderer.on('menu:find', callback);
+    return () => ipcRenderer.removeListener('menu:find', callback);
+  },
+
   // Session selection from notifications/tray
   onSessionSelect: (callback: (sessionId: string) => void) => {
     const listener = (_: Electron.IpcRendererEvent, sessionId: string) => callback(sessionId);

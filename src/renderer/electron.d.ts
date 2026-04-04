@@ -22,6 +22,13 @@ interface ElectronAPI {
   onMenuPrevSession: (callback: () => void) => () => void;
   onMenuNextWaiting: (callback: () => void) => () => void;
 
+  // Edit menu events
+  onMenuCopy: (callback: () => void) => () => void;
+  onMenuPaste: (callback: () => void) => () => void;
+  onMenuSelectAll: (callback: () => void) => () => void;
+  onMenuClearTerminal: (callback: () => void) => () => void;
+  onMenuFind: (callback: () => void) => () => void;
+
   // Session selection
   onSessionSelect: (callback: (sessionId: string) => void) => () => void;
   onOpenSettings: (callback: () => void) => () => void;

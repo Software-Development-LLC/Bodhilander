@@ -1,6 +1,6 @@
 appId: com.bodhilander.app
 productName: Bodhilander
-copyright: Copyright © 2024-2025
+copyright: Copyright © 2024
 
 directories:
   output: release

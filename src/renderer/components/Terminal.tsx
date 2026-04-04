@@ -112,6 +112,50 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     setContextMenu(prev => ({ ...prev, visible: false }));
   }, [sessionId]);
 
+  // Handle Edit menu events from the menu bar
+  useEffect(() => {
+    if (!isActive) return;
+
+    const cleanups: (() => void)[] = [];
+
+    cleanups.push(window.electronAPI.onMenuCopy(() => {
+      const term = xtermRef.current;
+      if (term) {
+        const selection = term.getSelection();
+        if (selection) {
+          navigator.clipboard.writeText(selection);
+        }
+      }
+    }));
+
+    cleanups.push(window.electronAPI.onMenuPaste(async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          window.electronAPI.writeToSession(sessionId, text);
+        }
+      } catch (err) {
+        console.error('Failed to paste:', err);
+      }
+    }));
+
+    cleanups.push(window.electronAPI.onMenuSelectAll(() => {
+      const term = xtermRef.current;
+      if (term) {
+        term.selectAll();
+      }
+    }));
+
+    cleanups.push(window.electronAPI.onMenuClearTerminal(() => {
+      const term = xtermRef.current;
+      if (term) {
+        term.clear();
+      }
+    }));
+
+    return () => cleanups.forEach(fn => fn());
+  }, [isActive, sessionId]);
+
   // Handle right-click context menu
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -155,16 +199,18 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     term.loadAddon(fitAddon);
 
     term.open(terminalRef.current);
-
-    // Load WebGL renderer for better performance (falls back to canvas automatically)
-    try {
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => { webglAddon.dispose(); });
-      term.loadAddon(webglAddon);
-    } catch (e) {
-      console.warn('WebGL addon failed to load, using canvas renderer:', e);
-    }
     fitAddon.fit();
+
+    // Load WebGL renderer after terminal is fully rendered for better performance
+    requestAnimationFrame(() => {
+      try {
+        const webglAddon = new WebglAddon();
+        webglAddon.onContextLoss(() => { webglAddon.dispose(); });
+        term.loadAddon(webglAddon);
+      } catch (e) {
+        console.warn('WebGL addon failed to load, using canvas renderer:', e);
+      }
+    });
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;

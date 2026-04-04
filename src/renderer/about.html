@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
   <title>About Bodhilander</title>
   <style>
     * {
@@ -201,7 +201,7 @@
     <div class="button-group">
       <button class="btn update-btn" id="updateBtn" onclick="checkForUpdate()">Check for Updates</button>
       <button class="btn download-btn" id="downloadBtn" onclick="downloadUpdate()" style="display: none;">Download Update</button>
-      <button class="btn close-btn" onclick="window.close()">OK</button>
+      <button class="btn close-btn" onclick="closeAbout()">OK</button>
     </div>
     <div class="update-status" id="updateStatus"></div>
   </div>
@@ -304,6 +304,14 @@
       downloadBtn.disabled = false;
       downloadBtn.onclick = downloadUpdate;
     });
+    function closeAbout() {
+      if (window.electronAPI && window.electronAPI.closeWindow) {
+        window.electronAPI.closeWindow();
+      } else {
+        window.close();
+      }
+    }
+
     // Dynamic copyright year
     document.getElementById('copyright').textContent = '\u00A9 2024-' + new Date().getFullYear();
   </script>

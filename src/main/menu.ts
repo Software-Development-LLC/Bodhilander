@@ -1,4 +1,4 @@
-import { Menu, shell, app, BrowserWindow } from 'electron';
+import { Menu, shell, app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 
 const aboutPreloadPath = path.join(__dirname, 'preload-about.js');
@@ -34,6 +34,11 @@ function showAboutWindow(parentWindow: BrowserWindow): void {
   const version = app.getVersion();
   aboutWindow.loadFile(path.join(__dirname, '../renderer/about.html'), {
     query: { version },
+  });
+
+  // Handle close request from about page
+  ipcMain.on('about:close', () => {
+    aboutWindow?.close();
   });
 
   aboutWindow.on('closed', () => {
@@ -126,7 +131,7 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
       ],
     },
 
-    // Edit menu (required for copy/paste to work on macOS)
+    // Edit menu - wired to terminal copy/paste when terminal is focused
     {
       label: 'Edit',
       submenu: [
@@ -134,25 +139,44 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         { role: 'redo' },
         { type: 'separator' },
         { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        ...(isMac ? [
-          { role: 'pasteAndMatchStyle' as const },
-          { role: 'delete' as const },
-          { role: 'selectAll' as const },
-          { type: 'separator' as const },
-          {
-            label: 'Speech',
-            submenu: [
-              { role: 'startSpeaking' as const },
-              { role: 'stopSpeaking' as const },
-            ],
+        {
+          label: 'Copy',
+          accelerator: 'CmdOrCtrl+C',
+          click: () => {
+            // Send to renderer which will check if terminal has selection
+            mainWindow.webContents.send('menu:copy');
           },
-        ] : [
-          { role: 'delete' as const },
-          { type: 'separator' as const },
-          { role: 'selectAll' as const },
-        ]),
+        },
+        {
+          label: 'Paste',
+          accelerator: 'CmdOrCtrl+V',
+          click: () => {
+            mainWindow.webContents.send('menu:paste');
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Select All',
+          accelerator: 'CmdOrCtrl+A',
+          click: () => {
+            mainWindow.webContents.send('menu:selectAll');
+          },
+        },
+        {
+          label: 'Clear Terminal',
+          accelerator: 'CmdOrCtrl+K',
+          click: () => {
+            mainWindow.webContents.send('menu:clearTerminal');
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Find',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => {
+            mainWindow.webContents.send('menu:find');
+          },
+        },
       ],
     },
 
