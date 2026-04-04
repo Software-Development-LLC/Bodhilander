@@ -37,6 +37,41 @@ interface PtySession {
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
 const MAX_SCROLLBACK_SIZE = 100 * 1024;
 
+const WAITING_PATTERNS = [
+  /\?\s*$/,                          // Ends with question mark
+  /\(y\/n\)/i,                        // Yes/no prompt
+  /\[Y\/n\]/i,                        // Yes/no prompt
+  /Press Enter/i,                     // Press enter prompt
+  /Enter to confirm/i,               // Claude confirmation prompt
+  /Enter to select/i,                // Claude Code selection menu prompt
+  /Tab\/Arrow keys to navigate/i,    // Claude Code selection menu
+  /Esc to cancel/i,                  // Claude Code selection menu
+  /Do you want to/i,                  // Permission prompts
+  /Do you trust/i,                    // Trust folder prompt
+  /Would you like/i,                  // Permission prompts
+  /Allow.*Deny/s,                     // Claude permission dialog
+  /Yes,\s*proceed/i,                  // Yes/No options
+  /\d+\.\s*Yes/i,                     // Numbered Yes option
+  /Type something/i,                  // Claude Code "Type something" option
+  />\s*\d+\./,                        // Selected numbered option (> 1.)
+  // Conversational questions from Claude asking for feedback/confirmation
+  /does this.{0,50}work for you\?/i,      // "Does this approach work for you?"
+  /does this.{0,50}look right/i,          // "Does this look right?"
+  /does that.{0,50}work/i,                // "Does that work for you?"
+  /does that.{0,50}make sense/i,          // "Does that make sense?"
+  /what do you think\?/i,                 // "What do you think?"
+  /how does this look\?/i,                // "How does this look?"
+  /is this.{0,30}(okay|ok|correct|right)\?/i, // "Is this okay?"
+  /should I.{0,50}\?/i,                   // "Should I proceed?"
+  /shall I.{0,50}\?/i,                    // "Shall I continue?"
+  /let me know.{0,30}(if|when|what)/i,    // "Let me know if..."
+  /any.{0,20}(feedback|thoughts|questions)\?/i, // "Any feedback?"
+  /sound good\?/i,                        // "Sound good?"
+  /ready to.{0,30}\?/i,                   // "Ready to proceed?"
+  /want me to.{0,50}\?/i,                 // "Want me to continue?"
+  /proceed with/i,                        // "Proceed with this approach?"
+] as const;
+
 class PtyManager extends EventEmitter {
   private sessions: Map<string, PtySession> = new Map();
   private socketPath: string;
@@ -379,40 +414,7 @@ class PtyManager extends EventEmitter {
 
     // Detect waiting for user input patterns (check recent buffer)
     const recentBuffer = session.outputBuffer.slice(-500);
-    const waitingPatterns = [
-      /\?\s*$/,                          // Ends with question mark
-      /\(y\/n\)/i,                        // Yes/no prompt
-      /\[Y\/n\]/i,                        // Yes/no prompt
-      /Press Enter/i,                     // Press enter prompt
-      /Enter to confirm/i,               // Claude confirmation prompt
-      /Enter to select/i,                // Claude Code selection menu prompt
-      /Tab\/Arrow keys to navigate/i,    // Claude Code selection menu
-      /Esc to cancel/i,                  // Claude Code selection menu
-      /Do you want to/i,                  // Permission prompts
-      /Do you trust/i,                    // Trust folder prompt
-      /Would you like/i,                  // Permission prompts
-      /Allow.*Deny/s,                     // Claude permission dialog
-      /Yes,\s*proceed/i,                  // Yes/No options
-      /\d+\.\s*Yes/i,                     // Numbered Yes option
-      /Type something/i,                  // Claude Code "Type something" option
-      />\s*\d+\./,                        // Selected numbered option (> 1.)
-      // Conversational questions from Claude asking for feedback/confirmation
-      /does this.{0,50}work for you\?/i,      // "Does this approach work for you?"
-      /does this.{0,50}look right/i,          // "Does this look right?"
-      /does that.{0,50}work/i,                // "Does that work for you?"
-      /does that.{0,50}make sense/i,          // "Does that make sense?"
-      /what do you think\?/i,                 // "What do you think?"
-      /how does this look\?/i,                // "How does this look?"
-      /is this.{0,30}(okay|ok|correct|right)\?/i, // "Is this okay?"
-      /should I.{0,50}\?/i,                   // "Should I proceed?"
-      /shall I.{0,50}\?/i,                    // "Shall I continue?"
-      /let me know.{0,30}(if|when|what)/i,    // "Let me know if..."
-      /any.{0,20}(feedback|thoughts|questions)\?/i, // "Any feedback?"
-      /sound good\?/i,                        // "Sound good?"
-      /ready to.{0,30}\?/i,                   // "Ready to proceed?"
-      /want me to.{0,50}\?/i,                 // "Want me to continue?"
-      /proceed with/i,                        // "Proceed with this approach?"
-    ];
+    const waitingPatterns = WAITING_PATTERNS;
 
     let isWaiting = false;
     for (const pattern of waitingPatterns) {

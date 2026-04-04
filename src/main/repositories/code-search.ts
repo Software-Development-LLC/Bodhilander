@@ -43,10 +43,27 @@ export function getIndexById(id: string): CodeIndex | null {
 export function getAllIndexes(): CodeIndex[] {
   const db = getDatabase();
   const rows = db
-    .prepare('SELECT * FROM code_indexes ORDER BY directory_path')
+    .prepare(`
+      SELECT ci.*, COALESCE(sc.count, 0) as symbol_count
+      FROM code_indexes ci
+      LEFT JOIN (SELECT index_id, COUNT(*) as count FROM symbols GROUP BY index_id) sc
+        ON sc.index_id = ci.id
+      ORDER BY ci.directory_path
+    `)
     .all() as any[];
 
-  return rows.map(mapRowToCodeIndex);
+  return rows.map(row => ({
+    id: row.id,
+    directoryPath: row.directory_path,
+    lastIndexedAt: row.last_indexed_at ? new Date(row.last_indexed_at) : null,
+    status: row.status,
+    fileCount: row.file_count,
+    chunkCount: row.chunk_count,
+    symbolCount: row.symbol_count,
+    modelName: row.model_name,
+    embeddingDimensions: row.embedding_dimensions,
+    errorMessage: row.error_message,
+  }));
 }
 
 export function createIndex(
@@ -355,10 +372,13 @@ export function searchSymbols(
 // ============ Mappers ============
 
 function mapRowToCodeIndex(row: any): CodeIndex {
-  // Count symbols for this index
-  const db = getDatabase();
-  const symbolCountRow = db.prepare('SELECT COUNT(*) as count FROM symbols WHERE index_id = ?').get(row.id) as any;
-  const symbolCount = symbolCountRow?.count ?? 0;
+  // Use pre-joined symbol_count if available, otherwise query
+  let symbolCount = row.symbol_count;
+  if (symbolCount === undefined) {
+    const db = getDatabase();
+    const symbolCountRow = db.prepare('SELECT COUNT(*) as count FROM symbols WHERE index_id = ?').get(row.id) as any;
+    symbolCount = symbolCountRow?.count ?? 0;
+  }
 
   return {
     id: row.id,

@@ -147,6 +147,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 14,
       cursorBlink: true,
+      minimumContrastRatio: 4.5,
     });
 
     const fitAddon = new FitAddon();
