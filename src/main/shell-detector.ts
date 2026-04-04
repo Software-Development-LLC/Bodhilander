@@ -122,7 +122,7 @@ export function getWSLDistros(): string[] {
     const distros = cleaned
       .split('\n')
       .map(s => s.trim())
-      .filter(s => s.length > 0 && !s.includes('Windows Subsystem'));
+      .filter(s => s.length > 0 && !s.includes('Windows Subsystem') && !s.startsWith('docker-desktop'));
 
     return distros;
   } catch {
