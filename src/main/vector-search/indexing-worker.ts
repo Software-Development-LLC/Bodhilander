@@ -177,31 +177,38 @@ async function runIndexing(
           ? parseCode(content, language)
           : { chunks: [], symbols: [] };
 
-        // Generate embeddings for each chunk (this is the CPU-intensive part)
+        // Generate embeddings in batches for better throughput
+        const BATCH_SIZE = 32;
         const chunksWithEmbeddings: ChunkWithEmbedding[] = [];
-        for (const chunk of chunks) {
-          if (cancelled) return;
+        if (chunks.length > 0) {
+          const textsToEmbed = chunks.map(chunk => {
+            const contextPrefix = `File: ${file.relativePath} | Type: ${chunk.chunkType || 'code'} | Code:
+`;
+            return contextPrefix + chunk.content;
+          });
 
-          try {
-            // Add context to chunk for better embedding quality
-            const contextPrefix = `File: ${file.relativePath} | Type: ${chunk.chunkType || 'code'} | Code:\n`;
-            const textToEmbed = contextPrefix + chunk.content;
-
-            const [embedding] = await embeddingProvider!.embed([textToEmbed]);
-            chunksWithEmbeddings.push({
-              ...chunk,
-              embedding,
-            });
-          } catch (embErr) {
-            // If embedding fails, still include chunk without embedding
-            console.warn(`[IndexingWorker] Embedding failed for chunk in ${file.path}:`, embErr);
-            chunksWithEmbeddings.push({
-              ...chunk,
-              embedding: null,
-            });
+          for (let i = 0; i < textsToEmbed.length; i += BATCH_SIZE) {
+            if (cancelled) return;
+            const batch = textsToEmbed.slice(i, i + BATCH_SIZE);
+            try {
+              const embeddings = await embeddingProvider!.embed(batch);
+              for (let j = 0; j < batch.length; j++) {
+                chunksWithEmbeddings.push({
+                  ...chunks[i + j],
+                  embedding: embeddings[j] ?? null,
+                });
+              }
+            } catch (embErr) {
+              console.warn(`[IndexingWorker] Batch embedding failed for ${file.path}:`, embErr);
+              for (let j = 0; j < batch.length; j++) {
+                chunksWithEmbeddings.push({
+                  ...chunks[i + j],
+                  embedding: null,
+                });
+              }
+            }
           }
         }
-
         // Send complete file data (with embeddings) to main process
         sendFileParsed(indexId, file.path, file.relativePath, file.mtime, chunksWithEmbeddings, symbols);
 

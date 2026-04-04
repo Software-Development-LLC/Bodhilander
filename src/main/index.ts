@@ -324,11 +324,6 @@ function createWindow(): void {
   // Create custom application menu
   createApplicationMenu(mainWindow);
 
-  // Initialize auto-updater (only in production)
-  if (app.isPackaged) {
-    initAutoUpdater(mainWindow);
-  }
-
   // Initialize notification manager
   notificationManager.setMainWindow(mainWindow);
 
@@ -343,15 +338,23 @@ function createWindow(): void {
     }
   });
 
-  // Initialize Teams auth service
-  teamsAuthService.initialize();
+  // Defer non-critical startup tasks until after first paint
+  setTimeout(() => {
+    // Initialize auto-updater (only in production)
+    if (app.isPackaged) {
+      initAutoUpdater(mainWindow!);
+    }
 
-  // Auto-start API server for MCP memory access
-  getApiServer().start().then(({ port }) => {
-    log.info(`[Main] API server auto-started on port ${port}`);
-  }).catch((err) => {
-    log.error('[Main] Failed to auto-start API server:', err);
-  });
+    // Initialize Teams auth service
+    teamsAuthService.initialize();
+
+    // Auto-start API server for MCP memory access
+    getApiServer().start().then(({ port }) => {
+      log.info(`[Main] API server auto-started on port ${port}`);
+    }).catch((err) => {
+      log.error('[Main] Failed to auto-start API server:', err);
+    });
+  }, 1500); // Defer 1.5s to prioritize UI rendering
 
   // Vector search event forwarding
   const vsManager = getVectorSearchManager();
