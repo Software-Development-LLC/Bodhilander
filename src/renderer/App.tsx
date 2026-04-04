@@ -16,6 +16,7 @@ import { useSharing } from './store/sharing';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
+import ErrorBoundary from './components/ErrorBoundary';
 
 interface RemoteSession {
   code: string;
@@ -1299,16 +1300,18 @@ const App: React.FC = () => {
                 onStop={() => updateSession(session.id, { state: 'stopped' })}
                 onClose={() => handleRemoveSession(session.id)}
               />
-              <Terminal
-                sessionId={session.id}
-                cwd={session.workingDir}
-                launchClaude={session.shellType === 'claude'}
-                isStopped={session.state === 'stopped'}
-                restartKey={restartKeys[session.id] || 0}
-                isActive={session.id === activeSessionId}
-                onStart={() => updateSession(session.id, { state: 'idle' })}
-                onError={() => updateSession(session.id, { state: 'error' })}
-              />
+              <ErrorBoundary>
+                <Terminal
+                  sessionId={session.id}
+                  cwd={session.workingDir}
+                  launchClaude={session.shellType === 'claude'}
+                  isStopped={session.state === 'stopped'}
+                  restartKey={restartKeys[session.id] || 0}
+                  isActive={session.id === activeSessionId}
+                  onStart={() => updateSession(session.id, { state: 'idle' })}
+                  onError={() => updateSession(session.id, { state: 'error' })}
+                />
+              </ErrorBoundary>
             </div>
           ))}
           {/* Remote sessions */}
@@ -1341,11 +1344,13 @@ const App: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <RemoteTerminal
-                code={rs.code}
-                permission={rs.permission}
-                isActive={activeRemoteCode === rs.code}
-              />
+              <ErrorBoundary>
+                <RemoteTerminal
+                  code={rs.code}
+                  permission={rs.permission}
+                  isActive={activeRemoteCode === rs.code}
+                />
+              </ErrorBoundary>
             </div>
           ))}
           {sessions.length === 0 && remoteSessions.length === 0 && (

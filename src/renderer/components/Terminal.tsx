@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
+import { WebglAddon } from 'xterm-addon-webgl';
 import 'xterm/css/xterm.css';
 import '../styles/terminal.css';
 
@@ -154,6 +155,15 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     term.loadAddon(fitAddon);
 
     term.open(terminalRef.current);
+
+    // Load WebGL renderer for better performance (falls back to canvas automatically)
+    try {
+      const webglAddon = new WebglAddon();
+      webglAddon.onContextLoss(() => { webglAddon.dispose(); });
+      term.loadAddon(webglAddon);
+    } catch (e) {
+      console.warn('WebGL addon failed to load, using canvas renderer:', e);
+    }
     fitAddon.fit();
 
     xtermRef.current = term;
