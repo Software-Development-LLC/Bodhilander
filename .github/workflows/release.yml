@@ -89,14 +89,8 @@ jobs:
         run: bun run dist:mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing (skip if not configured)
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CERTS != '' && 'true' || 'false' }}
-          CSC_LINK: ${{ secrets.MAC_CERTS }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
-          # Notarization (skip if not configured)
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Disable code signing unless MAC_CERTS is configured
+          CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -113,7 +107,7 @@ jobs:
 
   release:
     needs: [check-version, build]
-    if: needs.check-version.outputs.should_release == 'true'
+    if: always() && needs.check-version.outputs.should_release == 'true' && !cancelled()
     runs-on: ubuntu-latest
     permissions:
       contents: write
