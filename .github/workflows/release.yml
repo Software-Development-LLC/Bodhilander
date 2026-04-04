@@ -62,8 +62,16 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Setup Python (for native module builds)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: bun install
+        env:
+          # Skip postinstall electron-rebuild in CI — electron-builder handles it during packaging
+          npm_config_ignore_scripts: false
 
       - name: Build application
         run: bun run build
@@ -85,10 +93,10 @@ jobs:
         run: bun run dist:mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing
+          # Code signing (optional — builds work without these)
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
-          # Notarization
+          # Notarization (optional)
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -142,79 +150,3 @@ jobs:
             artifacts/**/latest*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Update Homebrew tap after release
-  update-homebrew:
-    needs: [check-version, release]
-    if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Wait for release assets to be available
-        run: sleep 30
-
-      - name: Download macOS release assets
-        run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-          curl -L -o intel.zip "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v${VERSION}/Bodhilander-${VERSION}-mac.zip"
-          curl -L -o arm64.zip "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v${VERSION}/Bodhilander-${VERSION}-arm64-mac.zip"
-
-      - name: Calculate SHA256 hashes
-        id: hashes
-        run: |
-          echo "intel_sha256=$(sha256sum intel.zip | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          echo "arm64_sha256=$(sha256sum arm64.zip | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-
-      - name: Checkout Homebrew tap
-        uses: actions/checkout@v4
-        with:
-          repository: Software-Development-LLC/homebrew-Bodhilander
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          path: homebrew-tap
-
-      - name: Update cask formula
-        run: |
-          VERSION="${{ needs.check-version.outputs.version }}"
-          INTEL_SHA="${{ steps.hashes.outputs.intel_sha256 }}"
-          ARM64_SHA="${{ steps.hashes.outputs.arm64_sha256 }}"
-
-          cat > homebrew-tap/Casks/bodhilander.rb << 'CASKEOF'
-          cask "bodhilander" do
-            version "VERSION_PLACEHOLDER"
-
-            on_intel do
-              sha256 "INTEL_SHA256_PLACEHOLDER"
-              url "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v#{version}/Bodhilander-#{version}-mac.zip"
-            end
-
-            on_arm do
-              sha256 "ARM64_SHA256_PLACEHOLDER"
-              url "https://github.com/Software-Development-LLC/Bodhilander/releases/download/v#{version}/Bodhilander-#{version}-arm64-mac.zip"
-            end
-
-            name "Bodhilander"
-            desc "Cross-platform Claude Code session manager"
-            homepage "https://github.com/Software-Development-LLC/Bodhilander"
-
-            app "Bodhilander.app"
-
-            zap trash: [
-              "~/Library/Application Support/bodhilander",
-              "~/Library/Preferences/com.bodhilander.app.plist",
-              "~/Library/Saved Application State/com.bodhilander.app.savedState",
-            ]
-          end
-          CASKEOF
-
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" homebrew-tap/Casks/bodhilander.rb
-          sed -i "s/INTEL_SHA256_PLACEHOLDER/${INTEL_SHA}/g" homebrew-tap/Casks/bodhilander.rb
-          sed -i "s/ARM64_SHA256_PLACEHOLDER/${ARM64_SHA}/g" homebrew-tap/Casks/bodhilander.rb
-
-      - name: Commit and push
-        run: |
-          cd homebrew-tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/bodhilander.rb
-          git commit -m "Update bodhilander to v${{ needs.check-version.outputs.version }}"
-          git push
