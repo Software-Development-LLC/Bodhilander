@@ -7,10 +7,9 @@ on:
     paths-ignore:
       - '**.md'
       - '.gitignore'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
-  # First, check if version changed and create tag
   check-version:
     runs-on: ubuntu-latest
     outputs:
@@ -36,11 +35,11 @@ jobs:
             echo "should_release=true" >> $GITHUB_OUTPUT
           fi
 
-  # Build for each platform
   build:
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -69,9 +68,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install
-        env:
-          # Skip postinstall electron-rebuild in CI — electron-builder handles it during packaging
-          npm_config_ignore_scripts: false
 
       - name: Build application
         run: bun run build
@@ -93,10 +89,11 @@ jobs:
         run: bun run dist:mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing (optional — builds work without these)
+          # Code signing (skip if not configured)
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CERTS != '' && 'true' || 'false' }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
-          # Notarization (optional)
+          # Notarization (skip if not configured)
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -114,7 +111,6 @@ jobs:
             release/latest*.yml
           if-no-files-found: ignore
 
-  # Create release and upload all artifacts
   release:
     needs: [check-version, build]
     if: needs.check-version.outputs.should_release == 'true'
