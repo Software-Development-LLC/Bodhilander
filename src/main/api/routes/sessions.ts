@@ -79,6 +79,7 @@ export function createSessionsRouter(): Router {
           order: getNextOrder(),
           createdAt: now,
           lastActivityAt: now,
+          claudeSessionId: null,
         };
 
         sessionsRepo.createSession(session);
