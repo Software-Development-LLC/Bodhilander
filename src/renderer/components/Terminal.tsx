@@ -29,6 +29,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const webglAddonRef = useRef<WebglAddon | null>(null);
   const lastPasteTimeRef = useRef<number>(0);
   const [isRunning, setIsRunning] = useState(!isStopped);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
@@ -181,6 +182,8 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   useEffect(() => {
     if (!terminalRef.current || !isRunning) return;
 
+    let mounted = true;
+
     const term = new XTerm({
       theme: {
         background: '#1e1e1e',
@@ -201,12 +204,16 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     term.open(terminalRef.current);
     fitAddon.fit();
 
-    // Load WebGL renderer after terminal is fully rendered for better performance
+    // Load WebGL renderer after terminal is fully rendered for better performance.
+    // Guard with `mounted` so the addon is not attached after effect cleanup —
+    // otherwise its dispose cascades through a torn-down RenderService and crashes.
     requestAnimationFrame(() => {
+      if (!mounted) return;
       try {
         const webglAddon = new WebglAddon();
         webglAddon.onContextLoss(() => { webglAddon.dispose(); });
         term.loadAddon(webglAddon);
+        webglAddonRef.current = webglAddon;
       } catch (e) {
         console.warn('WebGL addon failed to load, using canvas renderer:', e);
       }
@@ -334,11 +341,31 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     });
 
     return () => {
+      mounted = false;
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       cleanupPtyData();
       window.electronAPI.killSession(sessionId);
-      term.dispose();
+
+      // Dispose the WebGL addon explicitly before term.dispose() so its internal
+      // RenderService is still valid. Letting term.dispose() cascade into the
+      // addon can throw "Cannot read properties of undefined (reading 'onRequestRedraw')"
+      // when the addon was loaded async and is being torn down in the same tick.
+      if (webglAddonRef.current) {
+        try {
+          webglAddonRef.current.dispose();
+        } catch (e) {
+          console.warn('WebGL addon dispose error (non-fatal):', e);
+        }
+        webglAddonRef.current = null;
+      }
+
+      // Safety net: never let a terminal/addon dispose error escape to the React tree.
+      try {
+        term.dispose();
+      } catch (e) {
+        console.warn('Terminal dispose error (non-fatal):', e);
+      }
     };
   }, [sessionId, cwd, launchClaude, isRunning]);
 
