@@ -43,6 +43,8 @@ const RemoteTerminal: React.FC<RemoteTerminalProps> = ({ code, permission, isAct
       fontSize: 14,
       cursorBlink: permission === 'control',
       disableStdin: permission === 'read',
+      // BDHLNDR-13: match primary Terminal component — default 1000 is too small.
+      scrollback: 10000,
     });
 
     const fitAddon = new FitAddon();

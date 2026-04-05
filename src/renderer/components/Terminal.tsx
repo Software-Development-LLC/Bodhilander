@@ -196,6 +196,9 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       fontSize: 14,
       cursorBlink: true,
       minimumContrastRatio: 4.5,
+      // BDHLNDR-13: xterm.js defaults to 1000 lines, which fills up quickly
+      // during Claude Code sessions. 10k lines ≈ 2MB/terminal — negligible.
+      scrollback: 10000,
     });
 
     const fitAddon = new FitAddon();
