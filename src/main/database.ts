@@ -99,6 +99,13 @@ function initializeTables(database: Database.Database): void {
     database.exec("ALTER TABLE groups ADD COLUMN collapsed INTEGER DEFAULT 0");
   }
 
+  // Migration: Add claude_session_id column to sessions if it doesn't exist (BDHLNDR-9)
+  // Stores the Claude Code session UUID so we can resume conversation on restart.
+  const sessionColumns = database.prepare("PRAGMA table_info(sessions)").all() as { name: string }[];
+  if (!sessionColumns.some(col => col.name === 'claude_session_id')) {
+    database.exec("ALTER TABLE sessions ADD COLUMN claude_session_id TEXT DEFAULT NULL");
+  }
+
   // Migration: Create memories table if it doesn't exist
   database.exec(`
     CREATE TABLE IF NOT EXISTS memories (

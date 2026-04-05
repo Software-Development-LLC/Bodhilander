@@ -10,6 +10,11 @@ export interface Session {
   order: number;
   createdAt: Date;
   lastActivityAt: Date;
+  /**
+   * Claude Code session UUID for conversation resume across restarts (BDHLNDR-9).
+   * Null for non-Claude sessions or Claude sessions that have not been launched yet.
+   */
+  claudeSessionId: string | null;
 }
 
 export interface Group {

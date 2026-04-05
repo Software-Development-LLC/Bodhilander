@@ -59,6 +59,7 @@ export function useSessions() {
           order: prev.filter(s => s.groupId === groupId).length,
           createdAt: new Date(),
           lastActivityAt: new Date(),
+          claudeSessionId: null,
         };
 
         // Persist asynchronously

@@ -15,14 +15,15 @@ export function getAllSessions(): Session[] {
     order: row.order,
     createdAt: new Date(row.created_at),
     lastActivityAt: new Date(row.last_activity_at),
+    claudeSessionId: row.claude_session_id ?? null,
   }));
 }
 
 export function createSession(session: Session): void {
   const db = getDatabase();
   db.prepare(`
-    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at, claude_session_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id,
     session.groupId,
@@ -32,8 +33,38 @@ export function createSession(session: Session): void {
     session.shellType,
     session.order,
     session.createdAt.toISOString(),
-    session.lastActivityAt.toISOString()
+    session.lastActivityAt.toISOString(),
+    session.claudeSessionId ?? null
   );
+}
+
+/**
+ * Get the stored Claude session UUID for a Bodhilander session (BDHLNDR-9).
+ * Returns null if no Claude session has been launched yet for this session.
+ */
+export function getClaudeSessionId(id: string): string | null {
+  const db = getDatabase();
+  const row = db.prepare('SELECT claude_session_id FROM sessions WHERE id = ?').get(id) as
+    | { claude_session_id: string | null }
+    | undefined;
+  return row?.claude_session_id ?? null;
+}
+
+/**
+ * Store the Claude session UUID so we can pass it to `claude --resume` on restart (BDHLNDR-9).
+ */
+export function setClaudeSessionId(id: string, claudeSessionId: string): void {
+  const db = getDatabase();
+  db.prepare('UPDATE sessions SET claude_session_id = ? WHERE id = ?').run(claudeSessionId, id);
+}
+
+/**
+ * Clear the stored Claude session UUID (e.g. after a failed resume) so the next
+ * launch starts fresh (BDHLNDR-9).
+ */
+export function clearClaudeSessionId(id: string): void {
+  const db = getDatabase();
+  db.prepare('UPDATE sessions SET claude_session_id = NULL WHERE id = ?').run(id);
 }
 
 export function updateSession(id: string, updates: Partial<Session>): void {

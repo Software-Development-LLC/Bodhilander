@@ -2,9 +2,14 @@ import * as pty from 'node-pty';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { EventEmitter } from 'events';
-import { getClaudeCommand, getSocketPath } from './claude-launcher';
+import { getClaudeCommand, getSocketPath, generateClaudeSessionId, ClaudeSessionMode } from './claude-launcher';
 import { detectShell, ShellInfo } from './shell-detector';
 import { getPreference } from './repositories/preferences';
+import {
+  getClaudeSessionId as getStoredClaudeSessionId,
+  setClaudeSessionId as storeClaudeSessionId,
+  clearClaudeSessionId as clearStoredClaudeSessionId,
+} from './repositories/sessions';
 import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 import log from 'electron-log';
 
@@ -32,7 +37,20 @@ interface PtySession {
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
   lastOutputTime: number;
+  /** UUID passed to `claude --session-id` / `--resume` (BDHLNDR-9). Null for shell-only sessions. */
+  claudeSessionId: string | null;
+  /** Whether this spawn used `--resume`. Used to detect resume failure on early exit. */
+  claudeResumeAttempted: boolean;
+  /** Wall-clock spawn time (ms) for early-exit detection. */
+  spawnedAt: number;
 }
+
+/**
+ * If a Claude session launched with `--resume` exits non-zero within this
+ * window, we treat it as a resume failure and transparently respawn with a
+ * fresh `--session-id` (BDHLNDR-9).
+ */
+const RESUME_FAILURE_WINDOW_MS = 5000;
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
 const MAX_SCROLLBACK_SIZE = 100 * 1024;
@@ -119,16 +137,42 @@ class PtyManager extends EventEmitter {
       throw new Error(errorMsg);
     }
 
+    // Track Claude resume state for early-exit fallback (BDHLNDR-9)
+    let claudeSessionId: string | null = null;
+    let claudeSessionMode: ClaudeSessionMode | null = null;
+
     if (launchClaude) {
+      // Resolve the Claude session UUID + mode (BDHLNDR-9).
+      // If we have a stored ID, we're restarting and should resume. Otherwise
+      // generate a fresh UUID, pass it via --session-id, and persist it so the
+      // NEXT launch can resume.
+      const storedClaudeSessionId = getStoredClaudeSessionId(id);
+      if (storedClaudeSessionId) {
+        claudeSessionId = storedClaudeSessionId;
+        claudeSessionMode = 'resume';
+      } else {
+        claudeSessionId = generateClaudeSessionId();
+        claudeSessionMode = 'new';
+        storeClaudeSessionId(id, claudeSessionId);
+      }
+
       const claudeConfig = getClaudeCommand({
         sessionId: id,
         projectDir: cwd,
         socketPath: this.socketPath,
+        claudeSession: { id: claudeSessionId, mode: claudeSessionMode },
       });
+
+      // Suffix appended to every shell's claude command. UUIDs are alphanumeric
+      // + hyphens, so they are safe to inline without escaping.
+      // e.g. ' --resume 7a3f...' or ' --session-id 7a3f...'
+      const claudeSessionFlag = claudeConfig.args.length > 0
+        ? ' ' + claudeConfig.args.join(' ')
+        : '';
 
       // Get memory content for system prompt injection
       // Pass via environment variable to avoid shell escaping issues with newlines
-      let claudeCmd = 'claude';
+      let claudeCmd = `claude${claudeSessionFlag}`;
       let processEnv = { ...env, ...claudeConfig.env } as { [key: string]: string };
 
       if (groupId) {
@@ -142,7 +186,7 @@ class PtyManager extends EventEmitter {
         // Launch Claude inside WSL
         shell = 'wsl.exe';
         if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-          claudeCmd = 'claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"';
+          claudeCmd = `claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"${claudeSessionFlag}`;
         }
         args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
         env = processEnv;
@@ -151,18 +195,18 @@ class PtyManager extends EventEmitter {
         shell = shellInfo.shell;
         if (shellInfo.shell.toLowerCase().includes('powershell')) {
           if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-            claudeCmd = 'claude --append-system-prompt $env:BODHILANDER_SYSTEM_PROMPT';
+            claudeCmd = `claude --append-system-prompt $env:BODHILANDER_SYSTEM_PROMPT${claudeSessionFlag}`;
           }
           args = ['-NoLogo', '-Command', claudeCmd];
         } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
           if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-            claudeCmd = 'claude --append-system-prompt "%BODHILANDER_SYSTEM_PROMPT%"';
+            claudeCmd = `claude --append-system-prompt "%BODHILANDER_SYSTEM_PROMPT%"${claudeSessionFlag}`;
           }
           args = ['/c', claudeCmd];
         } else {
           // Assume bash-like shell (Git Bash, etc.)
           if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-            claudeCmd = 'claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"';
+            claudeCmd = `claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"${claudeSessionFlag}`;
           }
           args = ['-c', claudeCmd];
         }
@@ -171,7 +215,7 @@ class PtyManager extends EventEmitter {
         // macOS/Linux: run Claude through interactive login shell
         shell = shellInfo.shell;
         if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-          claudeCmd = 'claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"';
+          claudeCmd = `claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"${claudeSessionFlag}`;
         }
         args = ['-l', '-i', '-c', claudeCmd];
         env = processEnv;
@@ -227,6 +271,40 @@ class PtyManager extends EventEmitter {
     });
 
     ptyProcess.onExit(({ exitCode }) => {
+      // Resume-failure fallback (BDHLNDR-9): if we launched Claude with --resume
+      // and it exited non-zero within the failure window, treat that as a dead
+      // session and transparently respawn with a fresh UUID. The renderer never
+      // sees an 'exit' event for this path — it just sees new output from the
+      // replacement pty.
+      const session = this.sessions.get(id);
+      const isResumeFailure = session
+        && session.isClaudeSession
+        && session.claudeResumeAttempted
+        && exitCode !== 0
+        && (Date.now() - session.spawnedAt) < RESUME_FAILURE_WINDOW_MS;
+
+      if (isResumeFailure) {
+        log.warn(
+          `[PTY] Claude resume failed for session ${id} (exitCode=${exitCode}, ` +
+          `age=${Date.now() - session!.spawnedAt}ms). Clearing stored session ID ` +
+          `and retrying with a fresh Claude session.`
+        );
+        try {
+          clearStoredClaudeSessionId(id);
+        } catch (e) {
+          log.error(`[PTY] Failed to clear claude_session_id for ${id}:`, e);
+        }
+        // Remove the dead entry so createSession can re-insert a fresh one.
+        this.sessions.delete(id);
+        try {
+          this.createSession(id, cwd, true, groupId);
+          return; // Successful retry — suppress the exit emission.
+        } catch (e) {
+          log.error(`[PTY] Resume-failure retry spawn failed for ${id}:`, e);
+          // Fall through to emit the original exit so the UI recovers.
+        }
+      }
+
       this.emit('exit', { id, exitCode });
       this.sessions.delete(id);
     });
@@ -250,6 +328,9 @@ class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
+      claudeSessionId,
+      claudeResumeAttempted: claudeSessionMode === 'resume',
+      spawnedAt: Date.now(),
     });
 
   }
