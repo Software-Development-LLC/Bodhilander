@@ -969,13 +969,13 @@ safeHandle('vector-search:search-symbols', (directoryPath: string, name: string,
   return getVectorSearchManager().searchSymbols(directoryPath, name, symbolType as any, limit);
 });
 
-safeHandle('vector-search:cancel-indexing', (indexId: string) => {
-  getVectorSearchManager().cancelIndexing(indexId);
+safeHandle('vector-search:cancel-indexing', async (indexId: string) => {
+  await getVectorSearchManager().cancelIndexing(indexId);
   return { success: true };
 });
 
-safeHandle('vector-search:delete-index', (directoryPath: string) => {
-  getVectorSearchManager().deleteIndex(directoryPath);
+safeHandle('vector-search:delete-index', async (directoryPath: string) => {
+  await getVectorSearchManager().deleteIndex(directoryPath);
   return { success: true };
 });
 
