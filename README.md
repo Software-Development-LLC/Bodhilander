@@ -105,13 +105,6 @@ New versions download and install automatically via GitHub Releases.
 
 ## Installation
 
-### macOS (Recommended)
-```bash
-brew tap Software-Development-LLC/Bodhilander
-brew install --cask bodhilander
-```
-
-### Download
 Grab the latest release for your platform from [Releases](https://github.com/Software-Development-LLC/Bodhilander/releases).
 
 | Platform | File |
@@ -120,7 +113,7 @@ Grab the latest release for your platform from [Releases](https://github.com/Sof
 | macOS | `Bodhilander-x.x.x.dmg` |
 | Linux | `Bodhilander-x.x.x.AppImage` or `.deb` |
 
-> **macOS Note:** If downloading directly (not via Homebrew), the app is unsigned. Run this before opening:
+> **macOS Note:** The app is currently unsigned. Run this before opening:
 > ```bash
 > xattr -cr /Applications/Bodhilander.app
 > ```
