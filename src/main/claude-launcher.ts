@@ -1,12 +1,31 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import { app } from 'electron';
+
+/**
+ * Which Claude CLI flag to use for the stored session UUID (BDHLNDR-9).
+ * - `new`    → `--session-id <uuid>` (first launch, set the session's ID)
+ * - `resume` → `--resume <uuid>` (subsequent launches, restore prior conversation)
+ */
+export type ClaudeSessionMode = 'new' | 'resume';
+
+export interface ClaudeSessionLaunch {
+  id: string;
+  mode: ClaudeSessionMode;
+}
 
 export interface ClaudeLaunchConfig {
   sessionId: string;
   projectDir: string;
   socketPath: string;
+  /**
+   * Claude session UUID + mode. When provided, the returned args include
+   * `--session-id <uuid>` or `--resume <uuid>`. Omit for the legacy fresh-launch
+   * behavior (no flag), which is only used if resume infrastructure is disabled.
+   */
+  claudeSession?: ClaudeSessionLaunch;
 }
 
 export function getClaudeCommand(config: ClaudeLaunchConfig): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
@@ -25,11 +44,28 @@ export function getClaudeCommand(config: ClaudeLaunchConfig): { command: string;
     ENABLE_EXPERIMENTAL_MCP_CLI: 'true',
   };
 
+  // Build args for the Claude session UUID (BDHLNDR-9).
+  // UUIDs are alphanumeric + hyphens, so they are safe to inline into shell
+  // command strings without escaping.
+  const args: string[] = [];
+  if (config.claudeSession) {
+    const flag = config.claudeSession.mode === 'resume' ? '--resume' : '--session-id';
+    args.push(flag, config.claudeSession.id);
+  }
+
   return {
     command: 'claude',
-    args: [],
+    args,
     env,
   };
+}
+
+/**
+ * Generate a new Claude session UUID for first-launch use (BDHLNDR-9).
+ * Format matches Claude CLI's `--session-id` requirement (standard v4 UUID).
+ */
+export function generateClaudeSessionId(): string {
+  return crypto.randomUUID();
 }
 
 function getHookScriptPath(): string {
