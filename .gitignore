@@ -43,6 +43,5 @@ yarn-error.log*
 .test-data/
 .screenshot_coms/
 screenshot_coms/
-homebrew-tap/
 .claude/.bodhilander-memory.md
 nul
