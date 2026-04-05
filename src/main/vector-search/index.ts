@@ -181,8 +181,16 @@ export class VectorSearchManager extends EventEmitter {
   async startIndexing(directoryPath: string): Promise<void> {
     const index = await this.getOrCreateIndex(directoryPath);
 
-    // Cancel any existing indexing for this directory
-    this.cancelIndexing(index.id);
+    // If a worker is already running for this index, don't spawn another one.
+    // Multiple renderer consumers (IndexStatus, CodeSearchModal) each mount
+    // their own useCodeSearch hook, and on session switch each fires its own
+    // auto-index effect — without this guard, concurrent workers race on
+    // native module initialization (tree-sitter / onnxruntime-node) and
+    // crash the process. (BDHLNDR-6 / root cause of BDHLNDR-3.)
+    if (this.workers.has(index.id)) {
+      console.log('[VectorSearch] Indexing already in progress for:', directoryPath);
+      return;
+    }
 
     // Clear the cancelled flag since we're starting fresh
     this.cancelledIndexes.delete(index.id);
@@ -282,7 +290,9 @@ export class VectorSearchManager extends EventEmitter {
       if (this.workers.has(index.id)) {
         const errorMsg = 'Worker timed out during initialization (model download may have failed)';
         console.error('[VectorSearch]', errorMsg);
-        this.cancelIndexing(index.id);
+        // Fire-and-forget — the timeout handler isn't async. Termination
+        // races are bounded here since we just update DB/emit after.
+        void this.cancelIndexing(index.id);
         codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
         this.emit('indexing-error', {
           indexId: index.id,
@@ -311,16 +321,24 @@ export class VectorSearchManager extends EventEmitter {
     }
   }
 
-  cancelIndexing(indexId: string): void {
+  async cancelIndexing(indexId: string): Promise<void> {
     // Mark as cancelled so worker knows to stop
     this.cancelledIndexes.add(indexId);
     this.clearWorkerTimeout(indexId);
 
     const worker = this.workers.get(indexId);
     if (worker) {
-      worker.postMessage({ type: 'cancel' });
-      worker.terminate();
+      // Remove from the map synchronously so any concurrent startIndexing
+      // correctly observes "no running worker" for this index.
       this.workers.delete(indexId);
+      worker.postMessage({ type: 'cancel' });
+      // Await termination so callers that immediately restart indexing
+      // don't race with native-module init in the dying worker.
+      try {
+        await worker.terminate();
+      } catch (err) {
+        console.error('[VectorSearch] Error terminating worker:', err);
+      }
     }
   }
 
@@ -561,11 +579,13 @@ export class VectorSearchManager extends EventEmitter {
     return codeSearchRepo.getAllIndexes();
   }
 
-  deleteIndex(directoryPath: string): void {
+  async deleteIndex(directoryPath: string): Promise<void> {
     const index = codeSearchRepo.getIndexByDirectory(directoryPath);
     if (index) {
       this.stopWatching(index.id);
-      this.cancelIndexing(index.id);
+      // Await termination before deleting the DB row so any in-flight
+      // writes from the dying worker don't resurrect a deleted index.
+      await this.cancelIndexing(index.id);
       codeSearchRepo.deleteIndex(index.id);
     }
   }
