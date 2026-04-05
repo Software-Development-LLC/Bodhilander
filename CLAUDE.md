@@ -2,19 +2,19 @@
 
 ## Branching Strategy
 
-- **`main`** - Production branch. Merging to main triggers a release build.
-- **`develop`** - Staging branch. Accumulate features/fixes here before releasing.
-- **`fix/*` or `feature/*`** - Feature/fix branches. Create PRs targeting `develop`.
+- **`production`** - Release branch. Merging to `production` triggers a release build.
+- **`development`** - Staging branch. Accumulate features/fixes here before releasing.
+- **`fix/*` or `feature/*`** - Feature/fix branches. Create PRs targeting `development`.
 
 **Workflow:**
-1. Create feature branch from `develop`
-2. PR to `develop` for code review
-3. When ready to release, PR from `develop` → `main`
-4. Bump version on `main` and push to trigger release
+1. Create feature branch from `development`
+2. PR to `development` for code review
+3. When ready to release, PR from `development` → `production`
+4. Bump version on `production` and push to trigger release
 
 ## Release Workflow
 
-**IMPORTANT:** When bumping versions for release (on `main` branch):
+**IMPORTANT:** When bumping versions for release (on `production` branch):
 
 ```bash
 npm version patch   # or minor/major

@@ -17,9 +17,15 @@ interface McpServerConfig {
   env?: Record<string, string>;
 }
 
+interface HookCommand {
+  type: 'command';
+  command: string;
+  timeout?: number;
+}
+
 interface HookConfig {
   matcher: string;
-  hooks: string[];
+  hooks: HookCommand[];
 }
 
 interface ClaudeMcpConfig {
@@ -29,6 +35,7 @@ interface ClaudeMcpConfig {
 
 interface ClaudeSettingsConfig {
   hooks?: {
+    PreToolUse?: HookConfig[];
     PostToolUse?: HookConfig[];
     Stop?: HookConfig[];
     Notification?: HookConfig[];
@@ -38,7 +45,74 @@ interface ClaudeSettingsConfig {
 }
 
 const MCP_SERVER_NAME = 'bodhilander-memory';
-const HOOK_IDENTIFIER = 'bodhilander-hook';
+
+// Substrings identifying hook commands this app (or its prior incarnation as
+// "ClaudeLander") has registered. Used for cleanup during upgrade/reinstall.
+// Case-insensitive match.
+const OUR_HOOK_IDENTIFIERS = ['bodhilander', 'claudelander'];
+
+/**
+ * Whether a hook command string was registered by this app (or its prior
+ * "ClaudeLander" incarnation). Used to identify entries we own during cleanup.
+ */
+function isOurHookCommand(command: string): boolean {
+  const lower = command.toLowerCase();
+  return OUR_HOOK_IDENTIFIERS.some(id => lower.includes(id));
+}
+
+/**
+ * Remove Bodhilander/legacy-ClaudeLander hook entries from settings across ALL
+ * hook types (not just PostToolUse/Stop — older versions may have written
+ * PreToolUse or Notification hooks). Mutates `settings` in place.
+ *
+ * If `keepPath` is provided, commands whose string contains that path are
+ * preserved (they are the currently-valid registration). This makes cleanup
+ * idempotent with `registerHooks`: calling with the current hookScriptPath
+ * only removes truly stale entries.
+ *
+ * Returns true if any entries were removed.
+ */
+function purgeOurHooks(settings: ClaudeSettingsConfig, keepPath?: string): boolean {
+  if (!settings.hooks) return false;
+
+  const shouldRemove = (h: HookCommand): boolean => {
+    if (!isOurHookCommand(h.command)) return false;
+    if (keepPath && h.command.includes(keepPath)) return false;
+    return true;
+  };
+
+  let modified = false;
+
+  for (const hookType of Object.keys(settings.hooks)) {
+    const configs = settings.hooks[hookType];
+    if (!configs) continue;
+
+    const newConfigs: HookConfig[] = [];
+    for (const config of configs) {
+      const keptHooks = config.hooks.filter(h => !shouldRemove(h));
+      if (keptHooks.length === config.hooks.length) {
+        newConfigs.push(config);
+      } else {
+        modified = true;
+        if (keptHooks.length > 0) {
+          newConfigs.push({ ...config, hooks: keptHooks });
+        }
+      }
+    }
+
+    if (newConfigs.length > 0) {
+      settings.hooks[hookType] = newConfigs;
+    } else {
+      delete settings.hooks[hookType];
+    }
+  }
+
+  if (settings.hooks && Object.keys(settings.hooks).length === 0) {
+    delete settings.hooks;
+  }
+
+  return modified;
+}
 
 /**
  * Get the path to the MCP server script
@@ -188,17 +262,18 @@ function isServerConfigured(config: ClaudeMcpConfig, expectedPath: string): bool
 }
 
 /**
- * Check if our hooks are already configured
+ * Check if hooks pointing at the current hook script are already configured.
+ * Matches on the exact hookScriptPath so that an install-location change
+ * (e.g. version upgrade to a new unpacked path) triggers a re-register.
  */
 function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: string): boolean {
   const hooks = settings.hooks;
   if (!hooks) return false;
 
-  // Check if any hook contains our identifier
   const checkHookType = (hookConfigs: HookConfig[] | undefined): boolean => {
     if (!hookConfigs) return false;
     return hookConfigs.some(config =>
-      config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes(hookScriptPath))
+      config.hooks.some(h => h.command.includes(hookScriptPath))
     );
   };
 
@@ -255,22 +330,35 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
 }
 
 /**
- * Register Bodhilander hooks with Claude Code
- * Adds hooks for PostToolUse (git commits) and Stop (session summaries)
+ * Register Bodhilander hooks with Claude Code.
+ * Adds hooks for PostToolUse (git commits) and Stop (session summaries).
+ *
+ * Stale entries from prior installs (including the former "ClaudeLander"
+ * name) are purged from ALL hook types before any file-existence check, so
+ * users of renamed/removed installs aren't left with broken hook commands.
  */
 export function registerHooks(): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; error?: string } {
   try {
     const hookScriptPath = getHookScriptPath();
+    const settings = readClaudeSettings();
 
-    // Verify the hook script exists
+    // Purge stale Bodhilander/ClaudeLander entries FIRST — do this before any
+    // early return, so users whose new hook script is missing still get their
+    // broken stale entries cleaned up. Passing hookScriptPath keeps current
+    // valid entries in place so repeated startups don't thrash settings.
+    const purged = purgeOurHooks(settings, hookScriptPath);
+    if (purged) {
+      writeClaudeSettings(settings);
+      log.info('[Hooks Config] Purged stale Bodhilander/ClaudeLander hook entries');
+    }
+
+    // Verify the hook script exists before attempting to register new entries
     if (!fs.existsSync(hookScriptPath)) {
       log.warn('[Hooks Config] Hook script not found at:', hookScriptPath);
       return { success: false, action: 'error', error: `Hook script not found at ${hookScriptPath}` };
     }
 
-    const settings = readClaudeSettings();
-
-    // Check if already configured
+    // Check if current (correct-path) entries are already configured
     if (areHooksConfigured(settings, hookScriptPath)) {
       log.info('[Hooks Config] Hooks already configured');
       return { success: true, action: 'unchanged' };
@@ -284,32 +372,21 @@ export function registerHooks(): { success: boolean; action: 'added' | 'updated'
       settings.hooks = {};
     }
 
-    // Build the hook command - needs to work cross-platform
-    const nodeCmd = process.platform === 'win32' ? 'node' : 'node';
-
     // PostToolUse hook for Bash (captures git commits)
     const postToolUseHook: HookConfig = {
       matcher: 'Bash',
-      hooks: [`${nodeCmd} "${hookScriptPath}" PostToolUse`],
+      hooks: [{ type: 'command', command: `node "${hookScriptPath}" PostToolUse` }],
     };
 
     // Stop hook (captures session summaries after significant work)
     const stopHook: HookConfig = {
       matcher: '',  // Match all stops
-      hooks: [`${nodeCmd} "${hookScriptPath}" Stop`],
+      hooks: [{ type: 'command', command: `node "${hookScriptPath}" Stop` }],
     };
 
-    // Remove any existing Bodhilander hooks first
-    const filterOurHooks = (configs: HookConfig[] | undefined): HookConfig[] => {
-      if (!configs) return [];
-      return configs.filter(config =>
-        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('bodhilander'))
-      );
-    };
-
-    // Add our hooks
-    settings.hooks.PostToolUse = [...filterOurHooks(settings.hooks.PostToolUse), postToolUseHook];
-    settings.hooks.Stop = [...filterOurHooks(settings.hooks.Stop), stopHook];
+    // Append to any existing (non-ours) entries on these hook types.
+    settings.hooks.PostToolUse = [...(settings.hooks.PostToolUse ?? []), postToolUseHook];
+    settings.hooks.Stop = [...(settings.hooks.Stop ?? []), stopHook];
 
     // Write the updated settings
     if (writeClaudeSettings(settings)) {
@@ -354,37 +431,16 @@ export function unregisterMcpServer(): boolean {
 }
 
 /**
- * Unregister Bodhilander hooks from Claude Code
+ * Unregister Bodhilander hooks from Claude Code (including any legacy
+ * ClaudeLander entries from before the app rename).
  */
 export function unregisterHooks(): boolean {
   try {
     const settings = readClaudeSettings();
 
-    if (!settings.hooks) return false;
+    if (!purgeOurHooks(settings)) return false;
 
-    let modified = false;
-
-    // Remove our hooks from each hook type
-    const filterOurHooks = (configs: HookConfig[] | undefined): HookConfig[] | undefined => {
-      if (!configs) return undefined;
-      const filtered = configs.filter(config =>
-        !config.hooks.some(h => h.includes(HOOK_IDENTIFIER) || h.includes('bodhilander'))
-      );
-      if (filtered.length !== configs.length) modified = true;
-      return filtered.length > 0 ? filtered : undefined;
-    };
-
-    settings.hooks.PostToolUse = filterOurHooks(settings.hooks.PostToolUse);
-    settings.hooks.Stop = filterOurHooks(settings.hooks.Stop);
-
-    // Clean up empty hooks object
-    if (settings.hooks.PostToolUse === undefined) delete settings.hooks.PostToolUse;
-    if (settings.hooks.Stop === undefined) delete settings.hooks.Stop;
-    if (Object.keys(settings.hooks).length === 0) {
-      delete settings.hooks;
-    }
-
-    if (modified && writeClaudeSettings(settings)) {
+    if (writeClaudeSettings(settings)) {
       log.info('[Hooks Config] Hooks unregistered successfully');
       return true;
     }
