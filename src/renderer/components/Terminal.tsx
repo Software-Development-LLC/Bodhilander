@@ -35,6 +35,18 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
 
+  // Fit the xterm renderer to the current container size AND propagate the new
+  // cols/rows to the PTY (BDHLNDR-12). Kept as a single source of truth so the
+  // ResizeObserver, the window resize listener, and the session-activation
+  // effect all go through the same path.
+  const handleResize = useCallback(() => {
+    if (fitAddonRef.current && xtermRef.current) {
+      fitAddonRef.current.fit();
+      const { cols, rows } = xtermRef.current;
+      window.electronAPI.resizeSession(sessionId, cols, rows);
+    }
+  }, [sessionId]);
+
   // Sync isStopped prop changes to isRunning state (fixes stop button)
   useEffect(() => {
     setIsRunning(!isStopped);
@@ -70,16 +82,20 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     return () => window.removeEventListener('focus-terminal', handleFocusTerminal);
   }, [isActive]);
 
-  // Scroll to bottom when terminal becomes active (session switch)
+  // Refit and scroll to bottom when terminal becomes active (session switch).
+  // Critically, this must also resize the PTY (via handleResize) — the
+  // previously active layout may have changed while this session was hidden
+  // with `display: none` (App.tsx:1293). Without a PTY resize here, the shell
+  // keeps emitting at the stale column count and the visible output appears
+  // hard-wrapped to a narrow width (BDHLNDR-12).
   useEffect(() => {
     if (isActive && xtermRef.current && fitAddonRef.current) {
-      // Fit first to ensure dimensions are correct, then scroll to bottom
       requestAnimationFrame(() => {
-        fitAddonRef.current?.fit();
+        handleResize();
         xtermRef.current?.scrollToBottom();
       });
     }
-  }, [isActive]);
+  }, [isActive, handleResize]);
 
   // Copy text from terminal selection
   const handleCopy = useCallback(() => {
@@ -310,14 +326,8 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       window.electronAPI.writeToSession(sessionId, data);
     });
 
-    // Handle resize with ResizeObserver for reliable sizing
-    const handleResize = () => {
-      if (fitAddonRef.current && xtermRef.current) {
-        fitAddonRef.current.fit();
-        const { cols, rows } = xtermRef.current;
-        window.electronAPI.resizeSession(sessionId, cols, rows);
-      }
-    };
+    // Use the hoisted handleResize (BDHLNDR-12) so the ResizeObserver, window
+    // resize listener, and session-activation effect all share one fit+PTY-resize path.
 
     // Use ResizeObserver to detect when container actually has dimensions
     const resizeObserver = new ResizeObserver((entries) => {
@@ -367,7 +377,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         console.warn('Terminal dispose error (non-fatal):', e);
       }
     };
-  }, [sessionId, cwd, launchClaude, isRunning]);
+  }, [sessionId, cwd, launchClaude, isRunning, handleResize]);
 
   const handleStart = () => {
     setError(null);
