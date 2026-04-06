@@ -43,6 +43,9 @@ interface PtySession {
   claudeResumeAttempted: boolean;
   /** Wall-clock spawn time (ms) for early-exit detection. */
   spawnedAt: number;
+  /** Last known column/row count — used to detect actual size changes. */
+  lastCols: number;
+  lastRows: number;
 }
 
 /**
@@ -331,6 +334,8 @@ class PtyManager extends EventEmitter {
       claudeSessionId,
       claudeResumeAttempted: claudeSessionMode === 'resume',
       spawnedAt: Date.now(),
+      lastCols: 80,
+      lastRows: 24,
     });
 
   }
@@ -344,9 +349,12 @@ class PtyManager extends EventEmitter {
 
   resize(id: string, cols: number, rows: number): void {
     const session = this.sessions.get(id);
-    if (session) {
-      session.pty.resize(cols, rows);
-    }
+    if (!session) return;
+    // Skip no-op resizes to avoid unnecessary ConPTY churn on Windows
+    if (session.lastCols === cols && session.lastRows === rows) return;
+    session.lastCols = cols;
+    session.lastRows = rows;
+    session.pty.resize(cols, rows);
   }
 
   kill(id: string): Promise<void> {
