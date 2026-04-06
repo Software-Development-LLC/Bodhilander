@@ -80,6 +80,8 @@ export function createSessionsRouter(): Router {
           createdAt: now,
           lastActivityAt: now,
           claudeSessionId: null,
+          endedAt: null,
+          durationSeconds: 0,
         };
 
         sessionsRepo.createSession(session);

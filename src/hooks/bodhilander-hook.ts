@@ -185,7 +185,8 @@ function parseArgs(): { hookType: string; groupId?: string; sessionId?: string }
   const args = process.argv.slice(2);
   let hookType = 'PostToolUse';
   let groupId: string | undefined;
-  let sessionId: string | undefined;
+  // Use BODHILANDER_SESSION_ID env var (set by claude-launcher.ts) as default
+  let sessionId: string | undefined = process.env.BODHILANDER_SESSION_ID;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--group-id' && args[i + 1]) {

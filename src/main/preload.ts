@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -149,6 +149,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('memory:extracted', listener);
     return () => ipcRenderer.removeListener('memory:extracted', listener);
   },
+
+  // Database - Session Events (BDHLNDR-17)
+  getSessionEvents: (sessionId: string, limit?: number): Promise<SessionEvent[]> =>
+    ipcRenderer.invoke('db:sessionEvents:getBySession', sessionId, limit),
+  getSessionStats: (sessionId: string): Promise<SessionStats> =>
+    ipcRenderer.invoke('db:sessionEvents:getSessionStats', sessionId),
+  getGlobalStats: (since?: string): Promise<GlobalStats> =>
+    ipcRenderer.invoke('db:sessionEvents:getGlobalStats', since),
+  getToolUseCounts: (sessionId?: string): Promise<Record<string, number>> =>
+    ipcRenderer.invoke('db:sessionEvents:getToolUseCounts', sessionId),
 
   // Preferences
   getPreference: (key: string): Promise<string | null> =>

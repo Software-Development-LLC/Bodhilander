@@ -6,13 +6,14 @@ import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
+import * as sessionEventsRepo from './repositories/session-events';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { Group, Session, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
+import { Group, Session, SessionState, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
 import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
@@ -264,12 +265,24 @@ function createWindow(): void {
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
 
+  // Prune session events older than 90 days (BDHLNDR-17)
+  try {
+    const pruned = sessionEventsRepo.pruneEvents(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000));
+    if (pruned > 0) {
+      log.info(`[SessionEvents] Pruned ${pruned} events older than 90 days`);
+    }
+  } catch (error) {
+    log.error('Failed to prune session events:', error);
+  }
+
   // Start state monitor
   stateMonitor = new StateMonitor(ptyManager.getSocketPath());
   stateMonitor.start();
 
   stateMonitor.on('stateChange', (event) => {
     mainWindow?.webContents.send('state:change', event);
+    // Track previous state for event logging
+    const previousState = sessionStates.get(event.sessionId)?.state as SessionState | undefined;
     // Update database with error handling
     try {
       sessionsRepo.updateSession(event.sessionId, {
@@ -278,6 +291,24 @@ function createWindow(): void {
       });
     } catch (error) {
       console.error('Failed to update session state in database:', error);
+    }
+    // Log session event (BDHLNDR-17)
+    try {
+      sessionEventsRepo.createEvent(event.sessionId, 'state_change', {
+        from: previousState ?? 'unknown',
+        to: event.state,
+      });
+      if (event.state === 'stopped') {
+        sessionEventsRepo.createEvent(event.sessionId, 'session_stop', null);
+        const breakdown = sessionEventsRepo.getStateBreakdown(event.sessionId);
+        const activeSeconds = (breakdown['working'] || 0) + (breakdown['waiting'] || 0);
+        sessionsRepo.updateSession(event.sessionId, {
+          endedAt: new Date(),
+          durationSeconds: activeSeconds,
+        });
+      }
+    } catch (error) {
+      log.error('Failed to log session event:', error);
     }
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
@@ -385,6 +416,8 @@ function createWindow(): void {
   // PTY state detection forwarding
   ptyManager.on('stateChange', (event) => {
     mainWindow?.webContents.send('state:change', event);
+    // Track previous state for event logging
+    const previousState = sessionStates.get(event.sessionId)?.state as SessionState | undefined;
     // Update database
     try {
       sessionsRepo.updateSession(event.sessionId, {
@@ -393,6 +426,24 @@ function createWindow(): void {
       });
     } catch (error) {
       console.error('Failed to update session state in database:', error);
+    }
+    // Log session event (BDHLNDR-17)
+    try {
+      sessionEventsRepo.createEvent(event.sessionId, 'state_change', {
+        from: previousState ?? 'unknown',
+        to: event.state,
+      });
+      if (event.state === 'stopped') {
+        sessionEventsRepo.createEvent(event.sessionId, 'session_stop', null);
+        const breakdown = sessionEventsRepo.getStateBreakdown(event.sessionId);
+        const activeSeconds = (breakdown['working'] || 0) + (breakdown['waiting'] || 0);
+        sessionsRepo.updateSession(event.sessionId, {
+          endedAt: new Date(),
+          durationSeconds: activeSeconds,
+        });
+      }
+    } catch (error) {
+      log.error('Failed to log session event:', error);
     }
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
@@ -538,6 +589,12 @@ safeHandle('db:sessions:getAll', () => {
 
 safeHandle('db:sessions:create', (session: Session) => {
   sessionsRepo.createSession(session);
+  // Log session start event (BDHLNDR-17)
+  try {
+    sessionEventsRepo.createEvent(session.id, 'session_start', null);
+  } catch (error) {
+    log.error('Failed to log session_start event:', error);
+  }
   getApiServer().broadcastSessionsUpdated();
 });
 
@@ -597,6 +654,27 @@ safeHandle('db:memories:getById', (id: string) => {
 safeHandle('db:memories:getGlobal', () => {
   return memoriesRepo.getGlobalContextMemories();
 });
+
+// Database IPC Handlers - Session Events (BDHLNDR-17)
+safeHandle('db:sessionEvents:getBySession', (sessionId: string, limit?: number) =>
+  sessionEventsRepo.getEventsBySession(sessionId, limit)
+);
+
+safeHandle('db:sessionEvents:getSessionStats', (sessionId: string) =>
+  sessionEventsRepo.getSessionStats(sessionId)
+);
+
+safeHandle('db:sessionEvents:getGlobalStats', (since?: string) =>
+  sessionEventsRepo.getGlobalStats(since ? new Date(since) : undefined)
+);
+
+safeHandle('db:sessionEvents:getToolUseCounts', (sessionId?: string) =>
+  sessionEventsRepo.getToolUseCounts(sessionId)
+);
+
+safeHandle('db:sessionEvents:getEventsSince', (since: string, sessionId?: string) =>
+  sessionEventsRepo.getEventsSince(new Date(since), sessionId)
+);
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {

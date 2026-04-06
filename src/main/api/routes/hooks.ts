@@ -7,8 +7,25 @@
 
 import { Router, Request, Response } from 'express';
 import * as memoriesRepo from '../../repositories/memories';
-import * as groupsRepo from '../../repositories/groups';
+import * as sessionEventsRepo from '../../repositories/session-events';
+import * as sessionsRepo from '../../repositories/sessions';
+import { SessionEventType } from '../../../shared/types';
 import log from 'electron-log';
+
+/**
+ * Try to log a session event. Only writes if session_id references a valid session.
+ */
+function tryLogEvent(sessionId: string | undefined, eventType: SessionEventType, eventData?: Record<string, unknown> | null): void {
+  if (!sessionId) return;
+  try {
+    // Verify the session exists before writing (foreign key constraint)
+    const sessions = sessionsRepo.getAllSessions();
+    if (!sessions.some(s => s.id === sessionId)) return;
+    sessionEventsRepo.createEvent(sessionId, eventType, eventData);
+  } catch (error) {
+    log.error(`[HooksAPI] Failed to log ${eventType} event:`, error);
+  }
+}
 
 /**
  * Middleware to restrict to localhost only
@@ -115,10 +132,14 @@ export function createHooksRouter(): Router {
           });
 
           log.info(`[HooksAPI] Saved git commit as memory: ${memory.id}`);
+          tryLogEvent(session_id, 'tool_use', { tool_name });
           res.json({ saved: true, memory_id: memory.id, type: 'git_commit' });
           return;
         }
       }
+
+      // Log tool use event regardless of memory creation (BDHLNDR-17)
+      tryLogEvent(session_id, 'tool_use', { tool_name });
 
       // For other significant tool uses, just acknowledge
       res.json({ saved: false, reason: 'not_actionable' });
@@ -144,6 +165,13 @@ export function createHooksRouter(): Router {
       } = req.body;
 
       log.info(`[HooksAPI] Stop: session=${session_id}, reason=${stop_reason}, tools=${tool_uses_count}`);
+
+      // Log stop event regardless of significance (BDHLNDR-17)
+      tryLogEvent(session_id, 'session_stop', {
+        stop_reason,
+        tool_uses_count,
+        files_edited,
+      });
 
       // Only process if there was significant activity
       const isSignificant = (tool_uses_count && tool_uses_count > 3) ||
@@ -188,6 +216,13 @@ export function createHooksRouter(): Router {
       const { session_id, group_id, notification_type, message } = req.body;
 
       log.info(`[HooksAPI] Notification: ${notification_type}`);
+
+      // Log notification event (BDHLNDR-17)
+      if (notification_type === 'error') {
+        tryLogEvent(session_id, 'error', { message });
+      } else {
+        tryLogEvent(session_id, 'notification', { type: notification_type, message });
+      }
 
       // Could capture error notifications as error_fix memories
       if (notification_type === 'error' && message && group_id) {

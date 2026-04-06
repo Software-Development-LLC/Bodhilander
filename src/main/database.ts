@@ -106,6 +106,39 @@ function initializeTables(database: Database.Database): void {
     database.exec("ALTER TABLE sessions ADD COLUMN claude_session_id TEXT DEFAULT NULL");
   }
 
+  // Migration: Add ended_at and duration_seconds columns to sessions (BDHLNDR-17)
+  const sessionColsBdhlndr17 = sessionColumns.map(c => c.name);
+  if (!sessionColsBdhlndr17.includes('ended_at')) {
+    database.exec("ALTER TABLE sessions ADD COLUMN ended_at TEXT DEFAULT NULL");
+  }
+  if (!sessionColsBdhlndr17.includes('duration_seconds')) {
+    database.exec("ALTER TABLE sessions ADD COLUMN duration_seconds REAL DEFAULT 0");
+  }
+
+  // Migration: Create session_events table (BDHLNDR-17)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS session_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL CHECK(event_type IN (
+        'session_start', 'session_stop', 'state_change', 'tool_use', 'error', 'notification'
+      )),
+      event_data TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_events_session_id ON session_events(session_id);
+    CREATE INDEX IF NOT EXISTS idx_session_events_type ON session_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_session_events_created ON session_events(created_at);
+  `);
+
+  // Backfill duration_seconds for existing stopped sessions (rough estimate from wall clock)
+  database.exec(`
+    UPDATE sessions
+    SET duration_seconds = (julianday(last_activity_at) - julianday(created_at)) * 86400
+    WHERE duration_seconds = 0 AND state = 'stopped'
+      AND last_activity_at IS NOT NULL AND created_at IS NOT NULL
+  `);
+
   // Migration: Create memories table if it doesn't exist
   database.exec(`
     CREATE TABLE IF NOT EXISTS memories (

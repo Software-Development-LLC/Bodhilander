@@ -15,6 +15,10 @@ export interface Session {
    * Null for non-Claude sessions or Claude sessions that have not been launched yet.
    */
   claudeSessionId: string | null;
+  /** When the session was stopped/ended (BDHLNDR-17). Null if still active. */
+  endedAt: Date | null;
+  /** Active time in seconds (working + waiting states), not wall clock (BDHLNDR-17). */
+  durationSeconds: number;
 }
 
 export interface Group {
@@ -201,6 +205,37 @@ export interface MemoryEvent {
     source: 'claude';
   };
   timestamp: number;
+}
+
+// =============================================================================
+// Session Event Types (BDHLNDR-17)
+// =============================================================================
+// Types for session event tracking and analytics
+// =============================================================================
+
+export type SessionEventType = 'session_start' | 'session_stop' | 'state_change' | 'tool_use' | 'error' | 'notification';
+
+export interface SessionEvent {
+  id: string;
+  sessionId: string;
+  eventType: SessionEventType;
+  eventData: Record<string, unknown> | null;
+  createdAt: Date;
+}
+
+export interface SessionStats {
+  totalEvents: number;
+  totalDurationSeconds: number;
+  toolUseCounts: Record<string, number>;
+  stateBreakdown: Record<string, number>; // state name → seconds
+}
+
+export interface GlobalStats {
+  totalSessions: number;
+  totalEvents: number;
+  totalDurationSeconds: number;
+  eventsPerDay: { date: string; count: number }[];
+  toolUseCounts: Record<string, number>;
 }
 
 // =============================================================================
