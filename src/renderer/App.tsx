@@ -1330,6 +1330,7 @@ const App: React.FC = () => {
                   isStopped={session.state === 'stopped'}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
+                  sessionState={session.state}
                   onStart={() => updateSession(session.id, { state: 'idle' })}
                   onError={() => updateSession(session.id, { state: 'error' })}
                 />
