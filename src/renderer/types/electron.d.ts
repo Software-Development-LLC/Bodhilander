@@ -89,6 +89,9 @@ export interface ElectronAPI {
   getGlobalStats: (since?: string) => Promise<GlobalStats>;
   getToolUseCounts: (sessionId?: string) => Promise<Record<string, number>>;
 
+  // Session Export (BDHLNDR-20)
+  exportSessions: (format: 'csv' | 'json', since?: string) => Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }>;
+
   // Preferences
   getPreference: (key: string) => Promise<string | null>;
   setPreference: (key: string, value: string) => Promise<void>;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   PieChart, Pie, Cell, ResponsiveContainer, Legend,
@@ -289,6 +289,50 @@ function RecentActivityFeed({ events }: { events: SessionEvent[] }) {
   );
 }
 
+// --- Export ---
+
+function ExportButtons({ timeRange }: { timeRange: TimeRange }) {
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = useCallback(async (format: 'csv' | 'json') => {
+    setExporting(true);
+    try {
+      const since = timeRange === 'all' ? undefined : (() => {
+        const now = new Date();
+        switch (timeRange) {
+          case 'today': now.setHours(0, 0, 0, 0); return now.toISOString();
+          case '7d': now.setDate(now.getDate() - 7); return now.toISOString();
+          case '30d': now.setDate(now.getDate() - 30); return now.toISOString();
+        }
+      })();
+      await window.electronAPI.exportSessions(format, since);
+    } finally {
+      setExporting(false);
+    }
+  }, [timeRange]);
+
+  return (
+    <div className="export-buttons">
+      <button
+        className="icon-button"
+        onClick={() => handleExport('csv')}
+        disabled={exporting}
+        title="Export as CSV"
+      >
+        {exporting ? '...' : 'CSV'}
+      </button>
+      <button
+        className="icon-button"
+        onClick={() => handleExport('json')}
+        disabled={exporting}
+        title="Export as JSON"
+      >
+        {exporting ? '...' : 'JSON'}
+      </button>
+    </div>
+  );
+}
+
 // --- Main Component ---
 
 interface AnalyticsPanelProps {
@@ -335,6 +379,7 @@ export default function AnalyticsPanel({ onClose }: AnalyticsPanelProps) {
         <h2>Analytics</h2>
         <div className="analytics-header-actions">
           <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+          <ExportButtons timeRange={timeRange} />
           <button className="icon-button" onClick={refresh} title="Refresh">↻</button>
           <button className="icon-button" onClick={onClose} title="Close">×</button>
         </div>
