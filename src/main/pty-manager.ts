@@ -32,6 +32,9 @@ interface PtySession {
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
   lastOutputTime: number;
+  /** Last known column/row count — used to detect actual size changes. */
+  lastCols: number;
+  lastRows: number;
 }
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
@@ -250,6 +253,8 @@ class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
+      lastCols: 80,
+      lastRows: 24,
     });
 
   }
@@ -263,9 +268,12 @@ class PtyManager extends EventEmitter {
 
   resize(id: string, cols: number, rows: number): void {
     const session = this.sessions.get(id);
-    if (session) {
-      session.pty.resize(cols, rows);
-    }
+    if (!session) return;
+    // Skip no-op resizes to avoid unnecessary ConPTY churn on Windows
+    if (session.lastCols === cols && session.lastRows === rows) return;
+    session.lastCols = cols;
+    session.lastRows = rows;
+    session.pty.resize(cols, rows);
   }
 
   kill(id: string): Promise<void> {

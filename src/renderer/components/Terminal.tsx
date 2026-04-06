@@ -12,6 +12,7 @@ interface TerminalProps {
   isStopped?: boolean;
   restartKey?: number;
   isActive?: boolean;
+  sessionState?: string;
   onStart?: () => void;
   onError?: (error: string) => void;
 }
@@ -25,11 +26,12 @@ interface ContextMenuState {
 
 const PASTE_DEBOUNCE_MS = 300;
 
-const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, onStart, onError }) => {
+const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const lastPasteTimeRef = useRef<number>(0);
+  const prevSessionStateRef = useRef<string | undefined>(sessionState);
   const [isRunning, setIsRunning] = useState(!isStopped);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
@@ -69,16 +71,57 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     return () => window.removeEventListener('focus-terminal', handleFocusTerminal);
   }, [isActive]);
 
-  // Scroll to bottom when terminal becomes active (session switch)
+  // Refit and scroll to bottom when terminal becomes active (session switch).
+  // The display:none→flex transition means xterm may not have correct
+  // dimensions on the first animation frame. The multi-pass approach ensures
+  // the PTY gets the right column count and xterm reflows its buffer.
+  const fitAndSync = useCallback(() => {
+    if (fitAddonRef.current && xtermRef.current) {
+      fitAddonRef.current.fit();
+      const { cols, rows } = xtermRef.current;
+      window.electronAPI.resizeSession(sessionId, cols, rows);
+    }
+  }, [sessionId]);
+
   useEffect(() => {
     if (isActive && xtermRef.current && fitAddonRef.current) {
-      // Fit first to ensure dimensions are correct, then scroll to bottom
       requestAnimationFrame(() => {
-        fitAddonRef.current?.fit();
+        fitAndSync();
+        xtermRef.current?.scrollToBottom();
+        // Second pass: re-fit after the browser has flushed the display
+        // change, which triggers xterm buffer reflow to correct width.
+        requestAnimationFrame(() => {
+          fitAndSync();
+          xtermRef.current?.scrollToBottom();
+        });
+      });
+      // Third pass as a safety net for slower layout transitions.
+      const safetyTimer = setTimeout(() => {
+        if (fitAddonRef.current && xtermRef.current) {
+          fitAndSync();
+          xtermRef.current.scrollToBottom();
+        }
+      }, 150);
+      return () => clearTimeout(safetyTimer);
+    }
+  }, [isActive, fitAndSync]);
+
+  // Scroll to bottom when Claude transitions to idle or waiting (i.e. it
+  // finished a burst of work). This keeps the latest output visible without
+  // the user having to manually scroll down after every task.
+  useEffect(() => {
+    const prev = prevSessionStateRef.current;
+    prevSessionStateRef.current = sessionState;
+
+    if (!xtermRef.current || !isActive) return;
+
+    const scrollTargets = ['idle', 'waiting'];
+    if (sessionState && scrollTargets.includes(sessionState) && prev && prev !== sessionState) {
+      requestAnimationFrame(() => {
         xtermRef.current?.scrollToBottom();
       });
     }
-  }, [isActive]);
+  }, [sessionState, isActive]);
 
   // Copy text from terminal selection
   const handleCopy = useCallback(() => {
