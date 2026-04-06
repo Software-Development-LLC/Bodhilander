@@ -9,6 +9,7 @@ import { NamePromptModal } from './components/NamePromptModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { MemoryPanel } from './components/panels/MemoryPanel';
+import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { CodeSearchModal } from './components/CodeSearchModal';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -92,6 +93,9 @@ const App: React.FC = () => {
 
   // Memory panel state
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
+
+  // Analytics view state (BDHLNDR-18)
+  const [analyticsViewOpen, setAnalyticsViewOpen] = useState(false);
 
   // Code search modal state
   const [codeSearchOpen, setCodeSearchOpen] = useState(false);
@@ -737,6 +741,7 @@ const App: React.FC = () => {
     onExpand: handleExpand,
     onSelect: handleSelect,
     onCodeSearch: handleCodeSearch,
+    onToggleAnalytics: () => setAnalyticsViewOpen(prev => !prev),
   }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect, handleCodeSearch]);
 
   useKeyboardShortcuts(shortcutHandlers);
@@ -837,6 +842,14 @@ const App: React.FC = () => {
               aria-label="Toggle Memory Panel"
             >
               *
+            </button>
+            <button
+              className={`icon-button ${analyticsViewOpen ? 'active' : ''}`}
+              onClick={() => setAnalyticsViewOpen(prev => !prev)}
+              title="Analytics Dashboard (Ctrl+Shift+A)"
+              aria-label="Analytics Dashboard"
+            >
+              📊
             </button>
             <button
               className="icon-button"
@@ -1285,6 +1298,9 @@ const App: React.FC = () => {
       </aside>
 
       <main className="main">
+        {analyticsViewOpen ? (
+          <AnalyticsPanel onClose={() => setAnalyticsViewOpen(false)} />
+        ) : (
         <div className="terminal-area">
           {sessions.map(session => (
             <div
@@ -1374,6 +1390,7 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </main>
 
       {/* Memory Panel */}
