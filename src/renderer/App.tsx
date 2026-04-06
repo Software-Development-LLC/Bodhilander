@@ -1301,10 +1301,13 @@ const App: React.FC = () => {
       </aside>
 
       <main className="main">
-        {analyticsViewOpen ? (
-          <AnalyticsPanel onClose={() => setAnalyticsViewOpen(false)} />
-        ) : (
-        <div className="terminal-area">
+        {analyticsViewOpen && (
+          <AnalyticsPanel
+            onClose={() => setAnalyticsViewOpen(false)}
+            activeSessionId={activeSessionId}
+          />
+        )}
+        <div className="terminal-area" style={{ display: analyticsViewOpen ? 'none' : undefined }}>
           {sessions.map(session => (
             <div
               key={session.id}
@@ -1393,7 +1396,6 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
-        )}
       </main>
 
       {/* Memory Panel */}

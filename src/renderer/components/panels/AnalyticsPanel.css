@@ -39,6 +39,14 @@
   letter-spacing: 0.3px;
 }
 
+.view-mode-toggle {
+  display: flex;
+  gap: 2px;
+  background: #1e1e1e;
+  border-radius: 6px;
+  padding: 2px;
+}
+
 .analytics-header-actions {
   display: flex;
   align-items: center;

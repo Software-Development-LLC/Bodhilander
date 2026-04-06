@@ -4,6 +4,7 @@ import {
   PieChart, Pie, Cell, ResponsiveContainer, Legend,
 } from 'recharts';
 import { useAnalytics, TimeRange } from '../../store/analytics';
+import { useSessionStats, formatDuration as formatStatsDuration } from '../../store/session-stats';
 import { useSessions } from '../../store/sessions';
 import { SessionEvent, Session } from '../../../shared/types';
 import './AnalyticsPanel.css';
@@ -289,6 +290,42 @@ function RecentActivityFeed({ events }: { events: SessionEvent[] }) {
   );
 }
 
+function SessionTimeBreakdown({ stateBreakdown }: { stateBreakdown: Record<string, number> }) {
+  const entries = Object.entries(stateBreakdown)
+    .filter(([, secs]) => secs > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  if (entries.length === 0) {
+    return <div className="chart-empty">No time breakdown data yet</div>;
+  }
+
+  const data = entries.map(([name, seconds]) => ({
+    name,
+    seconds: Math.round(seconds),
+    label: formatDuration(seconds),
+  }));
+
+  return (
+    <ResponsiveContainer width="100%" height={Math.max(120, data.length * 36)}>
+      <BarChart data={data} layout="vertical" margin={{ top: 5, right: 5, bottom: 5, left: 60 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke={COLORS.grid} horizontal={false} />
+        <XAxis type="number" tick={{ fill: COLORS.text, fontSize: 11 }} axisLine={false} tickLine={false} />
+        <YAxis type="category" dataKey="name" tick={{ fill: COLORS.text, fontSize: 11 }} axisLine={false} tickLine={false} width={60} />
+        <Tooltip
+          contentStyle={TOOLTIP_STYLE}
+          formatter={(value) => [formatDuration(Number(value)), 'Time']}
+          cursor={{ fill: 'rgba(90, 122, 255, 0.1)' }}
+        />
+        <Bar dataKey="seconds" radius={[0, 3, 3, 0]} maxBarSize={24}>
+          {data.map((entry) => (
+            <Cell key={entry.name} fill={STATE_COLORS[entry.name] || COLORS.primary} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
 // --- Export ---
 
 function ExportButtons({ timeRange }: { timeRange: TimeRange }) {
@@ -337,12 +374,16 @@ function ExportButtons({ timeRange }: { timeRange: TimeRange }) {
 
 interface AnalyticsPanelProps {
   onClose: () => void;
+  activeSessionId?: string | null;
 }
 
-export default function AnalyticsPanel({ onClose }: AnalyticsPanelProps) {
+export default function AnalyticsPanel({ onClose, activeSessionId }: AnalyticsPanelProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>('7d');
+  const [viewMode, setViewMode] = useState<'session' | 'global'>(activeSessionId ? 'session' : 'global');
   const { globalStats, recentEvents, loading, error, refresh } = useAnalytics(timeRange);
+  const { stats: sessionStats } = useSessionStats(viewMode === 'session' ? (activeSessionId ?? null) : null);
   const { sessions } = useSessions();
+  const activeSession = sessions.find(s => s.id === activeSessionId);
 
   if (loading && !globalStats) {
     return (
@@ -373,12 +414,30 @@ export default function AnalyticsPanel({ onClose }: AnalyticsPanelProps) {
     );
   }
 
+  const showSessionView = viewMode === 'session' && activeSessionId && sessionStats;
+
   return (
     <div className="analytics-panel">
       <div className="analytics-header">
-        <h2>Analytics</h2>
+        <h2>Analytics{showSessionView && activeSession ? ` — ${activeSession.name}` : ''}</h2>
         <div className="analytics-header-actions">
-          <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
+          {activeSessionId && (
+            <div className="view-mode-toggle">
+              <button
+                className={`time-range-btn ${viewMode === 'session' ? 'active' : ''}`}
+                onClick={() => setViewMode('session')}
+              >
+                Session
+              </button>
+              <button
+                className={`time-range-btn ${viewMode === 'global' ? 'active' : ''}`}
+                onClick={() => setViewMode('global')}
+              >
+                All
+              </button>
+            </div>
+          )}
+          {viewMode === 'global' && <TimeRangeSelector value={timeRange} onChange={setTimeRange} />}
           <ExportButtons timeRange={timeRange} />
           <button className="icon-button" onClick={refresh} title="Refresh">↻</button>
           <button className="icon-button" onClick={onClose} title="Close">×</button>
@@ -386,34 +445,57 @@ export default function AnalyticsPanel({ onClose }: AnalyticsPanelProps) {
       </div>
 
       <div className="analytics-body">
-        {/* Summary stats row */}
-        <div className="analytics-summary">
-          <StatCard label="Sessions" value={globalStats?.totalSessions ?? 0} />
-          <StatCard label="Events" value={globalStats?.totalEvents ?? 0} />
-          <StatCard label="Active Time" value={formatDuration(globalStats?.totalDurationSeconds ?? 0)} />
-          <StatCard label="Tools Used" value={Object.keys(globalStats?.toolUseCounts ?? {}).length} />
-        </div>
+        {showSessionView ? (
+          <>
+            {/* Per-session stats */}
+            <div className="analytics-summary">
+              <StatCard label="Events" value={sessionStats.totalEvents} />
+              <StatCard label="Active Time" value={formatDuration(sessionStats.totalDurationSeconds)} />
+              <StatCard label="Tool Calls" value={Object.values(sessionStats.toolUseCounts).reduce((s, c) => s + c, 0)} />
+              <StatCard label="Tools Used" value={Object.keys(sessionStats.toolUseCounts).length} />
+            </div>
 
-        {/* Charts grid */}
-        <div className="analytics-grid">
-          <ChartCard title="Session Activity">
-            <ActivityChart data={globalStats?.eventsPerDay ?? []} />
-          </ChartCard>
+            <div className="analytics-grid">
+              <ChartCard title="Tool Usage">
+                <ToolUsageChart data={sessionStats.toolUseCounts} />
+              </ChartCard>
 
-          <ChartCard title="Session States">
-            <StateDistributionChart sessions={sessions} />
-          </ChartCard>
+              <ChartCard title="Time Breakdown">
+                <SessionTimeBreakdown stateBreakdown={sessionStats.stateBreakdown} />
+              </ChartCard>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Global stats */}
+            <div className="analytics-summary">
+              <StatCard label="Sessions" value={globalStats?.totalSessions ?? 0} />
+              <StatCard label="Events" value={globalStats?.totalEvents ?? 0} />
+              <StatCard label="Active Time" value={formatDuration(globalStats?.totalDurationSeconds ?? 0)} />
+              <StatCard label="Tools Used" value={Object.keys(globalStats?.toolUseCounts ?? {}).length} />
+            </div>
 
-          <ChartCard title="Top Tools">
-            <ToolUsageChart data={globalStats?.toolUseCounts ?? {}} />
-          </ChartCard>
+            <div className="analytics-grid">
+              <ChartCard title="Session Activity">
+                <ActivityChart data={globalStats?.eventsPerDay ?? []} />
+              </ChartCard>
 
-          <ChartCard title="Time Summary">
-            <TimeBreakdownChart sessions={sessions} />
-          </ChartCard>
-        </div>
+              <ChartCard title="Session States">
+                <StateDistributionChart sessions={sessions} />
+              </ChartCard>
 
-        {/* Recent activity */}
+              <ChartCard title="Top Tools">
+                <ToolUsageChart data={globalStats?.toolUseCounts ?? {}} />
+              </ChartCard>
+
+              <ChartCard title="Time Summary">
+                <TimeBreakdownChart sessions={sessions} />
+              </ChartCard>
+            </div>
+          </>
+        )}
+
+        {/* Recent activity (both views) */}
         <ChartCard title="Recent Activity">
           <RecentActivityFeed events={recentEvents} />
         </ChartCard>
