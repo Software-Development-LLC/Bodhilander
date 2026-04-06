@@ -9,12 +9,21 @@ interface SessionEventRow {
   created_at: string;
 }
 
+function safeJsonParse(json: string | null): Record<string, unknown> | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
 function rowToSessionEvent(row: SessionEventRow): SessionEvent {
   return {
     id: row.id,
     sessionId: row.session_id,
     eventType: row.event_type as SessionEventType,
-    eventData: row.event_data ? JSON.parse(row.event_data) : null,
+    eventData: safeJsonParse(row.event_data),
     createdAt: new Date(row.created_at),
   };
 }
@@ -59,19 +68,19 @@ export function getEventsByType(eventType: SessionEventType, limit: number = 500
   return rows.map(rowToSessionEvent);
 }
 
-export function getEventsSince(since: Date, sessionId?: string): SessionEvent[] {
+export function getEventsSince(since: Date, sessionId?: string, limit: number = 10000): SessionEvent[] {
   const db = getDatabase();
   const sinceStr = since.toISOString();
   let rows: SessionEventRow[];
 
   if (sessionId) {
     rows = db.prepare(
-      'SELECT * FROM session_events WHERE created_at >= ? AND session_id = ? ORDER BY created_at ASC'
-    ).all(sinceStr, sessionId) as SessionEventRow[];
+      'SELECT * FROM session_events WHERE created_at >= ? AND session_id = ? ORDER BY created_at ASC LIMIT ?'
+    ).all(sinceStr, sessionId, limit) as SessionEventRow[];
   } else {
     rows = db.prepare(
-      'SELECT * FROM session_events WHERE created_at >= ? ORDER BY created_at ASC'
-    ).all(sinceStr) as SessionEventRow[];
+      'SELECT * FROM session_events WHERE created_at >= ? ORDER BY created_at ASC LIMIT ?'
+    ).all(sinceStr, limit) as SessionEventRow[];
   }
 
   return rows.map(rowToSessionEvent);
@@ -131,17 +140,20 @@ export function getStateBreakdown(sessionId: string): Record<string, number> {
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
+    if (row.event_type !== 'state_change' || !row.event_data) continue;
+
+    const data = safeJsonParse(row.event_data);
+    if (!data?.to) continue;
+
+    const toState = data.to as string;
+    const currentTime = new Date(row.created_at).getTime();
+
+    // Use next event's time as boundary, or current time for open-ended final interval
     const nextRow = rows[i + 1];
+    const nextTime = nextRow ? new Date(nextRow.created_at).getTime() : Date.now();
+    const seconds = (nextTime - currentTime) / 1000;
 
-    if (row.event_type === 'state_change' && row.event_data && nextRow) {
-      const data = JSON.parse(row.event_data);
-      const toState = data.to as string;
-      const currentTime = new Date(row.created_at).getTime();
-      const nextTime = new Date(nextRow.created_at).getTime();
-      const seconds = (nextTime - currentTime) / 1000;
-
-      breakdown[toState] = (breakdown[toState] || 0) + seconds;
-    }
+    breakdown[toState] = (breakdown[toState] || 0) + seconds;
   }
 
   return breakdown;

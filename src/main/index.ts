@@ -137,6 +137,44 @@ soundManager.setSessionStateLookup((sessionId: string) => {
   return sessionStates.get(sessionId)?.state;
 });
 
+// Track which sessions have already had their state logged in this tick,
+// to deduplicate when both stateMonitor and ptyManager fire for the same transition.
+const recentlyLoggedStates: Map<string, { state: string; timestamp: number }> = new Map();
+
+/**
+ * Shared handler for session state change event logging (BDHLNDR-17).
+ * Called from both stateMonitor and ptyManager handlers.
+ * Deduplicates: if the same session+state was logged within the last 2 seconds, skips.
+ */
+function logSessionStateEvent(sessionId: string, newState: SessionState): void {
+  // Dedup guard: skip if same session+state was logged within 2 seconds
+  const recent = recentlyLoggedStates.get(sessionId);
+  const now = Date.now();
+  if (recent && recent.state === newState && (now - recent.timestamp) < 2000) {
+    return;
+  }
+  recentlyLoggedStates.set(sessionId, { state: newState, timestamp: now });
+
+  try {
+    const previousState = sessionStates.get(sessionId)?.state ?? 'unknown';
+    sessionEventsRepo.createEvent(sessionId, 'state_change', {
+      from: previousState,
+      to: newState,
+    });
+    if (newState === 'stopped') {
+      sessionEventsRepo.createEvent(sessionId, 'session_stop', null);
+      const breakdown = sessionEventsRepo.getStateBreakdown(sessionId);
+      const activeSeconds = (breakdown['working'] || 0) + (breakdown['waiting'] || 0);
+      sessionsRepo.updateSession(sessionId, {
+        endedAt: new Date(),
+        durationSeconds: activeSeconds,
+      });
+    }
+  } catch (error) {
+    log.error('Failed to log session event:', error);
+  }
+}
+
 const SPLASH_DURATION = 2500; // 2.5 seconds
 
 function updateTrayWithWaitingSessions(): void {
@@ -281,8 +319,6 @@ function createWindow(): void {
 
   stateMonitor.on('stateChange', (event) => {
     mainWindow?.webContents.send('state:change', event);
-    // Track previous state for event logging
-    const previousState = sessionStates.get(event.sessionId)?.state as SessionState | undefined;
     // Update database with error handling
     try {
       sessionsRepo.updateSession(event.sessionId, {
@@ -292,24 +328,8 @@ function createWindow(): void {
     } catch (error) {
       console.error('Failed to update session state in database:', error);
     }
-    // Log session event (BDHLNDR-17)
-    try {
-      sessionEventsRepo.createEvent(event.sessionId, 'state_change', {
-        from: previousState ?? 'unknown',
-        to: event.state,
-      });
-      if (event.state === 'stopped') {
-        sessionEventsRepo.createEvent(event.sessionId, 'session_stop', null);
-        const breakdown = sessionEventsRepo.getStateBreakdown(event.sessionId);
-        const activeSeconds = (breakdown['working'] || 0) + (breakdown['waiting'] || 0);
-        sessionsRepo.updateSession(event.sessionId, {
-          endedAt: new Date(),
-          durationSeconds: activeSeconds,
-        });
-      }
-    } catch (error) {
-      log.error('Failed to log session event:', error);
-    }
+    // Log session event with dedup (BDHLNDR-17)
+    logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
   });
@@ -416,8 +436,6 @@ function createWindow(): void {
   // PTY state detection forwarding
   ptyManager.on('stateChange', (event) => {
     mainWindow?.webContents.send('state:change', event);
-    // Track previous state for event logging
-    const previousState = sessionStates.get(event.sessionId)?.state as SessionState | undefined;
     // Update database
     try {
       sessionsRepo.updateSession(event.sessionId, {
@@ -427,24 +445,8 @@ function createWindow(): void {
     } catch (error) {
       console.error('Failed to update session state in database:', error);
     }
-    // Log session event (BDHLNDR-17)
-    try {
-      sessionEventsRepo.createEvent(event.sessionId, 'state_change', {
-        from: previousState ?? 'unknown',
-        to: event.state,
-      });
-      if (event.state === 'stopped') {
-        sessionEventsRepo.createEvent(event.sessionId, 'session_stop', null);
-        const breakdown = sessionEventsRepo.getStateBreakdown(event.sessionId);
-        const activeSeconds = (breakdown['working'] || 0) + (breakdown['waiting'] || 0);
-        sessionsRepo.updateSession(event.sessionId, {
-          endedAt: new Date(),
-          durationSeconds: activeSeconds,
-        });
-      }
-    } catch (error) {
-      log.error('Failed to log session event:', error);
-    }
+    // Log session event with dedup (BDHLNDR-17)
+    logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
     // Broadcast to mobile clients
@@ -670,10 +672,6 @@ safeHandle('db:sessionEvents:getGlobalStats', (since?: string) =>
 
 safeHandle('db:sessionEvents:getToolUseCounts', (sessionId?: string) =>
   sessionEventsRepo.getToolUseCounts(sessionId)
-);
-
-safeHandle('db:sessionEvents:getEventsSince', (since: string, sessionId?: string) =>
-  sessionEventsRepo.getEventsSince(new Date(since), sessionId)
 );
 
 // Preferences IPC Handlers

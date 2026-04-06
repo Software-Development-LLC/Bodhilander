@@ -18,13 +18,17 @@ import log from 'electron-log';
 function tryLogEvent(sessionId: string | undefined, eventType: SessionEventType, eventData?: Record<string, unknown> | null): void {
   if (!sessionId) return;
   try {
-    // Verify the session exists before writing (foreign key constraint)
-    const sessions = sessionsRepo.getAllSessions();
-    if (!sessions.some(s => s.id === sessionId)) return;
+    if (!sessionsRepo.sessionExists(sessionId)) return;
     sessionEventsRepo.createEvent(sessionId, eventType, eventData);
   } catch (error) {
     log.error(`[HooksAPI] Failed to log ${eventType} event:`, error);
   }
+}
+
+/** Sanitize a value for safe logging (strip control characters, truncate). */
+function sanitizeLogValue(val: unknown, maxLen = 100): string {
+  const str = String(val ?? '').replace(/[\x00-\x1f\x7f]/g, '');
+  return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
 }
 
 /**
@@ -97,7 +101,7 @@ export function createHooksRouter(): Router {
     try {
       const { tool_name, tool_input, tool_output, session_id, group_id } = req.body;
 
-      log.info(`[HooksAPI] PostToolUse: ${tool_name}`);
+      log.info(`[HooksAPI] PostToolUse: ${sanitizeLogValue(tool_name)}`);
 
       // Handle git commits specially
       if (tool_name === 'Bash') {
@@ -164,10 +168,10 @@ export function createHooksRouter(): Router {
         summary_hint
       } = req.body;
 
-      log.info(`[HooksAPI] Stop: session=${session_id}, reason=${stop_reason}, tools=${tool_uses_count}`);
+      log.info(`[HooksAPI] Stop: session=${sanitizeLogValue(session_id)}, reason=${sanitizeLogValue(stop_reason)}, tools=${sanitizeLogValue(tool_uses_count)}`);
 
-      // Log stop event regardless of significance (BDHLNDR-17)
-      tryLogEvent(session_id, 'session_stop', {
+      // Log turn completion event (distinct from session_stop which means PTY exited) (BDHLNDR-17)
+      tryLogEvent(session_id, 'turn_complete', {
         stop_reason,
         tool_uses_count,
         files_edited,
@@ -215,7 +219,7 @@ export function createHooksRouter(): Router {
     try {
       const { session_id, group_id, notification_type, message } = req.body;
 
-      log.info(`[HooksAPI] Notification: ${notification_type}`);
+      log.info(`[HooksAPI] Notification: ${sanitizeLogValue(notification_type)}`);
 
       // Log notification event (BDHLNDR-17)
       if (notification_type === 'error') {

@@ -1,6 +1,12 @@
 import { getDatabase } from '../database';
 import { Session, SessionState } from '../../shared/types';
 
+export function sessionExists(id: string): boolean {
+  const db = getDatabase();
+  const row = db.prepare('SELECT 1 FROM sessions WHERE id = ? LIMIT 1').get(id);
+  return !!row;
+}
+
 export function getAllSessions(): Session[] {
   const db = getDatabase();
   const rows = db.prepare('SELECT * FROM sessions ORDER BY "order"').all() as any[];

@@ -213,7 +213,7 @@ export interface MemoryEvent {
 // Types for session event tracking and analytics
 // =============================================================================
 
-export type SessionEventType = 'session_start' | 'session_stop' | 'state_change' | 'tool_use' | 'error' | 'notification';
+export type SessionEventType = 'session_start' | 'session_stop' | 'state_change' | 'tool_use' | 'turn_complete' | 'error' | 'notification';
 
 export interface SessionEvent {
   id: string;
