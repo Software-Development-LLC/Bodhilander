@@ -60,6 +60,8 @@ export function useSessions() {
           createdAt: new Date(),
           lastActivityAt: new Date(),
           claudeSessionId: null,
+          endedAt: null,
+          durationSeconds: 0,
         };
 
         // Persist asynchronously

@@ -7,6 +7,7 @@
 import { Router, Request, Response } from 'express';
 import log from 'electron-log';
 import * as sessionsRepo from '../../repositories/sessions';
+import * as sessionEventsRepo from '../../repositories/session-events';
 import { ptyManager } from '../../pty-manager';
 import { requireControlPermission, requireModifyPermission } from '../middleware/auth';
 import {
@@ -80,9 +81,18 @@ export function createSessionsRouter(): Router {
           createdAt: now,
           lastActivityAt: now,
           claudeSessionId: null,
+          endedAt: null,
+          durationSeconds: 0,
         };
 
         sessionsRepo.createSession(session);
+
+        // Log session start event (BDHLNDR-17)
+        try {
+          sessionEventsRepo.createEvent(session.id, 'session_start', null);
+        } catch (error) {
+          log.error('Failed to log session_start event:', error);
+        }
 
         // Start PTY if requested
         if (launchClaude) {
