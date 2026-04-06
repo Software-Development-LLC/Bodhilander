@@ -10,6 +10,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
+import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { CodeSearchModal } from './components/CodeSearchModal';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -1038,6 +1039,7 @@ const App: React.FC = () => {
                           {session.name}
                         </span>
                       )}
+                      <SessionStatsBadge sessionId={session.id} />
                     </div>
                     {sharingSessions.has(session.id) && (
                       <span className="share-indicator" title="Sharing" draggable={false}>⇄</span>
@@ -1209,6 +1211,7 @@ const App: React.FC = () => {
                             {session.name}
                           </span>
                         )}
+                        <SessionStatsBadge sessionId={session.id} />
                       </div>
                       {sharingSessions.has(session.id) && (
                         <span className="share-indicator" title="Sharing">⇄</span>

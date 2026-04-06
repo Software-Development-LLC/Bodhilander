@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Session } from '../../shared/types';
+import { useSessionStats, formatDuration, formatStatsTooltip } from '../store/session-stats';
 
 interface TerminalHeaderProps {
   session: Session;
@@ -20,6 +21,7 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(session.name);
+  const { stats } = useSessionStats(session.id);
 
   const handleFinishEdit = () => {
     if (editName.trim() && editName !== session.name) {
@@ -74,6 +76,22 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
       <span className="header-path" title={session.workingDir}>
         {truncatePath(session.workingDir)}
       </span>
+
+      {stats && stats.totalEvents > 0 && (
+        <span className="header-stats" title={formatStatsTooltip(stats)}>
+          {formatDuration(stats.totalDurationSeconds) && (
+            <span className="header-stat">{formatDuration(stats.totalDurationSeconds)}</span>
+          )}
+          {stats.totalEvents > 0 && (
+            <span className="header-stat">{stats.totalEvents} events</span>
+          )}
+          {Object.values(stats.toolUseCounts).reduce((s, c) => s + c, 0) > 0 && (
+            <span className="header-stat">
+              {Object.values(stats.toolUseCounts).reduce((s, c) => s + c, 0)} tools
+            </span>
+          )}
+        </span>
+      )}
 
       <div className="header-actions">
         <button className="header-action" onClick={onRestart} title="Restart session" aria-label="Restart session">
