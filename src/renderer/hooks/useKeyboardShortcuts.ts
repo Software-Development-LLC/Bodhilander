@@ -15,6 +15,7 @@ interface ShortcutHandlers {
   onExpand?: () => void;
   onSelect?: () => void;
   onCodeSearch?: () => void;
+  onToggleAnalytics?: () => void;
 }
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
@@ -88,6 +89,12 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
     if (isMod && e.shiftKey && key === 'f') {
       e.preventDefault();
       handlers.onCodeSearch?.();
+    }
+
+    // Ctrl+Shift+A = Analytics dashboard
+    if (isMod && e.shiftKey && key === 'a') {
+      e.preventDefault();
+      handlers.onToggleAnalytics?.();
     }
   }, [handlers]);
 

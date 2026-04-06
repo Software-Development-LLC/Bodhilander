@@ -6,13 +6,15 @@ import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
+import * as sessionEventsRepo from './repositories/session-events';
+import { exportSessions, ExportFormat } from './session-export';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { Group, Session, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
+import { Group, Session, SessionState, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
 import { authService } from './sharing/auth';
 import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
@@ -135,6 +137,44 @@ const sessionStates: Map<string, { name: string; state: string }> = new Map();
 soundManager.setSessionStateLookup((sessionId: string) => {
   return sessionStates.get(sessionId)?.state;
 });
+
+// Track which sessions have already had their state logged in this tick,
+// to deduplicate when both stateMonitor and ptyManager fire for the same transition.
+const recentlyLoggedStates: Map<string, { state: string; timestamp: number }> = new Map();
+
+/**
+ * Shared handler for session state change event logging (BDHLNDR-17).
+ * Called from both stateMonitor and ptyManager handlers.
+ * Deduplicates: if the same session+state was logged within the last 2 seconds, skips.
+ */
+function logSessionStateEvent(sessionId: string, newState: SessionState): void {
+  // Dedup guard: skip if same session+state was logged within 2 seconds
+  const recent = recentlyLoggedStates.get(sessionId);
+  const now = Date.now();
+  if (recent && recent.state === newState && (now - recent.timestamp) < 2000) {
+    return;
+  }
+  recentlyLoggedStates.set(sessionId, { state: newState, timestamp: now });
+
+  try {
+    const previousState = sessionStates.get(sessionId)?.state ?? 'unknown';
+    sessionEventsRepo.createEvent(sessionId, 'state_change', {
+      from: previousState,
+      to: newState,
+    });
+    if (newState === 'stopped') {
+      sessionEventsRepo.createEvent(sessionId, 'session_stop', null);
+      const breakdown = sessionEventsRepo.getStateBreakdown(sessionId);
+      const activeSeconds = (breakdown['working'] || 0) + (breakdown['waiting'] || 0);
+      sessionsRepo.updateSession(sessionId, {
+        endedAt: new Date(),
+        durationSeconds: activeSeconds,
+      });
+    }
+  } catch (error) {
+    log.error('Failed to log session event:', error);
+  }
+}
 
 const SPLASH_DURATION = 2500; // 2.5 seconds
 
@@ -264,6 +304,16 @@ function createWindow(): void {
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
 
+  // Prune session events older than 90 days (BDHLNDR-17)
+  try {
+    const pruned = sessionEventsRepo.pruneEvents(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000));
+    if (pruned > 0) {
+      log.info(`[SessionEvents] Pruned ${pruned} events older than 90 days`);
+    }
+  } catch (error) {
+    log.error('Failed to prune session events:', error);
+  }
+
   // Start state monitor
   stateMonitor = new StateMonitor(ptyManager.getSocketPath());
   stateMonitor.start();
@@ -279,6 +329,8 @@ function createWindow(): void {
     } catch (error) {
       console.error('Failed to update session state in database:', error);
     }
+    // Log session event with dedup (BDHLNDR-17)
+    logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
   });
@@ -394,6 +446,8 @@ function createWindow(): void {
     } catch (error) {
       console.error('Failed to update session state in database:', error);
     }
+    // Log session event with dedup (BDHLNDR-17)
+    logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
     // Broadcast to mobile clients
@@ -538,6 +592,12 @@ safeHandle('db:sessions:getAll', () => {
 
 safeHandle('db:sessions:create', (session: Session) => {
   sessionsRepo.createSession(session);
+  // Log session start event (BDHLNDR-17)
+  try {
+    sessionEventsRepo.createEvent(session.id, 'session_start', null);
+  } catch (error) {
+    log.error('Failed to log session_start event:', error);
+  }
   getApiServer().broadcastSessionsUpdated();
 });
 
@@ -597,6 +657,28 @@ safeHandle('db:memories:getById', (id: string) => {
 safeHandle('db:memories:getGlobal', () => {
   return memoriesRepo.getGlobalContextMemories();
 });
+
+// Database IPC Handlers - Session Events (BDHLNDR-17)
+safeHandle('db:sessionEvents:getBySession', (sessionId: string, limit?: number) =>
+  sessionEventsRepo.getEventsBySession(sessionId, limit)
+);
+
+safeHandle('db:sessionEvents:getSessionStats', (sessionId: string) =>
+  sessionEventsRepo.getSessionStats(sessionId)
+);
+
+safeHandle('db:sessionEvents:getGlobalStats', (since?: string) =>
+  sessionEventsRepo.getGlobalStats(since ? new Date(since) : undefined)
+);
+
+safeHandle('db:sessionEvents:getToolUseCounts', (sessionId?: string) =>
+  sessionEventsRepo.getToolUseCounts(sessionId)
+);
+
+// Session Export IPC Handlers (BDHLNDR-20)
+safeHandle('export:sessions', (format: ExportFormat, since?: string) =>
+  exportSessions({ format, since })
+);
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {

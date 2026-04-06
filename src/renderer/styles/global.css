@@ -372,14 +372,29 @@ body {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .session-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-stats-badge {
+  font-size: 10px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+  cursor: help;
+}
+
+.session.active .session-stats-badge {
+  color: #888;
 }
 
 .session-name-input {
@@ -640,6 +655,25 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.header-stats {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+.header-stat {
+  font-size: 11px;
+  color: #666;
+  white-space: nowrap;
+}
+
+.header-stat + .header-stat::before {
+  content: '·';
+  margin-right: 8px;
+  color: #555;
 }
 
 .header-actions {

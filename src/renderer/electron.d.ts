@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -60,6 +60,15 @@ interface ElectronAPI {
   getMemoryById: (id: string) => Promise<Memory | null>;
   getGlobalContextMemories: () => Promise<Memory[]>;
   onMemoryExtracted: (callback: (memory: Memory) => void) => () => void;
+
+  // Session Events (BDHLNDR-17)
+  getSessionEvents: (sessionId: string, limit?: number) => Promise<SessionEvent[]>;
+  getSessionStats: (sessionId: string) => Promise<SessionStats>;
+  getGlobalStats: (since?: string) => Promise<GlobalStats>;
+  getToolUseCounts: (sessionId?: string) => Promise<Record<string, number>>;
+
+  // Session Export (BDHLNDR-20)
+  exportSessions: (format: 'csv' | 'json', since?: string) => Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }>;
 
   // Preferences
   getPreference: (key: string) => Promise<string | null>;
