@@ -7,6 +7,7 @@ import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
+import { exportSessions, ExportFormat } from './session-export';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
@@ -672,6 +673,11 @@ safeHandle('db:sessionEvents:getGlobalStats', (since?: string) =>
 
 safeHandle('db:sessionEvents:getToolUseCounts', (sessionId?: string) =>
   sessionEventsRepo.getToolUseCounts(sessionId)
+);
+
+// Session Export IPC Handlers (BDHLNDR-20)
+safeHandle('export:sessions', (format: ExportFormat, since?: string) =>
+  exportSessions({ format, since })
 );
 
 // Preferences IPC Handlers

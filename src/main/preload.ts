@@ -160,6 +160,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getToolUseCounts: (sessionId?: string): Promise<Record<string, number>> =>
     ipcRenderer.invoke('db:sessionEvents:getToolUseCounts', sessionId),
 
+  // Session Export (BDHLNDR-20)
+  exportSessions: (format: 'csv' | 'json', since?: string): Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }> =>
+    ipcRenderer.invoke('export:sessions', format, since),
+
   // Preferences
   getPreference: (key: string): Promise<string | null> =>
     ipcRenderer.invoke('prefs:get', key),
