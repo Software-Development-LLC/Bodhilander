@@ -301,19 +301,32 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       });
 
     // Handle PTY data with smart auto-scroll (BDHLNDR-30)
-    // During rapid streaming, xterm.js viewport can lose sync and jump to random
-    // positions. Fix: if the user is near the bottom before the write, pin them
-    // to the bottom after the write. If they've scrolled up intentionally, leave
-    // them alone.
+    // During rapid streaming — especially when Claude rewrites lines in-place
+    // (task lists, progress indicators) via ANSI cursor-movement codes — the
+    // xterm.js viewport can desync and jump to random positions. Fix: if the
+    // user is near the bottom before the write, schedule a single
+    // requestAnimationFrame scroll correction that fires after the browser has
+    // processed all writes and redraws for that frame.
+    let scrollRafId = 0;
+    let shouldPin = false;
     const cleanupPtyData = window.electronAPI.onPtyData((id, data) => {
       if (id === sessionId) {
         const buf = term.buffer.active;
-        const wasNearBottom = (buf.baseY - buf.viewportY) <= AUTO_SCROLL_THRESHOLD;
-        term.write(data, () => {
-          if (wasNearBottom) {
-            term.scrollToBottom();
-          }
-        });
+        const nearBottom = (buf.baseY - buf.viewportY) <= AUTO_SCROLL_THRESHOLD;
+        if (nearBottom) {
+          shouldPin = true;
+        }
+        term.write(data);
+        // Coalesce: many writes per frame → one scroll correction after paint
+        if (shouldPin && !scrollRafId) {
+          scrollRafId = requestAnimationFrame(() => {
+            scrollRafId = 0;
+            if (shouldPin) {
+              term.scrollToBottom();
+              shouldPin = false;
+            }
+          });
+        }
       }
     });
 
@@ -406,6 +419,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
 
     return () => {
       mounted = false;
+      if (scrollRafId) cancelAnimationFrame(scrollRafId);
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       cleanupPtyData();
