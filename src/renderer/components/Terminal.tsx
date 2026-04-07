@@ -25,6 +25,10 @@ interface ContextMenuState {
 }
 
 const PASTE_DEBOUNCE_MS = 300;
+// BDHLNDR-30: Number of lines from bottom to consider "near bottom" for auto-scroll.
+// If the user is within this many lines of the bottom, new output will pin the
+// viewport to the bottom. If they've scrolled further up, they won't be disturbed.
+const AUTO_SCROLL_THRESHOLD = 5;
 
 const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -296,10 +300,20 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         onError?.(errorMsg);
       });
 
-    // Handle PTY data
+    // Handle PTY data with smart auto-scroll (BDHLNDR-30)
+    // During rapid streaming, xterm.js viewport can lose sync and jump to random
+    // positions. Fix: if the user is near the bottom before the write, pin them
+    // to the bottom after the write. If they've scrolled up intentionally, leave
+    // them alone.
     const cleanupPtyData = window.electronAPI.onPtyData((id, data) => {
       if (id === sessionId) {
-        term.write(data);
+        const buf = term.buffer.active;
+        const wasNearBottom = (buf.baseY - buf.viewportY) <= AUTO_SCROLL_THRESHOLD;
+        term.write(data, () => {
+          if (wasNearBottom) {
+            term.scrollToBottom();
+          }
+        });
       }
     });
 
