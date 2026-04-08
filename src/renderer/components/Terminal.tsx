@@ -47,20 +47,30 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
 
+  // Track isActive in a ref so handleResize (set up in the main effect which
+  // does NOT depend on isActive) can skip hidden terminals. Without this,
+  // window-resize and ResizeObserver events call fitAddon.fit() on a
+  // display:none container, corrupting xterm's internal column count.
+  const isActiveRef = useRef(isActive);
+  useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
+
   // Fit the xterm renderer to the current container size AND propagate the new
   // cols/rows to the PTY (BDHLNDR-12). Kept as a single source of truth so the
   // ResizeObserver, the window resize listener, and the session-activation
   // effect all go through the same path.
   const handleResize = useCallback(() => {
-    if (fitAddonRef.current && xtermRef.current) {
-      fitAddonRef.current.fit();
-      const { cols, rows } = xtermRef.current;
-      // Guard: don't propagate bogus dimensions from a hidden/unsized container.
-      // fitAddon returns cols≈2 when the element has display:none, which would
-      // cause the shell to hard-wrap all output at the wrong width.
-      if (cols >= MIN_COLS && rows >= MIN_ROWS) {
-        window.electronAPI.resizeSession(sessionId, cols, rows);
-      }
+    if (!fitAddonRef.current || !xtermRef.current) return;
+    // Skip hidden terminals entirely. fitAddon.fit() on a display:none
+    // container measures ≈2 cols and internally resizes xterm to that bogus
+    // value, corrupting the buffer. The session-activation effect handles
+    // resize when the terminal becomes visible again.
+    if (!isActiveRef.current) return;
+
+    fitAddonRef.current.fit();
+    const { cols, rows } = xtermRef.current;
+    // Guard: don't propagate bogus dimensions from an unsized container.
+    if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+      window.electronAPI.resizeSession(sessionId, cols, rows);
     }
   }, [sessionId]);
 
@@ -106,29 +116,34 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // keeps emitting at the stale column count and the visible output appears
   // hard-wrapped to a narrow width (BDHLNDR-12).
   //
-  // The double-rAF + setTimeout ensures xterm has fully laid out after the
-  // display:none→flex transition before we attempt to scroll. A single rAF
-  // can fire before the browser has flushed the new layout.
+  // Multiple attempts at increasing delays because:
+  // - rAF may fire before the browser has flushed display:none→flex layout
+  // - xterm.js internal renderer state may be stale from being hidden
+  // - The grid/flex layout may settle across multiple frames
   useEffect(() => {
     if (isActive && xtermRef.current && fitAddonRef.current) {
+      const timers: number[] = [];
+
       requestAnimationFrame(() => {
         handleResize();
         xtermRef.current?.scrollToBottom();
-        // Second pass: re-fit after the browser has flushed the display
-        // change, which triggers xterm buffer reflow to correct width.
         requestAnimationFrame(() => {
           handleResize();
           xtermRef.current?.scrollToBottom();
         });
       });
-      // Third pass as a safety net for slower layout transitions.
-      const safetyTimer = setTimeout(() => {
-        if (fitAddonRef.current && xtermRef.current) {
-          handleResize();
-          xtermRef.current.scrollToBottom();
-        }
-      }, 150);
-      return () => clearTimeout(safetyTimer);
+
+      // Safety net attempts at increasing delays for slow layout transitions
+      for (const delay of [100, 250, 500]) {
+        timers.push(window.setTimeout(() => {
+          if (fitAddonRef.current && xtermRef.current) {
+            handleResize();
+            xtermRef.current.scrollToBottom();
+          }
+        }, delay));
+      }
+
+      return () => timers.forEach(t => clearTimeout(t));
     }
   }, [isActive, handleResize]);
 
