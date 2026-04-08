@@ -46,6 +46,8 @@ interface PtySession {
   /** Last known column/row count — used to detect actual size changes. */
   lastCols: number;
   lastRows: number;
+  /** Set to true when kill() is in progress — guards against use-after-free on native PTY handle. */
+  killing: boolean;
 }
 
 /**
@@ -242,6 +244,10 @@ class PtyManager extends EventEmitter {
     });
 
     ptyProcess.onData((data) => {
+      const session = this.sessions.get(id);
+      // Guard: reject data from a PTY that is being torn down
+      if (!session || session.killing) return;
+
       // Filter out Windows ConPTY error messages
       // Win32 error 299 (ERROR_PARTIAL_COPY) is a race condition when reading from
       // a terminating process. Using useConptyDll should reduce these occurrences.
@@ -257,7 +263,6 @@ class PtyManager extends EventEmitter {
       }
 
       // Append to scrollback buffer
-      const session = this.sessions.get(id);
       if (session) {
         session.scrollbackBuffer += filteredData;
         // Trim if too large (keep last MAX_SCROLLBACK_SIZE bytes)
@@ -336,20 +341,21 @@ class PtyManager extends EventEmitter {
       spawnedAt: Date.now(),
       lastCols: 80,
       lastRows: 24,
+      killing: false,
     });
 
   }
 
   write(id: string, data: string): void {
     const session = this.sessions.get(id);
-    if (session) {
+    if (session && !session.killing) {
       session.pty.write(data);
     }
   }
 
   resize(id: string, cols: number, rows: number): void {
     const session = this.sessions.get(id);
-    if (!session) return;
+    if (!session || session.killing) return;
     // Skip no-op resizes to avoid unnecessary ConPTY churn on Windows
     if (session.lastCols === cols && session.lastRows === rows) return;
     session.lastCols = cols;
@@ -365,6 +371,10 @@ class PtyManager extends EventEmitter {
         return;
       }
 
+      // Mark as killing FIRST — prevents write/resize/onData from touching
+      // the native PTY handle during teardown.
+      session.killing = true;
+
       if (session.idleTimeout) {
         clearTimeout(session.idleTimeout);
       }
@@ -373,45 +383,49 @@ class PtyManager extends EventEmitter {
       }
 
       const pid = session.pty.pid;
-      let exited = false;
 
-      const onExit = () => {
-        if (exited) return;
-        exited = true;
-        this.sessions.delete(id);
-        resolve();
-      };
-
-      // Listen for normal exit
-      session.pty.onExit(() => onExit());
+      // Remove from map BEFORE calling pty.kill() so concurrent IPC calls
+      // (write, resize) get a null lookup and bail out instead of hitting
+      // a freed native handle.
+      this.sessions.delete(id);
 
       // Send graceful kill signal
       session.pty.kill();
 
+      // The onExit handler registered in createSession will fire and emit
+      // the 'exit' event. We just need to resolve this promise once the
+      // process is gone.
+      let resolved = false;
+      const done = () => {
+        if (resolved) return;
+        resolved = true;
+        resolve();
+      };
+
       // Force-kill after 3 seconds if process hasn't exited (Windows only)
       if (process.platform === 'win32' && pid) {
         setTimeout(() => {
-          if (!exited) {
+          if (!resolved) {
             log.warn(`[PTY] Force-killing session ${id} (pid ${pid}) after 3s timeout`);
             try {
               execFile('taskkill', ['/F', '/T', '/PID', String(pid)], (err) => {
                 if (err) {
                   log.error(`[PTY] taskkill failed for pid ${pid}:`, err);
                 }
-                onExit();
+                done();
               });
             } catch (err) {
               log.error(`[PTY] Failed to spawn taskkill for pid ${pid}:`, err);
-              onExit();
+              done();
             }
           }
         }, 3000);
       } else {
         // On non-Windows, fall back to a timeout cleanup
         setTimeout(() => {
-          if (!exited) {
+          if (!resolved) {
             log.warn(`[PTY] Session ${id} did not exit within 3s, cleaning up`);
-            onExit();
+            done();
           }
         }, 3000);
       }
