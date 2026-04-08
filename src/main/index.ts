@@ -8,6 +8,7 @@ import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
 import { exportSessions, ExportFormat } from './session-export';
+import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
@@ -679,6 +680,11 @@ safeHandle('db:sessionEvents:getToolUseCounts', (sessionId?: string) =>
 safeHandle('export:sessions', (format: ExportFormat, since?: string) =>
   exportSessions({ format, since })
 );
+
+// Group & Session Import/Export
+safeHandle('export:groups', () => exportGroupsAndSessions());
+safeHandle('import:groups', () => importGroupsAndSessions());
+safeHandle('import:fromClaudeLander', () => importFromClaudeLander());
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {
