@@ -348,4 +348,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getEditorOptions: (): Promise<{ value: string; label: string }[]> =>
     ipcRenderer.invoke('editor:getOptions'),
+
+  // Error logging — forward renderer errors to main process log file
+  logError: (source: string, message: string, stack?: string): Promise<void> =>
+    ipcRenderer.invoke('log:error', source, message, stack),
+  logWarn: (source: string, message: string): Promise<void> =>
+    ipcRenderer.invoke('log:warn', source, message),
+  getLogPaths: (): Promise<{ logFile: string | null; crashDumps: string }> =>
+    ipcRenderer.invoke('log:getPaths'),
 });

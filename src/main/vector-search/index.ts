@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as chokidar from 'chokidar';
 import { EventEmitter } from 'events';
 import { app } from 'electron';
+import log from 'electron-log';
 import * as codeSearchRepo from '../repositories/code-search';
 import { getEmbeddingProvider } from './embedding-provider';
 import { ParsedSymbol } from './parser';
@@ -240,17 +241,16 @@ export class VectorSearchManager extends EventEmitter {
 
     this.workers.set(index.id, worker);
 
-    // Forward worker stdout to console
+    // Forward worker stdout/stderr to electron-log so they land in the log file
     if (worker.stdout) {
       worker.stdout.on('data', (data: Buffer) => {
-        console.log('[VectorSearch Worker]', data.toString().trim());
+        log.info('[VectorSearch Worker]', data.toString().trim());
       });
     }
 
-    // Forward worker stderr to console
     if (worker.stderr) {
       worker.stderr.on('data', (data: Buffer) => {
-        console.error('[VectorSearch Worker Error]', data.toString().trim());
+        log.error('[VectorSearch Worker]', data.toString().trim());
       });
     }
 
@@ -259,8 +259,8 @@ export class VectorSearchManager extends EventEmitter {
     });
 
     worker.on('error', (err: Error) => {
-      console.error('[VectorSearch] Worker error:', err);
-      console.error('[VectorSearch] Worker error stack:', err.stack);
+      log.error('[VectorSearch] Worker error:', err);
+      log.error('[VectorSearch] Worker error stack:', err.stack);
       const errorMsg = err.message || 'Worker thread error';
       codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
       this.workers.delete(index.id);
@@ -275,7 +275,7 @@ export class VectorSearchManager extends EventEmitter {
       this.workers.delete(index.id);
       if (code !== 0 && !this.cancelledIndexes.has(index.id)) {
         const errorMsg = `Worker exited with code ${code}`;
-        console.error('[VectorSearch]', errorMsg);
+        log.error('[VectorSearch]', errorMsg);
         codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
         this.emit('indexing-error', {
           indexId: index.id,
@@ -289,7 +289,7 @@ export class VectorSearchManager extends EventEmitter {
     const timeout = setTimeout(() => {
       if (this.workers.has(index.id)) {
         const errorMsg = 'Worker timed out during initialization (model download may have failed)';
-        console.error('[VectorSearch]', errorMsg);
+        log.error('[VectorSearch]', errorMsg);
         // Fire-and-forget — the timeout handler isn't async. Termination
         // races are bounded here since we just update DB/emit after.
         void this.cancelIndexing(index.id);
