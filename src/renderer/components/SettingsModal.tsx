@@ -633,6 +633,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     <span className="settings-hint">Reads the ClaudeLander database directly — no export step needed</span>
                   </div>
                 </div>
+
+                <div className="settings-group">
+                  <h4>Diagnostics</h4>
+                  <div className="settings-row">
+                    <label>Log Files:</label>
+                    <button
+                      className="settings-button"
+                      onClick={async () => {
+                        const paths = await window.electronAPI.getLogPaths();
+                        if (paths.logFile) {
+                          const dir = paths.logFile.replace(/[\\/][^\\/]+$/, '');
+                          window.electronAPI.openExternal(`file://${dir}`);
+                        }
+                      }}
+                    >
+                      Open Log Folder
+                    </button>
+                    <span className="settings-hint">View application logs for troubleshooting</span>
+                  </div>
+                  <div className="settings-row">
+                    <label>Crash Dumps:</label>
+                    <button
+                      className="settings-button"
+                      onClick={async () => {
+                        const paths = await window.electronAPI.getLogPaths();
+                        window.electronAPI.openExternal(`file://${paths.crashDumps}`);
+                      }}
+                    >
+                      Open Crash Dumps Folder
+                    </button>
+                    <span className="settings-hint">View native crash dumps (minidump files)</span>
+                  </div>
+                </div>
               </div>
             )}
 

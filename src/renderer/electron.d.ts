@@ -163,6 +163,11 @@ interface ElectronAPI {
   openInEditor: (filePath: string, line?: number, column?: number) => Promise<{ success: boolean; error?: string }>;
   detectAvailableEditors: () => Promise<string[]>;
   getEditorOptions: () => Promise<{ value: string; label: string }[]>;
+
+  // Error logging
+  logError: (source: string, message: string, stack?: string) => Promise<void>;
+  logWarn: (source: string, message: string) => Promise<void>;
+  getLogPaths: () => Promise<{ logFile: string | null; crashDumps: string }>;
 }
 
 declare global {
