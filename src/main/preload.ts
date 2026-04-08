@@ -164,6 +164,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportSessions: (format: 'csv' | 'json', since?: string): Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }> =>
     ipcRenderer.invoke('export:sessions', format, since),
 
+  // Group & Session Import/Export
+  exportGroups: (): Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }> =>
+    ipcRenderer.invoke('export:groups'),
+  importGroups: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+    ipcRenderer.invoke('import:groups'),
+  importFromClaudeLander: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+    ipcRenderer.invoke('import:fromClaudeLander'),
+
   // Preferences
   getPreference: (key: string): Promise<string | null> =>
     ipcRenderer.invoke('prefs:get', key),
