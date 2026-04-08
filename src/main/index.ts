@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { getDatabase, closeDatabase } from './database';
@@ -8,6 +8,7 @@ import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
 import { exportSessions, ExportFormat } from './session-export';
+import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
@@ -24,6 +25,22 @@ import log from 'electron-log';
 import { getApiServer } from './api';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
+
+// ---------------------------------------------------------------------------
+// Logging & crash reporting configuration
+// ---------------------------------------------------------------------------
+
+// Enable Electron's native crash reporter — writes minidump files locally
+// so we can diagnose native-module crashes (e.g. node-pty SIGSEGV).
+crashReporter.start({
+  submitURL: '',       // No remote server — dumps stay local
+  uploadToServer: false,
+  compress: false,
+});
+
+// Configure electron-log: file rotation to prevent unbounded disk growth
+log.transports.file.maxSize = 5 * 1024 * 1024; // 5 MB per log file
+log.transports.file.level = 'info';
 
 // Global error handlers to catch uncaught exceptions and prevent silent crashes
 process.on('uncaughtException', (error: Error) => {
@@ -680,6 +697,11 @@ safeHandle('export:sessions', (format: ExportFormat, since?: string) =>
   exportSessions({ format, since })
 );
 
+// Group & Session Import/Export
+safeHandle('export:groups', () => exportGroupsAndSessions());
+safeHandle('import:groups', () => importGroupsAndSessions());
+safeHandle('import:fromClaudeLander', () => importFromClaudeLander());
+
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {
   return prefsRepo.getPreference(key);
@@ -1137,6 +1159,24 @@ app.on('render-process-gone', (event, webContents, details) => {
 // Handle child process crashes
 app.on('child-process-gone', (event, details) => {
   log.error('[Main] Child process gone:', details.type, details.reason, details.exitCode);
+});
+
+// Renderer error forwarding — renderer calls this via IPC so errors land in the log file
+safeHandle('log:error', (source: string, message: string, stack?: string) => {
+  log.error(`[Renderer:${source}]`, message);
+  if (stack) log.error(`[Renderer:${source}] Stack:`, stack);
+});
+
+safeHandle('log:warn', (source: string, message: string) => {
+  log.warn(`[Renderer:${source}]`, message);
+});
+
+// Expose log file path and crash dump directory so user can find them
+safeHandle('log:getPaths', () => {
+  return {
+    logFile: log.transports.file.getFile()?.path || null,
+    crashDumps: app.getPath('crashDumps'),
+  };
 });
 
 app.on('window-all-closed', () => {

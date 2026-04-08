@@ -70,6 +70,11 @@ interface ElectronAPI {
   // Session Export (BDHLNDR-20)
   exportSessions: (format: 'csv' | 'json', since?: string) => Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }>;
 
+  // Group & Session Import/Export
+  exportGroups: () => Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }>;
+  importGroups: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
+  importFromClaudeLander: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
+
   // Preferences
   getPreference: (key: string) => Promise<string | null>;
   setPreference: (key: string, value: string) => Promise<void>;
@@ -158,6 +163,11 @@ interface ElectronAPI {
   openInEditor: (filePath: string, line?: number, column?: number) => Promise<{ success: boolean; error?: string }>;
   detectAvailableEditors: () => Promise<string[]>;
   getEditorOptions: () => Promise<{ value: string; label: string }[]>;
+
+  // Error logging
+  logError: (source: string, message: string, stack?: string) => Promise<void>;
+  logWarn: (source: string, message: string) => Promise<void>;
+  getLogPaths: () => Promise<{ logFile: string | null; crashDumps: string }>;
 }
 
 declare global {

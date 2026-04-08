@@ -164,6 +164,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportSessions: (format: 'csv' | 'json', since?: string): Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }> =>
     ipcRenderer.invoke('export:sessions', format, since),
 
+  // Group & Session Import/Export
+  exportGroups: (): Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }> =>
+    ipcRenderer.invoke('export:groups'),
+  importGroups: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+    ipcRenderer.invoke('import:groups'),
+  importFromClaudeLander: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+    ipcRenderer.invoke('import:fromClaudeLander'),
+
   // Preferences
   getPreference: (key: string): Promise<string | null> =>
     ipcRenderer.invoke('prefs:get', key),
@@ -340,4 +348,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getEditorOptions: (): Promise<{ value: string; label: string }[]> =>
     ipcRenderer.invoke('editor:getOptions'),
+
+  // Error logging — forward renderer errors to main process log file
+  logError: (source: string, message: string, stack?: string): Promise<void> =>
+    ipcRenderer.invoke('log:error', source, message, stack),
+  logWarn: (source: string, message: string): Promise<void> =>
+    ipcRenderer.invoke('log:warn', source, message),
+  getLogPaths: (): Promise<{ logFile: string | null; crashDumps: string }> =>
+    ipcRenderer.invoke('log:getPaths'),
 });

@@ -572,6 +572,100 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     <span className="settings-hint">Minimize to system tray instead of quitting when closing window</span>
                   </div>
                 </div>
+
+                <div className="settings-group">
+                  <h4>Data</h4>
+                  <div className="settings-row">
+                    <label>Import / Export:</label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        className="settings-button"
+                        onClick={async () => {
+                          const result = await window.electronAPI.exportGroups();
+                          if (result.success) {
+                            alert(`Exported ${result.groupCount} groups and ${result.sessionCount} sessions.`);
+                          } else if (result.error && result.error !== 'Export cancelled') {
+                            alert(`Export failed: ${result.error}`);
+                          }
+                        }}
+                      >
+                        Export Groups & Sessions
+                      </button>
+                      <button
+                        className="settings-button"
+                        onClick={async () => {
+                          const result = await window.electronAPI.importGroups();
+                          if (result.success) {
+                            alert(`Imported ${result.groupCount} groups and ${result.sessionCount} sessions.` +
+                              (result.skippedGroups || result.skippedSessions
+                                ? ` (Skipped ${result.skippedGroups} existing groups, ${result.skippedSessions} existing sessions)`
+                                : ''));
+                            window.location.reload();
+                          } else if (result.error && result.error !== 'Import cancelled') {
+                            alert(`Import failed: ${result.error}`);
+                          }
+                        }}
+                      >
+                        Import Groups & Sessions
+                      </button>
+                    </div>
+                    <span className="settings-hint">Transfer groups and sessions between Bodhilander and ClaudeLander</span>
+                  </div>
+                  <div className="settings-row">
+                    <label>ClaudeLander:</label>
+                    <button
+                      className="settings-button"
+                      onClick={async () => {
+                        const result = await window.electronAPI.importFromClaudeLander();
+                        if (result.success) {
+                          alert(`Imported ${result.groupCount} groups and ${result.sessionCount} sessions from ClaudeLander.` +
+                            (result.skippedGroups || result.skippedSessions
+                              ? ` (Skipped ${result.skippedGroups} existing groups, ${result.skippedSessions} existing sessions)`
+                              : ''));
+                          window.location.reload();
+                        } else if (result.error) {
+                          alert(result.error);
+                        }
+                      }}
+                    >
+                      Import directly from ClaudeLander
+                    </button>
+                    <span className="settings-hint">Reads the ClaudeLander database directly — no export step needed</span>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h4>Diagnostics</h4>
+                  <div className="settings-row">
+                    <label>Log Files:</label>
+                    <button
+                      className="settings-button"
+                      onClick={async () => {
+                        const paths = await window.electronAPI.getLogPaths();
+                        if (paths.logFile) {
+                          const dir = paths.logFile.replace(/[\\/][^\\/]+$/, '');
+                          window.electronAPI.openExternal(`file://${dir}`);
+                        }
+                      }}
+                    >
+                      Open Log Folder
+                    </button>
+                    <span className="settings-hint">View application logs for troubleshooting</span>
+                  </div>
+                  <div className="settings-row">
+                    <label>Crash Dumps:</label>
+                    <button
+                      className="settings-button"
+                      onClick={async () => {
+                        const paths = await window.electronAPI.getLogPaths();
+                        window.electronAPI.openExternal(`file://${paths.crashDumps}`);
+                      }}
+                    >
+                      Open Crash Dumps Folder
+                    </button>
+                    <span className="settings-hint">View native crash dumps (minidump files)</span>
+                  </div>
+                </div>
               </div>
             )}
 
