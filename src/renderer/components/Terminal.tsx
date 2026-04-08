@@ -29,6 +29,12 @@ const PASTE_DEBOUNCE_MS = 300;
 // If the user is within this many lines of the bottom, new output will pin the
 // viewport to the bottom. If they've scrolled further up, they won't be disturbed.
 const AUTO_SCROLL_THRESHOLD = 5;
+// Minimum dimensions to send to the PTY. If fitAddon measures a hidden or
+// not-yet-laid-out container it can return as few as 2 cols — sending that to
+// the PTY causes Claude to hard-wrap output at the wrong width. Guard against
+// this by requiring a sane minimum before propagating a resize.
+const MIN_COLS = 10;
+const MIN_ROWS = 2;
 
 const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -49,7 +55,12 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     if (fitAddonRef.current && xtermRef.current) {
       fitAddonRef.current.fit();
       const { cols, rows } = xtermRef.current;
-      window.electronAPI.resizeSession(sessionId, cols, rows);
+      // Guard: don't propagate bogus dimensions from a hidden/unsized container.
+      // fitAddon returns cols≈2 when the element has display:none, which would
+      // cause the shell to hard-wrap all output at the wrong width.
+      if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+        window.electronAPI.resizeSession(sessionId, cols, rows);
+      }
     }
   }, [sessionId]);
 
@@ -285,12 +296,15 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     // Create PTY session with error handling
     window.electronAPI.createSession(sessionId, cwd, launchClaude)
       .then(() => {
-        // Immediately send resize after PTY creation to fix Windows ConPTY race condition
-        // where input doesn't register until a resize event syncs the terminal
+        // Send resize after PTY creation to fix Windows ConPTY race condition
+        // where input doesn't register until a resize event syncs the terminal.
+        // Guard against bogus dimensions from a container that hasn't laid out yet.
         if (fitAddonRef.current && xtermRef.current) {
           fitAddonRef.current.fit();
           const { cols, rows } = xtermRef.current;
-          window.electronAPI.resizeSession(sessionId, cols, rows);
+          if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+            window.electronAPI.resizeSession(sessionId, cols, rows);
+          }
         }
       })
       .catch((err) => {

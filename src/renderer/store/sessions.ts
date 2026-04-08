@@ -64,10 +64,16 @@ export function useSessions() {
           durationSeconds: 0,
         };
 
+        // Activate immediately so the Terminal mounts in a visible container.
+        // Previously this was deferred to the .then() below, which meant the
+        // terminal wrapper had display:none during the first render. fitAddon
+        // would measure a hidden container (≈2 cols) and send that bogus size
+        // to the PTY, causing Claude to output at the wrong column width.
+        setActiveSessionId(session.id);
+
         // Persist asynchronously
         window.electronAPI.createDbSession(session)
           .then(() => {
-            setActiveSessionId(session.id);
             resolve(session);
           })
           .catch((error) => {
