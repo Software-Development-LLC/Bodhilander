@@ -83,11 +83,19 @@ function detectWindowsShell(): ShellInfo {
 }
 
 function detectUnixShell(): ShellInfo {
-  const shell = process.env.SHELL || '/bin/zsh';
+  let actualShell: string;
+
+  if (process.platform === 'darwin') {
+    // macOS: default to /bin/zsh (default shell since Catalina).
+    // process.env.SHELL may be stale or unavailable when Electron is
+    // launched from Finder/Dock, causing claude to not be found on PATH.
+    actualShell = '/bin/zsh';
+  } else {
+    actualShell = process.env.SHELL || '/bin/bash';
+  }
 
   // Verify shell exists, fallback to common shells
-  let actualShell = shell;
-  if (!fs.existsSync(shell)) {
+  if (!fs.existsSync(actualShell)) {
     const fallbacks = ['/bin/zsh', '/bin/bash', '/bin/sh'];
     for (const fb of fallbacks) {
       if (fs.existsSync(fb)) {
