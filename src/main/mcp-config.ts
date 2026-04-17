@@ -139,21 +139,32 @@ function getMcpServerPath(): string {
 }
 
 /**
- * Get the path to Claude Code's config file
- * MCP servers are stored in ~/.claude.json (not ~/.claude/settings.json)
+ * Resolve the `.claude` config directory for a given account (BDHLNDR-31).
+ * When configDir is omitted, defaults to the user's global ~/.claude.
+ * Pass an account's isolated configDir to register MCP/hooks into that
+ * account's sandbox instead of the global one.
  */
-function getClaudeConfigPath(): string {
-  const homeDir = os.homedir();
-
-  // Claude Code stores MCP servers in ~/.claude.json on all platforms
-  return path.join(homeDir, '.claude.json');
+function resolveConfigDir(configDir?: string): string {
+  return configDir ?? path.join(os.homedir(), '.claude');
 }
 
 /**
- * Read Claude Code MCP config (~/.claude.json), returning empty object if doesn't exist
+ * Get the path to Claude Code's MCP config file for the given config dir.
+ * Claude Code keeps MCP servers in a `.claude.json` that sits alongside the
+ * `.claude/` directory (not inside it). For the default case this is
+ * `~/.claude.json`; for an isolated account it's `<parent>/.claude.json`
+ * next to the account's `.claude/`.
  */
-function readClaudeMcpConfig(): ClaudeMcpConfig {
-  const configPath = getClaudeConfigPath();
+function getClaudeConfigPath(configDir?: string): string {
+  const claudeDir = resolveConfigDir(configDir);
+  return path.join(path.dirname(claudeDir), '.claude.json');
+}
+
+/**
+ * Read Claude Code MCP config, returning empty object if the file doesn't exist
+ */
+function readClaudeMcpConfig(configDir?: string): ClaudeMcpConfig {
+  const configPath = getClaudeConfigPath(configDir);
 
   try {
     if (fs.existsSync(configPath)) {
@@ -170,10 +181,12 @@ function readClaudeMcpConfig(): ClaudeMcpConfig {
 /**
  * Write Claude Code MCP config
  */
-function writeClaudeMcpConfig(config: ClaudeMcpConfig): boolean {
-  const configPath = getClaudeConfigPath();
+function writeClaudeMcpConfig(config: ClaudeMcpConfig, configDir?: string): boolean {
+  const configPath = getClaudeConfigPath(configDir);
 
   try {
+    // Ensure parent dir exists (account root may not exist until first write).
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
     return true;
   } catch (err) {
@@ -183,19 +196,19 @@ function writeClaudeMcpConfig(config: ClaudeMcpConfig): boolean {
 }
 
 /**
- * Get path to Claude Code settings file (~/.claude/settings.json)
- * This is where hooks are configured
+ * Get path to Claude Code settings file. Hooks are configured here.
+ * Default: `~/.claude/settings.json`. With a configDir passed: `<configDir>/settings.json`.
  */
-function getClaudeSettingsPath(): string {
-  const homeDir = os.homedir();
-  return path.join(homeDir, '.claude', 'settings.json');
+function getClaudeSettingsPath(configDir?: string): string {
+  return path.join(resolveConfigDir(configDir), 'settings.json');
 }
 
 /**
- * Read Claude Code settings (~/.claude/settings.json)
+ * Read Claude Code settings for the given config dir.
+ * Default target: `~/.claude/settings.json`.
  */
-function readClaudeSettings(): ClaudeSettingsConfig {
-  const settingsPath = getClaudeSettingsPath();
+function readClaudeSettings(configDir?: string): ClaudeSettingsConfig {
+  const settingsPath = getClaudeSettingsPath(configDir);
 
   try {
     if (fs.existsSync(settingsPath)) {
@@ -212,11 +225,11 @@ function readClaudeSettings(): ClaudeSettingsConfig {
 /**
  * Write Claude Code settings
  */
-function writeClaudeSettings(settings: ClaudeSettingsConfig): boolean {
-  const settingsPath = getClaudeSettingsPath();
+function writeClaudeSettings(settings: ClaudeSettingsConfig, configDir?: string): boolean {
+  const settingsPath = getClaudeSettingsPath(configDir);
 
   try {
-    // Ensure .claude directory exists
+    // Ensure the target .claude directory exists
     const claudeDir = path.dirname(settingsPath);
     if (!fs.existsSync(claudeDir)) {
       fs.mkdirSync(claudeDir, { recursive: true });
@@ -284,7 +297,7 @@ function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: stri
  * Register the Bodhilander Memory MCP server with Claude Code
  * Returns true if configuration was added/updated, false if already configured
  */
-export function registerMcpServer(): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; path?: string; error?: string } {
+export function registerMcpServer(configDir?: string): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; path?: string; error?: string } {
   try {
     const mcpServerPath = getMcpServerPath();
 
@@ -294,11 +307,11 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
       return { success: false, action: 'error', error: `MCP server not found at ${mcpServerPath}` };
     }
 
-    const config = readClaudeMcpConfig();
+    const config = readClaudeMcpConfig(configDir);
 
     // Check if already configured correctly
     if (isServerConfigured(config, mcpServerPath)) {
-      log.info('[MCP Config] MCP server already configured correctly');
+      log.info(`[MCP Config] MCP server already configured correctly for ${configDir ?? '(default)'}`);
       return { success: true, action: 'unchanged', path: mcpServerPath };
     }
 
@@ -316,8 +329,8 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
     };
 
     // Write the updated config
-    if (writeClaudeMcpConfig(config)) {
-      log.info(`[MCP Config] MCP server ${action} successfully:`, mcpServerPath);
+    if (writeClaudeMcpConfig(config, configDir)) {
+      log.info(`[MCP Config] MCP server ${action} successfully for ${configDir ?? '(default)'}:`, mcpServerPath);
       return { success: true, action, path: mcpServerPath };
     } else {
       return { success: false, action: 'error', error: 'Failed to write config file' };
@@ -337,10 +350,10 @@ export function registerMcpServer(): { success: boolean; action: 'added' | 'upda
  * name) are purged from ALL hook types before any file-existence check, so
  * users of renamed/removed installs aren't left with broken hook commands.
  */
-export function registerHooks(): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; error?: string } {
+export function registerHooks(configDir?: string): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; error?: string } {
   try {
     const hookScriptPath = getHookScriptPath();
-    const settings = readClaudeSettings();
+    const settings = readClaudeSettings(configDir);
 
     // Purge stale Bodhilander/ClaudeLander entries FIRST — do this before any
     // early return, so users whose new hook script is missing still get their
@@ -348,8 +361,8 @@ export function registerHooks(): { success: boolean; action: 'added' | 'updated'
     // valid entries in place so repeated startups don't thrash settings.
     const purged = purgeOurHooks(settings, hookScriptPath);
     if (purged) {
-      writeClaudeSettings(settings);
-      log.info('[Hooks Config] Purged stale Bodhilander/ClaudeLander hook entries');
+      writeClaudeSettings(settings, configDir);
+      log.info(`[Hooks Config] Purged stale Bodhilander/ClaudeLander hook entries from ${configDir ?? '(default)'}`);
     }
 
     // Verify the hook script exists before attempting to register new entries
@@ -360,7 +373,7 @@ export function registerHooks(): { success: boolean; action: 'added' | 'updated'
 
     // Check if current (correct-path) entries are already configured
     if (areHooksConfigured(settings, hookScriptPath)) {
-      log.info('[Hooks Config] Hooks already configured');
+      log.info(`[Hooks Config] Hooks already configured for ${configDir ?? '(default)'}`);
       return { success: true, action: 'unchanged' };
     }
 
@@ -389,8 +402,8 @@ export function registerHooks(): { success: boolean; action: 'added' | 'updated'
     settings.hooks.Stop = [...(settings.hooks.Stop ?? []), stopHook];
 
     // Write the updated settings
-    if (writeClaudeSettings(settings)) {
-      log.info(`[Hooks Config] Hooks ${action} successfully`);
+    if (writeClaudeSettings(settings, configDir)) {
+      log.info(`[Hooks Config] Hooks ${action} successfully for ${configDir ?? '(default)'}`);
       return { success: true, action };
     } else {
       return { success: false, action: 'error', error: 'Failed to write settings file' };
@@ -405,9 +418,9 @@ export function registerHooks(): { success: boolean; action: 'added' | 'updated'
 /**
  * Unregister the Bodhilander Memory MCP server from Claude Code
  */
-export function unregisterMcpServer(): boolean {
+export function unregisterMcpServer(configDir?: string): boolean {
   try {
-    const config = readClaudeMcpConfig();
+    const config = readClaudeMcpConfig(configDir);
 
     if (config.mcpServers?.[MCP_SERVER_NAME]) {
       delete config.mcpServers[MCP_SERVER_NAME];
@@ -417,8 +430,8 @@ export function unregisterMcpServer(): boolean {
         delete config.mcpServers;
       }
 
-      if (writeClaudeMcpConfig(config)) {
-        log.info('[MCP Config] MCP server unregistered successfully');
+      if (writeClaudeMcpConfig(config, configDir)) {
+        log.info(`[MCP Config] MCP server unregistered successfully for ${configDir ?? '(default)'}`);
         return true;
       }
     }
@@ -434,14 +447,14 @@ export function unregisterMcpServer(): boolean {
  * Unregister Bodhilander hooks from Claude Code (including any legacy
  * ClaudeLander entries from before the app rename).
  */
-export function unregisterHooks(): boolean {
+export function unregisterHooks(configDir?: string): boolean {
   try {
-    const settings = readClaudeSettings();
+    const settings = readClaudeSettings(configDir);
 
     if (!purgeOurHooks(settings)) return false;
 
-    if (writeClaudeSettings(settings)) {
-      log.info('[Hooks Config] Hooks unregistered successfully');
+    if (writeClaudeSettings(settings, configDir)) {
+      log.info(`[Hooks Config] Hooks unregistered successfully for ${configDir ?? '(default)'}`);
       return true;
     }
 
@@ -455,10 +468,10 @@ export function unregisterHooks(): boolean {
 /**
  * Get the current MCP server configuration status
  */
-export function getMcpServerStatus(): { configured: boolean; path?: string; expectedPath?: string } {
+export function getMcpServerStatus(configDir?: string): { configured: boolean; path?: string; expectedPath?: string } {
   try {
     const expectedPath = getMcpServerPath();
-    const config = readClaudeMcpConfig();
+    const config = readClaudeMcpConfig(configDir);
     const serverConfig = config.mcpServers?.[MCP_SERVER_NAME];
 
     if (!serverConfig) {
@@ -479,10 +492,10 @@ export function getMcpServerStatus(): { configured: boolean; path?: string; expe
 /**
  * Get the current hooks configuration status
  */
-export function getHooksStatus(): { configured: boolean; hookScriptPath?: string } {
+export function getHooksStatus(configDir?: string): { configured: boolean; hookScriptPath?: string } {
   try {
     const hookScriptPath = getHookScriptPath();
-    const settings = readClaudeSettings();
+    const settings = readClaudeSettings(configDir);
     const configured = areHooksConfigured(settings, hookScriptPath);
 
     return { configured, hookScriptPath };

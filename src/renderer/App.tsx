@@ -137,6 +137,26 @@ const App: React.FC = () => {
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const activeGroupId = activeSession?.groupId || null;
 
+  // Resolve the effective Claude account for a session, applying the same
+  // fallback chain the main process uses (session → group → default). Used by
+  // the sidebar badge so the user can see which account a session will run
+  // under at a glance (BDHLNDR-31).
+  const effectiveAccountForSession = useCallback((sessionId: string): ClaudeAccount | null => {
+    if (claudeAccounts.length === 0) return null;
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return null;
+    const direct = session.claudeAccountId
+      ? claudeAccounts.find(a => a.id === session.claudeAccountId)
+      : null;
+    if (direct) return direct;
+    const group = groups.find(g => g.id === session.groupId);
+    const inherited = group?.claudeAccountId
+      ? claudeAccounts.find(a => a.id === group.claudeAccountId)
+      : null;
+    if (inherited) return inherited;
+    return claudeAccounts.find(a => a.isDefault) ?? null;
+  }, [sessions, groups, claudeAccounts]);
+
   // Dismiss color picker on Escape or click-outside
   useEffect(() => {
     if (!colorPickerGroupId) return;
@@ -1090,6 +1110,19 @@ const App: React.FC = () => {
                     onDragOver={(e) => handleSessionDragOver(e, session.id, group.id)}
                     onDrop={(e) => handleSessionDrop(e, session.id, group.id)}
                   >
+                    {(() => {
+                      const acc = effectiveAccountForSession(session.id);
+                      if (!acc) return null;
+                      return (
+                        <span
+                          className="session-account-dot"
+                          style={{ background: acc.color || '#888888' }}
+                          title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
+                          aria-label={`Account: ${acc.label}`}
+                          draggable={false}
+                        />
+                      );
+                    })()}
                     <div className="session-info">
                       {editingSessionId === session.id ? (
                         <input
@@ -1262,6 +1295,18 @@ const App: React.FC = () => {
                       onDragOver={(e) => handleSessionDragOver(e, session.id, subGroup.id)}
                       onDrop={(e) => handleSessionDrop(e, session.id, subGroup.id)}
                     >
+                      {(() => {
+                        const acc = effectiveAccountForSession(session.id);
+                        if (!acc) return null;
+                        return (
+                          <span
+                            className="session-account-dot"
+                            style={{ background: acc.color || '#888888' }}
+                            title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
+                            aria-label={`Account: ${acc.label}`}
+                          />
+                        );
+                      })()}
                       <div className="session-info">
                         {editingSessionId === session.id ? (
                           <input

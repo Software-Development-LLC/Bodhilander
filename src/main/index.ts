@@ -296,29 +296,52 @@ function createSplashWindow(): void {
   });
 }
 
+/**
+ * Register the Bodhilander Memory MCP server and hook script into every
+ * Claude config dir we know about: the global ~/.claude plus each registered
+ * account's isolated .claude (BDHLNDR-31).
+ */
+function registerMcpAndHooksEverywhere(): void {
+  const targets: (string | undefined)[] = [undefined]; // undefined = global ~/.claude
+  try {
+    for (const acc of accountsRepo.getAllAccounts()) {
+      targets.push(acc.configDir);
+    }
+  } catch (err) {
+    log.warn('[MCP Config] Failed to list accounts for MCP registration:', err);
+  }
+
+  for (const configDir of targets) {
+    const label = configDir ?? '(default)';
+    const mcpResult = registerMcpServer(configDir);
+    if (mcpResult.success) {
+      if (mcpResult.action !== 'unchanged') {
+        log.info(`MCP server ${mcpResult.action} for ${label}: ${mcpResult.path}`);
+      }
+    } else {
+      log.warn(`MCP server registration failed for ${label}:`, mcpResult.error);
+    }
+
+    const hooksResult = registerHooks(configDir);
+    if (hooksResult.success) {
+      if (hooksResult.action !== 'unchanged') {
+        log.info(`Hooks ${hooksResult.action} for ${label}`);
+      }
+    } else {
+      log.warn(`Hooks registration failed for ${label}:`, hooksResult.error);
+    }
+  }
+}
+
 function createWindow(): void {
   // Initialize database
   getDatabase();
 
-  // Register MCP server with Claude Code (auto-configure on startup)
-  const mcpResult = registerMcpServer();
-  if (mcpResult.success) {
-    if (mcpResult.action !== 'unchanged') {
-      log.info(`MCP server ${mcpResult.action}: ${mcpResult.path}`);
-    }
-  } else {
-    log.warn('MCP server registration failed:', mcpResult.error);
-  }
-
-  // Register hooks with Claude Code (auto-configure on startup)
-  const hooksResult = registerHooks();
-  if (hooksResult.success) {
-    if (hooksResult.action !== 'unchanged') {
-      log.info(`Hooks ${hooksResult.action}`);
-    }
-  } else {
-    log.warn('Hooks registration failed:', hooksResult.error);
-  }
+  // Register MCP server + hooks with Claude Code (auto-configure on startup).
+  // Registers into the user's global ~/.claude plus each registered account's
+  // isolated config dir (BDHLNDR-31), so the Bodhilander memory MCP and hook
+  // script work regardless of which account the session is running under.
+  registerMcpAndHooksEverywhere();
 
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();

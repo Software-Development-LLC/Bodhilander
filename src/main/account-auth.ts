@@ -22,6 +22,7 @@ import { app, BrowserWindow } from 'electron';
 import log from 'electron-log';
 import { PtyManager } from './pty-manager';
 import * as accountsRepo from './repositories/accounts';
+import { registerMcpServer, registerHooks } from './mcp-config';
 import { ClaudeAccount } from '../shared/types';
 
 interface LoginFlow {
@@ -69,6 +70,16 @@ export function startLoginFlow(
     configDir,
     isDefault: isFirst,
   });
+
+  // Register the Bodhilander MCP server + hooks into the new account's
+  // isolated config before spawning the login pty, so the session has them
+  // available from the first turn (BDHLNDR-31).
+  try {
+    registerMcpServer(configDir);
+    registerHooks(configDir);
+  } catch (err) {
+    log.warn(`[Accounts] MCP/hooks registration failed for new account ${accountId}:`, err);
+  }
 
   const ptyId = `__login-${accountId}`;
 

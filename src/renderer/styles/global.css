@@ -377,6 +377,17 @@ body {
   gap: 1px;
 }
 
+/* Account badge — small colored dot shown on sessions when Claude accounts
+ * are registered (BDHLNDR-31). Color matches the assigned account. */
+.session-account-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
+}
+
 .session-name {
   overflow: hidden;
   text-overflow: ellipsis;
