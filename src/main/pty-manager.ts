@@ -10,6 +10,7 @@ import {
   setClaudeSessionId as storeClaudeSessionId,
   clearClaudeSessionId as clearStoredClaudeSessionId,
 } from './repositories/sessions';
+import { resolveAccountForSession, touchAccount } from './repositories/accounts';
 import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 import log from 'electron-log';
 
@@ -161,11 +162,19 @@ class PtyManager extends EventEmitter {
         storeClaudeSessionId(id, claudeSessionId);
       }
 
+      // Resolve which Claude account this session should launch under (BDHLNDR-31).
+      // Returns null when no accounts are registered, preserving legacy ~/.claude behavior.
+      const account = resolveAccountForSession(id);
+      if (account) {
+        touchAccount(account.id);
+      }
+
       const claudeConfig = getClaudeCommand({
         sessionId: id,
         projectDir: cwd,
         socketPath: this.socketPath,
         claudeSession: { id: claudeSessionId, mode: claudeSessionMode },
+        claudeConfigDir: account?.configDir,
       });
 
       // Suffix appended to every shell's claude command. UUIDs are alphanumeric
