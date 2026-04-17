@@ -191,6 +191,7 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
         collapsed: g.collapsed,
         order: g.order,
         createdAt: new Date(g.createdAt),
+        claudeAccountId: null,
       });
       groupCount++;
     }
@@ -223,6 +224,7 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
         lastActivityAt: new Date(s.lastActivityAt),
         endedAt: null,
         durationSeconds: 0,
+        claudeAccountId: null,
       });
       sessionCount++;
     }
@@ -327,6 +329,7 @@ export async function importFromClaudeLander(): Promise<ImportResult> {
         collapsed: Boolean(row.collapsed),
         order: row.order || 0,
         createdAt: new Date(row.created_at || Date.now()),
+        claudeAccountId: null,
       });
       groupCount++;
     }
@@ -359,6 +362,7 @@ export async function importFromClaudeLander(): Promise<ImportResult> {
         lastActivityAt: new Date(row.last_activity_at || Date.now()),
         endedAt: null,
         durationSeconds: 0,
+        claudeAccountId: null,
       });
       sessionCount++;
     }

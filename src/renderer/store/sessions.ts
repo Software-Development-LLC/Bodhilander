@@ -62,6 +62,7 @@ export function useSessions() {
           claudeSessionId: null,
           endedAt: null,
           durationSeconds: 0,
+          claudeAccountId: null,
         };
 
         // Activate immediately so the Terminal mounts in a visible container.
