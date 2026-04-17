@@ -7,6 +7,8 @@ import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
+import * as accountsRepo from './repositories/accounts';
+import * as accountAuth from './account-auth';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
 import { StateMonitor } from './state-monitor';
@@ -632,6 +634,40 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
   }
   sessionsRepo.deleteSession(id);
   getApiServer().broadcastSessionsUpdated();
+});
+
+// Claude account IPC handlers (BDHLNDR-31)
+safeHandle('accounts:list', () => {
+  return accountsRepo.getAllAccounts();
+});
+
+safeHandle('accounts:startLogin', (label: string) => {
+  const trimmed = (label ?? '').toString().trim();
+  if (!trimmed) throw new Error('Account label is required');
+  return accountAuth.startLoginFlow(ptyManager, mainWindow, trimmed);
+});
+
+safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {
+  accountAuth.cancelLoginFlow(ptyManager, ptyId, deleteAccount);
+});
+
+safeHandle('accounts:confirmLoginMacOS', (ptyId: string) => {
+  accountAuth.confirmLoginMacOS(mainWindow, ptyId);
+});
+
+safeHandle('accounts:delete', (id: string) => {
+  accountAuth.deleteAccountAndDir(id);
+});
+
+safeHandle('accounts:update', (
+  id: string,
+  updates: { label?: string; color?: string; email?: string | null },
+) => {
+  accountsRepo.updateAccount(id, updates);
+});
+
+safeHandle('accounts:setDefault', (id: string) => {
+  accountsRepo.setDefaultAccount(id);
 });
 
 // Database IPC Handlers - Memories
