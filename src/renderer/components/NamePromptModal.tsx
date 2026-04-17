@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { ClaudeAccount } from '../../shared/types';
 import './NamePromptModal.css';
 
 interface NamePromptModalProps {
@@ -6,11 +7,22 @@ interface NamePromptModalProps {
   title: string;
   placeholder: string;
   defaultValue: string;
-  onConfirm: (name: string, path?: string) => void;
+  onConfirm: (name: string, path?: string, claudeAccountId?: string | null) => void;
   onCancel: () => void;
   /** Show an optional path selector for group creation */
   showPathSelector?: boolean;
   pathLabel?: string;
+  /**
+   * When provided, show a Claude account dropdown (BDHLNDR-31). The onConfirm
+   * callback receives the selected accountId (or null for "use default") as
+   * the third argument.
+   */
+  accountPicker?: {
+    accounts: ClaudeAccount[];
+    initialAccountId?: string | null;
+    /** Override the dropdown label. Default: "Claude account". */
+    label?: string;
+  };
 }
 
 export const NamePromptModal: React.FC<NamePromptModalProps> = ({
@@ -22,31 +34,34 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
   onCancel,
   showPathSelector = false,
   pathLabel = 'Working Directory (optional)',
+  accountPicker,
 }) => {
   const [value, setValue] = useState(defaultValue);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
+    accountPicker?.initialAccountId ?? null,
+  );
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setValue(defaultValue);
       setSelectedPath(null);
+      setSelectedAccountId(accountPicker?.initialAccountId ?? null);
       // Focus and select input after modal opens
       setTimeout(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
       }, 50);
     }
-  }, [isOpen, defaultValue]);
+  }, [isOpen, defaultValue, accountPicker?.initialAccountId]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = value.trim();
-    if (trimmed) {
-      onConfirm(trimmed, selectedPath || undefined);
-    } else {
-      onConfirm(defaultValue, selectedPath || undefined);
-    }
+    const finalName = trimmed || defaultValue;
+    const finalAccountId = accountPicker ? selectedAccountId : undefined;
+    onConfirm(finalName, selectedPath || undefined, finalAccountId);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -127,6 +142,28 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
                   Browse...
                 </button>
               </div>
+            </div>
+          )}
+          {accountPicker && (
+            <div className="path-selector">
+              <label>{accountPicker.label ?? 'Claude account'}</label>
+              <select
+                value={selectedAccountId ?? ''}
+                onChange={e => setSelectedAccountId(e.target.value || null)}
+                className="path-input"
+                style={{ width: '100%', padding: '10px 12px', cursor: 'pointer' }}
+              >
+                <option value="">
+                  {accountPicker.accounts.length === 0
+                    ? 'No accounts registered — will use ~/.claude'
+                    : 'Use default account'}
+                </option>
+                {accountPicker.accounts.map(acc => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.label}{acc.email ? ` (${acc.email})` : ''}{acc.isDefault ? ' — default' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
           <div className="modal-buttons">

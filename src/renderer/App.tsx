@@ -13,6 +13,7 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { CodeSearchModal } from './components/CodeSearchModal';
 import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
+import { ClaudeAccount } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -76,6 +77,7 @@ const App: React.FC = () => {
   const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [claudeAccountsOpen, setClaudeAccountsOpen] = useState(false);
+  const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
   const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
   const { user, isAuthenticated } = useSharing();
 
@@ -191,6 +193,33 @@ const App: React.FC = () => {
     return cleanup;
   }, [activeRemoteCode]);
 
+  // Claude accounts cache — kept in sync with main process so context menus
+  // and creation dialogs can offer account pickers without refetching each time.
+  useEffect(() => {
+    let cancelled = false;
+    const reload = async () => {
+      try {
+        const list = await window.electronAPI.listAccounts();
+        if (!cancelled) setClaudeAccounts(list);
+      } catch (err) {
+        console.error('Failed to load Claude accounts:', err);
+      }
+    };
+    reload();
+    const offCompleted = window.electronAPI.onAccountLoginCompleted(() => reload());
+    return () => {
+      cancelled = true;
+      offCompleted();
+    };
+  }, []);
+
+  // Refresh accounts whenever the accounts modal closes (covers delete/rename).
+  useEffect(() => {
+    if (!claudeAccountsOpen) {
+      window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
+    }
+  }, [claudeAccountsOpen]);
+
   // Show prompt for new session name
   const handleNewSession = useCallback((groupId: string) => {
     if (!groupId) {
@@ -216,15 +245,17 @@ const App: React.FC = () => {
   };
 
   // Actually create the group after name is confirmed
-  const handleConfirmGroup = async (name: string, path?: string) => {
+  const handleConfirmGroup = async (name: string, path?: string, claudeAccountId?: string | null) => {
     setGroupPrompt(null);
 
     // Create the group first
     const newGroup = await createGroup(name);
 
-    // If path was selected during creation, update the group
-    if (path) {
-      await updateGroup(newGroup.id, { workingDir: path });
+    const updates: Partial<typeof newGroup> = {};
+    if (path) updates.workingDir = path;
+    if (claudeAccountId !== undefined) updates.claudeAccountId = claudeAccountId;
+    if (Object.keys(updates).length > 0) {
+      await updateGroup(newGroup.id, updates);
     }
   };
 
@@ -238,12 +269,16 @@ const App: React.FC = () => {
   };
 
   // Actually create the sub-group after name is confirmed
-  const handleConfirmSubGroup = async (name: string, path?: string) => {
+  const handleConfirmSubGroup = async (name: string, path?: string, claudeAccountId?: string | null) => {
     if (!subGroupPrompt) return;
     const newGroup = await createGroup(name, subGroupPrompt.parentId);
-    // If path was selected, update the subgroup (overrides inherited parent path)
-    if (path && newGroup) {
-      await updateGroup(newGroup.id, { workingDir: path });
+    if (newGroup) {
+      const updates: Partial<typeof newGroup> = {};
+      if (path) updates.workingDir = path;
+      if (claudeAccountId !== undefined) updates.claudeAccountId = claudeAccountId;
+      if (Object.keys(updates).length > 0) {
+        await updateGroup(newGroup.id, updates);
+      }
     }
     setSubGroupPrompt(null);
   };
@@ -292,38 +327,74 @@ const App: React.FC = () => {
 
   const handleSessionContextMenu = (e: React.MouseEvent, sessionId: string, sessionName: string) => {
     e.preventDefault();
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
-        { label: 'Share Session', onClick: () => setShareModalSessionId(sessionId), disabled: !isAuthenticated },
-        { label: 'separator', onClick: () => {}, separator: true },
-        { label: 'Close Session', onClick: () => handleRemoveSession(sessionId), danger: true },
-      ],
-    });
+    const session = sessions.find(s => s.id === sessionId);
+    const currentAccountId = session?.claudeAccountId ?? null;
+
+    const items: MenuItem[] = [
+      { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
+      { label: 'Share Session', onClick: () => setShareModalSessionId(sessionId), disabled: !isAuthenticated },
+    ];
+
+    // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
+    if (claudeAccounts.length > 0) {
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
+      items.push({
+        label: `${currentAccountId === null ? '✓ ' : '   '}Inherit account from group`,
+        onClick: () => updateSession(sessionId, { claudeAccountId: null }),
+      });
+      for (const acc of claudeAccounts) {
+        const isCurrent = currentAccountId === acc.id;
+        items.push({
+          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
+          onClick: () => updateSession(sessionId, { claudeAccountId: acc.id }),
+        });
+      }
+    }
+
+    items.push({ label: 'separator', onClick: () => {}, separator: true });
+    items.push({ label: 'Close Session', onClick: () => handleRemoveSession(sessionId), danger: true });
+
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
   };
 
   const handleGroupContextMenu = (e: React.MouseEvent, groupId: string, groupName: string) => {
     e.preventDefault();
     const sessionsInGroup = getSessionsByGroup(groupId);
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: 'New Session', onClick: () => handleNewSession(groupId) },
-        { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
-        { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
-        { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
-        { label: 'separator', onClick: () => {}, separator: true },
-        {
-          label: 'Delete Group',
-          onClick: () => handleDeleteGroup(groupId),
-          danger: true,
-          disabled: sessionsInGroup.length > 0,
-        },
-      ],
+    const group = groups.find(g => g.id === groupId);
+    const currentAccountId = group?.claudeAccountId ?? null;
+
+    const items: MenuItem[] = [
+      { label: 'New Session', onClick: () => handleNewSession(groupId) },
+      { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
+      { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
+      { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
+    ];
+
+    // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
+    if (claudeAccounts.length > 0) {
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
+      items.push({
+        label: `${currentAccountId === null ? '✓ ' : '   '}Use default account`,
+        onClick: () => updateGroup(groupId, { claudeAccountId: null }),
+      });
+      for (const acc of claudeAccounts) {
+        const isCurrent = currentAccountId === acc.id;
+        items.push({
+          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
+          onClick: () => updateGroup(groupId, { claudeAccountId: acc.id }),
+        });
+      }
+    }
+
+    items.push({ label: 'separator', onClick: () => {}, separator: true });
+    items.push({
+      label: 'Delete Group',
+      onClick: () => handleDeleteGroup(groupId),
+      danger: true,
+      disabled: sessionsInGroup.length > 0,
     });
+
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
   };
 
   const handleRemoteGroupContextMenu = (e: React.MouseEvent) => {
@@ -1489,6 +1560,7 @@ const App: React.FC = () => {
         onConfirm={handleConfirmGroup}
         onCancel={() => setGroupPrompt(null)}
         showPathSelector={true}
+        accountPicker={{ accounts: claudeAccounts, initialAccountId: null }}
       />
 
       <NamePromptModal
@@ -1500,6 +1572,11 @@ const App: React.FC = () => {
         onCancel={() => setSubGroupPrompt(null)}
         showPathSelector={true}
         pathLabel="Working Directory (optional, inherits from parent)"
+        accountPicker={{
+          accounts: claudeAccounts,
+          initialAccountId: null,
+          label: 'Claude account (optional, inherits from parent)',
+        }}
       />
 
       {/* Choice menu for + button on groups */}
