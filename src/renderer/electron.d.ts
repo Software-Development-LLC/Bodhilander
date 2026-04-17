@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -168,6 +168,17 @@ interface ElectronAPI {
   logError: (source: string, message: string, stack?: string) => Promise<void>;
   logWarn: (source: string, message: string) => Promise<void>;
   getLogPaths: () => Promise<{ logFile: string | null; crashDumps: string }>;
+
+  // Claude accounts (BDHLNDR-31)
+  listAccounts: () => Promise<ClaudeAccount[]>;
+  startAccountLogin: (label: string) => Promise<{ account: ClaudeAccount; ptyId: string }>;
+  cancelAccountLogin: (ptyId: string, deleteAccount: boolean) => Promise<void>;
+  confirmAccountLoginMacOS: (ptyId: string) => Promise<void>;
+  deleteAccount: (id: string) => Promise<void>;
+  updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }) => Promise<void>;
+  setDefaultAccount: (id: string) => Promise<void>;
+  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => () => void;
+  onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => () => void;
 }
 
 declare global {

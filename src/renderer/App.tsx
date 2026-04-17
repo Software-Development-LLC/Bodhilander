@@ -12,6 +12,7 @@ import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { CodeSearchModal } from './components/CodeSearchModal';
+import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -74,6 +75,7 @@ const App: React.FC = () => {
   const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [claudeAccountsOpen, setClaudeAccountsOpen] = useState(false);
   const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
   const { user, isAuthenticated } = useSharing();
 
@@ -870,6 +872,14 @@ const App: React.FC = () => {
             </button>
             <button
               className="icon-button"
+              onClick={() => setClaudeAccountsOpen(true)}
+              title="Claude accounts"
+              aria-label="Claude accounts"
+            >
+              🔑
+            </button>
+            <button
+              className="icon-button"
               onClick={() => setJoinModalOpen(true)}
               title={isAuthenticated ? 'Join Shared Session' : 'Sign in to join sessions'}
               aria-label="Join Shared Session"
@@ -1516,6 +1526,12 @@ const App: React.FC = () => {
       <SettingsModal
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+      />
+
+      {/* Claude accounts modal (BDHLNDR-31) */}
+      <ClaudeAccountsModal
+        isOpen={claudeAccountsOpen}
+        onClose={() => setClaudeAccountsOpen(false)}
       />
 
       {/* Code Search modal */}

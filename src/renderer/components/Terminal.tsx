@@ -15,6 +15,12 @@ interface TerminalProps {
   sessionState?: string;
   onStart?: () => void;
   onError?: (error: string) => void;
+  /**
+   * When true, skip the pty:create IPC call — caller has already spawned the
+   * pty out-of-band (e.g. the add-account login flow in BDHLNDR-31). The
+   * Terminal will just attach its data/exit listeners to `sessionId`.
+   */
+  externalPty?: boolean;
 }
 
 interface ContextMenuState {
@@ -36,7 +42,7 @@ const AUTO_SCROLL_THRESHOLD = 5;
 const MIN_COLS = 10;
 const MIN_ROWS = 2;
 
-const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError }) => {
+const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError, externalPty = false }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -308,26 +314,39 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Create PTY session with error handling
-    window.electronAPI.createSession(sessionId, cwd, launchClaude)
-      .then(() => {
-        // Send resize after PTY creation to fix Windows ConPTY race condition
-        // where input doesn't register until a resize event syncs the terminal.
-        // Guard against bogus dimensions from a container that hasn't laid out yet.
-        if (fitAddonRef.current && xtermRef.current) {
-          fitAddonRef.current.fit();
-          const { cols, rows } = xtermRef.current;
-          if (cols >= MIN_COLS && rows >= MIN_ROWS) {
-            window.electronAPI.resizeSession(sessionId, cols, rows);
-          }
+    // Create PTY session with error handling. When externalPty is true, the
+    // caller has already spawned the pty out-of-band (account login flow,
+    // BDHLNDR-31) and we should just attach listeners below.
+    if (externalPty) {
+      // Still kick a resize so the initial dimensions reach the existing pty.
+      if (fitAddonRef.current && xtermRef.current) {
+        fitAddonRef.current.fit();
+        const { cols, rows } = xtermRef.current;
+        if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+          window.electronAPI.resizeSession(sessionId, cols, rows);
         }
-      })
-      .catch((err) => {
-        const errorMsg = err?.message || 'Failed to start session';
-        console.error('Failed to create PTY session:', err);
-        setError(errorMsg);
-        onError?.(errorMsg);
-      });
+      }
+    } else {
+      window.electronAPI.createSession(sessionId, cwd, launchClaude)
+        .then(() => {
+          // Send resize after PTY creation to fix Windows ConPTY race condition
+          // where input doesn't register until a resize event syncs the terminal.
+          // Guard against bogus dimensions from a container that hasn't laid out yet.
+          if (fitAddonRef.current && xtermRef.current) {
+            fitAddonRef.current.fit();
+            const { cols, rows } = xtermRef.current;
+            if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+              window.electronAPI.resizeSession(sessionId, cols, rows);
+            }
+          }
+        })
+        .catch((err) => {
+          const errorMsg = err?.message || 'Failed to start session';
+          console.error('Failed to create PTY session:', err);
+          setError(errorMsg);
+          onError?.(errorMsg);
+        });
+    }
 
     // Handle PTY data with smart auto-scroll (BDHLNDR-30)
     // During rapid streaming — especially when Claude rewrites lines in-place
