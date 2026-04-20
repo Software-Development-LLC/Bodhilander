@@ -39,6 +39,7 @@ export function useGroups() {
           createdAt: new Date(),
           parentId: parentId || null,
           collapsed: false,
+          claudeAccountId: parentGroup?.claudeAccountId ?? null,
         };
 
         window.electronAPI.createGroup(group)

@@ -81,6 +81,19 @@ function initializeTables(database: Database.Database): void {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS claude_accounts (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      config_dir TEXT NOT NULL UNIQUE,
+      email TEXT,
+      color TEXT DEFAULT '#888888',
+      is_default INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      last_used_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_accounts_single_default
+      ON claude_accounts(is_default) WHERE is_default = 1;
   `);
 
   // Migration: Add working_dir column to groups if it doesn't exist
@@ -115,6 +128,19 @@ function initializeTables(database: Database.Database): void {
   if (!sessionColsBdhlndr17.includes('duration_seconds')) {
     database.exec("ALTER TABLE sessions ADD COLUMN duration_seconds REAL DEFAULT 0");
     durationColumnJustAdded = true;
+  }
+
+  // Migration: Add claude_account_id column to groups and sessions (BDHLNDR-31).
+  // Multi-account support — session inherits from group if session's own column
+  // is NULL; group falls back to the default account, then to legacy ~/.claude.
+  // ON DELETE SET NULL is enforced in the repositories/app layer (SQLite doesn't
+  // support adding FK constraints via ALTER TABLE); deleteAccount() in the
+  // accounts repo explicitly nulls referring rows before removing the account.
+  if (!columns.some(col => col.name === 'claude_account_id')) {
+    database.exec("ALTER TABLE groups ADD COLUMN claude_account_id TEXT DEFAULT NULL");
+  }
+  if (!sessionColsBdhlndr17.includes('claude_account_id')) {
+    database.exec("ALTER TABLE sessions ADD COLUMN claude_account_id TEXT DEFAULT NULL");
   }
 
   // Migration: Create session_events table (BDHLNDR-17)

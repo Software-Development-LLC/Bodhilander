@@ -1,0 +1,163 @@
+import { getDatabase } from '../database';
+import { ClaudeAccount } from '../../shared/types';
+
+function mapRow(row: any): ClaudeAccount {
+  return {
+    id: row.id,
+    label: row.label,
+    configDir: row.config_dir,
+    email: row.email ?? null,
+    color: row.color ?? '#888888',
+    isDefault: Boolean(row.is_default),
+    createdAt: new Date(row.created_at),
+    lastUsedAt: row.last_used_at ? new Date(row.last_used_at) : null,
+  };
+}
+
+export function getAllAccounts(): ClaudeAccount[] {
+  const db = getDatabase();
+  const rows = db.prepare('SELECT * FROM claude_accounts ORDER BY is_default DESC, created_at ASC').all() as any[];
+  return rows.map(mapRow);
+}
+
+export function getAccount(id: string): ClaudeAccount | null {
+  const db = getDatabase();
+  const row = db.prepare('SELECT * FROM claude_accounts WHERE id = ?').get(id);
+  return row ? mapRow(row) : null;
+}
+
+export function getDefaultAccount(): ClaudeAccount | null {
+  const db = getDatabase();
+  const row = db.prepare('SELECT * FROM claude_accounts WHERE is_default = 1 LIMIT 1').get();
+  return row ? mapRow(row) : null;
+}
+
+export interface CreateAccountInput {
+  id: string;
+  label: string;
+  configDir: string;
+  color?: string;
+  isDefault?: boolean;
+}
+
+export function createAccount(input: CreateAccountInput): ClaudeAccount {
+  const db = getDatabase();
+  const createdAt = new Date();
+  const isDefault = input.isDefault ?? false;
+
+  const insert = db.transaction(() => {
+    if (isDefault) {
+      db.prepare('UPDATE claude_accounts SET is_default = 0 WHERE is_default = 1').run();
+    }
+    db.prepare(`
+      INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at, last_used_at)
+      VALUES (?, ?, ?, NULL, ?, ?, ?, NULL)
+    `).run(
+      input.id,
+      input.label,
+      input.configDir,
+      input.color ?? '#888888',
+      isDefault ? 1 : 0,
+      createdAt.toISOString()
+    );
+  });
+  insert();
+
+  return {
+    id: input.id,
+    label: input.label,
+    configDir: input.configDir,
+    email: null,
+    color: input.color ?? '#888888',
+    isDefault,
+    createdAt,
+    lastUsedAt: null,
+  };
+}
+
+export interface UpdateAccountInput {
+  label?: string;
+  email?: string | null;
+  color?: string;
+}
+
+export function updateAccount(id: string, updates: UpdateAccountInput): void {
+  const db = getDatabase();
+  const fields: string[] = [];
+  const values: any[] = [];
+
+  if (updates.label !== undefined) {
+    fields.push('label = ?');
+    values.push(updates.label);
+  }
+  if (updates.email !== undefined) {
+    fields.push('email = ?');
+    values.push(updates.email);
+  }
+  if (updates.color !== undefined) {
+    fields.push('color = ?');
+    values.push(updates.color);
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(id);
+  db.prepare(`UPDATE claude_accounts SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function setDefaultAccount(id: string): void {
+  const db = getDatabase();
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE claude_accounts SET is_default = 0 WHERE is_default = 1').run();
+    db.prepare('UPDATE claude_accounts SET is_default = 1 WHERE id = ?').run(id);
+  });
+  tx();
+}
+
+export function touchAccount(id: string): void {
+  const db = getDatabase();
+  db.prepare('UPDATE claude_accounts SET last_used_at = ? WHERE id = ?').run(
+    new Date().toISOString(),
+    id
+  );
+}
+
+/**
+ * Delete an account and NULL out any sessions/groups that referred to it.
+ * SQLite ALTER TABLE can't add a real FK, so we enforce SET NULL semantics here.
+ * Caller is responsible for removing the on-disk config directory.
+ */
+export function deleteAccount(id: string): void {
+  const db = getDatabase();
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE sessions SET claude_account_id = NULL WHERE claude_account_id = ?').run(id);
+    db.prepare('UPDATE groups SET claude_account_id = NULL WHERE claude_account_id = ?').run(id);
+    db.prepare('DELETE FROM claude_accounts WHERE id = ?').run(id);
+  });
+  tx();
+}
+
+/**
+ * Resolve which Claude account a given session should launch under (BDHLNDR-31).
+ * Fallback chain: session → group → default → null (legacy ~/.claude behavior).
+ * Returns null if no accounts are configured, preserving pre-feature behavior.
+ */
+export function resolveAccountForSession(sessionId: string): ClaudeAccount | null {
+  const db = getDatabase();
+
+  const row = db.prepare(`
+    SELECT
+      s.claude_account_id AS session_account_id,
+      g.claude_account_id AS group_account_id
+    FROM sessions s
+    LEFT JOIN groups g ON g.id = s.group_id
+    WHERE s.id = ?
+  `).get(sessionId) as { session_account_id: string | null; group_account_id: string | null } | undefined;
+
+  const candidateId = row?.session_account_id ?? row?.group_account_id ?? null;
+  if (candidateId) {
+    const account = getAccount(candidateId);
+    if (account) return account;
+  }
+  return getDefaultAccount();
+}

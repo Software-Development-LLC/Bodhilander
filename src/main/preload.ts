@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -348,6 +348,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getEditorOptions: (): Promise<{ value: string; label: string }[]> =>
     ipcRenderer.invoke('editor:getOptions'),
+
+  // Claude accounts (BDHLNDR-31)
+  listAccounts: (): Promise<ClaudeAccount[]> =>
+    ipcRenderer.invoke('accounts:list'),
+  startAccountLogin: (label: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
+    ipcRenderer.invoke('accounts:startLogin', label),
+  cancelAccountLogin: (ptyId: string, deleteAccount: boolean): Promise<void> =>
+    ipcRenderer.invoke('accounts:cancelLogin', ptyId, deleteAccount),
+  confirmAccountLoginMacOS: (ptyId: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:confirmLoginMacOS', ptyId),
+  deleteAccount: (id: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:delete', id),
+  updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }): Promise<void> =>
+    ipcRenderer.invoke('accounts:update', id, updates),
+  setDefaultAccount: (id: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:setDefault', id),
+  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; email: string | null }) => callback(data);
+    ipcRenderer.on('accounts:login-completed', listener);
+    return () => ipcRenderer.removeListener('accounts:login-completed', listener);
+  },
+  onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; exitCode: number }) => callback(data);
+    ipcRenderer.on('accounts:login-exited', listener);
+    return () => ipcRenderer.removeListener('accounts:login-exited', listener);
+  },
 
   // Update channel (BDHLNDR-32) — opt-in beta builds
   getUpdateChannel: (): Promise<'stable' | 'beta'> =>

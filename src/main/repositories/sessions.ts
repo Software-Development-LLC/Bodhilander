@@ -24,14 +24,15 @@ export function getAllSessions(): Session[] {
     claudeSessionId: row.claude_session_id ?? null,
     endedAt: row.ended_at ? new Date(row.ended_at) : null,
     durationSeconds: row.duration_seconds ?? 0,
+    claudeAccountId: row.claude_account_id ?? null,
   }));
 }
 
 export function createSession(session: Session): void {
   const db = getDatabase();
   db.prepare(`
-    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at, claude_session_id, ended_at, duration_seconds)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at, claude_session_id, ended_at, duration_seconds, claude_account_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id,
     session.groupId,
@@ -44,7 +45,8 @@ export function createSession(session: Session): void {
     session.lastActivityAt.toISOString(),
     session.claudeSessionId ?? null,
     session.endedAt ? session.endedAt.toISOString() : null,
-    session.durationSeconds ?? 0
+    session.durationSeconds ?? 0,
+    session.claudeAccountId ?? null
   );
 }
 
@@ -109,6 +111,10 @@ export function updateSession(id: string, updates: Partial<Session>): void {
   if (updates.durationSeconds !== undefined) {
     fields.push('duration_seconds = ?');
     values.push(updates.durationSeconds);
+  }
+  if (updates.claudeAccountId !== undefined) {
+    fields.push('claude_account_id = ?');
+    values.push(updates.claudeAccountId);
   }
 
   if (fields.length > 0) {

@@ -1,0 +1,256 @@
+/* Claude accounts modal (BDHLNDR-31) — reuses the global .modal-overlay */
+
+.claude-accounts-modal {
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  padding: 20px 24px;
+  min-width: 520px;
+  max-width: 640px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d4d4d4;
+}
+
+.claude-accounts-modal h3 {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.claude-accounts-modal .subtitle {
+  margin: 0 0 16px 0;
+  font-size: 12px;
+  color: #888;
+}
+
+.claude-accounts-modal .empty {
+  padding: 24px;
+  text-align: center;
+  color: #888;
+  font-size: 13px;
+  background: #1e1e1e;
+  border: 1px dashed #3c3c3c;
+  border-radius: 6px;
+}
+
+.claude-accounts-modal .account-list {
+  list-style: none;
+  margin: 0 0 12px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.claude-accounts-modal .account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #1e1e1e;
+  border: 1px solid #2c2c2c;
+  border-radius: 6px;
+}
+
+.claude-accounts-modal .account-row .swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 10px;
+}
+
+.claude-accounts-modal .account-row .label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.claude-accounts-modal .account-row .label .name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #e0e0e0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-accounts-modal .account-row .label .email {
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claude-accounts-modal .account-row .default-tag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #69ADFF;
+  border: 1px solid #3a5a8f;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.claude-accounts-modal .account-row .row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.claude-accounts-modal button {
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border: none;
+  background: #3c3c3c;
+  color: #d4d4d4;
+}
+
+.claude-accounts-modal button:hover {
+  background: #4c4c4c;
+}
+
+.claude-accounts-modal button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.claude-accounts-modal .modal-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.claude-accounts-modal .add-btn {
+  background: linear-gradient(135deg, #5a7aff 0%, #69ADFF 100%);
+  color: #ffffff;
+  font-weight: 500;
+  padding: 8px 14px;
+}
+
+.claude-accounts-modal .add-btn:hover {
+  opacity: 0.9;
+}
+
+.claude-accounts-modal .close-btn {
+  background: #2c2c2c;
+}
+
+.claude-accounts-modal .delete-btn {
+  background: #5a2c2c;
+  color: #f0d0d0;
+}
+
+.claude-accounts-modal .delete-btn:hover {
+  background: #7a3c3c;
+}
+
+/* Add-account login modal */
+.claude-account-login-modal {
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  padding: 20px 24px;
+  width: 760px;
+  max-width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d4d4d4;
+}
+
+.claude-account-login-modal h3 {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+  color: #e0e0e0;
+}
+
+.claude-account-login-modal .hint {
+  font-size: 12px;
+  color: #888;
+  margin: 0 0 14px 0;
+  line-height: 1.5;
+}
+
+.claude-account-login-modal input[type="text"] {
+  width: 100%;
+  padding: 10px 12px;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 14px;
+  outline: none;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+}
+
+.claude-account-login-modal input[type="text"]:focus {
+  border-color: #69ADFF;
+}
+
+.claude-account-login-modal .terminal-host {
+  flex: 1;
+  min-height: 360px;
+  background: #000;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.claude-account-login-modal .completion-banner {
+  background: #1e3a1e;
+  border: 1px solid #2e5a2e;
+  color: #b8f0b8;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.claude-account-login-modal .footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.claude-account-login-modal button {
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  border: none;
+  background: #3c3c3c;
+  color: #d4d4d4;
+}
+
+.claude-account-login-modal button:hover {
+  background: #4c4c4c;
+}
+
+.claude-account-login-modal .primary {
+  background: linear-gradient(135deg, #5a7aff 0%, #69ADFF 100%);
+  color: #fff;
+  font-weight: 500;
+}
+
+.claude-account-login-modal .primary:hover {
+  opacity: 0.9;
+}
+
+.claude-account-login-modal .danger {
+  background: #5a2c2c;
+  color: #f0d0d0;
+}
+
+.claude-account-login-modal .danger:hover {
+  background: #7a3c3c;
+}

@@ -26,6 +26,13 @@ export interface ClaudeLaunchConfig {
    * behavior (no flag), which is only used if resume infrastructure is disabled.
    */
   claudeSession?: ClaudeSessionLaunch;
+  /**
+   * Absolute path to an isolated Claude config directory (BDHLNDR-31).
+   * When set, exported as CLAUDE_CONFIG_DIR so Claude Code reads/writes
+   * credentials and settings there instead of ~/.claude. Omit to use the
+   * current user's global ~/.claude.
+   */
+  claudeConfigDir?: string;
 }
 
 export function getClaudeCommand(config: ClaudeLaunchConfig): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
@@ -43,6 +50,10 @@ export function getClaudeCommand(config: ClaudeLaunchConfig): { command: string;
     // Enable experimental MCP CLI features
     ENABLE_EXPERIMENTAL_MCP_CLI: 'true',
   };
+
+  if (config.claudeConfigDir) {
+    env.CLAUDE_CONFIG_DIR = config.claudeConfigDir;
+  }
 
   // Build args for the Claude session UUID (BDHLNDR-9).
   // UUIDs are alphanumeric + hyphens, so they are safe to inline into shell

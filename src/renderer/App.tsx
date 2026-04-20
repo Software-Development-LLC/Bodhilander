@@ -12,6 +12,8 @@ import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { CodeSearchModal } from './components/CodeSearchModal';
+import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
+import { ClaudeAccount } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useSharing } from './store/sharing';
@@ -74,6 +76,8 @@ const App: React.FC = () => {
   const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null);
   const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [claudeAccountsOpen, setClaudeAccountsOpen] = useState(false);
+  const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
   // True when the running build is itself a beta (version contains -beta.).
   // Shows a BETA pill in the sidebar so opt-in testers know what they're on
   // (BDHLNDR-32).
@@ -137,6 +141,26 @@ const App: React.FC = () => {
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const activeGroupId = activeSession?.groupId || null;
 
+  // Resolve the effective Claude account for a session, applying the same
+  // fallback chain the main process uses (session → group → default). Used by
+  // the sidebar badge so the user can see which account a session will run
+  // under at a glance (BDHLNDR-31).
+  const effectiveAccountForSession = useCallback((sessionId: string): ClaudeAccount | null => {
+    if (claudeAccounts.length === 0) return null;
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return null;
+    const direct = session.claudeAccountId
+      ? claudeAccounts.find(a => a.id === session.claudeAccountId)
+      : null;
+    if (direct) return direct;
+    const group = groups.find(g => g.id === session.groupId);
+    const inherited = group?.claudeAccountId
+      ? claudeAccounts.find(a => a.id === group.claudeAccountId)
+      : null;
+    if (inherited) return inherited;
+    return claudeAccounts.find(a => a.isDefault) ?? null;
+  }, [sessions, groups, claudeAccounts]);
+
   // Dismiss color picker on Escape or click-outside
   useEffect(() => {
     if (!colorPickerGroupId) return;
@@ -193,6 +217,33 @@ const App: React.FC = () => {
     return cleanup;
   }, [activeRemoteCode]);
 
+  // Claude accounts cache — kept in sync with main process so context menus
+  // and creation dialogs can offer account pickers without refetching each time.
+  useEffect(() => {
+    let cancelled = false;
+    const reload = async () => {
+      try {
+        const list = await window.electronAPI.listAccounts();
+        if (!cancelled) setClaudeAccounts(list);
+      } catch (err) {
+        console.error('Failed to load Claude accounts:', err);
+      }
+    };
+    reload();
+    const offCompleted = window.electronAPI.onAccountLoginCompleted(() => reload());
+    return () => {
+      cancelled = true;
+      offCompleted();
+    };
+  }, []);
+
+  // Refresh accounts whenever the accounts modal closes (covers delete/rename).
+  useEffect(() => {
+    if (!claudeAccountsOpen) {
+      window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
+    }
+  }, [claudeAccountsOpen]);
+
   // Determine once at mount whether the running app build is a beta —
   // controls the BETA pill shown in the sidebar header (BDHLNDR-32).
   useEffect(() => {
@@ -201,6 +252,7 @@ const App: React.FC = () => {
       .then(setIsBetaBuild)
       .catch(() => { /* leave default (false) on failure */ });
   }, []);
+
 
   // Show prompt for new session name
   const handleNewSession = useCallback((groupId: string) => {
@@ -227,15 +279,17 @@ const App: React.FC = () => {
   };
 
   // Actually create the group after name is confirmed
-  const handleConfirmGroup = async (name: string, path?: string) => {
+  const handleConfirmGroup = async (name: string, path?: string, claudeAccountId?: string | null) => {
     setGroupPrompt(null);
 
     // Create the group first
     const newGroup = await createGroup(name);
 
-    // If path was selected during creation, update the group
-    if (path) {
-      await updateGroup(newGroup.id, { workingDir: path });
+    const updates: Partial<typeof newGroup> = {};
+    if (path) updates.workingDir = path;
+    if (claudeAccountId !== undefined) updates.claudeAccountId = claudeAccountId;
+    if (Object.keys(updates).length > 0) {
+      await updateGroup(newGroup.id, updates);
     }
   };
 
@@ -249,12 +303,16 @@ const App: React.FC = () => {
   };
 
   // Actually create the sub-group after name is confirmed
-  const handleConfirmSubGroup = async (name: string, path?: string) => {
+  const handleConfirmSubGroup = async (name: string, path?: string, claudeAccountId?: string | null) => {
     if (!subGroupPrompt) return;
     const newGroup = await createGroup(name, subGroupPrompt.parentId);
-    // If path was selected, update the subgroup (overrides inherited parent path)
-    if (path && newGroup) {
-      await updateGroup(newGroup.id, { workingDir: path });
+    if (newGroup) {
+      const updates: Partial<typeof newGroup> = {};
+      if (path) updates.workingDir = path;
+      if (claudeAccountId !== undefined) updates.claudeAccountId = claudeAccountId;
+      if (Object.keys(updates).length > 0) {
+        await updateGroup(newGroup.id, updates);
+      }
     }
     setSubGroupPrompt(null);
   };
@@ -303,38 +361,74 @@ const App: React.FC = () => {
 
   const handleSessionContextMenu = (e: React.MouseEvent, sessionId: string, sessionName: string) => {
     e.preventDefault();
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
-        { label: 'Share Session', onClick: () => setShareModalSessionId(sessionId), disabled: !isAuthenticated },
-        { label: 'separator', onClick: () => {}, separator: true },
-        { label: 'Close Session', onClick: () => handleRemoveSession(sessionId), danger: true },
-      ],
-    });
+    const session = sessions.find(s => s.id === sessionId);
+    const currentAccountId = session?.claudeAccountId ?? null;
+
+    const items: MenuItem[] = [
+      { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
+      { label: 'Share Session', onClick: () => setShareModalSessionId(sessionId), disabled: !isAuthenticated },
+    ];
+
+    // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
+    if (claudeAccounts.length > 0) {
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
+      items.push({
+        label: `${currentAccountId === null ? '✓ ' : '   '}Inherit account from group`,
+        onClick: () => updateSession(sessionId, { claudeAccountId: null }),
+      });
+      for (const acc of claudeAccounts) {
+        const isCurrent = currentAccountId === acc.id;
+        items.push({
+          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
+          onClick: () => updateSession(sessionId, { claudeAccountId: acc.id }),
+        });
+      }
+    }
+
+    items.push({ label: 'separator', onClick: () => {}, separator: true });
+    items.push({ label: 'Close Session', onClick: () => handleRemoveSession(sessionId), danger: true });
+
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
   };
 
   const handleGroupContextMenu = (e: React.MouseEvent, groupId: string, groupName: string) => {
     e.preventDefault();
     const sessionsInGroup = getSessionsByGroup(groupId);
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: 'New Session', onClick: () => handleNewSession(groupId) },
-        { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
-        { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
-        { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
-        { label: 'separator', onClick: () => {}, separator: true },
-        {
-          label: 'Delete Group',
-          onClick: () => handleDeleteGroup(groupId),
-          danger: true,
-          disabled: sessionsInGroup.length > 0,
-        },
-      ],
+    const group = groups.find(g => g.id === groupId);
+    const currentAccountId = group?.claudeAccountId ?? null;
+
+    const items: MenuItem[] = [
+      { label: 'New Session', onClick: () => handleNewSession(groupId) },
+      { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
+      { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
+      { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
+    ];
+
+    // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
+    if (claudeAccounts.length > 0) {
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
+      items.push({
+        label: `${currentAccountId === null ? '✓ ' : '   '}Use default account`,
+        onClick: () => updateGroup(groupId, { claudeAccountId: null }),
+      });
+      for (const acc of claudeAccounts) {
+        const isCurrent = currentAccountId === acc.id;
+        items.push({
+          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
+          onClick: () => updateGroup(groupId, { claudeAccountId: acc.id }),
+        });
+      }
+    }
+
+    items.push({ label: 'separator', onClick: () => {}, separator: true });
+    items.push({
+      label: 'Delete Group',
+      onClick: () => handleDeleteGroup(groupId),
+      danger: true,
+      disabled: sessionsInGroup.length > 0,
     });
+
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
   };
 
   const handleRemoteGroupContextMenu = (e: React.MouseEvent) => {
@@ -893,6 +987,14 @@ const App: React.FC = () => {
             </button>
             <button
               className="icon-button"
+              onClick={() => setClaudeAccountsOpen(true)}
+              title="Claude accounts"
+              aria-label="Claude accounts"
+            >
+              🔑
+            </button>
+            <button
+              className="icon-button"
               onClick={() => setJoinModalOpen(true)}
               title={isAuthenticated ? 'Join Shared Session' : 'Sign in to join sessions'}
               aria-label="Join Shared Session"
@@ -1032,6 +1134,19 @@ const App: React.FC = () => {
                     onDragOver={(e) => handleSessionDragOver(e, session.id, group.id)}
                     onDrop={(e) => handleSessionDrop(e, session.id, group.id)}
                   >
+                    {(() => {
+                      const acc = effectiveAccountForSession(session.id);
+                      if (!acc) return null;
+                      return (
+                        <span
+                          className="session-account-dot"
+                          style={{ background: acc.color || '#888888' }}
+                          title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
+                          aria-label={`Account: ${acc.label}`}
+                          draggable={false}
+                        />
+                      );
+                    })()}
                     <div className="session-info">
                       {editingSessionId === session.id ? (
                         <input
@@ -1204,6 +1319,18 @@ const App: React.FC = () => {
                       onDragOver={(e) => handleSessionDragOver(e, session.id, subGroup.id)}
                       onDrop={(e) => handleSessionDrop(e, session.id, subGroup.id)}
                     >
+                      {(() => {
+                        const acc = effectiveAccountForSession(session.id);
+                        if (!acc) return null;
+                        return (
+                          <span
+                            className="session-account-dot"
+                            style={{ background: acc.color || '#888888' }}
+                            title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
+                            aria-label={`Account: ${acc.label}`}
+                          />
+                        );
+                      })()}
                       <div className="session-info">
                         {editingSessionId === session.id ? (
                           <input
@@ -1502,6 +1629,7 @@ const App: React.FC = () => {
         onConfirm={handleConfirmGroup}
         onCancel={() => setGroupPrompt(null)}
         showPathSelector={true}
+        accountPicker={{ accounts: claudeAccounts, initialAccountId: null }}
       />
 
       <NamePromptModal
@@ -1513,6 +1641,11 @@ const App: React.FC = () => {
         onCancel={() => setSubGroupPrompt(null)}
         showPathSelector={true}
         pathLabel="Working Directory (optional, inherits from parent)"
+        accountPicker={{
+          accounts: claudeAccounts,
+          initialAccountId: null,
+          label: 'Claude account (optional, inherits from parent)',
+        }}
       />
 
       {/* Choice menu for + button on groups */}
@@ -1539,6 +1672,12 @@ const App: React.FC = () => {
       <SettingsModal
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+      />
+
+      {/* Claude accounts modal (BDHLNDR-31) */}
+      <ClaudeAccountsModal
+        isOpen={claudeAccountsOpen}
+        onClose={() => setClaudeAccountsOpen(false)}
       />
 
       {/* Code Search modal */}

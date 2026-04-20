@@ -83,6 +83,7 @@ export function createSessionsRouter(): Router {
           claudeSessionId: null,
           endedAt: null,
           durationSeconds: 0,
+          claudeAccountId: null,
         };
 
         sessionsRepo.createSession(session);
