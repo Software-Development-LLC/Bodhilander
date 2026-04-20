@@ -168,6 +168,11 @@ interface ElectronAPI {
   logError: (source: string, message: string, stack?: string) => Promise<void>;
   logWarn: (source: string, message: string) => Promise<void>;
   getLogPaths: () => Promise<{ logFile: string | null; crashDumps: string }>;
+
+  // Update channel (BDHLNDR-32)
+  getUpdateChannel: () => Promise<'stable' | 'beta'>;
+  setUpdateChannel: (channel: 'stable' | 'beta') => Promise<'stable' | 'beta'>;
+  isPrereleaseBuild: () => Promise<boolean>;
 }
 
 declare global {

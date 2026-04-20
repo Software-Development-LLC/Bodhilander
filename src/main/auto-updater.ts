@@ -1,6 +1,7 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater';
 import { BrowserWindow, dialog, Notification } from 'electron';
 import * as log from 'electron-log';
+import { getPreference, setPreference } from './repositories/preferences';
 
 // Configure logging
 autoUpdater.logger = log;
@@ -16,6 +17,49 @@ let isDialogOpen = false;
 let isDownloadingFromAbout = false;
 let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string; error?: string }) => void) | null = null;
 
+// Update channels supported by Bodhilander (BDHLNDR-32). "stable" maps to
+// electron-updater's default `latest` channel; "beta" opts into the beta
+// channel published alongside stable from the development branch.
+export type UpdateChannel = 'stable' | 'beta';
+const UPDATE_CHANNEL_PREF_KEY = 'updateChannel';
+
+function parseChannel(raw: string | null): UpdateChannel {
+  return raw === 'beta' ? 'beta' : 'stable';
+}
+
+export function getUpdateChannel(): UpdateChannel {
+  return parseChannel(getPreference(UPDATE_CHANNEL_PREF_KEY));
+}
+
+/**
+ * Apply the stored update channel to the electron-updater runtime. "stable"
+ * uses `latest` (the default), "beta" pulls from `beta.yml`. Called at startup
+ * and whenever the user flips the toggle in Settings.
+ */
+function applyUpdateChannel(channel: UpdateChannel): void {
+  // electron-updater maps `channel` directly to the remote yml feed name.
+  // It accepts `null` to mean "default" (latest).
+  autoUpdater.channel = channel === 'beta' ? 'beta' : null;
+  // Allow downgrade from beta → stable so users flipping the toggle back
+  // don't stay stuck on a newer-than-stable beta forever. Harmless on the
+  // stable channel because stable versions only move forward.
+  autoUpdater.allowDowngrade = channel === 'stable';
+  log.info(`[auto-updater] Channel set to ${channel} (autoUpdater.channel=${autoUpdater.channel ?? 'latest'})`);
+}
+
+/**
+ * Persist a new channel choice and immediately re-check. The renderer calls
+ * this from the Settings toggle; the change takes effect without an app
+ * restart so testers get a responsive opt-in experience (BDHLNDR-32).
+ */
+export function setUpdateChannel(channel: UpdateChannel): void {
+  setPreference(UPDATE_CHANNEL_PREF_KEY, channel);
+  applyUpdateChannel(channel);
+  // Kick an immediate background check so the user sees the new channel's
+  // latest release (if any) without waiting for the 4-hour interval.
+  checkForUpdates();
+}
+
 // Broadcast event to all windows (including About dialog)
 function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
   BrowserWindow.getAllWindows().forEach(win => {
@@ -27,6 +71,10 @@ function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
 
 export function initAutoUpdater(window: BrowserWindow): void {
   mainWindow = window;
+
+  // Honor the saved update channel preference before the first check so
+  // existing beta opt-ins pick up beta.yml on startup (BDHLNDR-32).
+  applyUpdateChannel(getUpdateChannel());
 
   // Check for updates on startup (with delay to not block app launch)
   setTimeout(() => {

@@ -31,6 +31,33 @@ The GitHub Actions workflow (`release.yml`) checks if the tag exists:
 1. Delete the tag: `git tag -d v1.x.x && git push origin :refs/tags/v1.x.x`
 2. Re-trigger: `gh workflow run "Build and Release"`
 
+## Beta Release Workflow (BDHLNDR-32)
+
+Bodhilander ships two auto-update channels: **stable** (default) and **beta** (opt-in via Settings → Updates).
+
+**To cut a beta (on the `development` branch):**
+
+```bash
+npm version prerelease --preid=beta   # e.g. 3.3.0 → 3.3.0-beta.1
+git push                              # DO NOT use --tags
+```
+
+The same `release.yml` workflow handles it — it sees the `-beta.N` suffix on the package.json version and:
+- marks the GitHub Release as a **pre-release**,
+- sets `make_latest: false` so stable users don't pick it up,
+- uploads `beta.yml` (produced automatically by electron-builder because the semver contains a pre-release segment) alongside the installers.
+
+Users who flipped "Beta (opt-in)" in Settings → Updates get the new build on their next auto-update check; everyone else stays on the last stable release.
+
+**Channel gating by branch** (enforced in `release.yml`'s `check-version` job):
+- `production` accepts stable versions only (no `-beta.` suffix).
+- `development` accepts beta versions only (must carry `-beta.` suffix).
+- Mismatched pushes short-circuit with a log message; no partial release is produced.
+
+**Bumping a subsequent beta:** `npm version prerelease` (without `--preid`) bumps the suffix (`3.3.0-beta.1` → `3.3.0-beta.2`).
+
+**Promoting a beta to stable:** merge `development` → `production`, then on `production` run `npm version minor` (or patch/major) to drop the pre-release suffix and bump to the final version. Push.
+
 ## Project Structure
 
 - Electron app for managing Claude Code sessions

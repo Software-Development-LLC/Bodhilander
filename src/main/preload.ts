@@ -349,6 +349,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getEditorOptions: (): Promise<{ value: string; label: string }[]> =>
     ipcRenderer.invoke('editor:getOptions'),
 
+  // Update channel (BDHLNDR-32) — opt-in beta builds
+  getUpdateChannel: (): Promise<'stable' | 'beta'> =>
+    ipcRenderer.invoke('app:get-update-channel'),
+  setUpdateChannel: (channel: 'stable' | 'beta'): Promise<'stable' | 'beta'> =>
+    ipcRenderer.invoke('app:set-update-channel', channel),
+  isPrereleaseBuild: (): Promise<boolean> =>
+    ipcRenderer.invoke('app:is-prerelease-build'),
+
   // Error logging — forward renderer errors to main process log file
   logError: (source: string, message: string, stack?: string): Promise<void> =>
     ipcRenderer.invoke('log:error', source, message, stack),
