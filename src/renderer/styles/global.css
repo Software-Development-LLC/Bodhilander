@@ -388,6 +388,50 @@ body {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
 }
 
+/* BETA pill shown in the sidebar header when the running build is a beta
+ * release (BDHLNDR-32). Purely informational — not clickable. */
+.beta-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: linear-gradient(135deg, #c08a2e 0%, #e0a647 100%);
+  border-radius: 10px;
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+
+/* Radio-list used by the Updates settings section (BDHLNDR-32). */
+.settings-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-radio-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.settings-radio-row input[type="radio"] {
+  margin-top: 3px;
+  cursor: pointer;
+}
+
+.settings-radio-row input[type="radio"]:disabled {
+  cursor: default;
+}
+
+.settings-radio-row .settings-hint {
+  display: inline;
+  color: #888;
+}
+
 .session-name {
   overflow: hidden;
   text-overflow: ellipsis;

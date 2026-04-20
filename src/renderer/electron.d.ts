@@ -179,6 +179,11 @@ interface ElectronAPI {
   setDefaultAccount: (id: string) => Promise<void>;
   onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => () => void;
   onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => () => void;
+
+  // Update channel (BDHLNDR-32)
+  getUpdateChannel: () => Promise<'stable' | 'beta'>;
+  setUpdateChannel: (channel: 'stable' | 'beta') => Promise<'stable' | 'beta'>;
+  isPrereleaseBuild: () => Promise<boolean>;
 }
 
 declare global {

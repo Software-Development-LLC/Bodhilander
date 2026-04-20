@@ -7,8 +7,12 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile';
+  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile' | 'updates';
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+
+  // Update channel state (BDHLNDR-32)
+  const [updateChannel, setUpdateChannelState] = useState<'stable' | 'beta'>('stable');
+  const [updateChannelLoading, setUpdateChannelLoading] = useState(false);
 
   // Mobile API state
   const [apiStatus, setApiStatus] = useState<ApiServerStatus>({ running: false });
@@ -68,11 +72,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
     const loadState = async () => {
       try {
-        const [status, devices, hasPairingResult, remoteAccessStatus] = await Promise.all([
+        const [status, devices, hasPairingResult, remoteAccessStatus, channel] = await Promise.all([
           window.electronAPI.apiGetStatus(),
           window.electronAPI.apiGetPairedDevices(),
           window.electronAPI.apiHasPairingCode(),
           window.electronAPI.apiGetRemoteAccessStatus(),
+          window.electronAPI.getUpdateChannel(),
         ]);
         setApiStatus(status);
         setPairedDevices(devices);
@@ -80,6 +85,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           setPairingCode(null);
         }
         setRemoteStatus(remoteAccessStatus);
+        setUpdateChannelState(channel);
 
         // Load sound settings
         const [
@@ -497,6 +503,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             >
               Integrations
             </button>
+            <button
+              className={`settings-nav-item ${activeTab === 'updates' ? 'active' : ''}`}
+              onClick={() => setActiveTab('updates')}
+            >
+              Updates
+            </button>
           </nav>
 
           <div className="settings-content">
@@ -786,6 +798,73 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       Coming Soon
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'updates' && (
+              <div className="settings-section">
+                <h3>Updates</h3>
+                <p className="settings-description">
+                  Choose which release channel Bodhilander auto-updates from. Changing
+                  the channel triggers an immediate background check.
+                </p>
+
+                <div className="settings-group">
+                  <h4>Release channel</h4>
+                  <div className="settings-radio-group">
+                    <label className="settings-radio-row">
+                      <input
+                        type="radio"
+                        name="updateChannel"
+                        value="stable"
+                        checked={updateChannel === 'stable'}
+                        disabled={updateChannelLoading}
+                        onChange={async () => {
+                          setUpdateChannelLoading(true);
+                          try {
+                            const applied = await window.electronAPI.setUpdateChannel('stable');
+                            setUpdateChannelState(applied);
+                          } finally {
+                            setUpdateChannelLoading(false);
+                          }
+                        }}
+                      />
+                      <span>
+                        <strong>Stable</strong>
+                        <span className="settings-hint"> — the default. Tested releases only.</span>
+                      </span>
+                    </label>
+                    <label className="settings-radio-row">
+                      <input
+                        type="radio"
+                        name="updateChannel"
+                        value="beta"
+                        checked={updateChannel === 'beta'}
+                        disabled={updateChannelLoading}
+                        onChange={async () => {
+                          setUpdateChannelLoading(true);
+                          try {
+                            const applied = await window.electronAPI.setUpdateChannel('beta');
+                            setUpdateChannelState(applied);
+                          } finally {
+                            setUpdateChannelLoading(false);
+                          }
+                        }}
+                      />
+                      <span>
+                        <strong>Beta (opt-in)</strong>
+                        <span className="settings-hint"> — earlier access to new features. May be unstable; please report issues.</span>
+                      </span>
+                    </label>
+                  </div>
+                  {updateChannel === 'beta' && (
+                    <p className="settings-hint" style={{ marginTop: 8 }}>
+                      You'll receive beta builds as they're cut from the development branch.
+                      Switch back to Stable at any time — the next stable release ≥ your
+                      current beta will auto-install.
+                    </p>
+                  )}
                 </div>
               </div>
             )}

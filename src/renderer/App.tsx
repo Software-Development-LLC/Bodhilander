@@ -78,6 +78,10 @@ const App: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [claudeAccountsOpen, setClaudeAccountsOpen] = useState(false);
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  // True when the running build is itself a beta (version contains -beta.).
+  // Shows a BETA pill in the sidebar so opt-in testers know what they're on
+  // (BDHLNDR-32).
+  const [isBetaBuild, setIsBetaBuild] = useState(false);
   const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
   const { user, isAuthenticated } = useSharing();
 
@@ -239,6 +243,16 @@ const App: React.FC = () => {
       window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
     }
   }, [claudeAccountsOpen]);
+
+  // Determine once at mount whether the running app build is a beta —
+  // controls the BETA pill shown in the sidebar header (BDHLNDR-32).
+  useEffect(() => {
+    window.electronAPI
+      .isPrereleaseBuild()
+      .then(setIsBetaBuild)
+      .catch(() => { /* leave default (false) on failure */ });
+  }, []);
+
 
   // Show prompt for new session name
   const handleNewSession = useCallback((groupId: string) => {
@@ -927,7 +941,17 @@ const App: React.FC = () => {
           onMouseDown={handleResizeStart}
         />
         <div className="sidebar-header">
-          <h2>Groups</h2>
+          <h2>
+            Groups
+            {isBetaBuild && (
+              <span
+                className="beta-pill"
+                title="You're running a beta build. Report issues on GitHub."
+              >
+                BETA
+              </span>
+            )}
+          </h2>
           <div className="sidebar-header-actions">
             <button
               className={`icon-button ${memoryPanelOpen ? 'active' : ''}`}
