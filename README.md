@@ -94,7 +94,10 @@ Receive session event notifications in Microsoft Teams:
 - OAuth authentication via Microsoft Graph API
 
 ### Auto-Update
-New versions download and install automatically via GitHub Releases.
+New versions download and install automatically via GitHub Releases. Two channels are available:
+
+- **Stable** (default) — tested releases only.
+- **Beta** (opt-in) — earlier access to new features while they're being validated. Enable from **Settings → Updates**. You'll see a small **BETA** pill in the sidebar while running a beta build. Switch back to Stable any time; the next stable release ≥ your current beta will auto-install.
 
 ### Cross-Platform Support
 - Windows (native + WSL)
@@ -166,6 +169,7 @@ Bodhilander offers extensive configuration across multiple tabs:
 - **Sound** - Master toggle, per-event sounds, volume, debounce frequency, custom audio files
 - **Mobile** - API server, pairing, device management, remote access
 - **Integrations** - GitHub authentication, Microsoft Teams notifications
+- **Updates** - Release channel (Stable / Beta opt-in)
 
 ---
 

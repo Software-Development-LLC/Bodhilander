@@ -11,7 +11,7 @@ import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
-import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
+import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
@@ -811,6 +811,23 @@ safeHandle('app:download-update', () => {
 safeHandle('app:restart-and-update', async () => {
   const { autoUpdater } = await import('electron-updater');
   autoUpdater.quitAndInstall(false, true);
+});
+
+// Update channel (BDHLNDR-32) — opt-in beta builds
+safeHandle('app:get-update-channel', () => {
+  return getUpdateChannel();
+});
+
+safeHandle('app:set-update-channel', (channel: UpdateChannel) => {
+  const normalized: UpdateChannel = channel === 'beta' ? 'beta' : 'stable';
+  setUpdateChannel(normalized);
+  return normalized;
+});
+
+// Whether the currently-running build is itself a beta — used by the
+// renderer to show a BETA pill in the title bar.
+safeHandle('app:is-prerelease-build', () => {
+  return app.getVersion().includes('-beta.');
 });
 
 // Sharing IPC handlers (host)
