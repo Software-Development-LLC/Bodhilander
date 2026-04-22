@@ -113,6 +113,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # BDHLNDR-37: GitHub's macos-latest runner is Apple Silicon, so the default
+      # bun install only fetches the darwin-arm64 sharp prebuilt. electron-builder
+      # cross-packages BOTH x64 and arm64 Mac DMGs from this single run, which
+      # left Intel Mac users on 3.2.8 crashing at launch with "could not load the
+      # sharp module using the darwin-x64 runtime". Use `npm pack` (which doesn't
+      # platform-check since it's just downloading tarballs, not installing) and
+      # extract into node_modules/@img/ directly. The --cpu/--os flags on
+      # `npm install` don't override the platform check for explicit installs on
+      # npm 10.8.2 — they only influence optional-dep resolution — so the
+      # pack+extract route is the reliable way to cross-pack a native prebuilt.
+      # Pinned to versions already referenced by sharp@0.34.5 in the lockfile.
+      - name: Install darwin-x64 sharp variant for cross-arch packaging
+        if: matrix.platform == 'mac'
+        run: |
+          mkdir -p node_modules/@img/sharp-darwin-x64 node_modules/@img/sharp-libvips-darwin-x64
+          tarball=$(npm pack "@img/sharp-darwin-x64@0.34.5" --pack-destination /tmp --silent)
+          tar -xzf "/tmp/$tarball" -C node_modules/@img/sharp-darwin-x64 --strip-components=1
+          rm "/tmp/$tarball"
+          tarball=$(npm pack "@img/sharp-libvips-darwin-x64@1.2.4" --pack-destination /tmp --silent)
+          tar -xzf "/tmp/$tarball" -C node_modules/@img/sharp-libvips-darwin-x64 --strip-components=1
+          rm "/tmp/$tarball"
+          ls node_modules/@img/
+
       - name: Build distributables (macOS)
         if: matrix.platform == 'mac'
         run: bun run dist:mac
