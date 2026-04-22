@@ -348,7 +348,11 @@ const App: React.FC = () => {
   }, [getSessionsByGroup]);
 
   const handleSetGroupDirectory = async (groupId: string) => {
-    const dir = await window.electronAPI.selectDirectory();
+    // Open the picker at the group's current working directory so it's
+    // obvious which group we're editing (BDHLNDR-36). Falls through to the
+    // OS default when the group has no wd set yet.
+    const group = groups.find(g => g.id === groupId);
+    const dir = await window.electronAPI.selectDirectory(group?.workingDir || undefined);
     if (dir) {
       await updateGroup(groupId, { workingDir: dir });
     }

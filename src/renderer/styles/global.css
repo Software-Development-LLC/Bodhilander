@@ -40,6 +40,12 @@ body {
   color: #d4d4d4;
   height: 100vh;
   overflow: hidden;
+  /* BDHLNDR-34: Tell WebKit/Chromium to render all native form controls
+   * (<select> popups, checkboxes, radios, scrollbars) with dark styling
+   * by default. Without this, the account-picker dropdown on macOS
+   * renders with near-black text on the light default popup background,
+   * which our dark modal surrounds — producing an unreadable black box. */
+  color-scheme: dark;
 }
 
 .app {

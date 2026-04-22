@@ -218,16 +218,12 @@ function initializeTables(database: Database.Database): void {
     console.log('FTS5 setup (may already exist):', e);
   }
 
-  // Insert default group if none exists
-  const groupCount = database.prepare('SELECT COUNT(*) as count FROM groups').get() as { count: number };
-  if (groupCount.count === 0) {
-    database.prepare(`
-      INSERT INTO groups (id, name, color, working_dir, "order")
-      VALUES ('default', 'Default', '#e06c75', '', 0)
-    `).run();
-  }
-
-  // Ensure __global__ group exists for global context memories
+  // Ensure __global__ group exists for global context memories (BDHLNDR-35).
+  // This row is required by the memory system (memories with group_id =
+  // '__global__' inject into every session as global context) but is hidden
+  // from the sidebar UI — see the store filter in src/renderer/store/groups.ts.
+  // Note: we no longer seed a visible "Default" group on first run. Users
+  // create their own groups; existing installs keep whatever's already there.
   const globalGroup = database.prepare('SELECT id FROM groups WHERE id = ?').get('__global__');
   if (!globalGroup) {
     database.prepare(`
