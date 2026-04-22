@@ -84,6 +84,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # BDHLNDR-37: GitHub's macos-latest runner is Apple Silicon, so the default
+      # bun install only fetches the darwin-arm64 sharp prebuilt. electron-builder
+      # cross-packages BOTH x64 and arm64 Mac DMGs from this single run, which
+      # left Intel Mac users on 3.2.8 crashing at launch with "could not load the
+      # sharp module using the darwin-x64 runtime". Force-install the darwin-x64
+      # sharp + libvips binaries (bypassing npm's cpu/os filter) so the x64 DMG
+      # ships with a usable sharp. Pinned to the sharp@0.34.5 already in lockfile.
+      - name: Install darwin-x64 sharp variant for cross-arch packaging
+        if: matrix.platform == 'mac'
+        run: |
+          npm install --no-save --cpu=x64 --os=darwin \
+            @img/sharp-darwin-x64@0.34.5 \
+            @img/sharp-libvips-darwin-x64@1.2.4
+
       - name: Build distributables (macOS)
         if: matrix.platform == 'mac'
         run: bun run dist:mac
