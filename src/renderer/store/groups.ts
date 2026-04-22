@@ -1,7 +1,18 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Group } from '../../shared/types';
+import { Group, GLOBAL_CONTEXT_GROUP_ID } from '../../shared/types';
 
 const DEFAULT_COLORS = ['#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2'];
+
+/**
+ * Filter out system-managed groups that should never appear in the UI
+ * (BDHLNDR-35). The `__global__` group is required by the memory system's
+ * global-context injection but must stay hidden from the sidebar, pickers,
+ * and context menus. MemoryPanel references it directly via the constant,
+ * not through this store.
+ */
+function visibleGroups(all: Group[]): Group[] {
+  return all.filter(g => g.id !== GLOBAL_CONTEXT_GROUP_ID);
+}
 
 export function useGroups() {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -12,7 +23,7 @@ export function useGroups() {
     const loadGroups = async () => {
       try {
         const dbGroups = await window.electronAPI.getAllGroups();
-        setGroups(dbGroups);
+        setGroups(visibleGroups(dbGroups));
       } catch (error) {
         console.error('Failed to load groups:', error);
       } finally {

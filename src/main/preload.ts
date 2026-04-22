@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('pty:resize', id, cols, rows),
   killSession: (id: string) =>
     ipcRenderer.send('pty:kill', id),
+  primePty: (id: string) =>
+    ipcRenderer.send('pty:prime', id),
 
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => {
@@ -100,8 +102,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Dialogs
-  selectDirectory: (): Promise<string | null> =>
-    ipcRenderer.invoke('dialog:selectDirectory'),
+  selectDirectory: (defaultPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:selectDirectory', defaultPath),
 
   // Database - Groups
   getAllGroups: (): Promise<Group[]> =>

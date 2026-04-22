@@ -9,6 +9,7 @@ interface ElectronAPI {
   writeToSession: (id: string, data: string) => void;
   resizeSession: (id: string, cols: number, rows: number) => void;
   killSession: (id: string) => void;
+  primePty: (id: string) => void;
 
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => () => void;
@@ -34,7 +35,7 @@ interface ElectronAPI {
   onOpenSettings: (callback: () => void) => () => void;
 
   // Dialogs
-  selectDirectory: () => Promise<string | null>;
+  selectDirectory: (defaultPath?: string) => Promise<string | null>;
 
   // Database - Groups
   getAllGroups: () => Promise<Group[]>;

@@ -91,6 +91,19 @@
   cursor: default;
 }
 
+/* BDHLNDR-34: Explicit colors on select and its <option>s so Linux / fallback
+ * popup renderers (which don't always honor color-scheme) still read. */
+.name-prompt-modal select.path-input {
+  color: #d4d4d4;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+}
+
+.name-prompt-modal select.path-input option {
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+
 .name-prompt-modal .path-input::placeholder {
   color: #555;
   font-style: italic;

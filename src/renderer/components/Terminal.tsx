@@ -378,6 +378,16 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       }
     });
 
+    // Prime external ptys (BDHLNDR-33). The login-flow pty in the Add Account
+    // modal is spawned in main before this component renders, so any output
+    // claude produced during the IPC round-trip + React render would be lost.
+    // primePty asks main to flush the accumulated scrollback as a 'data' event
+    // and unlock live emission atomically — the listener above receives the
+    // flush first, then subsequent live events in correct order.
+    if (externalPty) {
+      window.electronAPI.primePty(sessionId);
+    }
+
     // Handle keyboard shortcuts
     term.attachCustomKeyEventHandler((event) => {
       const isMod = event.ctrlKey || event.metaKey;

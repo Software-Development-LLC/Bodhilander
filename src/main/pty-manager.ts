@@ -49,6 +49,15 @@ interface PtySession {
   lastRows: number;
   /** Set to true when kill() is in progress — guards against use-after-free on native PTY handle. */
   killing: boolean;
+  /**
+   * When true, incoming pty output is accumulated in scrollbackBuffer but NOT
+   * emitted as 'data' events (BDHLNDR-33). Used by the interactive-login pty
+   * to avoid losing startup output in the window between pty spawn and the
+   * renderer attaching its listener. Flipped to false by primePty() once the
+   * renderer signals it's ready; primePty emits the buffered scrollback as a
+   * single 'data' event first, guaranteeing ordered delivery.
+   */
+  deferEmission: boolean;
 }
 
 /**
@@ -351,6 +360,9 @@ export class PtyManager extends EventEmitter {
       lastCols: 80,
       lastRows: 24,
       killing: false,
+      // Regular sessions spawn only after the renderer explicitly called
+      // pty:create, so listeners are already attached — no deferral needed.
+      deferEmission: false,
     });
 
   }
@@ -427,10 +439,21 @@ export class PtyManager extends EventEmitter {
         session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
       }
 
+      // Hold emission until the renderer primes this pty (BDHLNDR-33). The
+      // scrollback is accumulated above regardless, so nothing is lost.
+      if (session.deferEmission) return;
+
       this.emit('data', { id, data: filteredData });
     });
 
     ptyProcess.onExit(({ exitCode }) => {
+      // If the pty exited before being primed, flush whatever it managed to
+      // print so the renderer can show the error instead of a blank box.
+      const session = this.sessions.get(id);
+      if (session?.deferEmission && session.scrollbackBuffer) {
+        this.emit('data', { id, data: session.scrollbackBuffer });
+        session.deferEmission = false;
+      }
       this.emit('exit', { id, exitCode });
       this.sessions.delete(id);
     });
@@ -455,7 +478,27 @@ export class PtyManager extends EventEmitter {
       lastCols: 80,
       lastRows: 24,
       killing: false,
+      // Login ptys defer event emission until the renderer attaches its
+      // listener and calls primePty — avoids losing claude's startup banner
+      // in the IPC-round-trip + React-render gap (BDHLNDR-33).
+      deferEmission: true,
     });
+  }
+
+  /**
+   * Flush a login pty's accumulated scrollback to the renderer as a single
+   * 'data' event, then unlock live emission (BDHLNDR-33). The two operations
+   * happen in the same synchronous tick so no live data sneaks in between —
+   * preserving strict ordering even on the renderer side. Idempotent: after
+   * the first call, subsequent calls are no-ops.
+   */
+  primePty(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session || !session.deferEmission) return;
+    if (session.scrollbackBuffer) {
+      this.emit('data', { id, data: session.scrollbackBuffer });
+    }
+    session.deferEmission = false;
   }
 
   write(id: string, data: string): void {

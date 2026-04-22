@@ -594,6 +594,14 @@ safeOn('pty:kill', (id: string) => {
   ptyManager.kill(id);
 });
 
+// Prime a deferred-emission pty (BDHLNDR-33): flushes any buffered scrollback
+// as a single 'data' event then unlocks live emission. Used by the Terminal
+// component for the Add Account login flow, which attaches its listener
+// after the pty has already started producing output.
+safeOn('pty:prime', (id: string) => {
+  ptyManager.primePty(id);
+});
+
 // Database IPC Handlers - Groups
 safeHandle('db:groups:getAll', () => {
   return groupsRepo.getAllGroups();
@@ -615,11 +623,14 @@ safeHandle('db:groups:delete', (id: string) => {
 });
 
 // Dialog IPC Handlers
-safeHandle('dialog:selectDirectory', async () => {
+safeHandle('dialog:selectDirectory', async (defaultPath?: string) => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'showHiddenFiles'],
     title: 'Select Working Directory',
+    // BDHLNDR-36: open the picker at the group's current working directory
+    // (or the last path the caller passed), not the OS's last-remembered dir.
+    ...(defaultPath ? { defaultPath } : {}),
   });
   if (result.canceled || result.filePaths.length === 0) {
     return null;
