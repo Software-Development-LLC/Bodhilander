@@ -75,8 +75,20 @@ jobs:
             platform: linux
           - os: windows-latest
             platform: win
-          - os: macos-latest
-            platform: mac
+          # BDHLNDR-38: build each Mac arch on its native runner so postinstall
+          # (electron-rebuild) and sharp's optional-dep resolution produce
+          # host-native binaries. Cross-packaging from a single arm64 runner
+          # previously shipped arm64 .node files inside the x64 DMG, causing
+          # Intel Mac users to hang at the splash screen when better-sqlite3
+          # failed to load.
+          #
+          # macos-15-intel is GitHub's current Intel x64 12-core larger runner
+          # (retired macos-13 replacement). It's a paid tier (~$0.077/min, ~$1
+          # per release) — larger runners don't use the public-repo free quota.
+          - os: macos-14
+            platform: mac-arm64
+          - os: macos-15-intel
+            platform: mac-x64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -114,8 +126,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build distributables (macOS)
-        if: matrix.platform == 'mac'
-        run: bun run dist:mac
+        if: startsWith(matrix.platform, 'mac')
+        run: bunx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
@@ -155,10 +167,24 @@ jobs:
       - name: Display structure of downloaded files
         run: ls -R artifacts
 
+      # BDHLNDR-38: each mac matrix job produces its own arch-scoped
+      # latest-mac.yml. Merge into one so electron-updater clients see both
+      # DMGs and pick the right arch. Then remove the per-job files so the
+      # release upload glob doesn't race on identical filenames.
+      - name: Merge latest-mac.yml from arm64 and x64 builds
+        run: |
+          pip install pyyaml
+          python3 scripts/merge-latest-mac.py \
+            artifacts/dist-mac-arm64/latest-mac.yml \
+            artifacts/dist-mac-x64/latest-mac.yml \
+            artifacts/latest-mac.yml
+          rm artifacts/dist-mac-arm64/latest-mac.yml artifacts/dist-mac-x64/latest-mac.yml
+
       # Rename channel feeds for beta releases (BDHLNDR-32). electron-builder's
       # GitHub publish provider always writes `latest*.yml` regardless of the
       # semver pre-release suffix, so we rename them post-build to `beta*.yml`
-      # so beta-channel opt-ins can find the feed.
+      # so beta-channel opt-ins can find the feed. This runs AFTER the mac
+      # merge so the merged artifacts/latest-mac.yml is renamed too.
       - name: Rename channel feeds for beta releases
         if: needs.check-version.outputs.is_prerelease == 'true'
         run: |

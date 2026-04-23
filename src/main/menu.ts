@@ -1,5 +1,6 @@
 import { Menu, shell, app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
+import log from 'electron-log';
 
 const aboutPreloadPath = path.join(__dirname, 'preload-about.js');
 
@@ -215,6 +216,15 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
           label: 'Report Issue',
           click: async () => {
             await shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander/issues');
+          },
+        },
+        {
+          label: 'Open Log Folder',
+          click: () => {
+            const logFile = log.transports.file.getFile()?.path;
+            if (logFile) {
+              shell.showItemInFolder(logFile);
+            }
           },
         },
       ],
