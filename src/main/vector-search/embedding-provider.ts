@@ -1,14 +1,28 @@
 console.log('[EmbeddingProvider] Loading @huggingface/transformers...');
 
+import os from 'os';
+
 // Import types for TypeScript, runtime value loaded dynamically
 import type { FeatureExtractionPipeline as FeatureExtractionPipelineType } from '@huggingface/transformers';
 
 let pipeline: typeof import('@huggingface/transformers').pipeline;
 
+// Cap ONNX threads so indexing doesn't saturate every CPU core.
+// Default onnxruntime behavior is intraOpNumThreads = physical cores, which
+// pins the machine during long indexing runs. Half the cores, max 4, min 1.
+const EMBEDDING_THREAD_COUNT = Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)));
+
 try {
   const transformers = require('@huggingface/transformers');
   pipeline = transformers.pipeline;
-  console.log('[EmbeddingProvider] @huggingface/transformers loaded successfully');
+  // WASM numThreads matters when transformers falls back to the WASM backend;
+  // harmless when onnxruntime-node is in use.
+  if (transformers.env?.backends?.onnx?.wasm) {
+    transformers.env.backends.onnx.wasm.numThreads = EMBEDDING_THREAD_COUNT;
+  }
+  console.log(
+    `[EmbeddingProvider] @huggingface/transformers loaded successfully (thread cap=${EMBEDDING_THREAD_COUNT})`
+  );
 } catch (e) {
   console.error('[EmbeddingProvider] Failed to load @huggingface/transformers:', e);
   throw e;
@@ -63,8 +77,15 @@ export class HuggingFaceEmbeddingProvider implements EmbeddingProvider {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         console.log(`Initializing embedding model (attempt ${attempt}/${maxRetries})...`);
-        // Cast to any to avoid complex union type issues with the transformers library
-        this.pipeline = await (pipeline as any)('feature-extraction', this.name);
+        // Cast to any to avoid complex union type issues with the transformers library.
+        // session_options caps onnxruntime-node thread usage so indexing doesn't
+        // pin every core.
+        this.pipeline = await (pipeline as any)('feature-extraction', this.name, {
+          session_options: {
+            intraOpNumThreads: EMBEDDING_THREAD_COUNT,
+            interOpNumThreads: 1,
+          },
+        });
         console.log('Embedding model initialized successfully');
         return;
       } catch (error) {
@@ -88,14 +109,37 @@ export class HuggingFaceEmbeddingProvider implements EmbeddingProvider {
       await this.initialize();
     }
 
-    const results: number[][] = [];
+    if (texts.length === 0) return [];
 
-    for (const text of texts) {
-      const embedding = await this.embedWithRetry(text);
-      results.push(embedding);
+    // Truncate to model max token budget before handing to the pipeline.
+    const truncated = texts.map(t => t.slice(0, 8000));
+
+    // Real batched inference: feed the whole array once so ONNX can amortize
+    // the forward pass. Previously this looped one text at a time, which meant
+    // BATCH_SIZE=32 in the indexing worker was really 32 sequential calls.
+    try {
+      const output = await this.pipeline!(truncated, {
+        pooling: 'mean',
+        normalize: true,
+      });
+
+      const data = output.data as Float32Array;
+      const dims = this.dimensions;
+      const results: number[][] = new Array(truncated.length);
+      for (let i = 0; i < truncated.length; i++) {
+        results[i] = Array.from(data.slice(i * dims, (i + 1) * dims));
+      }
+      return results;
+    } catch (batchErr) {
+      // On batch failure, fall back to per-text with retries so a single bad
+      // input can't take out the whole batch.
+      console.warn('[EmbeddingProvider] Batched embed failed, falling back to per-text:', batchErr);
+      const results: number[][] = [];
+      for (const text of texts) {
+        results.push(await this.embedWithRetry(text));
+      }
+      return results;
     }
-
-    return results;
   }
 
   /**
