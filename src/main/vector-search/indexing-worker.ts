@@ -218,6 +218,11 @@ async function runIndexing(
       }
 
       filesIndexed++;
+
+      // Yield so the worker can service cancel messages and let progress IPC
+      // flush. Without this, long runs silently pin the worker thread for
+      // minutes and the user has no way to stop them.
+      await new Promise(resolve => setImmediate(resolve));
     }
 
     sendComplete(indexId);
