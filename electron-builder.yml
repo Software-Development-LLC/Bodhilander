@@ -50,15 +50,16 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # BDHLNDR-38: no explicit arch list — electron-builder defaults to host
+  # arch when unspecified, which is what we want since release.yml now runs
+  # each arch on its native runner (macos-14 arm64 + macos-15-intel x64).
+  # A hardcoded [x64, arm64] here overrode the CLI --x64/--arm64 flags and
+  # caused every matrix job to cross-package both archs, producing colliding
+  # DMG filenames and a latest-mac.yml with duplicate sha512 entries that
+  # broke auto-update for Intel Mac clients on 3.2.10.
   target:
     - target: dmg
-      arch:
-        - x64
-        - arm64
     - target: zip
-      arch:
-        - x64
-        - arm64
 
 # Copy conpty.dll for Windows PTY support (runs after packing)
 afterPack: scripts/copy-conpty.js
