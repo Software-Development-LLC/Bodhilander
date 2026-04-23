@@ -14,14 +14,15 @@ export function getAllGroups(): Group[] {
     createdAt: new Date(row.created_at),
     parentId: row.parent_id || null,
     collapsed: Boolean(row.collapsed),
+    claudeAccountId: row.claude_account_id ?? null,
   }));
 }
 
 export function createGroup(group: Group): void {
   const db = getDatabase();
   db.prepare(`
-    INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     group.id,
     group.name,
@@ -30,7 +31,8 @@ export function createGroup(group: Group): void {
     group.order,
     group.createdAt.toISOString(),
     group.parentId || null,
-    group.collapsed ? 1 : 0
+    group.collapsed ? 1 : 0,
+    group.claudeAccountId ?? null
   );
 }
 
@@ -62,6 +64,10 @@ export function updateGroup(id: string, updates: Partial<Group>): void {
   if (updates.collapsed !== undefined) {
     fields.push('collapsed = ?');
     values.push(updates.collapsed ? 1 : 0);
+  }
+  if (updates.claudeAccountId !== undefined) {
+    fields.push('claude_account_id = ?');
+    values.push(updates.claudeAccountId);
   }
 
   if (fields.length > 0) {

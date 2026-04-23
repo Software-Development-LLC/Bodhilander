@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('pty:resize', id, cols, rows),
   killSession: (id: string) =>
     ipcRenderer.send('pty:kill', id),
+  primePty: (id: string) =>
+    ipcRenderer.send('pty:prime', id),
 
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => {
@@ -100,8 +102,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Dialogs
-  selectDirectory: (): Promise<string | null> =>
-    ipcRenderer.invoke('dialog:selectDirectory'),
+  selectDirectory: (defaultPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:selectDirectory', defaultPath),
 
   // Database - Groups
   getAllGroups: (): Promise<Group[]> =>
@@ -348,6 +350,40 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getEditorOptions: (): Promise<{ value: string; label: string }[]> =>
     ipcRenderer.invoke('editor:getOptions'),
+
+  // Claude accounts (BDHLNDR-31)
+  listAccounts: (): Promise<ClaudeAccount[]> =>
+    ipcRenderer.invoke('accounts:list'),
+  startAccountLogin: (label: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
+    ipcRenderer.invoke('accounts:startLogin', label),
+  cancelAccountLogin: (ptyId: string, deleteAccount: boolean): Promise<void> =>
+    ipcRenderer.invoke('accounts:cancelLogin', ptyId, deleteAccount),
+  confirmAccountLoginMacOS: (ptyId: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:confirmLoginMacOS', ptyId),
+  deleteAccount: (id: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:delete', id),
+  updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }): Promise<void> =>
+    ipcRenderer.invoke('accounts:update', id, updates),
+  setDefaultAccount: (id: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:setDefault', id),
+  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; email: string | null }) => callback(data);
+    ipcRenderer.on('accounts:login-completed', listener);
+    return () => ipcRenderer.removeListener('accounts:login-completed', listener);
+  },
+  onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; exitCode: number }) => callback(data);
+    ipcRenderer.on('accounts:login-exited', listener);
+    return () => ipcRenderer.removeListener('accounts:login-exited', listener);
+  },
+
+  // Update channel (BDHLNDR-32) — opt-in beta builds
+  getUpdateChannel: (): Promise<'stable' | 'beta'> =>
+    ipcRenderer.invoke('app:get-update-channel'),
+  setUpdateChannel: (channel: 'stable' | 'beta'): Promise<'stable' | 'beta'> =>
+    ipcRenderer.invoke('app:set-update-channel', channel),
+  isPrereleaseBuild: (): Promise<boolean> =>
+    ipcRenderer.invoke('app:is-prerelease-build'),
 
   // Error logging — forward renderer errors to main process log file
   logError: (source: string, message: string, stack?: string): Promise<void> =>

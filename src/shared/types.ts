@@ -19,6 +19,12 @@ export interface Session {
   endedAt: Date | null;
   /** Active time in seconds (working + waiting states), not wall clock (BDHLNDR-17). */
   durationSeconds: number;
+  /**
+   * Optional Claude account override for this session (BDHLNDR-31). When null,
+   * the session inherits from its group (and if the group has none, falls back
+   * to the global default account, then to the legacy ~/.claude config).
+   */
+  claudeAccountId: string | null;
 }
 
 export interface Group {
@@ -30,6 +36,32 @@ export interface Group {
   createdAt: Date;
   parentId: string | null;
   collapsed: boolean;
+  /**
+   * Default Claude account for sessions in this group (BDHLNDR-31). Sessions
+   * inherit this unless they set their own claudeAccountId.
+   */
+  claudeAccountId: string | null;
+}
+
+/**
+ * A Claude.ai account registered with Bodhilander (BDHLNDR-31). Each account
+ * owns an isolated CLAUDE_CONFIG_DIR so that multiple accounts can run
+ * concurrent sessions without credential contention.
+ */
+export interface ClaudeAccount {
+  id: string;
+  /** Human-readable label (e.g. "Personal", "Acme Corp"). */
+  label: string;
+  /** Absolute path to the account's isolated .claude directory. */
+  configDir: string;
+  /** Email parsed from credentials after login, for display. */
+  email: string | null;
+  /** Hex color for UI badge. */
+  color: string;
+  /** True for the single account used as the global default fallback. */
+  isDefault: boolean;
+  createdAt: Date;
+  lastUsedAt: Date | null;
 }
 
 export interface AppState {

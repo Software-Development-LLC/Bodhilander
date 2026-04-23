@@ -90,6 +90,7 @@ export function createGroupsRouter(): Router {
           createdAt: now,
           parentId: parentId || null,
           collapsed: false,
+          claudeAccountId: null,
         };
 
         groupsRepo.createGroup(group);

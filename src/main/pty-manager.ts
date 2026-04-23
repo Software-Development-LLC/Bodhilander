@@ -10,6 +10,7 @@ import {
   setClaudeSessionId as storeClaudeSessionId,
   clearClaudeSessionId as clearStoredClaudeSessionId,
 } from './repositories/sessions';
+import { resolveAccountForSession, touchAccount } from './repositories/accounts';
 import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 import log from 'electron-log';
 
@@ -48,6 +49,15 @@ interface PtySession {
   lastRows: number;
   /** Set to true when kill() is in progress — guards against use-after-free on native PTY handle. */
   killing: boolean;
+  /**
+   * When true, incoming pty output is accumulated in scrollbackBuffer but NOT
+   * emitted as 'data' events (BDHLNDR-33). Used by the interactive-login pty
+   * to avoid losing startup output in the window between pty spawn and the
+   * renderer attaching its listener. Flipped to false by primePty() once the
+   * renderer signals it's ready; primePty emits the buffered scrollback as a
+   * single 'data' event first, guaranteeing ordered delivery.
+   */
+  deferEmission: boolean;
 }
 
 /**
@@ -95,7 +105,7 @@ const WAITING_PATTERNS = [
   /proceed with/i,                        // "Proceed with this approach?"
 ] as const;
 
-class PtyManager extends EventEmitter {
+export class PtyManager extends EventEmitter {
   private sessions: Map<string, PtySession> = new Map();
   private socketPath: string;
 
@@ -161,11 +171,19 @@ class PtyManager extends EventEmitter {
         storeClaudeSessionId(id, claudeSessionId);
       }
 
+      // Resolve which Claude account this session should launch under (BDHLNDR-31).
+      // Returns null when no accounts are registered, preserving legacy ~/.claude behavior.
+      const account = resolveAccountForSession(id);
+      if (account) {
+        touchAccount(account.id);
+      }
+
       const claudeConfig = getClaudeCommand({
         sessionId: id,
         projectDir: cwd,
         socketPath: this.socketPath,
         claudeSession: { id: claudeSessionId, mode: claudeSessionMode },
+        claudeConfigDir: account?.configDir,
       });
 
       // Suffix appended to every shell's claude command. UUIDs are alphanumeric
@@ -342,8 +360,145 @@ class PtyManager extends EventEmitter {
       lastCols: 80,
       lastRows: 24,
       killing: false,
+      // Regular sessions spawn only after the renderer explicitly called
+      // pty:create, so listeners are already attached — no deferral needed.
+      deferEmission: false,
     });
 
+  }
+
+  /**
+   * Spawn a pty running `claude` under an isolated CLAUDE_CONFIG_DIR for the
+   * interactive add-account login flow (BDHLNDR-31). Keyed by an arbitrary pty
+   * id that's not tied to a DB session — reuses the standard pty events so the
+   * renderer Terminal can attach unchanged.
+   *
+   * Skips memory injection, session-UUID management, and state detection; this
+   * pty exists only long enough for the user to complete `/login` via browser
+   * OAuth, after which the caller tears it down.
+   */
+  createLoginSession(id: string, configDir: string): void {
+    const shellInfo = this.getShellInfo();
+    if (!shellInfo.shell || !fs.existsSync(shellInfo.shell)) {
+      throw new Error(`Shell not found: ${shellInfo.shell || '(empty)'}`);
+    }
+
+    const cwd = require('os').homedir();
+    const processEnv: { [key: string]: string } = {
+      ...(process.env as { [key: string]: string }),
+      CLAUDE_CONFIG_DIR: configDir,
+    };
+    const claudeCmd = 'claude';
+
+    let shell: string;
+    let args: string[];
+
+    if (shellInfo.isWSL) {
+      shell = 'wsl.exe';
+      args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
+    } else if (process.platform === 'win32') {
+      shell = shellInfo.shell;
+      if (shellInfo.shell.toLowerCase().includes('powershell')) {
+        args = ['-NoLogo', '-Command', claudeCmd];
+      } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
+        args = ['/c', claudeCmd];
+      } else {
+        args = ['-c', claudeCmd];
+      }
+    } else {
+      shell = shellInfo.shell;
+      args = ['-l', '-i', '-c', claudeCmd];
+    }
+
+    log.info(`[PTY] Starting login pty ${id} with CLAUDE_CONFIG_DIR=${configDir}`);
+
+    const ptyProcess = pty.spawn(shell, args, {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: shellInfo.isWSL ? undefined : cwd,
+      env: processEnv,
+      ...(process.platform === 'win32' ? {
+        useConptyDll: true,
+        conptyInheritCursor: false,
+      } : {}),
+    });
+
+    ptyProcess.onData((data) => {
+      const session = this.sessions.get(id);
+      if (!session || session.killing) return;
+
+      let filteredData = data;
+      if (process.platform === 'win32') {
+        filteredData = filteredData.replace(/windows pid \d+, Win32 error \d+/gi, '');
+        if (filteredData.trim() === '') return;
+      }
+
+      session.scrollbackBuffer += filteredData;
+      if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
+        session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
+      }
+
+      // Hold emission until the renderer primes this pty (BDHLNDR-33). The
+      // scrollback is accumulated above regardless, so nothing is lost.
+      if (session.deferEmission) return;
+
+      this.emit('data', { id, data: filteredData });
+    });
+
+    ptyProcess.onExit(({ exitCode }) => {
+      // If the pty exited before being primed, flush whatever it managed to
+      // print so the renderer can show the error instead of a blank box.
+      const session = this.sessions.get(id);
+      if (session?.deferEmission && session.scrollbackBuffer) {
+        this.emit('data', { id, data: session.scrollbackBuffer });
+        session.deferEmission = false;
+      }
+      this.emit('exit', { id, exitCode });
+      this.sessions.delete(id);
+    });
+
+    this.sessions.set(id, {
+      id,
+      pty: ptyProcess,
+      cwd,
+      groupId: null,
+      isClaudeSession: true,
+      shellInfo,
+      lastState: 'idle',
+      outputBuffer: '',
+      scrollbackBuffer: '',
+      idleTimeout: null,
+      workingDebounce: null,
+      recentOutputBytes: 0,
+      lastOutputTime: 0,
+      claudeSessionId: null,
+      claudeResumeAttempted: false,
+      spawnedAt: Date.now(),
+      lastCols: 80,
+      lastRows: 24,
+      killing: false,
+      // Login ptys defer event emission until the renderer attaches its
+      // listener and calls primePty — avoids losing claude's startup banner
+      // in the IPC-round-trip + React-render gap (BDHLNDR-33).
+      deferEmission: true,
+    });
+  }
+
+  /**
+   * Flush a login pty's accumulated scrollback to the renderer as a single
+   * 'data' event, then unlock live emission (BDHLNDR-33). The two operations
+   * happen in the same synchronous tick so no live data sneaks in between —
+   * preserving strict ordering even on the renderer side. Idempotent: after
+   * the first call, subsequent calls are no-ops.
+   */
+  primePty(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session || !session.deferEmission) return;
+    if (session.scrollbackBuffer) {
+      this.emit('data', { id, data: session.scrollbackBuffer });
+    }
+    session.deferEmission = false;
   }
 
   write(id: string, data: string): void {

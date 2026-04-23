@@ -7,11 +7,13 @@ import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
+import * as accountsRepo from './repositories/accounts';
+import * as accountAuth from './account-auth';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
-import { initAutoUpdater, checkForUpdatesManual, downloadUpdate } from './auto-updater';
+import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
@@ -294,29 +296,52 @@ function createSplashWindow(): void {
   });
 }
 
+/**
+ * Register the Bodhilander Memory MCP server and hook script into every
+ * Claude config dir we know about: the global ~/.claude plus each registered
+ * account's isolated .claude (BDHLNDR-31).
+ */
+function registerMcpAndHooksEverywhere(): void {
+  const targets: (string | undefined)[] = [undefined]; // undefined = global ~/.claude
+  try {
+    for (const acc of accountsRepo.getAllAccounts()) {
+      targets.push(acc.configDir);
+    }
+  } catch (err) {
+    log.warn('[MCP Config] Failed to list accounts for MCP registration:', err);
+  }
+
+  for (const configDir of targets) {
+    const label = configDir ?? '(default)';
+    const mcpResult = registerMcpServer(configDir);
+    if (mcpResult.success) {
+      if (mcpResult.action !== 'unchanged') {
+        log.info(`MCP server ${mcpResult.action} for ${label}: ${mcpResult.path}`);
+      }
+    } else {
+      log.warn(`MCP server registration failed for ${label}:`, mcpResult.error);
+    }
+
+    const hooksResult = registerHooks(configDir);
+    if (hooksResult.success) {
+      if (hooksResult.action !== 'unchanged') {
+        log.info(`Hooks ${hooksResult.action} for ${label}`);
+      }
+    } else {
+      log.warn(`Hooks registration failed for ${label}:`, hooksResult.error);
+    }
+  }
+}
+
 function createWindow(): void {
   // Initialize database
   getDatabase();
 
-  // Register MCP server with Claude Code (auto-configure on startup)
-  const mcpResult = registerMcpServer();
-  if (mcpResult.success) {
-    if (mcpResult.action !== 'unchanged') {
-      log.info(`MCP server ${mcpResult.action}: ${mcpResult.path}`);
-    }
-  } else {
-    log.warn('MCP server registration failed:', mcpResult.error);
-  }
-
-  // Register hooks with Claude Code (auto-configure on startup)
-  const hooksResult = registerHooks();
-  if (hooksResult.success) {
-    if (hooksResult.action !== 'unchanged') {
-      log.info(`Hooks ${hooksResult.action}`);
-    }
-  } else {
-    log.warn('Hooks registration failed:', hooksResult.error);
-  }
+  // Register MCP server + hooks with Claude Code (auto-configure on startup).
+  // Registers into the user's global ~/.claude plus each registered account's
+  // isolated config dir (BDHLNDR-31), so the Bodhilander memory MCP and hook
+  // script work regardless of which account the session is running under.
+  registerMcpAndHooksEverywhere();
 
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
@@ -569,6 +594,14 @@ safeOn('pty:kill', (id: string) => {
   ptyManager.kill(id);
 });
 
+// Prime a deferred-emission pty (BDHLNDR-33): flushes any buffered scrollback
+// as a single 'data' event then unlocks live emission. Used by the Terminal
+// component for the Add Account login flow, which attaches its listener
+// after the pty has already started producing output.
+safeOn('pty:prime', (id: string) => {
+  ptyManager.primePty(id);
+});
+
 // Database IPC Handlers - Groups
 safeHandle('db:groups:getAll', () => {
   return groupsRepo.getAllGroups();
@@ -590,11 +623,14 @@ safeHandle('db:groups:delete', (id: string) => {
 });
 
 // Dialog IPC Handlers
-safeHandle('dialog:selectDirectory', async () => {
+safeHandle('dialog:selectDirectory', async (defaultPath?: string) => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'showHiddenFiles'],
     title: 'Select Working Directory',
+    // BDHLNDR-36: open the picker at the group's current working directory
+    // (or the last path the caller passed), not the OS's last-remembered dir.
+    ...(defaultPath ? { defaultPath } : {}),
   });
   if (result.canceled || result.filePaths.length === 0) {
     return null;
@@ -632,6 +668,40 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
   }
   sessionsRepo.deleteSession(id);
   getApiServer().broadcastSessionsUpdated();
+});
+
+// Claude account IPC handlers (BDHLNDR-31)
+safeHandle('accounts:list', () => {
+  return accountsRepo.getAllAccounts();
+});
+
+safeHandle('accounts:startLogin', (label: string) => {
+  const trimmed = (label ?? '').toString().trim();
+  if (!trimmed) throw new Error('Account label is required');
+  return accountAuth.startLoginFlow(ptyManager, mainWindow, trimmed);
+});
+
+safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {
+  accountAuth.cancelLoginFlow(ptyManager, ptyId, deleteAccount);
+});
+
+safeHandle('accounts:confirmLoginMacOS', (ptyId: string) => {
+  accountAuth.confirmLoginMacOS(mainWindow, ptyId);
+});
+
+safeHandle('accounts:delete', (id: string) => {
+  accountAuth.deleteAccountAndDir(id);
+});
+
+safeHandle('accounts:update', (
+  id: string,
+  updates: { label?: string; color?: string; email?: string | null },
+) => {
+  accountsRepo.updateAccount(id, updates);
+});
+
+safeHandle('accounts:setDefault', (id: string) => {
+  accountsRepo.setDefaultAccount(id);
 });
 
 // Database IPC Handlers - Memories
@@ -811,6 +881,23 @@ safeHandle('app:download-update', () => {
 safeHandle('app:restart-and-update', async () => {
   const { autoUpdater } = await import('electron-updater');
   autoUpdater.quitAndInstall(false, true);
+});
+
+// Update channel (BDHLNDR-32) — opt-in beta builds
+safeHandle('app:get-update-channel', () => {
+  return getUpdateChannel();
+});
+
+safeHandle('app:set-update-channel', (channel: UpdateChannel) => {
+  const normalized: UpdateChannel = channel === 'beta' ? 'beta' : 'stable';
+  setUpdateChannel(normalized);
+  return normalized;
+});
+
+// Whether the currently-running build is itself a beta — used by the
+// renderer to show a BETA pill in the title bar.
+safeHandle('app:is-prerelease-build', () => {
+  return app.getVersion().includes('-beta.');
 });
 
 // Sharing IPC handlers (host)
