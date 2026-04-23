@@ -58,10 +58,8 @@ jobs:
           # per release) — larger runners don't use the public-repo free quota.
           - os: macos-14
             platform: mac-arm64
-            mac_arch: arm64
           - os: macos-15-intel
             platform: mac-x64
-            mac_arch: x64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -100,7 +98,7 @@ jobs:
 
       - name: Build distributables (macOS)
         if: startsWith(matrix.platform, 'mac')
-        run: bunx electron-builder --mac --${{ matrix.mac_arch }}
+        run: bunx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
@@ -168,6 +166,5 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*.zip
             artifacts/**/latest*.yml
-            artifacts/latest-mac.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
