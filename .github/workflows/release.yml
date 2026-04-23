@@ -52,10 +52,14 @@ jobs:
           # previously shipped arm64 .node files inside the x64 DMG, causing
           # Intel Mac users to hang at the splash screen when better-sqlite3
           # failed to load.
+          #
+          # macos-15-intel is GitHub's current Intel x64 12-core larger runner
+          # (retired macos-13 replacement). It's a paid tier (~$0.077/min, ~$1
+          # per release) — larger runners don't use the public-repo free quota.
           - os: macos-14
             platform: mac-arm64
             mac_arch: arm64
-          - os: macos-13
+          - os: macos-15-intel
             platform: mac-x64
             mac_arch: x64
     runs-on: ${{ matrix.os }}
