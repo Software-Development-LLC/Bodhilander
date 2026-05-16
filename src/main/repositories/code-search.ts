@@ -150,6 +150,55 @@ export function deleteIndex(id: string): void {
   })();
 }
 
+/**
+ * Embedding version the index's stored vectors were generated with
+ * (BDHLNDR-46). Defaults to 1 for pre-migration rows.
+ */
+export function getEmbeddingVersion(id: string): number {
+  const db = getDatabase();
+  const row = db
+    .prepare('SELECT embedding_version FROM code_indexes WHERE id = ?')
+    .get(id) as { embedding_version: number } | undefined;
+  return row?.embedding_version ?? 1;
+}
+
+/** Record the embedding version an index was (re)built with (BDHLNDR-46). */
+export function setEmbeddingVersion(id: string, version: number): void {
+  const db = getDatabase();
+  db.prepare('UPDATE code_indexes SET embedding_version = ? WHERE id = ?').run(version, id);
+}
+
+/**
+ * Wipe all indexed data for an index but keep the code_indexes row
+ * (BDHLNDR-46). Used when the embedding version changed: old vectors are
+ * incomparable to the new model's output and must not be mixed. Resets the
+ * index to a clean 'pending' state at the new embedding version so the normal
+ * auto-index path rebuilds it from scratch.
+ */
+export function clearIndexData(id: string, embeddingVersion: number): void {
+  const db = getDatabase();
+  db.transaction(() => {
+    if (isSqliteVecAvailable()) {
+      db.prepare(
+        'DELETE FROM code_chunks_vec WHERE chunk_id IN (SELECT id FROM code_chunks WHERE index_id = ?)'
+      ).run(id);
+    }
+    db.prepare('DELETE FROM code_chunks WHERE index_id = ?').run(id);
+    db.prepare('DELETE FROM symbols WHERE index_id = ?').run(id);
+    db.prepare('DELETE FROM indexed_files WHERE index_id = ?').run(id);
+    db.prepare(
+      `UPDATE code_indexes
+         SET file_count = 0,
+             chunk_count = 0,
+             status = 'pending',
+             error_message = NULL,
+             consecutive_failures = 0,
+             embedding_version = ?
+       WHERE id = ?`
+    ).run(embeddingVersion, id);
+  })();
+}
+
 // ============ Indexed Files ============
 
 export function getIndexedFile(indexId: string, filePath: string): IndexedFile | null {

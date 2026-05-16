@@ -6,7 +6,7 @@ import { EventEmitter } from 'events';
 import { app } from 'electron';
 import log from 'electron-log';
 import * as codeSearchRepo from '../repositories/code-search';
-import { getEmbeddingProvider } from './embedding-provider';
+import { getEmbeddingProvider, EMBEDDING_VERSION } from './embedding-provider';
 import { ParsedSymbol } from './parser';
 import type { CodeIndex, IndexProgress, CodeSearchResult, SymbolSearchResult, SymbolType, IndexStatus, IndexPhase } from '../../shared/types';
 
@@ -200,6 +200,27 @@ export class VectorSearchManager extends EventEmitter {
     if (this.workers.has(index.id)) {
       console.log('[VectorSearch] Indexing already in progress for:', directoryPath);
       return;
+    }
+
+    // BDHLNDR-46: if this index's stored vectors were generated with a
+    // different embedding version (e.g. fp32 from <= v3.3.1, now embedding at
+    // q8), they are not comparable to new query vectors. Wipe and rebuild from
+    // scratch rather than mixing incompatible vectors. Runs before the circuit
+    // breaker below: clearIndexData resets status to 'pending', so a stale
+    // 'indexing' from an old crash can't be miscounted as a fresh crash here.
+    const persistedEmbeddingVersion = codeSearchRepo.getEmbeddingVersion(index.id);
+    if (persistedEmbeddingVersion !== EMBEDDING_VERSION) {
+      if ((index.chunkCount ?? 0) > 0) {
+        log.warn(
+          `[VectorSearch] Embedding version changed ` +
+            `(${persistedEmbeddingVersion} → ${EMBEDDING_VERSION}) for ${directoryPath}; ` +
+            `clearing stale vectors and re-indexing from scratch`
+        );
+        codeSearchRepo.clearIndexData(index.id, EMBEDDING_VERSION);
+      } else {
+        // Nothing indexed yet — just stamp the current embedding version.
+        codeSearchRepo.setEmbeddingVersion(index.id, EMBEDDING_VERSION);
+      }
     }
 
     // BDHLNDR-40 circuit breaker: a fresh status of 'indexing' here means a
@@ -517,6 +538,9 @@ export class VectorSearchManager extends EventEmitter {
     codeSearchRepo.updateIndexStatus(indexId, 'ready');
     // BDHLNDR-40: a clean completion clears the crash-loop circuit breaker.
     codeSearchRepo.resetConsecutiveFailures(indexId);
+    // BDHLNDR-46: record the embedding version this index was built with so a
+    // future model/dtype change is detected and forces a clean re-index.
+    codeSearchRepo.setEmbeddingVersion(indexId, EMBEDDING_VERSION);
     this.emit('indexing-complete', { indexId, directoryPath: index?.directoryPath });
 
     // Start file watcher
