@@ -177,8 +177,13 @@ async function runIndexing(
           ? parseCode(content, language)
           : { chunks: [], symbols: [] };
 
-        // Generate embeddings in batches for better throughput
-        const BATCH_SIZE = 32;
+        // Generate embeddings in batches for better throughput.
+        // BDHLNDR-40: peak ONNX tensor ≈ BATCH_SIZE × longest-seq-in-batch.
+        // 32 was a key contributor to the arena-exhaustion crash; 16 halves
+        // peak memory. Per-text embeddings are independent of batch size
+        // (no cross-sequence attention), so this is numerically identical —
+        // no re-index needed.
+        const BATCH_SIZE = 16;
         const chunksWithEmbeddings: ChunkWithEmbedding[] = [];
         if (chunks.length > 0) {
           const textsToEmbed = chunks.map(chunk => {
