@@ -246,7 +246,8 @@ function initializeCodeSearchTables(database: Database.Database): void {
       model_name TEXT DEFAULT 'bge-base-en-v1.5',
       embedding_dimensions INTEGER DEFAULT 768,
       error_message TEXT,
-      consecutive_failures INTEGER DEFAULT 0
+      consecutive_failures INTEGER DEFAULT 0,
+      embedding_version INTEGER DEFAULT 1
     )
   `);
 
@@ -261,6 +262,15 @@ function initializeCodeSearchTables(database: Database.Database): void {
     .all() as { name: string }[];
   if (!codeIndexColumns.some(col => col.name === 'consecutive_failures')) {
     database.exec("ALTER TABLE code_indexes ADD COLUMN consecutive_failures INTEGER DEFAULT 0");
+  }
+
+  // Migration: Add embedding_version to code_indexes if it doesn't exist
+  // (BDHLNDR-46). Existing rows default to 1 (fp32, shipped through v3.3.1);
+  // the current build embeds at EMBEDDING_VERSION=2 (q8), so the mismatch
+  // triggers a one-time clean re-index — old fp32 vectors are not comparable
+  // to q8 query vectors and must not be mixed.
+  if (!codeIndexColumns.some(col => col.name === 'embedding_version')) {
+    database.exec("ALTER TABLE code_indexes ADD COLUMN embedding_version INTEGER DEFAULT 1");
   }
 
   // Indexed files table
