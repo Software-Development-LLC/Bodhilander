@@ -63,6 +63,28 @@ miscounted.
   follow-up.
 - AC1/AC3/AC4: unchanged — still require the `.ips` root cause. Tracked on the ticket.
 
+## Root-cause safe subset (added after the 5 `.ips` reports)
+
+The crash is confirmed (all 5 `.ips` identical): `EXC_BREAKPOINT/SIGTRAP` in
+`onnxruntime::BFCArena::Extend → CPUAllocator::Alloc` — ORT's CPU arena grows
+to the worst-case embedding batch, never shrinks, and a later larger batch
+traps when `Extend` can't allocate. Memory exhaustion in the embedding path.
+
+The full root-cause fix splits by risk. The **embedding-neutral subset** ships
+here in the production hotfix (no quality change, no re-index):
+
+- `embedding-provider.ts`: `session_options.enableCpuMemArena: false` — ORT
+  allocates per-request instead of holding a growing pool. Directly counters
+  the crash frame; numerically identical output.
+- `indexing-worker.ts`: `BATCH_SIZE` 32 → 16 — halves peak tensor
+  (`≈ BATCH_SIZE × longest-seq`). Per-text embeddings are batch-size
+  independent (no cross-sequence attention) → identical results, no re-index.
+
+The **risky remainder** — `dtype: 'q8'` (quantized model) and token-bounded
+truncation — changes embedding quality and forces a re-index, so it is tracked
+separately for `development`/beta bake (not in this hotfix). The circuit
+breaker above remains as a backstop for any residual/again-regressed crash.
+
 ## Verification
 
 No test framework exists in the repo (no vitest/jest/test script) — TDD phase is infeasible

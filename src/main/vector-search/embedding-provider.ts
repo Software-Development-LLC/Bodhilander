@@ -84,6 +84,14 @@ export class HuggingFaceEmbeddingProvider implements EmbeddingProvider {
           session_options: {
             intraOpNumThreads: EMBEDDING_THREAD_COUNT,
             interOpNumThreads: 1,
+            // BDHLNDR-40: ONNX Runtime's BFC arena grows to the worst-case
+            // batch and never shrinks; a later larger batch forces
+            // BFCArena::Extend, which traps (SIGTRAP) on allocation failure
+            // and kills the whole process. Disabling the CPU arena makes ORT
+            // allocate per-request instead of holding a growing pool —
+            // numerically identical output, just bounded memory. This is the
+            // exact counter to the confirmed crash frame.
+            enableCpuMemArena: false,
           },
         });
         console.log('Embedding model initialized successfully');
