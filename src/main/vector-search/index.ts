@@ -45,6 +45,15 @@ interface WorkerResult {
 // Timeout for model initialization (downloading 110MB model + loading ONNX runtime)
 const WORKER_INIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+// BDHLNDR-40: a native crash in the indexing worker_thread kills the whole
+// process silently — no exit/error handler runs, so status stays 'indexing'
+// in the DB. The renderer auto-restarts indexing on a stale 'indexing' status,
+// producing an infinite crash-relaunch loop. After this many consecutive
+// crashed attempts we trip a circuit breaker and stop auto-spawning the worker
+// (status → 'error', user can still explicitly retry). 2 = allow one automatic
+// retry, then break the loop.
+const MAX_CONSECUTIVE_INDEX_CRASHES = 2;
+
 export class VectorSearchManager extends EventEmitter {
   private workers: Map<string, Worker> = new Map();
   private watchers: Map<string, chokidar.FSWatcher> = new Map();
@@ -191,6 +200,37 @@ export class VectorSearchManager extends EventEmitter {
     if (this.workers.has(index.id)) {
       console.log('[VectorSearch] Indexing already in progress for:', directoryPath);
       return;
+    }
+
+    // BDHLNDR-40 circuit breaker: a fresh status of 'indexing' here means a
+    // previous attempt started but the process never reached a terminal state
+    // (complete/error) — i.e. it crashed the whole process (native segfault in
+    // the worker thread can't be caught in-process). In-process cancels are
+    // excluded via cancelledIndexes; retryIndexing() sets 'pending' first so it
+    // is never miscounted. Count consecutive crashes and stop auto-spawning the
+    // worker once the threshold trips, so we don't relaunch-loop forever.
+    const persisted = codeSearchRepo.getIndexById(index.id);
+    if (persisted?.status === 'indexing' && !this.cancelledIndexes.has(index.id)) {
+      const failures = codeSearchRepo.incrementConsecutiveFailures(index.id);
+      if (failures >= MAX_CONSECUTIVE_INDEX_CRASHES) {
+        const errorMsg =
+          `Indexing disabled after ${failures} consecutive crashes. ` +
+          `Use Retry to try again.`;
+        log.error(
+          `[VectorSearch] Circuit breaker tripped for ${directoryPath} — ${errorMsg}`
+        );
+        codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
+        this.emit('indexing-error', {
+          indexId: index.id,
+          error: errorMsg,
+          directoryPath: index.directoryPath,
+        });
+        return; // do NOT spawn the worker — breaks the crash-relaunch loop
+      }
+      log.warn(
+        `[VectorSearch] Prior indexing attempt for ${directoryPath} did not ` +
+          `complete (likely crashed); retry ${failures}/${MAX_CONSECUTIVE_INDEX_CRASHES}`
+      );
     }
 
     // Clear the cancelled flag since we're starting fresh
@@ -352,7 +392,10 @@ export class VectorSearchManager extends EventEmitter {
       throw new Error('No index found for directory');
     }
 
-    // Clear error state
+    // Clear error state. BDHLNDR-40: an explicit user retry re-arms the
+    // crash-loop circuit breaker from a clean count, and 'pending' (not
+    // 'indexing') ensures startIndexing does not miscount this as a crash.
+    codeSearchRepo.resetConsecutiveFailures(index.id);
     codeSearchRepo.updateIndexStatus(index.id, 'pending', null);
 
     // Restart indexing
@@ -472,6 +515,8 @@ export class VectorSearchManager extends EventEmitter {
     }
 
     codeSearchRepo.updateIndexStatus(indexId, 'ready');
+    // BDHLNDR-40: a clean completion clears the crash-loop circuit breaker.
+    codeSearchRepo.resetConsecutiveFailures(indexId);
     this.emit('indexing-complete', { indexId, directoryPath: index?.directoryPath });
 
     // Start file watcher
