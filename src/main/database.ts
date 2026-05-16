@@ -245,9 +245,23 @@ function initializeCodeSearchTables(database: Database.Database): void {
       chunk_count INTEGER DEFAULT 0,
       model_name TEXT DEFAULT 'bge-base-en-v1.5',
       embedding_dimensions INTEGER DEFAULT 768,
-      error_message TEXT
+      error_message TEXT,
+      consecutive_failures INTEGER DEFAULT 0
     )
   `);
+
+  // Migration: Add consecutive_failures to code_indexes if it doesn't exist
+  // (BDHLNDR-40). Powers the indexing crash-loop circuit breaker — a native
+  // crash in the indexing worker_thread kills the whole process silently and
+  // leaves status stuck at 'indexing', which the renderer then auto-restarts,
+  // producing an infinite crash-relaunch loop. We count consecutive crashed
+  // attempts and trip a breaker. Existing installs need the column added.
+  const codeIndexColumns = database
+    .prepare("PRAGMA table_info(code_indexes)")
+    .all() as { name: string }[];
+  if (!codeIndexColumns.some(col => col.name === 'consecutive_failures')) {
+    database.exec("ALTER TABLE code_indexes ADD COLUMN consecutive_failures INTEGER DEFAULT 0");
+  }
 
   // Indexed files table
   database.exec(`
