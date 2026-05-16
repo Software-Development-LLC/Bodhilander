@@ -105,6 +105,33 @@ export function updateIndexStatus(
   db.prepare(`UPDATE code_indexes SET ${updates.join(', ')} WHERE id = ?`).run(...params);
 }
 
+/**
+ * Increment the consecutive-crash counter for an index and return the new
+ * value. (BDHLNDR-40) Called when a fresh process observes a prior indexing
+ * attempt left stuck at status 'indexing' — i.e. the previous attempt crashed
+ * the process before reaching a terminal state.
+ */
+export function incrementConsecutiveFailures(id: string): number {
+  const db = getDatabase();
+  db.prepare(
+    'UPDATE code_indexes SET consecutive_failures = consecutive_failures + 1 WHERE id = ?'
+  ).run(id);
+  const row = db
+    .prepare('SELECT consecutive_failures FROM code_indexes WHERE id = ?')
+    .get(id) as { consecutive_failures: number } | undefined;
+  return row?.consecutive_failures ?? 0;
+}
+
+/**
+ * Reset the consecutive-crash counter (BDHLNDR-40). Called on successful
+ * indexing completion and on an explicit user retry, so the circuit breaker
+ * re-arms from a clean state.
+ */
+export function resetConsecutiveFailures(id: string): void {
+  const db = getDatabase();
+  db.prepare('UPDATE code_indexes SET consecutive_failures = 0 WHERE id = ?').run(id);
+}
+
 export function updateIndexCounts(id: string, fileCount: number, chunkCount: number): void {
   const db = getDatabase();
   db.prepare('UPDATE code_indexes SET file_count = ?, chunk_count = ? WHERE id = ?')
