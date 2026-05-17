@@ -37,14 +37,24 @@ export function getUpdateChannel(): UpdateChannel {
  * and whenever the user flips the toggle in Settings.
  */
 function applyUpdateChannel(channel: UpdateChannel): void {
-  // electron-updater maps `channel` directly to the remote yml feed name.
-  // It accepts `null` to mean "default" (latest).
-  autoUpdater.channel = channel === 'beta' ? 'beta' : null;
+  const isBeta = channel === 'beta';
+  // electron-updater maps `channel` to the remote yml feed name. Use the
+  // explicit 'latest' string for stable, never null — older electron-updater
+  // throws "Channel must be a string, but got: null" from the channel setter
+  // (BDHLNDR-42 Defect A).
+  autoUpdater.channel = isBeta ? 'beta' : 'latest';
+  // BDHLNDR-42 Defect B: betas are published as GitHub *pre-releases*. Without
+  // allowPrerelease the GitHubProvider resolves "latest" to the newest
+  // non-prerelease tag and fetches beta.yml from *that* release's assets →
+  // 404 ("Cannot find beta.yml ... releases/download/v3.3.1/beta.yml"). With
+  // allowPrerelease the provider considers the beta pre-release, where
+  // beta.yml actually lives. Stable must NOT see pre-releases.
+  autoUpdater.allowPrerelease = isBeta;
   // Allow downgrade from beta → stable so users flipping the toggle back
   // don't stay stuck on a newer-than-stable beta forever. Harmless on the
   // stable channel because stable versions only move forward.
-  autoUpdater.allowDowngrade = channel === 'stable';
-  log.info(`[auto-updater] Channel set to ${channel} (autoUpdater.channel=${autoUpdater.channel ?? 'latest'})`);
+  autoUpdater.allowDowngrade = !isBeta;
+  log.info(`[auto-updater] Channel set to ${channel} (autoUpdater.channel=${autoUpdater.channel}, allowPrerelease=${autoUpdater.allowPrerelease})`);
 }
 
 /**
