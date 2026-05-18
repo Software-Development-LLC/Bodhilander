@@ -279,6 +279,14 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 }
 
 function createSplashWindow(): void {
+  // BDHLNDR-44: a BrowserWindow must never be constructed before app 'ready'
+  // (the "Cannot create BrowserWindow before app is ready" uncaught exception
+  // seen under rapid relaunch). Defer instead of throwing so the error is
+  // impossible regardless of caller/timing.
+  if (!app.isReady()) {
+    app.whenReady().then(() => createSplashWindow());
+    return;
+  }
   splashWindow = new BrowserWindow({
     icon: path.join(__dirname, '../../build/icon.png'),
     width: 500,
@@ -339,6 +347,14 @@ function registerMcpAndHooksEverywhere(): void {
 }
 
 function createWindow(): void {
+  // BDHLNDR-44: never construct a BrowserWindow before app 'ready' — defends
+  // the rapid-relaunch race that produced "Cannot create BrowserWindow before
+  // app is ready". Defer rather than throw.
+  if (!app.isReady()) {
+    app.whenReady().then(() => createWindow());
+    return;
+  }
+
   // Initialize database
   getDatabase();
 
@@ -1243,14 +1259,57 @@ app.whenReady().then(() => {
   log.error('[Main] Failed to initialize app:', error);
 });
 
+// BDHLNDR-44: recover from renderer/GPU process crashes instead of leaving
+// the window blank. Bounded against a crash→reload storm: at most
+// MAX_PROCESS_RELOADS within RELOAD_WINDOW_MS, then stop and just log.
+const MAX_PROCESS_RELOADS = 3;
+const RELOAD_WINDOW_MS = 60_000;
+let processReloadTimes: number[] = [];
+
+function recoverWindowAfterCrash(reason: string): void {
+  const now = Date.now();
+  processReloadTimes = processReloadTimes.filter((t) => now - t < RELOAD_WINDOW_MS);
+  if (processReloadTimes.length >= MAX_PROCESS_RELOADS) {
+    log.error(
+      `[Main] Skipping recovery after ${reason} — ${processReloadTimes.length} ` +
+        `reloads within ${RELOAD_WINDOW_MS}ms (reload-storm guard)`
+    );
+    return;
+  }
+  processReloadTimes.push(now);
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    log.warn(`[Main] Recovering UI after ${reason} — reloading main window`);
+    try {
+      mainWindow.webContents.reload();
+    } catch (e) {
+      log.error('[Main] Reload after crash failed:', e);
+    }
+  } else if (app.isReady()) {
+    log.warn(`[Main] Recovering after ${reason} — recreating main window`);
+    createWindow();
+  }
+}
+
 // Handle render process crashes (if any child window crashes)
 app.on('render-process-gone', (event, webContents, details) => {
   log.error('[Main] Render process gone:', details.reason, details.exitCode);
+  // 'clean-exit'/'killed' are intentional teardown (quit, manual kill) — don't
+  // fight those. Anything else (crashed/oom/abnormal-exit/launch-failed) left
+  // the renderer dead → reload so the user isn't staring at a blank window.
+  if (details.reason === 'clean-exit' || details.reason === 'killed') return;
+  recoverWindowAfterCrash(`render-process-gone (${details.reason})`);
 });
 
 // Handle child process crashes
 app.on('child-process-gone', (event, details) => {
   log.error('[Main] Child process gone:', details.type, details.reason, details.exitCode);
+  // Electron auto-relaunches the GPU process, but on macOS the renderer is
+  // often left blank/unresponsive afterwards — reload so it re-establishes
+  // its GPU channel and re-paints. (Bounded by the reload-storm guard.)
+  if (details.type === 'GPU' && details.reason !== 'clean-exit') {
+    recoverWindowAfterCrash('GPU process crash');
+  }
 });
 
 // Renderer error forwarding — renderer calls this via IPC so errors land in the log file
