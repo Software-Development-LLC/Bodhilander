@@ -72,11 +72,24 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     // resize when the terminal becomes visible again.
     if (!isActiveRef.current) return;
 
-    fitAddonRef.current.fit();
-    const { cols, rows } = xtermRef.current;
-    // Guard: don't propagate bogus dimensions from an unsized container.
-    if (cols >= MIN_COLS && rows >= MIN_ROWS) {
-      window.electronAPI.resizeSession(sessionId, cols, rows);
+    // BDHLNDR-43: fitAddon.fit() drives xterm's internal resize
+    // (onResize → _renderService.handleResize / the deferred
+    // _pausedResizeTask). If a queued resize (ResizeObserver rAF, window
+    // 'resize', activation-effect timers) lands during/after teardown, those
+    // xterm internals are undefined and throw the recurring
+    // "Cannot read properties of undefined (reading 'handleResize')". Refs are
+    // nulled on cleanup so this normally early-returns; this try/catch is the
+    // final safety net so any residual dispose/paused-renderer race can never
+    // escape to window.onerror (same posture as the BDHLNDR-8 dispose guards).
+    try {
+      fitAddonRef.current.fit();
+      const { cols, rows } = xtermRef.current;
+      // Guard: don't propagate bogus dimensions from an unsized container.
+      if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+        window.electronAPI.resizeSession(sessionId, cols, rows);
+      }
+    } catch (e) {
+      console.warn('[Terminal] resize during teardown (non-fatal):', e);
     }
   }, [sessionId]);
 
@@ -356,6 +369,9 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     // requestAnimationFrame scroll correction that fires after the browser has
     // processed all writes and redraws for that frame.
     let scrollRafId = 0;
+    // BDHLNDR-43: the ResizeObserver schedules a deferred handleResize via rAF;
+    // tracked so cleanup can cancel it before it fires into a disposed xterm.
+    let resizeRafId = 0;
     let shouldPin = false;
     const cleanupPtyData = window.electronAPI.onPtyData((id, data) => {
       if (id === sessionId) {
@@ -456,9 +472,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
 
     // Use ResizeObserver to detect when container actually has dimensions
     const resizeObserver = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      if (width > 0 && height > 0) {
-        requestAnimationFrame(() => {
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        if (resizeRafId) cancelAnimationFrame(resizeRafId);
+        resizeRafId = requestAnimationFrame(() => {
+          resizeRafId = 0;
           handleResize();
         });
       }
@@ -478,6 +496,9 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     return () => {
       mounted = false;
       if (scrollRafId) cancelAnimationFrame(scrollRafId);
+      // BDHLNDR-43: cancel the ResizeObserver's deferred resize so it can't
+      // fire handleResize into the disposed terminal after this cleanup.
+      if (resizeRafId) cancelAnimationFrame(resizeRafId);
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       cleanupPtyData();
@@ -502,6 +523,13 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       } catch (e) {
         console.warn('Terminal dispose error (non-fatal):', e);
       }
+
+      // BDHLNDR-43: null the refs so any handleResize that still slips through
+      // (a window 'resize' between dispose and listener removal, or the
+      // activation-effect rAF/timer chain) hits the early-return guard instead
+      // of calling fit() on the disposed terminal.
+      xtermRef.current = null;
+      fitAddonRef.current = null;
     };
   }, [sessionId, cwd, launchClaude, isRunning, handleResize]);
 

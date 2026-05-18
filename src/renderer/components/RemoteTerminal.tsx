@@ -116,17 +116,29 @@ const RemoteTerminal: React.FC<RemoteTerminalProps> = ({ code, permission, isAct
       });
     }
 
-    // Handle resize
+    // Handle resize. BDHLNDR-43: fitAddon.fit() drives xterm's internal
+    // resize; a queued resize landing during/after teardown hits undefined
+    // xterm internals ("Cannot read properties of undefined (reading
+    // 'handleResize')"). Refs are nulled on cleanup so this normally
+    // early-returns; the try/catch is the final safety net.
+    let resizeRafId = 0;
     const handleResize = () => {
-      if (fitAddonRef.current && xtermRef.current) {
+      if (!fitAddonRef.current || !xtermRef.current) return;
+      try {
         fitAddonRef.current.fit();
+      } catch (e) {
+        console.warn('[RemoteTerminal] resize during teardown (non-fatal):', e);
       }
     };
 
     const resizeObserver = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      if (width > 0 && height > 0) {
-        requestAnimationFrame(handleResize);
+      const rect = entries[0]?.contentRect;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        if (resizeRafId) cancelAnimationFrame(resizeRafId);
+        resizeRafId = requestAnimationFrame(() => {
+          resizeRafId = 0;
+          handleResize();
+        });
       }
     });
 
@@ -139,10 +151,21 @@ const RemoteTerminal: React.FC<RemoteTerminalProps> = ({ code, permission, isAct
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      // BDHLNDR-43: cancel the deferred resize so it can't fire into the
+      // disposed terminal after cleanup.
+      if (resizeRafId) cancelAnimationFrame(resizeRafId);
       resizeObserver.disconnect();
       cleanupData();
       cleanupEnded();
-      term.dispose();
+      try {
+        term.dispose();
+      } catch (e) {
+        console.warn('[RemoteTerminal] dispose error (non-fatal):', e);
+      }
+      // Null refs so any late handleResize (window 'resize' / init timer)
+      // early-returns instead of calling fit() on the disposed terminal.
+      xtermRef.current = null;
+      fitAddonRef.current = null;
     };
   }, [code, permission]);
 
