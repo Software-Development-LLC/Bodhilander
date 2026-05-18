@@ -167,8 +167,19 @@ export class RelayConnection extends EventEmitter {
       });
 
       this.ws.on('error', (error) => {
-        log.error('[RelayConnection] WebSocket error:', error);
-        this.emit('error', error);
+        // BDHLNDR-41: connection-level failures (e.g. getaddrinfo ENOTFOUND
+        // when offline / DNS down) arrive here. `emit('error', …)` on an
+        // EventEmitter with no registered 'error' listener re-throws as an
+        // uncaught exception, so guard it. Reconnect is handled by the 'close'
+        // handler that follows a failed ws connection — treat this as
+        // transient, not fatal.
+        log.warn(
+          '[RelayConnection] WebSocket error (will retry):',
+          error instanceof Error ? error.message : error
+        );
+        if (this.listenerCount('error') > 0) {
+          this.emit('error', error);
+        }
       });
     } catch (error) {
       log.error('[RelayConnection] Failed to connect:', error);

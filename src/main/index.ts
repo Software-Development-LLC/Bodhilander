@@ -44,7 +44,12 @@ crashReporter.start({
 log.transports.file.maxSize = 5 * 1024 * 1024; // 5 MB per log file
 log.transports.file.level = 'info';
 
-// Global error handlers to catch uncaught exceptions and prevent silent crashes
+// Global error handlers — last-resort logger of genuinely unexpected faults.
+// BDHLNDR-41: the recurring mDNS (`send ENETUNREACH 224.0.0.251:5353`) and
+// relay (`getaddrinfo ENOTFOUND`) uncaught exceptions are now handled at their
+// source (mdns-advertiser socket handler / relay emit guard), so this should
+// no longer see those transient network floods. Intentionally non-exiting:
+// keep the process alive and logged rather than hard-crash.
 process.on('uncaughtException', (error: Error) => {
   log.error('[Main] Uncaught exception:', error);
   log.error('[Main] Stack:', error.stack);
