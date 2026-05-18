@@ -33,12 +33,23 @@ import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } fr
 // ---------------------------------------------------------------------------
 
 // Enable Electron's native crash reporter — writes minidump files locally
-// so we can diagnose native-module crashes (e.g. node-pty SIGSEGV).
+// so we can diagnose native-module crashes (e.g. node-pty SIGSEGV, the
+// onnxruntime BFCArena trap behind BDHLNDR-40). BDHLNDR-45 (re-scoped from a
+// worker→utilityProcess refactor — superseded by the -40/-46 fixes — down to
+// just local minidump capture): tag dumps with the app version so they're
+// triageable without guesswork, and log the dump directory at startup so we
+// never again have to talk a user through hunting for crash reports by hand.
 crashReporter.start({
-  submitURL: '',       // No remote server — dumps stay local
+  submitURL: '',       // No remote server — dumps stay local (upload = BDHLNDR-47)
   uploadToServer: false,
   compress: false,
+  extra: { appVersion: app.getVersion() },
 });
+try {
+  log.info('[CrashReporter] Native crash minidumps written to:', app.getPath('crashDumps'));
+} catch {
+  // getPath('crashDumps') can throw very early on some platforms — non-fatal.
+}
 
 // Configure electron-log: file rotation to prevent unbounded disk growth
 log.transports.file.maxSize = 5 * 1024 * 1024; // 5 MB per log file
