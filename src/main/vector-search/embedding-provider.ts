@@ -12,6 +12,20 @@ let pipeline: typeof import('@huggingface/transformers').pipeline;
 // pins the machine during long indexing runs. Half the cores, max 4, min 1.
 const EMBEDDING_THREAD_COUNT = Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)));
 
+// BDHLNDR-46: bumped whenever a change alters embedding numerics so stored
+// vectors become incomparable to freshly-generated ones. Persisted per index
+// (code_indexes.embedding_version); a mismatch forces a clean re-index.
+//   1 = fp32 (original, shipped through v3.3.1)
+//   2 = q8 quantized + token-bounded truncation
+export const EMBEDDING_VERSION = 2;
+
+// bge-base-en-v1.5 only attends to its first 512 tokens; the tokenizer
+// truncates to that anyway. Bounding input chars keeps tokenization and the
+// peak ONNX tensor predictable (BDHLNDR-46/40). ~4 chars/token for code, so
+// 2048 chars reliably yields ≥512 tokens — the model sees the same content
+// it did under the old 8000-char cap, just without the wasted work.
+const MAX_EMBED_CHARS = 2048;
+
 try {
   const transformers = require('@huggingface/transformers');
   pipeline = transformers.pipeline;
@@ -81,6 +95,11 @@ export class HuggingFaceEmbeddingProvider implements EmbeddingProvider {
         // session_options caps onnxruntime-node thread usage so indexing doesn't
         // pin every core.
         this.pipeline = await (pipeline as any)('feature-extraction', this.name, {
+          // BDHLNDR-46: quantized (int8) model — ~4× smaller weights and
+          // activation tensors than the fp32 default, the main headroom fix
+          // for the ONNX arena-exhaustion crash. Changes embedding numerics
+          // (see EMBEDDING_VERSION) so a re-index is forced on upgrade.
+          dtype: 'q8',
           session_options: {
             intraOpNumThreads: EMBEDDING_THREAD_COUNT,
             interOpNumThreads: 1,
@@ -120,7 +139,7 @@ export class HuggingFaceEmbeddingProvider implements EmbeddingProvider {
     if (texts.length === 0) return [];
 
     // Truncate to model max token budget before handing to the pipeline.
-    const truncated = texts.map(t => t.slice(0, 8000));
+    const truncated = texts.map(t => t.slice(0, MAX_EMBED_CHARS));
 
     // Real batched inference: feed the whole array once so ONNX can amortize
     // the forward pass. Previously this looped one text at a time, which meant
@@ -189,7 +208,7 @@ export class HuggingFaceEmbeddingProvider implements EmbeddingProvider {
     if (!this.pipeline) throw new Error('Pipeline not initialized');
 
     // Truncate text if too long (model has max token limit)
-    const truncatedText = text.slice(0, 8000);
+    const truncatedText = text.slice(0, MAX_EMBED_CHARS);
 
     const output = await this.pipeline(truncatedText, {
       pooling: 'mean',
