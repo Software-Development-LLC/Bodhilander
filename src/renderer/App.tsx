@@ -604,6 +604,9 @@ const App: React.FC = () => {
 
   const handleSessionDrop = (e: React.DragEvent, targetSessionId: string, targetGroupId: string) => {
     e.preventDefault();
+    e.stopPropagation(); // BDHLNDR-48 (GH #42): without this the drop bubbles to
+    // the parent .group-sessions handleGroupAreaDrop, which re-reorders the
+    // session to the end of the list, overwriting the correct dropped position.
 
     // Read from dataTransfer (race-condition safe on macOS)
     const data = e.dataTransfer.getData('text/plain');
