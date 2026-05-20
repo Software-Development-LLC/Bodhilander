@@ -357,3 +357,8 @@ export interface IndexProgress {
   currentFile: string | null;
   error: string | null;
 }
+
+export interface NotARealInterface {
+  // This is just a placeholder to demonstrate how to add more types in the future.
+  // You can replace this with actual types as needed.
+}
