@@ -503,23 +503,6 @@ body {
   color: #666;
 }
 
-/* Share indicator in sidebar */
-.share-indicator {
-  font-size: 12px;
-  color: #4ade80;
-  margin-right: 4px;
-}
-
-/* Share badge in terminal header */
-.header-share-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  background: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
-  border-radius: 4px;
-  margin-left: 8px;
-}
-
 .session-close {
   background: none;
   border: none;
@@ -848,58 +831,6 @@ body {
   cursor: not-allowed;
 }
 
-/* Remote Sessions */
-.remote-group {
-  border-left: 3px solid #9333ea;
-}
-
-.remote-color {
-  background: #9333ea !important;
-}
-
-.remote-host-group {
-  margin-left: 8px;
-}
-
-.remote-host-header {
-  font-size: 11px;
-  color: #888;
-  padding: 4px 8px;
-  font-weight: 500;
-}
-
-.remote-empty {
-  padding: 12px;
-  color: #666;
-  font-size: 12px;
-  text-align: center;
-}
-
-.status-pill.read {
-  background: #4a5568;
-}
-
-.status-pill.control {
-  background: #9333ea;
-}
-
-.permission-badge {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  margin-left: 8px;
-}
-
-.permission-badge.read {
-  background: #4a5568;
-  color: #fff;
-}
-
-.permission-badge.control {
-  background: #9333ea;
-  color: #fff;
-}
-
 /* Settings Modal */
 .modal {
   background: #252526;
@@ -1088,41 +1019,35 @@ body {
   color: #ef4444;
 }
 
-/* Remote Access Status */
-.remote-status {
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+/* Tailscale Funnel guidance panel */
+.tailscale-steps {
+  margin: 8px 0 12px;
+  padding-left: 20px;
+  color: #d4d4d4;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.remote-status.connected {
-  background: rgba(74, 222, 128, 0.2);
-  color: #4ade80;
+.tailscale-steps li {
+  margin-bottom: 10px;
 }
 
-.remote-status.connecting {
-  background: rgba(250, 204, 21, 0.2);
-  color: #facc15;
+.tailscale-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
 }
 
-.remote-status.disabled {
-  background: rgba(113, 113, 122, 0.2);
-  color: #71717a;
-}
-
-.desktop-id {
+.tailscale-cmd {
+  flex: 1;
   font-family: 'Consolas', 'Monaco', monospace;
   background: rgba(0, 0, 0, 0.3);
-  padding: 4px 8px;
+  padding: 6px 10px;
   border-radius: 4px;
   font-size: 12px;
   user-select: all;
-}
-
-.relay-url {
-  font-size: 12px;
-  color: #71717a;
+  color: #e4e4e4;
 }
 
 /* Button styles */

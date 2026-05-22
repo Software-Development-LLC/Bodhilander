@@ -13,6 +13,49 @@ import log from 'electron-log';
 const SERVICE_TYPE = 'bodhilander';
 const SERVICE_PROTOCOL = 'tcp';
 
+// BDHLNDR-41: bonjour-service wraps a multicast-dns dgram socket. Transient
+// network failures (sleep/wake, Wi-Fi switch, VPN, no route to the mDNS
+// multicast group) surface as `send ENETUNREACH 224.0.0.251:5353` emitted on
+// the underlying mdns instance/socket — which bonjour-service leaves without
+// an 'error' listener, so it escapes to process 'uncaughtException'. mDNS is
+// best-effort; bonjour re-announces periodically and self-heals when the
+// network returns, so these are non-fatal: log and swallow.
+const TRANSIENT_NET_CODES = new Set([
+  'ENETUNREACH', 'ENETDOWN', 'EHOSTUNREACH', 'EHOSTDOWN',
+  'ENODEV', 'EADDRNOTAVAIL', 'EPERM',
+]);
+
+/**
+ * Attach an 'error' handler to the multicast-dns instance/socket inside a
+ * bonjour-service instance so transient socket send failures don't crash the
+ * main process. `_server.mdns` is internal to bonjour-service but stable
+ * across its 1.x; optional-chained so a library shape change degrades to the
+ * prior behavior (no regression) rather than throwing here.
+ */
+function attachMdnsErrorHandler(bonjour: Bonjour, context: string): void {
+  const mdns: any = (bonjour as any)?._server?.mdns;
+  if (!mdns || typeof mdns.on !== 'function') return;
+
+  const onError = (err: NodeJS.ErrnoException) => {
+    const code = err?.code ?? '';
+    if (TRANSIENT_NET_CODES.has(code)) {
+      log.warn(
+        `[${context}] Transient network error (${code}) — mDNS paused, ` +
+          `will recover when the network returns`
+      );
+    } else {
+      log.warn(`[${context}] mDNS socket error (discovery degraded):`, err?.message || err);
+    }
+  };
+
+  mdns.on('error', onError);
+  // Some multicast-dns versions surface socket send errors on the dgram
+  // socket directly rather than on the mdns instance.
+  if (mdns.socket && typeof mdns.socket.on === 'function') {
+    mdns.socket.on('error', onError);
+  }
+}
+
 export class MdnsAdvertiser {
   private bonjour: Bonjour | null = null;
   private service: Service | null = null;
@@ -23,6 +66,7 @@ export class MdnsAdvertiser {
   async advertise(port: number): Promise<void> {
     try {
       this.bonjour = new Bonjour();
+      attachMdnsErrorHandler(this.bonjour, 'MdnsAdvertiser');
 
       // Use a unique name with random suffix to avoid conflicts
       const uniqueId = Math.random().toString(36).substring(2, 8);
@@ -103,6 +147,7 @@ export class MdnsDiscovery {
 
   start(): void {
     this.bonjour = new Bonjour();
+    attachMdnsErrorHandler(this.bonjour, 'MdnsDiscovery');
 
     this.browser = this.bonjour.find({
       type: SERVICE_TYPE,

@@ -1,10 +1,7 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
-import RemoteTerminal from './components/RemoteTerminal';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
-import { ShareModal } from './components/ShareModal';
-import { JoinSessionModal } from './components/JoinSessionModal';
 import { NamePromptModal } from './components/NamePromptModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
@@ -16,19 +13,10 @@ import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
 import { ClaudeAccount } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
-import { useSharing } from './store/sharing';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
-
-interface RemoteSession {
-  code: string;
-  hostUsername: string;
-  sessionName: string;
-  permission: 'read' | 'control';
-  connectedAt: string;
-}
 
 const App: React.FC = () => {
   const {
@@ -72,9 +60,6 @@ const App: React.FC = () => {
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [isResizing, setIsResizing] = useState(false);
 
-  // Sharing state
-  const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null);
-  const [joinModalOpen, setJoinModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [claudeAccountsOpen, setClaudeAccountsOpen] = useState(false);
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
@@ -82,12 +67,6 @@ const App: React.FC = () => {
   // Shows a BETA pill in the sidebar so opt-in testers know what they're on
   // (BDHLNDR-32).
   const [isBetaBuild, setIsBetaBuild] = useState(false);
-  const [sharingSessions, setSharingSessions] = useState<Set<string>>(new Set());
-  const { user, isAuthenticated } = useSharing();
-
-  // Remote sessions state
-  const [remoteSessions, setRemoteSessions] = useState<RemoteSession[]>([]);
-  const [activeRemoteCode, setActiveRemoteCode] = useState<string | null>(null);
 
   // Restart keys for each session (increment to trigger restart)
   const [restartKeys, setRestartKeys] = useState<Record<string, number>>({});
@@ -183,39 +162,6 @@ const App: React.FC = () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [colorPickerGroupId]);
-
-  // Check sharing status for all sessions
-  useEffect(() => {
-    const checkSharingStatus = async () => {
-      const sharing = new Set<string>();
-      for (const session of sessions) {
-        try {
-          const isSharing = await window.electronAPI.isSharing(session.id);
-          if (isSharing) {
-            sharing.add(session.id);
-          }
-        } catch {
-          // Ignore errors
-        }
-      }
-      setSharingSessions(sharing);
-    };
-
-    if (sessions.length > 0) {
-      checkSharingStatus();
-    }
-  }, [sessions]);
-
-  // Listen for remote session disconnection
-  useEffect(() => {
-    const cleanup = window.electronAPI.onShareEnded((event) => {
-      setRemoteSessions(prev => prev.filter(rs => rs.code !== event.code));
-      if (activeRemoteCode === event.code) {
-        setActiveRemoteCode(null);
-      }
-    });
-    return cleanup;
-  }, [activeRemoteCode]);
 
   // Claude accounts cache — kept in sync with main process so context menus
   // and creation dialogs can offer account pickers without refetching each time.
@@ -370,7 +316,6 @@ const App: React.FC = () => {
 
     const items: MenuItem[] = [
       { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
-      { label: 'Share Session', onClick: () => setShareModalSessionId(sessionId), disabled: !isAuthenticated },
     ];
 
     // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
@@ -433,28 +378,6 @@ const App: React.FC = () => {
     });
 
     setContextMenu({ x: e.clientX, y: e.clientY, items });
-  };
-
-  const handleRemoteGroupContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      items: [
-        { label: 'Join Remote Session', onClick: () => setJoinModalOpen(true) },
-        { label: 'separator', onClick: () => {}, separator: true },
-        {
-          label: 'Disconnect All',
-          onClick: () => {
-            remoteSessions.forEach(rs => window.electronAPI.leaveSession(rs.code));
-            setRemoteSessions([]);
-            setActiveRemoteCode(null);
-          },
-          danger: true,
-          disabled: remoteSessions.length === 0,
-        },
-      ],
-    });
   };
 
   const handleStartEditSession = (sessionId: string, currentName: string) => {
@@ -604,6 +527,9 @@ const App: React.FC = () => {
 
   const handleSessionDrop = (e: React.DragEvent, targetSessionId: string, targetGroupId: string) => {
     e.preventDefault();
+    e.stopPropagation(); // BDHLNDR-48 (GH #42): without this the drop bubbles to
+    // the parent .group-sessions handleGroupAreaDrop, which re-reorders the
+    // session to the end of the list, overwriting the correct dropped position.
 
     // Read from dataTransfer (race-condition safe on macOS)
     const data = e.dataTransfer.getData('text/plain');
@@ -727,7 +653,6 @@ const App: React.FC = () => {
   // Click handlers that also update focus state
   const handleSessionClick = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId);
-    setActiveRemoteCode(null); // Clear remote session when switching to local
     setFocusedItemId(sessionId);
     setFocusedItemType('session');
   }, [setActiveSessionId]);
@@ -999,15 +924,6 @@ const App: React.FC = () => {
             </button>
             <button
               className="icon-button"
-              onClick={() => setJoinModalOpen(true)}
-              title={isAuthenticated ? 'Join Shared Session' : 'Sign in to join sessions'}
-              aria-label="Join Shared Session"
-              disabled={!isAuthenticated}
-            >
-              ⇄
-            </button>
-            <button
-              className="icon-button"
               onClick={handleCreateGroup}
               title="New Group"
               aria-label="New Group"
@@ -1183,9 +1099,6 @@ const App: React.FC = () => {
                       )}
                       <SessionStatsBadge sessionId={session.id} />
                     </div>
-                    {sharingSessions.has(session.id) && (
-                      <span className="share-indicator" title="Sharing" draggable={false}>⇄</span>
-                    )}
                     <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
                     <button
                       className="session-close"
@@ -1367,9 +1280,6 @@ const App: React.FC = () => {
                         )}
                         <SessionStatsBadge sessionId={session.id} />
                       </div>
-                      {sharingSessions.has(session.id) && (
-                        <span className="share-indicator" title="Sharing">⇄</span>
-                      )}
                       <span className={`status-pill ${session.state}`}>{session.state}</span>
                       <button
                         className="session-close"
@@ -1391,67 +1301,6 @@ const App: React.FC = () => {
           </div>
         ))}
 
-        {/* Remote Sessions group - only visible when authenticated */}
-        {isAuthenticated && (
-          <div className="group-container">
-            <div className="group remote-group">
-              <div
-                className="group-header"
-                onContextMenu={handleRemoteGroupContextMenu}
-              >
-                <span className="group-chevron" style={{ visibility: 'hidden' }}>▼</span>
-                <span className="group-color remote-color" style={{ background: '#9333ea' }} />
-                <span className="group-name">Remote Sessions</span>
-              </div>
-              <div className="group-sessions">
-                {/* Group by host */}
-                {Object.entries(
-                  remoteSessions.reduce((acc, rs) => {
-                    if (!acc[rs.hostUsername]) acc[rs.hostUsername] = [];
-                    acc[rs.hostUsername].push(rs);
-                    return acc;
-                  }, {} as Record<string, RemoteSession[]>)
-                ).map(([hostUsername, hostSessions]) => (
-                  <div key={hostUsername} className="remote-host-group">
-                    <div className="remote-host-header">@ {hostUsername}</div>
-                    {hostSessions.map(rs => (
-                      <div
-                        key={rs.code}
-                        className={`session ${activeRemoteCode === rs.code ? 'active' : ''}`}
-                        onClick={() => {
-                          setActiveRemoteCode(rs.code);
-                          setActiveSessionId(null);
-                        }}
-                      >
-                        <div className="session-info">
-                          <span className="session-name">{rs.sessionName}</span>
-                        </div>
-                        <span className={`permission-badge ${rs.permission}`}>
-                          {rs.permission}
-                        </span>
-                        <button
-                          className="session-close"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            window.electronAPI.leaveSession(rs.code);
-                            setRemoteSessions(prev => prev.filter(r => r.code !== rs.code));
-                            if (activeRemoteCode === rs.code) {
-                              setActiveRemoteCode(null);
-                            }
-                          }}
-                          title="Leave session"
-                          aria-label="Leave session"
-                        >
-                          x
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
       </aside>
 
       <main className="main">
@@ -1470,7 +1319,6 @@ const App: React.FC = () => {
             >
               <TerminalHeader
                 session={session}
-                isSharing={sharingSessions.has(session.id)}
                 onRename={(name) => updateSession(session.id, { name })}
                 onRestart={() => setRestartKeys(prev => ({ ...prev, [session.id]: (prev[session.id] || 0) + 1 }))}
                 onStop={() => updateSession(session.id, { state: 'stopped' })}
@@ -1491,46 +1339,7 @@ const App: React.FC = () => {
               </ErrorBoundary>
             </div>
           ))}
-          {/* Remote sessions */}
-          {remoteSessions.map(rs => (
-            <div
-              key={`remote:${rs.code}`}
-              className="terminal-wrapper"
-              style={{ display: activeRemoteCode === rs.code ? 'flex' : 'none' }}
-            >
-              <div className="terminal-header">
-                <div className="terminal-header-left">
-                  <span className="terminal-title">
-                    {rs.sessionName} (from {rs.hostUsername})
-                  </span>
-                  <span className={`permission-badge ${rs.permission}`}>
-                    {rs.permission === 'read' ? 'Read-only' : 'Control'}
-                  </span>
-                </div>
-                <div className="terminal-header-right">
-                  <button
-                    className="header-btn"
-                    onClick={() => {
-                      window.electronAPI.leaveSession(rs.code);
-                      setRemoteSessions(prev => prev.filter(s => s.code !== rs.code));
-                      setActiveRemoteCode(null);
-                    }}
-                    title="Leave session"
-                  >
-                    Leave
-                  </button>
-                </div>
-              </div>
-              <ErrorBoundary>
-                <RemoteTerminal
-                  code={rs.code}
-                  permission={rs.permission}
-                  isActive={activeRemoteCode === rs.code}
-                />
-              </ErrorBoundary>
-            </div>
-          ))}
-          {sessions.length === 0 && remoteSessions.length === 0 && (
+          {sessions.length === 0 && (
             <div className="no-session">
               {!groups.length ? (
                 <>
@@ -1587,33 +1396,6 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Sharing modals */}
-      {shareModalSessionId && user && (
-        <ShareModal
-          sessionId={shareModalSessionId}
-          sessionName={sessions.find(s => s.id === shareModalSessionId)?.name || 'Session'}
-          userTier={user.tier}
-          isOpen={true}
-          onClose={() => setShareModalSessionId(null)}
-        />
-      )}
-
-      <JoinSessionModal
-        isOpen={joinModalOpen}
-        onClose={() => setJoinModalOpen(false)}
-        onJoined={(result) => {
-          const newRemoteSession: RemoteSession = {
-            code: result.code,
-            hostUsername: result.hostUsername,
-            sessionName: result.sessionName,
-            permission: result.permission,
-            connectedAt: new Date().toISOString(),
-          };
-          setRemoteSessions(prev => [...prev, newRemoteSession]);
-          setActiveRemoteCode(result.code);
-          setActiveSessionId(null);
-        }}
-      />
 
       {/* Name prompt modals */}
       <NamePromptModal

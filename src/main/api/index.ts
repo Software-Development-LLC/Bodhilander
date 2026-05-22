@@ -2,7 +2,8 @@
  * API Server Module
  *
  * Exposes Bodhilander functionality over HTTP/WebSocket for mobile companion app access.
- * Supports both local P2P connections (same network) and relay server fallback.
+ * LAN-direct only — mobile devices reach the desktop on the same network or via a
+ * user-managed tunnel (Tailscale Funnel recommended).
  */
 
 import { EventEmitter } from 'events';
@@ -13,7 +14,6 @@ import { createHttpServer } from './http-server';
 import { createWsServer, WsServer } from './ws-server';
 import { MdnsAdvertiser } from './discovery/mdns-advertiser';
 import { PairingManager } from './pairing/pairing-manager';
-import { getRelayConnection, initRelayHandler, type RelayConnectionStatus } from './relay';
 
 export interface ApiServerConfig {
   port: number;
@@ -27,12 +27,14 @@ export interface ApiServerStatus {
   addresses: string[];
   connectedClients: number;
   pairedDevices: number;
-  relay: RelayConnectionStatus;
 }
 
+// Bind to all interfaces so mobile devices on the LAN can reach the server
+// (loopback-only would only serve the desktop itself — useless for pairing).
+// Access is still gated by the localNetworkOnly middleware in http-server.ts.
 const DEFAULT_CONFIG: ApiServerConfig = {
   port: 8443,
-  bindAddress: '127.0.0.1',
+  bindAddress: '0.0.0.0',
   enableMdns: true,
 };
 
@@ -153,38 +155,7 @@ class ApiServer extends EventEmitter {
       addresses: this._isRunning ? this.getLocalAddresses() : [],
       connectedClients: this.connectedClientCount,
       pairedDevices: this.pairingManager.getDeviceCount(),
-      relay: getRelayConnection().getStatus(),
     };
-  }
-
-  /**
-   * Enable remote access via relay server
-   */
-  async enableRemoteAccess(): Promise<void> {
-    const relay = getRelayConnection();
-    await relay.enable();
-
-    // Initialize relay handler if not already done
-    const handler = initRelayHandler(this.pairingManager);
-    handler.start();
-
-    log.info('[ApiServer] Remote access enabled');
-  }
-
-  /**
-   * Disable remote access via relay server
-   */
-  disableRemoteAccess(): void {
-    const relay = getRelayConnection();
-    relay.disable();
-    log.info('[ApiServer] Remote access disabled');
-  }
-
-  /**
-   * Get remote access status
-   */
-  getRemoteAccessStatus(): RelayConnectionStatus {
-    return getRelayConnection().getStatus();
   }
 
   private getLocalAddresses(): string[] {
@@ -218,11 +189,7 @@ class ApiServer extends EventEmitter {
     });
   }
 
-  /**
-   * Send terminal output to all subscribed mobile clients
-   */
   broadcastTerminalData(sessionId: string, data: string): void {
-    // Send to local WebSocket clients
     if (this.wsServer) {
       this.wsServer.broadcastToSession(sessionId, {
         type: 'terminal:output',
@@ -231,22 +198,9 @@ class ApiServer extends EventEmitter {
         timestamp: Date.now(),
       });
     }
-
-    // Send to relay clients
-    try {
-      const { getRelayHandler } = require('./relay');
-      const handler = getRelayHandler();
-      handler.broadcastTerminalData(sessionId, data);
-    } catch {
-      // Relay handler not initialized, ignore
-    }
   }
 
-  /**
-   * Broadcast session state change to all connected clients
-   */
   broadcastSessionState(sessionId: string, state: string, event?: string): void {
-    // Send to local WebSocket clients
     if (this.wsServer) {
       this.wsServer.broadcast({
         type: 'session:state',
@@ -255,36 +209,14 @@ class ApiServer extends EventEmitter {
         timestamp: Date.now(),
       });
     }
-
-    // Send to relay clients
-    try {
-      const { getRelayHandler } = require('./relay');
-      const handler = getRelayHandler();
-      handler.broadcastSessionState(sessionId, state, event);
-    } catch {
-      // Relay handler not initialized, ignore
-    }
   }
 
-  /**
-   * Broadcast sessions list update to all connected clients
-   */
   broadcastSessionsUpdated(): void {
-    // Send to local WebSocket clients
     if (this.wsServer) {
       this.wsServer.broadcast({
         type: 'sessions:updated',
         timestamp: Date.now(),
       });
-    }
-
-    // Send to relay clients
-    try {
-      const { getRelayHandler } = require('./relay');
-      const handler = getRelayHandler();
-      handler.broadcastSessionsUpdated();
-    } catch {
-      // Relay handler not initialized, ignore
     }
   }
 

@@ -18,8 +18,6 @@ import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
 import { Group, Session, SessionState, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
-import { authService } from './sharing/auth';
-import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerMcpServer, registerHooks } from './mcp-config';
@@ -33,18 +31,34 @@ import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } fr
 // ---------------------------------------------------------------------------
 
 // Enable Electron's native crash reporter — writes minidump files locally
-// so we can diagnose native-module crashes (e.g. node-pty SIGSEGV).
+// so we can diagnose native-module crashes (e.g. node-pty SIGSEGV, the
+// onnxruntime BFCArena trap behind BDHLNDR-40). BDHLNDR-45 (re-scoped from a
+// worker→utilityProcess refactor — superseded by the -40/-46 fixes — down to
+// just local minidump capture): tag dumps with the app version so they're
+// triageable without guesswork, and log the dump directory at startup so we
+// never again have to talk a user through hunting for crash reports by hand.
 crashReporter.start({
-  submitURL: '',       // No remote server — dumps stay local
+  submitURL: '',       // No remote server — dumps stay local (upload = BDHLNDR-47)
   uploadToServer: false,
   compress: false,
+  extra: { appVersion: app.getVersion() },
 });
+try {
+  log.info('[CrashReporter] Native crash minidumps written to:', app.getPath('crashDumps'));
+} catch {
+  // getPath('crashDumps') can throw very early on some platforms — non-fatal.
+}
 
 // Configure electron-log: file rotation to prevent unbounded disk growth
 log.transports.file.maxSize = 5 * 1024 * 1024; // 5 MB per log file
 log.transports.file.level = 'info';
 
-// Global error handlers to catch uncaught exceptions and prevent silent crashes
+// Global error handlers — last-resort logger of genuinely unexpected faults.
+// BDHLNDR-41: the recurring mDNS (`send ENETUNREACH 224.0.0.251:5353`) and
+// relay (`getaddrinfo ENOTFOUND`) uncaught exceptions are now handled at their
+// source (mdns-advertiser socket handler / relay emit guard), so this should
+// no longer see those transient network floods. Intentionally non-exiting:
+// keep the process alive and logged rather than hard-crash.
 process.on('uncaughtException', (error: Error) => {
   log.error('[Main] Uncaught exception:', error);
   log.error('[Main] Stack:', error.stack);
@@ -119,20 +133,6 @@ function broadcastToAllWindows(channel: string, ...args: any[]) {
 async function handleDeepLink(url: string) {
   log.info('Received deep link:', url);
   const parsed = new URL(url);
-
-  if (parsed.hostname === 'auth' || parsed.pathname === '/auth') {
-    const token = parsed.searchParams.get('token');
-    if (token) {
-      try {
-        const user = await authService.handleCallback(token);
-        // Broadcast to all windows (main + settings)
-        broadcastToAllWindows('auth:changed', { user, token });
-      } catch (e) {
-        log.error('Auth callback failed:', e);
-        broadcastToAllWindows('auth:error', { error: (e as Error).message });
-      }
-    }
-  }
 
   // Teams OAuth callback
   if (parsed.pathname === '/auth/teams' || (parsed.hostname === 'auth' && parsed.pathname.includes('teams'))) {
@@ -274,6 +274,14 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 }
 
 function createSplashWindow(): void {
+  // BDHLNDR-44: a BrowserWindow must never be constructed before app 'ready'
+  // (the "Cannot create BrowserWindow before app is ready" uncaught exception
+  // seen under rapid relaunch). Defer instead of throwing so the error is
+  // impossible regardless of caller/timing.
+  if (!app.isReady()) {
+    app.whenReady().then(() => createSplashWindow());
+    return;
+  }
   splashWindow = new BrowserWindow({
     icon: path.join(__dirname, '../../build/icon.png'),
     width: 500,
@@ -334,6 +342,14 @@ function registerMcpAndHooksEverywhere(): void {
 }
 
 function createWindow(): void {
+  // BDHLNDR-44: never construct a BrowserWindow before app 'ready' — defends
+  // the rapid-relaunch race that produced "Cannot create BrowserWindow before
+  // app is ready". Defer rather than throw.
+  if (!app.isReady()) {
+    app.whenReady().then(() => createWindow());
+    return;
+  }
+
   // Initialize database
   getDatabase();
 
@@ -587,10 +603,6 @@ safeOn('pty:resize', (id: string, cols: number, rows: number) => {
 });
 
 safeOn('pty:kill', (id: string) => {
-  // Stop sharing if this session was being shared
-  shareManager.stopSharing(id).catch(() => {
-    // Ignore errors - session may not have been shared
-  });
   ptyManager.kill(id);
 });
 
@@ -660,12 +672,6 @@ safeHandle('db:sessions:update', (id: string, updates: Partial<Session>) => {
 });
 
 ipcMain.handle('db:sessions:delete', async (_, id: string) => {
-  // Stop sharing if this session was being shared
-  try {
-    await shareManager.stopSharing(id);
-  } catch {
-    // Ignore errors - session may not have been shared
-  }
   sessionsRepo.deleteSession(id);
   getApiServer().broadcastSessionsUpdated();
 });
@@ -827,24 +833,6 @@ safeHandle('sound:selectFile', async () => {
   return result.filePaths[0];
 });
 
-// Auth IPC handlers
-safeHandle('auth:login', () => {
-  authService.startLogin();
-});
-
-safeHandle('auth:logout', () => {
-  authService.logout();
-  return { success: true };
-});
-
-safeHandle('auth:getUser', () => {
-  return authService.currentUser;
-});
-
-safeHandle('auth:setToken', async (token: string) => {
-  return authService.setToken(token);
-});
-
 // Teams IPC Handlers
 safeHandle('teams:login', () => {
   teamsAuthService.startLogin();
@@ -898,64 +886,6 @@ safeHandle('app:set-update-channel', (channel: UpdateChannel) => {
 // renderer to show a BETA pill in the title bar.
 safeHandle('app:is-prerelease-build', () => {
   return app.getVersion().includes('-beta.');
-});
-
-// Sharing IPC handlers (host)
-safeHandle('share:start', async (localSessionId: string) => {
-  return shareManager.startSharing(localSessionId);
-});
-
-safeHandle('share:stop', async (localSessionId: string) => {
-  return shareManager.stopSharing(localSessionId);
-});
-
-safeHandle('share:createCode', async (localSessionId: string, options: any) => {
-  return shareManager.createCode(localSessionId, options);
-});
-
-safeHandle('share:revokeCode', async (code: string) => {
-  return shareManager.revokeCode(code);
-});
-
-safeHandle('share:getCodes', async (localSessionId: string) => {
-  return shareManager.getCodes(localSessionId);
-});
-
-safeHandle('share:isSharing', (localSessionId: string) => {
-  return shareManager.isSharing(localSessionId);
-});
-
-safeHandle('share:getGuestCount', (localSessionId: string) => {
-  return shareManager.getGuestCount(localSessionId);
-});
-
-// Sharing IPC handlers (guest)
-safeHandle('share:join', async (code: string) => {
-  const { permission, hostUsername, sessionName, relayClient } = await shareManager.joinSession(code);
-
-  // Forward relay data to renderer
-  relayClient.on('data', (data) => {
-    mainWindow?.webContents.send('share:data', { code, data: data.toString() });
-  });
-
-  relayClient.on('disconnected', () => {
-    mainWindow?.webContents.send('share:ended', { code });
-  });
-
-  return { code, permission, hostUsername, sessionName };
-});
-
-safeHandle('share:leave', (code: string) => {
-  shareManager.leaveSession(code);
-});
-
-safeHandle('share:write', (code: string, data: string) => {
-  const client = shareManager.getJoinedClient(code);
-  if (client && client.canSendInput()) {
-    client.send(data);
-    return { success: true };
-  }
-  return { success: false, error: 'Cannot send input' };
 });
 
 // Open external URL
@@ -1101,34 +1031,6 @@ safeHandle('api:hasPairingCode', () => {
   return { active: apiServer.pairingManager.hasActivePairingCode() };
 });
 
-// Remote access IPC handlers
-ipcMain.handle('api:enableRemoteAccess', async () => {
-  try {
-    const apiServer = getApiServer();
-    await apiServer.enableRemoteAccess();
-    return { success: true, status: apiServer.getRemoteAccessStatus() };
-  } catch (error) {
-    log.error('Failed to enable remote access:', error);
-    return { success: false, error: (error as Error).message };
-  }
-});
-
-ipcMain.handle('api:disableRemoteAccess', () => {
-  try {
-    const apiServer = getApiServer();
-    apiServer.disableRemoteAccess();
-    return { success: true };
-  } catch (error) {
-    log.error('Failed to disable remote access:', error);
-    return { success: false, error: (error as Error).message };
-  }
-});
-
-safeHandle('api:getRemoteAccessStatus', () => {
-  const apiServer = getApiServer();
-  return apiServer.getRemoteAccessStatus();
-});
-
 // ============================================================================
 // Vector Search IPC Handlers
 // ============================================================================
@@ -1222,15 +1124,6 @@ function getLocalAddresses(): string[] {
   });
 }
 
-// Forward share manager events to renderer
-shareManager.on('guestJoined', (info) => {
-  mainWindow?.webContents.send('share:guestJoined', info);
-});
-
-shareManager.on('guestLeft', (info) => {
-  mainWindow?.webContents.send('share:guestLeft', info);
-});
-
 app.whenReady().then(() => {
   createSplashWindow();
   createWindow();
@@ -1238,14 +1131,57 @@ app.whenReady().then(() => {
   log.error('[Main] Failed to initialize app:', error);
 });
 
+// BDHLNDR-44: recover from renderer/GPU process crashes instead of leaving
+// the window blank. Bounded against a crash→reload storm: at most
+// MAX_PROCESS_RELOADS within RELOAD_WINDOW_MS, then stop and just log.
+const MAX_PROCESS_RELOADS = 3;
+const RELOAD_WINDOW_MS = 60_000;
+let processReloadTimes: number[] = [];
+
+function recoverWindowAfterCrash(reason: string): void {
+  const now = Date.now();
+  processReloadTimes = processReloadTimes.filter((t) => now - t < RELOAD_WINDOW_MS);
+  if (processReloadTimes.length >= MAX_PROCESS_RELOADS) {
+    log.error(
+      `[Main] Skipping recovery after ${reason} — ${processReloadTimes.length} ` +
+        `reloads within ${RELOAD_WINDOW_MS}ms (reload-storm guard)`
+    );
+    return;
+  }
+  processReloadTimes.push(now);
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    log.warn(`[Main] Recovering UI after ${reason} — reloading main window`);
+    try {
+      mainWindow.webContents.reload();
+    } catch (e) {
+      log.error('[Main] Reload after crash failed:', e);
+    }
+  } else if (app.isReady()) {
+    log.warn(`[Main] Recovering after ${reason} — recreating main window`);
+    createWindow();
+  }
+}
+
 // Handle render process crashes (if any child window crashes)
 app.on('render-process-gone', (event, webContents, details) => {
   log.error('[Main] Render process gone:', details.reason, details.exitCode);
+  // 'clean-exit'/'killed' are intentional teardown (quit, manual kill) — don't
+  // fight those. Anything else (crashed/oom/abnormal-exit/launch-failed) left
+  // the renderer dead → reload so the user isn't staring at a blank window.
+  if (details.reason === 'clean-exit' || details.reason === 'killed') return;
+  recoverWindowAfterCrash(`render-process-gone (${details.reason})`);
 });
 
 // Handle child process crashes
 app.on('child-process-gone', (event, details) => {
   log.error('[Main] Child process gone:', details.type, details.reason, details.exitCode);
+  // Electron auto-relaunches the GPU process, but on macOS the renderer is
+  // often left blank/unresponsive afterwards — reload so it re-establishes
+  // its GPU channel and re-paints. (Bounded by the reload-storm guard.)
+  if (details.type === 'GPU' && details.reason !== 'clean-exit') {
+    recoverWindowAfterCrash('GPU process crash');
+  }
 });
 
 // Renderer error forwarding — renderer calls this via IPC so errors land in the log file
@@ -1294,12 +1230,6 @@ app.on('before-quit', (event) => {
   isQuitting = true;
 
   (async () => {
-    try {
-      await shareManager.stopAllSharing();
-    } catch (e) {
-      log.error('Error stopping shares on quit:', e);
-    }
-
     try {
       await ptyManager.killAll();
     } catch (e) {
