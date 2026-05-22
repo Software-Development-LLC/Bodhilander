@@ -21,6 +21,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [port, setPort] = useState(8443);
   const [enableMdns, setEnableMdns] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
 
   // Sound settings state
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -210,6 +211,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     } catch (err) {
       console.error('Failed to cancel pairing:', err);
       setError('Failed to cancel pairing.');
+    }
+  }, []);
+
+  const handleCopyCommand = useCallback(async (cmd: string) => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopiedCommand(cmd);
+      setTimeout(() => setCopiedCommand(prev => (prev === cmd ? null : prev)), 1500);
+    } catch (err) {
+      console.error('Failed to copy command:', err);
+      setError('Failed to copy to clipboard.');
     }
   }, []);
 
@@ -894,10 +906,62 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 </div>
 
                 <div className="settings-group">
-                  <h4>Remote Access</h4>
+                  <h4>Remote Access via Tailscale Funnel</h4>
                   <p className="settings-description">
-                    {/* TODO(BDHLNDR-11 step 4): Tailscale Funnel guidance panel */}
-                    Coming soon — remote access guidance.
+                    Bodhilander has no built-in remote-access service. To reach the
+                    desktop from outside your LAN, expose the local API port through
+                    Tailscale Funnel — free for personal use, no Bodhilander-hosted
+                    infrastructure required.
+                  </p>
+
+                  <ol className="tailscale-steps">
+                    <li>
+                      Install Tailscale and sign in:
+                      <div className="tailscale-cmd-row">
+                        <code className="tailscale-cmd">tailscale up</code>
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => handleCopyCommand('tailscale up')}
+                        >
+                          {copiedCommand === 'tailscale up' ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    </li>
+                    <li>
+                      Expose port 8443 to the public internet via Tailscale's edge:
+                      <div className="tailscale-cmd-row">
+                        <code className="tailscale-cmd">tailscale funnel 8443</code>
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => handleCopyCommand('tailscale funnel 8443')}
+                        >
+                          {copiedCommand === 'tailscale funnel 8443' ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    </li>
+                    <li>
+                      Pair your mobile device using the Funnel URL Tailscale prints
+                      (looks like <code>https://&lt;machine&gt;.&lt;tailnet&gt;.ts.net</code>).
+                    </li>
+                  </ol>
+
+                  <p className="settings-hint">
+                    Tailscale Funnel only accepts ports 443, 8443, and 10000 — keep
+                    the API server on 8443 (the default) or it won't work.
+                  </p>
+
+                  <div className="settings-actions">
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => window.electronAPI.openExternal('https://tailscale.com/kb/1223/funnel')}
+                    >
+                      Open Tailscale Funnel docs
+                    </button>
+                  </div>
+
+                  <p className="settings-hint" style={{ marginTop: '0.75rem' }}>
+                    Prefer Cloudflare Tunnel or ngrok? Either also works — point the
+                    tunnel at <code>localhost:8443</code>.
                   </p>
                 </div>
               </div>
