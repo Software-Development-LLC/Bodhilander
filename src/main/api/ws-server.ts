@@ -139,6 +139,14 @@ export function createWsServer(httpServer: HttpServer, pairingManager: PairingMa
 
 /**
  * Authenticate WebSocket connection from query parameter
+ *
+ * SECURITY (BDHLNDR-11): the device token is carried in the URL query string,
+ * which means it lands in URL-style logs anywhere the request is observed —
+ * proxies, CDNs, browser history. Acceptable today because (1) Bodhilander is
+ * internal-only and (2) the recommended remote path is Tailscale Funnel, which
+ * is a network-level proxy that logs connection metadata, not URLs. If we ever
+ * expose the WS endpoint behind an L7 CDN, migrate to first-message auth
+ * (read token from initial frame after upgrade) so it never appears in any URL.
  */
 function authenticateWsConnection(request: IncomingMessage, pairingManager: PairingManager): PairedDevice | null {
   try {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode, RelayConnectionStatus } from '../../shared/types';
+import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -21,15 +21,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [port, setPort] = useState(8443);
   const [enableMdns, setEnableMdns] = useState(true);
   const [loading, setLoading] = useState(false);
-
-  // Remote access state
-  const [remoteStatus, setRemoteStatus] = useState<RelayConnectionStatus>({
-    enabled: false,
-    connected: false,
-    desktopId: null,
-    relayUrl: '',
-  });
-  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
 
   // Sound settings state
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -60,8 +52,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [enableNotifications, setEnableNotifications] = useState(true);
 
   // Integrations state
-  const [githubUser, setGithubUser] = useState<{ username: string } | null>(null);
-  const [githubLoading, setGithubLoading] = useState(false);
 
   // Error state for surfacing errors to users
   const [error, setError] = useState<string | null>(null);
@@ -72,11 +62,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
     const loadState = async () => {
       try {
-        const [status, devices, hasPairingResult, remoteAccessStatus, channel] = await Promise.all([
+        const [status, devices, hasPairingResult, channel] = await Promise.all([
           window.electronAPI.apiGetStatus(),
           window.electronAPI.apiGetPairedDevices(),
           window.electronAPI.apiHasPairingCode(),
-          window.electronAPI.apiGetRemoteAccessStatus(),
           window.electronAPI.getUpdateChannel(),
         ]);
         setApiStatus(status);
@@ -84,7 +73,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         if (!hasPairingResult.active) {
           setPairingCode(null);
         }
-        setRemoteStatus(remoteAccessStatus);
         setUpdateChannelState(channel);
 
         // Load sound settings
@@ -138,14 +126,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setWebglRenderer(webglRendererPref === 'true');
         setEnableNotifications(enableNotificationsPref !== 'false');
 
-        // Load GitHub user status
-        try {
-          const user = await window.electronAPI.getUser();
-          setGithubUser(user);
-        } catch {
-          setGithubUser(null);
-        }
-
         // Load editor options and preference
         try {
           const [options, editorPref] = await Promise.all([
@@ -165,19 +145,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
     loadState();
   }, [isOpen]);
-
-  // Listen for GitHub auth changes
-  useEffect(() => {
-    const unsubscribe = window.electronAPI.onAuthChanged(async () => {
-      try {
-        const user = await window.electronAPI.getUser();
-        setGithubUser(user);
-      } catch {
-        setGithubUser(null);
-      }
-    });
-    return unsubscribe;
-  }, []);
 
   // Auto-dismiss error after 5 seconds
   useEffect(() => {
@@ -247,6 +214,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     }
   }, []);
 
+  const handleCopyCommand = useCallback(async (cmd: string) => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopiedCommand(cmd);
+      setTimeout(() => setCopiedCommand(prev => (prev === cmd ? null : prev)), 1500);
+    } catch (err) {
+      console.error('Failed to copy command:', err);
+      setError('Failed to copy to clipboard.');
+    }
+  }, []);
+
   const handleUnpairDevice = useCallback(async (deviceId: string) => {
     try {
       await window.electronAPI.apiUnpairDevice(deviceId);
@@ -274,40 +252,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       console.error('Failed to update permissions:', err);
       setError('Failed to update device permissions.');
     }
-  }, []);
-
-  const handleEnableRemoteAccess = useCallback(async () => {
-    setRemoteLoading(true);
-    try {
-      const result = await window.electronAPI.apiEnableRemoteAccess();
-      if (result.success && result.status) {
-        setRemoteStatus(result.status);
-      } else {
-        console.error('Failed to enable remote access:', result.error);
-        setError('Failed to enable remote access.');
-      }
-    } catch (err) {
-      console.error('Failed to enable remote access:', err);
-      setError('Failed to enable remote access.');
-    }
-    setRemoteLoading(false);
-  }, []);
-
-  const handleDisableRemoteAccess = useCallback(async () => {
-    setRemoteLoading(true);
-    try {
-      const result = await window.electronAPI.apiDisableRemoteAccess();
-      if (result.success) {
-        setRemoteStatus(prev => ({ ...prev, enabled: false, connected: false }));
-      } else {
-        console.error('Failed to disable remote access:', result.error);
-        setError('Failed to disable remote access.');
-      }
-    } catch (err) {
-      console.error('Failed to disable remote access:', err);
-      setError('Failed to disable remote access.');
-    }
-    setRemoteLoading(false);
   }, []);
 
   // Sound setting handlers
@@ -397,32 +341,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const handleEnableNotificationsChange = useCallback(async (enabled: boolean) => {
     setEnableNotifications(enabled);
     await window.electronAPI.setPreference('enableNotifications', enabled.toString());
-  }, []);
-
-  // Integrations handlers
-  const handleGitHubLogin = useCallback(async () => {
-    setGithubLoading(true);
-    try {
-      await window.electronAPI.login();
-      const user = await window.electronAPI.getUser();
-      setGithubUser(user);
-    } catch (err) {
-      console.error('GitHub login failed:', err);
-      setError('GitHub login failed. Please try again.');
-    }
-    setGithubLoading(false);
-  }, []);
-
-  const handleGitHubLogout = useCallback(async () => {
-    setGithubLoading(true);
-    try {
-      await window.electronAPI.logout();
-      setGithubUser(null);
-    } catch (err) {
-      console.error('GitHub logout failed:', err);
-      setError('GitHub logout failed. Please try again.');
-    }
-    setGithubLoading(false);
   }, []);
 
   const handleModalKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -756,36 +674,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   Connect external services to receive notifications and share sessions.
                 </p>
 
-                <div className="settings-group integration-card">
-                  <div className="integration-header">
-                    <span className={`integration-status-dot ${githubUser ? 'connected' : ''}`} />
-                    <h4>GitHub</h4>
-                  </div>
-                  <p className="integration-status">
-                    {githubUser ? `Connected as ${githubUser.username}` : 'Not connected'}
-                  </p>
-                  <p className="settings-hint">Used for: Session sharing</p>
-                  <div className="settings-actions">
-                    {githubUser ? (
-                      <button
-                        className="btn btn-danger"
-                        onClick={handleGitHubLogout}
-                        disabled={githubLoading}
-                      >
-                        {githubLoading ? 'Signing Out...' : 'Sign Out'}
-                      </button>
-                    ) : (
-                      <button
-                        className="btn btn-primary"
-                        onClick={handleGitHubLogin}
-                        disabled={githubLoading}
-                      >
-                        {githubLoading ? 'Signing In...' : 'Sign In'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
                 <div className="settings-group integration-card disabled">
                   <div className="integration-header">
                     <span className="integration-status-dot" />
@@ -1018,55 +906,63 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 </div>
 
                 <div className="settings-group">
-                  <h4>Remote Access</h4>
+                  <h4>Remote Access via Tailscale Funnel</h4>
                   <p className="settings-description">
-                    Enable remote access to connect from outside your local network via the relay server.
+                    Bodhilander has no built-in remote-access service. To reach the
+                    desktop from outside your LAN, expose the local API port through
+                    Tailscale Funnel — free for personal use, no Bodhilander-hosted
+                    infrastructure required.
                   </p>
 
-                  <div className="settings-row">
-                    <label>Status:</label>
-                    <span className={`remote-status ${remoteStatus.connected ? 'connected' : remoteStatus.enabled ? 'connecting' : 'disabled'}`}>
-                      {remoteStatus.connected
-                        ? 'Connected to relay'
-                        : remoteStatus.enabled
-                        ? 'Connecting...'
-                        : 'Disabled'}
-                    </span>
-                  </div>
+                  <ol className="tailscale-steps">
+                    <li>
+                      Install Tailscale and sign in:
+                      <div className="tailscale-cmd-row">
+                        <code className="tailscale-cmd">tailscale up</code>
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => handleCopyCommand('tailscale up')}
+                        >
+                          {copiedCommand === 'tailscale up' ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    </li>
+                    <li>
+                      Expose port 8443 to the public internet via Tailscale's edge:
+                      <div className="tailscale-cmd-row">
+                        <code className="tailscale-cmd">tailscale funnel 8443</code>
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => handleCopyCommand('tailscale funnel 8443')}
+                        >
+                          {copiedCommand === 'tailscale funnel 8443' ? 'Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    </li>
+                    <li>
+                      Pair your mobile device using the Funnel URL Tailscale prints
+                      (looks like <code>https://&lt;machine&gt;.&lt;tailnet&gt;.ts.net</code>).
+                    </li>
+                  </ol>
 
-                  {remoteStatus.enabled && remoteStatus.desktopId && (
-                    <div className="settings-row">
-                      <label>Desktop ID:</label>
-                      <code className="desktop-id">{remoteStatus.desktopId}</code>
-                    </div>
-                  )}
-
-                  {remoteStatus.enabled && remoteStatus.relayUrl && (
-                    <div className="settings-row">
-                      <label>Relay Server:</label>
-                      <span className="relay-url">{remoteStatus.relayUrl}</span>
-                    </div>
-                  )}
+                  <p className="settings-hint">
+                    Tailscale Funnel only accepts ports 443, 8443, and 10000 — keep
+                    the API server on 8443 (the default) or it won't work.
+                  </p>
 
                   <div className="settings-actions">
-                    {remoteStatus.enabled ? (
-                      <button
-                        className="btn btn-danger"
-                        onClick={handleDisableRemoteAccess}
-                        disabled={remoteLoading}
-                      >
-                        {remoteLoading ? 'Disabling...' : 'Disable Remote Access'}
-                      </button>
-                    ) : (
-                      <button
-                        className="btn btn-primary"
-                        onClick={handleEnableRemoteAccess}
-                        disabled={remoteLoading}
-                      >
-                        {remoteLoading ? 'Enabling...' : 'Enable Remote Access'}
-                      </button>
-                    )}
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => window.electronAPI.openExternal('https://tailscale.com/kb/1223/funnel')}
+                    >
+                      Open Tailscale Funnel docs
+                    </button>
                   </div>
+
+                  <p className="settings-hint" style={{ marginTop: '0.75rem' }}>
+                    Prefer Cloudflare Tunnel or ngrok? Either also works — point the
+                    tunnel at <code>localhost:8443</code>.
+                  </p>
                 </div>
               </div>
             )}

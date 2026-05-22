@@ -4,7 +4,6 @@ import { useSessionStats, formatDuration, formatStatsTooltip } from '../store/se
 
 interface TerminalHeaderProps {
   session: Session;
-  isSharing?: boolean;
   onRename: (name: string) => void;
   onRestart: () => void;
   onStop: () => void;
@@ -13,7 +12,6 @@ interface TerminalHeaderProps {
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   session,
-  isSharing = false,
   onRename,
   onRestart,
   onStop,
@@ -64,12 +62,6 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
           title="Double-click to rename"
         >
           {session.name}
-        </span>
-      )}
-
-      {isSharing && (
-        <span className="header-share-badge" title="Session is being shared">
-          ⇄ Sharing
         </span>
       )}
 

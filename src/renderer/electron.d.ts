@@ -81,32 +81,6 @@ interface ElectronAPI {
   setPreference: (key: string, value: string) => Promise<void>;
   getAllPreferences: () => Promise<Record<string, string>>;
 
-  // Auth
-  login: () => Promise<any>;
-  logout: () => Promise<any>;
-  getUser: () => Promise<any>;
-  setAuthToken: (token: string) => Promise<any>;
-  onAuthChanged: (callback: (data: any) => void) => () => void;
-  onAuthError: (callback: (data: any) => void) => () => void;
-
-  // Sharing (host)
-  startSharing: (sessionId: string) => Promise<any>;
-  stopSharing: (sessionId: string) => Promise<any>;
-  createShareCode: (sessionId: string, options: any) => Promise<any>;
-  revokeShareCode: (code: string) => Promise<any>;
-  getShareCodes: (sessionId: string) => Promise<any>;
-  isSharing: (sessionId: string) => Promise<any>;
-  getGuestCount: (sessionId: string) => Promise<any>;
-  onGuestJoined: (callback: (info: any) => void) => () => void;
-  onGuestLeft: (callback: (info: any) => void) => () => void;
-
-  // Sharing (guest)
-  joinSession: (code: string) => Promise<any>;
-  leaveSession: (code: string) => Promise<any>;
-  writeToRemote: (code: string, data: string) => Promise<any>;
-  onShareData: (callback: (data: any) => void) => () => void;
-  onShareEnded: (callback: (data: any) => void) => () => void;
-
   // Shell
   openExternal: (url: string) => Promise<void>;
 
@@ -141,11 +115,6 @@ interface ElectronAPI {
   apiUnpairDevice: (deviceId: string) => Promise<any>;
   apiUpdateDevicePermissions: (deviceId: string, permissions: { canControl?: boolean; canModify?: boolean }) => Promise<any>;
   apiHasPairingCode: () => Promise<{ active: boolean }>;
-
-  // Remote access
-  apiEnableRemoteAccess: () => Promise<{ success: boolean; status?: any; error?: string }>;
-  apiDisableRemoteAccess: () => Promise<{ success: boolean; error?: string }>;
-  apiGetRemoteAccessStatus: () => Promise<{ enabled: boolean; connected: boolean; desktopId: string | null; relayUrl: string }>;
 
   // Vector Search
   getIndexStatus: (directoryPath: string) => Promise<CodeIndex | null>;

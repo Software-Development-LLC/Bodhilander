@@ -18,8 +18,6 @@ import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
 import { Group, Session, SessionState, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
-import { authService } from './sharing/auth';
-import { shareManager } from './sharing/share-manager';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerMcpServer, registerHooks } from './mcp-config';
@@ -135,20 +133,6 @@ function broadcastToAllWindows(channel: string, ...args: any[]) {
 async function handleDeepLink(url: string) {
   log.info('Received deep link:', url);
   const parsed = new URL(url);
-
-  if (parsed.hostname === 'auth' || parsed.pathname === '/auth') {
-    const token = parsed.searchParams.get('token');
-    if (token) {
-      try {
-        const user = await authService.handleCallback(token);
-        // Broadcast to all windows (main + settings)
-        broadcastToAllWindows('auth:changed', { user, token });
-      } catch (e) {
-        log.error('Auth callback failed:', e);
-        broadcastToAllWindows('auth:error', { error: (e as Error).message });
-      }
-    }
-  }
 
   // Teams OAuth callback
   if (parsed.pathname === '/auth/teams' || (parsed.hostname === 'auth' && parsed.pathname.includes('teams'))) {
@@ -619,10 +603,6 @@ safeOn('pty:resize', (id: string, cols: number, rows: number) => {
 });
 
 safeOn('pty:kill', (id: string) => {
-  // Stop sharing if this session was being shared
-  shareManager.stopSharing(id).catch(() => {
-    // Ignore errors - session may not have been shared
-  });
   ptyManager.kill(id);
 });
 
@@ -692,12 +672,6 @@ safeHandle('db:sessions:update', (id: string, updates: Partial<Session>) => {
 });
 
 ipcMain.handle('db:sessions:delete', async (_, id: string) => {
-  // Stop sharing if this session was being shared
-  try {
-    await shareManager.stopSharing(id);
-  } catch {
-    // Ignore errors - session may not have been shared
-  }
   sessionsRepo.deleteSession(id);
   getApiServer().broadcastSessionsUpdated();
 });
@@ -859,24 +833,6 @@ safeHandle('sound:selectFile', async () => {
   return result.filePaths[0];
 });
 
-// Auth IPC handlers
-safeHandle('auth:login', () => {
-  authService.startLogin();
-});
-
-safeHandle('auth:logout', () => {
-  authService.logout();
-  return { success: true };
-});
-
-safeHandle('auth:getUser', () => {
-  return authService.currentUser;
-});
-
-safeHandle('auth:setToken', async (token: string) => {
-  return authService.setToken(token);
-});
-
 // Teams IPC Handlers
 safeHandle('teams:login', () => {
   teamsAuthService.startLogin();
@@ -930,64 +886,6 @@ safeHandle('app:set-update-channel', (channel: UpdateChannel) => {
 // renderer to show a BETA pill in the title bar.
 safeHandle('app:is-prerelease-build', () => {
   return app.getVersion().includes('-beta.');
-});
-
-// Sharing IPC handlers (host)
-safeHandle('share:start', async (localSessionId: string) => {
-  return shareManager.startSharing(localSessionId);
-});
-
-safeHandle('share:stop', async (localSessionId: string) => {
-  return shareManager.stopSharing(localSessionId);
-});
-
-safeHandle('share:createCode', async (localSessionId: string, options: any) => {
-  return shareManager.createCode(localSessionId, options);
-});
-
-safeHandle('share:revokeCode', async (code: string) => {
-  return shareManager.revokeCode(code);
-});
-
-safeHandle('share:getCodes', async (localSessionId: string) => {
-  return shareManager.getCodes(localSessionId);
-});
-
-safeHandle('share:isSharing', (localSessionId: string) => {
-  return shareManager.isSharing(localSessionId);
-});
-
-safeHandle('share:getGuestCount', (localSessionId: string) => {
-  return shareManager.getGuestCount(localSessionId);
-});
-
-// Sharing IPC handlers (guest)
-safeHandle('share:join', async (code: string) => {
-  const { permission, hostUsername, sessionName, relayClient } = await shareManager.joinSession(code);
-
-  // Forward relay data to renderer
-  relayClient.on('data', (data) => {
-    mainWindow?.webContents.send('share:data', { code, data: data.toString() });
-  });
-
-  relayClient.on('disconnected', () => {
-    mainWindow?.webContents.send('share:ended', { code });
-  });
-
-  return { code, permission, hostUsername, sessionName };
-});
-
-safeHandle('share:leave', (code: string) => {
-  shareManager.leaveSession(code);
-});
-
-safeHandle('share:write', (code: string, data: string) => {
-  const client = shareManager.getJoinedClient(code);
-  if (client && client.canSendInput()) {
-    client.send(data);
-    return { success: true };
-  }
-  return { success: false, error: 'Cannot send input' };
 });
 
 // Open external URL
@@ -1133,34 +1031,6 @@ safeHandle('api:hasPairingCode', () => {
   return { active: apiServer.pairingManager.hasActivePairingCode() };
 });
 
-// Remote access IPC handlers
-ipcMain.handle('api:enableRemoteAccess', async () => {
-  try {
-    const apiServer = getApiServer();
-    await apiServer.enableRemoteAccess();
-    return { success: true, status: apiServer.getRemoteAccessStatus() };
-  } catch (error) {
-    log.error('Failed to enable remote access:', error);
-    return { success: false, error: (error as Error).message };
-  }
-});
-
-ipcMain.handle('api:disableRemoteAccess', () => {
-  try {
-    const apiServer = getApiServer();
-    apiServer.disableRemoteAccess();
-    return { success: true };
-  } catch (error) {
-    log.error('Failed to disable remote access:', error);
-    return { success: false, error: (error as Error).message };
-  }
-});
-
-safeHandle('api:getRemoteAccessStatus', () => {
-  const apiServer = getApiServer();
-  return apiServer.getRemoteAccessStatus();
-});
-
 // ============================================================================
 // Vector Search IPC Handlers
 // ============================================================================
@@ -1253,15 +1123,6 @@ function getLocalAddresses(): string[] {
     return score(a) - score(b);
   });
 }
-
-// Forward share manager events to renderer
-shareManager.on('guestJoined', (info) => {
-  mainWindow?.webContents.send('share:guestJoined', info);
-});
-
-shareManager.on('guestLeft', (info) => {
-  mainWindow?.webContents.send('share:guestLeft', info);
-});
 
 app.whenReady().then(() => {
   createSplashWindow();
@@ -1369,12 +1230,6 @@ app.on('before-quit', (event) => {
   isQuitting = true;
 
   (async () => {
-    try {
-      await shareManager.stopAllSharing();
-    } catch (e) {
-      log.error('Error stopping shares on quit:', e);
-    }
-
     try {
       await ptyManager.killAll();
     } catch (e) {
