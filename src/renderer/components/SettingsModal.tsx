@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode, RelayConnectionStatus } from '../../shared/types';
+import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -21,15 +21,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [port, setPort] = useState(8443);
   const [enableMdns, setEnableMdns] = useState(true);
   const [loading, setLoading] = useState(false);
-
-  // Remote access state
-  const [remoteStatus, setRemoteStatus] = useState<RelayConnectionStatus>({
-    enabled: false,
-    connected: false,
-    desktopId: null,
-    relayUrl: '',
-  });
-  const [remoteLoading, setRemoteLoading] = useState(false);
 
   // Sound settings state
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -70,11 +61,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
     const loadState = async () => {
       try {
-        const [status, devices, hasPairingResult, remoteAccessStatus, channel] = await Promise.all([
+        const [status, devices, hasPairingResult, channel] = await Promise.all([
           window.electronAPI.apiGetStatus(),
           window.electronAPI.apiGetPairedDevices(),
           window.electronAPI.apiHasPairingCode(),
-          window.electronAPI.apiGetRemoteAccessStatus(),
           window.electronAPI.getUpdateChannel(),
         ]);
         setApiStatus(status);
@@ -82,7 +72,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         if (!hasPairingResult.active) {
           setPairingCode(null);
         }
-        setRemoteStatus(remoteAccessStatus);
         setUpdateChannelState(channel);
 
         // Load sound settings
@@ -251,40 +240,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       console.error('Failed to update permissions:', err);
       setError('Failed to update device permissions.');
     }
-  }, []);
-
-  const handleEnableRemoteAccess = useCallback(async () => {
-    setRemoteLoading(true);
-    try {
-      const result = await window.electronAPI.apiEnableRemoteAccess();
-      if (result.success && result.status) {
-        setRemoteStatus(result.status);
-      } else {
-        console.error('Failed to enable remote access:', result.error);
-        setError('Failed to enable remote access.');
-      }
-    } catch (err) {
-      console.error('Failed to enable remote access:', err);
-      setError('Failed to enable remote access.');
-    }
-    setRemoteLoading(false);
-  }, []);
-
-  const handleDisableRemoteAccess = useCallback(async () => {
-    setRemoteLoading(true);
-    try {
-      const result = await window.electronAPI.apiDisableRemoteAccess();
-      if (result.success) {
-        setRemoteStatus(prev => ({ ...prev, enabled: false, connected: false }));
-      } else {
-        console.error('Failed to disable remote access:', result.error);
-        setError('Failed to disable remote access.');
-      }
-    } catch (err) {
-      console.error('Failed to disable remote access:', err);
-      setError('Failed to disable remote access.');
-    }
-    setRemoteLoading(false);
   }, []);
 
   // Sound setting handlers
@@ -941,53 +896,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 <div className="settings-group">
                   <h4>Remote Access</h4>
                   <p className="settings-description">
-                    Enable remote access to connect from outside your local network via the relay server.
+                    {/* TODO(BDHLNDR-11 step 4): Tailscale Funnel guidance panel */}
+                    Coming soon — remote access guidance.
                   </p>
-
-                  <div className="settings-row">
-                    <label>Status:</label>
-                    <span className={`remote-status ${remoteStatus.connected ? 'connected' : remoteStatus.enabled ? 'connecting' : 'disabled'}`}>
-                      {remoteStatus.connected
-                        ? 'Connected to relay'
-                        : remoteStatus.enabled
-                        ? 'Connecting...'
-                        : 'Disabled'}
-                    </span>
-                  </div>
-
-                  {remoteStatus.enabled && remoteStatus.desktopId && (
-                    <div className="settings-row">
-                      <label>Desktop ID:</label>
-                      <code className="desktop-id">{remoteStatus.desktopId}</code>
-                    </div>
-                  )}
-
-                  {remoteStatus.enabled && remoteStatus.relayUrl && (
-                    <div className="settings-row">
-                      <label>Relay Server:</label>
-                      <span className="relay-url">{remoteStatus.relayUrl}</span>
-                    </div>
-                  )}
-
-                  <div className="settings-actions">
-                    {remoteStatus.enabled ? (
-                      <button
-                        className="btn btn-danger"
-                        onClick={handleDisableRemoteAccess}
-                        disabled={remoteLoading}
-                      >
-                        {remoteLoading ? 'Disabling...' : 'Disable Remote Access'}
-                      </button>
-                    ) : (
-                      <button
-                        className="btn btn-primary"
-                        onClick={handleEnableRemoteAccess}
-                        disabled={remoteLoading}
-                      >
-                        {remoteLoading ? 'Enabling...' : 'Enable Remote Access'}
-                      </button>
-                    )}
-                  </div>
                 </div>
               </div>
             )}

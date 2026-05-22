@@ -6,7 +6,6 @@ import {
   PairedDevice,
   ApiServerConfig,
   DevicePermissions,
-  RelayConnectionStatus,
   Memory,
   MemoryCreateInput,
   MemoryUpdateInput,
@@ -124,15 +123,6 @@ export interface ElectronAPI {
   apiUnpairDevice: (deviceId: string) => Promise<void>;
   apiUpdateDevicePermissions: (deviceId: string, permissions: DevicePermissions) => Promise<void>;
   apiHasPairingCode: () => Promise<{ active: boolean }>;
-
-  // Remote access
-  apiEnableRemoteAccess: () => Promise<{
-    success: boolean;
-    status?: RelayConnectionStatus;
-    error?: string;
-  }>;
-  apiDisableRemoteAccess: () => Promise<{ success: boolean; error?: string }>;
-  apiGetRemoteAccessStatus: () => Promise<RelayConnectionStatus>;
 
   // Vector Search
   getIndexStatus: (directoryPath: string) => Promise<CodeIndex | null>;

@@ -226,26 +226,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('api:updateDevicePermissions', deviceId, permissions),
   apiHasPairingCode: (): Promise<{ active: boolean }> => ipcRenderer.invoke('api:hasPairingCode'),
 
-  // Remote access
-  apiEnableRemoteAccess: (): Promise<{
-    success: boolean;
-    status?: {
-      enabled: boolean;
-      connected: boolean;
-      desktopId: string | null;
-      relayUrl: string;
-    };
-    error?: string;
-  }> => ipcRenderer.invoke('api:enableRemoteAccess'),
-  apiDisableRemoteAccess: (): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('api:disableRemoteAccess'),
-  apiGetRemoteAccessStatus: (): Promise<{
-    enabled: boolean;
-    connected: boolean;
-    desktopId: string | null;
-    relayUrl: string;
-  }> => ipcRenderer.invoke('api:getRemoteAccessStatus'),
-
   // Vector Search
   getIndexStatus: (directoryPath: string): Promise<CodeIndex | null> =>
     ipcRenderer.invoke('vector-search:get-index-status', directoryPath),

@@ -116,11 +116,6 @@ interface ElectronAPI {
   apiUpdateDevicePermissions: (deviceId: string, permissions: { canControl?: boolean; canModify?: boolean }) => Promise<any>;
   apiHasPairingCode: () => Promise<{ active: boolean }>;
 
-  // Remote access
-  apiEnableRemoteAccess: () => Promise<{ success: boolean; status?: any; error?: string }>;
-  apiDisableRemoteAccess: () => Promise<{ success: boolean; error?: string }>;
-  apiGetRemoteAccessStatus: () => Promise<{ enabled: boolean; connected: boolean; desktopId: string | null; relayUrl: string }>;
-
   // Vector Search
   getIndexStatus: (directoryPath: string) => Promise<CodeIndex | null>;
   getAllIndexes: () => Promise<CodeIndex[]>;

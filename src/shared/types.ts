@@ -71,32 +71,15 @@ export interface AppState {
 }
 
 // =============================================================================
-// Sharing Types
-// =============================================================================
-// These types use `string` for dates (ISO 8601 format) because they represent
-// data from JSON API responses from the relay server. In contrast, the local
-// Session/Group types above use `Date` objects because they are managed as
-// local application state.
-// =============================================================================
-
-// =============================================================================
 // Mobile API Server Types
 // =============================================================================
 // Types for the local API server that enables mobile companion app connectivity
 // =============================================================================
 
-export interface RelayConnectionStatus {
-  enabled: boolean;
-  connected: boolean;
-  desktopId: string | null;
-  relayUrl: string;
-}
-
 export interface ApiServerStatus {
   running: boolean;
   port?: number;
   addresses?: string[];
-  relay?: RelayConnectionStatus;
 }
 
 export interface PairingCode {
