@@ -44,12 +44,16 @@ function isLocalNetworkIp(ip: string): boolean {
 
   // Allow private IP ranges
   const privateRanges = [
-    /^10\./,                          // 10.0.0.0/8
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // 172.16.0.0/12
-    /^192\.168\./,                    // 192.168.0.0/16
-    /^169\.254\./,                    // Link-local
-    /^fc00:/,                         // IPv6 unique local
-    /^fe80:/,                         // IPv6 link-local
+    /^10\./,                                       // 10.0.0.0/8
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./,              // 172.16.0.0/12
+    /^192\.168\./,                                 // 192.168.0.0/16
+    /^169\.254\./,                                 // Link-local
+    // Tailscale CGNAT (100.64.0.0/10) — admit mobile peers reaching the
+    // desktop directly over the tailnet. Funnel-routed traffic enters via
+    // 127.0.0.1 and is already covered by the loopback branch above.
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,
+    /^fc00:/,                                      // IPv6 unique local
+    /^fe80:/,                                      // IPv6 link-local
   ];
 
   return privateRanges.some(range => range.test(ip));

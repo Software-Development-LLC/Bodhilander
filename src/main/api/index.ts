@@ -29,9 +29,12 @@ export interface ApiServerStatus {
   pairedDevices: number;
 }
 
+// Bind to all interfaces so mobile devices on the LAN can reach the server
+// (loopback-only would only serve the desktop itself — useless for pairing).
+// Access is still gated by the localNetworkOnly middleware in http-server.ts.
 const DEFAULT_CONFIG: ApiServerConfig = {
   port: 8443,
-  bindAddress: '127.0.0.1',
+  bindAddress: '0.0.0.0',
   enableMdns: true,
 };
 
