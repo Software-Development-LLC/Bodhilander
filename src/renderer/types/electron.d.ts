@@ -1,10 +1,6 @@
 import {
   Group,
   Session,
-  ShareUser,
-  ShareCode,
-  CreateCodeOptions,
-  GuestInfo,
   ApiServerStatus,
   PairingCode,
   PairedDevice,
@@ -101,37 +97,6 @@ export interface ElectronAPI {
   getPreference: (key: string) => Promise<string | null>;
   setPreference: (key: string, value: string) => Promise<void>;
   getAllPreferences: () => Promise<Record<string, string>>;
-
-  // Auth
-  login: () => Promise<void>;
-  logout: () => Promise<void>;
-  getUser: () => Promise<ShareUser | null>;
-  setAuthToken: (token: string) => Promise<ShareUser | null>;
-  onAuthChanged: (callback: (data: { user: ShareUser; token?: string }) => void) => () => void;
-  onAuthError: (callback: (data: { error: string }) => void) => () => void;
-
-  // Sharing (host)
-  startSharing: (sessionId: string) => Promise<void>;
-  stopSharing: (sessionId: string) => Promise<void>;
-  createShareCode: (sessionId: string, options: CreateCodeOptions) => Promise<ShareCode>;
-  revokeShareCode: (code: string) => Promise<void>;
-  getShareCodes: (sessionId: string) => Promise<ShareCode[]>;
-  isSharing: (sessionId: string) => Promise<boolean>;
-  getGuestCount: (sessionId: string) => Promise<number>;
-  onGuestJoined: (callback: (info: GuestInfo) => void) => () => void;
-  onGuestLeft: (callback: (info: { sessionId: string; guestUserId: string }) => void) => () => void;
-
-  // Sharing (guest)
-  joinSession: (code: string) => Promise<{
-    code: string;
-    permission: 'read' | 'control';
-    hostUsername: string;
-    sessionName: string;
-  }>;
-  leaveSession: (code: string) => Promise<void>;
-  writeToRemote: (code: string, data: string) => Promise<{ success: boolean; error?: string }>;
-  onShareData: (callback: (data: { code: string; data: string }) => void) => () => void;
-  onShareEnded: (callback: (data: { code: string; reason: string }) => void) => () => void;
 
   // Shell
   openExternal: (url: string) => Promise<void>;

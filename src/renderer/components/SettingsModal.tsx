@@ -60,8 +60,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [enableNotifications, setEnableNotifications] = useState(true);
 
   // Integrations state
-  const [githubUser, setGithubUser] = useState<{ username: string } | null>(null);
-  const [githubLoading, setGithubLoading] = useState(false);
 
   // Error state for surfacing errors to users
   const [error, setError] = useState<string | null>(null);
@@ -138,14 +136,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setWebglRenderer(webglRendererPref === 'true');
         setEnableNotifications(enableNotificationsPref !== 'false');
 
-        // Load GitHub user status
-        try {
-          const user = await window.electronAPI.getUser();
-          setGithubUser(user);
-        } catch {
-          setGithubUser(null);
-        }
-
         // Load editor options and preference
         try {
           const [options, editorPref] = await Promise.all([
@@ -165,19 +155,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
     loadState();
   }, [isOpen]);
-
-  // Listen for GitHub auth changes
-  useEffect(() => {
-    const unsubscribe = window.electronAPI.onAuthChanged(async () => {
-      try {
-        const user = await window.electronAPI.getUser();
-        setGithubUser(user);
-      } catch {
-        setGithubUser(null);
-      }
-    });
-    return unsubscribe;
-  }, []);
 
   // Auto-dismiss error after 5 seconds
   useEffect(() => {
@@ -397,32 +374,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const handleEnableNotificationsChange = useCallback(async (enabled: boolean) => {
     setEnableNotifications(enabled);
     await window.electronAPI.setPreference('enableNotifications', enabled.toString());
-  }, []);
-
-  // Integrations handlers
-  const handleGitHubLogin = useCallback(async () => {
-    setGithubLoading(true);
-    try {
-      await window.electronAPI.login();
-      const user = await window.electronAPI.getUser();
-      setGithubUser(user);
-    } catch (err) {
-      console.error('GitHub login failed:', err);
-      setError('GitHub login failed. Please try again.');
-    }
-    setGithubLoading(false);
-  }, []);
-
-  const handleGitHubLogout = useCallback(async () => {
-    setGithubLoading(true);
-    try {
-      await window.electronAPI.logout();
-      setGithubUser(null);
-    } catch (err) {
-      console.error('GitHub logout failed:', err);
-      setError('GitHub logout failed. Please try again.');
-    }
-    setGithubLoading(false);
   }, []);
 
   const handleModalKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -755,36 +706,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 <p className="settings-description">
                   Connect external services to receive notifications and share sessions.
                 </p>
-
-                <div className="settings-group integration-card">
-                  <div className="integration-header">
-                    <span className={`integration-status-dot ${githubUser ? 'connected' : ''}`} />
-                    <h4>GitHub</h4>
-                  </div>
-                  <p className="integration-status">
-                    {githubUser ? `Connected as ${githubUser.username}` : 'Not connected'}
-                  </p>
-                  <p className="settings-hint">Used for: Session sharing</p>
-                  <div className="settings-actions">
-                    {githubUser ? (
-                      <button
-                        className="btn btn-danger"
-                        onClick={handleGitHubLogout}
-                        disabled={githubLoading}
-                      >
-                        {githubLoading ? 'Signing Out...' : 'Sign Out'}
-                      </button>
-                    ) : (
-                      <button
-                        className="btn btn-primary"
-                        onClick={handleGitHubLogin}
-                        disabled={githubLoading}
-                      >
-                        {githubLoading ? 'Signing In...' : 'Sign In'}
-                      </button>
-                    )}
-                  </div>
-                </div>
 
                 <div className="settings-group integration-card disabled">
                   <div className="integration-header">

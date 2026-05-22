@@ -79,61 +79,6 @@ export interface AppState {
 // local application state.
 // =============================================================================
 
-/**
- * The authenticated user from OAuth, stored locally.
- * This represents YOU when you are sharing or joining sessions.
- * Compare with GuestInfo which represents others connected to your session.
- */
-export interface ShareUser {
-  id: string;
-  username: string;
-  email?: string;
-  tier: 'free' | 'pro' | 'admin';
-}
-
-export interface ShareSession {
-  id: string;
-  hostPublicKey: string;
-  startedAt: string;
-  codes: ShareCode[];
-}
-
-export interface ShareCode {
-  code: string;
-  permission: 'read' | 'control';
-  /** Maximum number of times this code can be used. `null` means unlimited. */
-  maxUses: number | null;
-  currentUses: number;
-  /** When this code expires (ISO 8601). `null` means no expiration. */
-  expiresAt: string | null;
-  createdAt: string;
-}
-
-export interface CreateCodeOptions {
-  permission: 'read' | 'control';
-  maxUses?: number;
-  expiresInMinutes?: number;
-}
-
-export interface SharedSessionInfo {
-  sessionId: string;
-  hostUsername: string;
-  permission: 'read' | 'control';
-  connectedAt: Date;
-}
-
-/**
- * A guest connected to YOUR shared session, as reported by the relay server.
- * This represents OTHER users who have joined your session using a share code.
- * Compare with ShareUser which represents the authenticated local user.
- */
-export interface GuestInfo {
-  userId: string;
-  username: string;
-  permission: 'read' | 'control';
-  publicKey: string;
-}
-
 // =============================================================================
 // Mobile API Server Types
 // =============================================================================
