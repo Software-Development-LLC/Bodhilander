@@ -22,6 +22,7 @@ import { createTerminalRouter } from './routes/terminal';
 import { createMemoriesRouter } from './routes/memories';
 import { createHooksRouter } from './routes/hooks';
 import { createCodeSearchRouter } from './routes/code-search';
+import { createWebPushRouter } from './routes/web-push';
 
 export interface HttpServerConfig {
   port: number;
@@ -193,6 +194,12 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
 
   // Code search routes for MCP server (localhost-only, no device auth needed)
   app.use('/api/v1/code', generalLimiter, createCodeSearchRouter());
+
+  // Web Push routes (BDHLNDR-49). Mounts BOTH the unauthenticated
+  // /public-key endpoint and the auth-required /subscribe endpoints. The
+  // router applies authenticateDevice per-route so we can't accidentally
+  // shield the public key behind a token the PWA doesn't have yet.
+  app.use('/api/v1/web-push', generalLimiter, createWebPushRouter(config.pairingManager));
 
   // Protected routes (require device authentication)
   const authMiddleware = authenticateDevice(config.pairingManager);
