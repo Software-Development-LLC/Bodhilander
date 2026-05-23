@@ -97,6 +97,7 @@ import {
 import { wsClient, type ChatEventMessage, type WsStatus } from '../lib/ws';
 import { ConnectionDot } from '../components/ConnectionDot';
 import { OverflowMenu } from '../components/OverflowMenu';
+import { VoiceInput, isVoiceInputSupported } from '../components/VoiceInput';
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -455,6 +456,10 @@ function SessionDetailInner({
         sending={sending}
         readOnly={readOnly}
         error={sendError}
+        onVoiceTranscript={(text) =>
+          setDraft((d) => (d.length === 0 || d.endsWith(' ') ? d + text : d + ' ' + text))
+        }
+        onVoiceError={setSendError}
       />
     </main>
   );
@@ -754,6 +759,8 @@ function Compose({
   sending,
   readOnly,
   error,
+  onVoiceTranscript,
+  onVoiceError,
 }: {
   draft: string;
   onDraftChange: (s: string) => void;
@@ -761,7 +768,15 @@ function Compose({
   sending: boolean;
   readOnly: boolean;
   error: string | null;
+  onVoiceTranscript: (text: string) => void;
+  onVoiceError: (message: string) => void;
 }) {
+  // BDHLNDR-15: detect Web Speech API support ONCE per component mount.
+  // The capability doesn't change at runtime, so this avoids re-checking on
+  // every keystroke (the parent re-renders this component on every draft
+  // change for the auto-size effect). Mic button is omitted entirely on
+  // unsupported browsers — no "feature unavailable" cruft.
+  const voiceSupported = useMemo(() => isVoiceInputSupported(), []);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   // Auto-size the textarea up to COMPOSE_MAX_ROWS. We reset height to 'auto'
@@ -794,7 +809,13 @@ function Compose({
         </p>
       )}
       <div className="flex items-end gap-2">
-        {/* TODO(BDHLNDR-15): mic icon placeholder — voice input. */}
+        {voiceSupported && (
+          <VoiceInput
+            disabled={sending || readOnly}
+            onTranscript={onVoiceTranscript}
+            onError={onVoiceError}
+          />
+        )}
         <textarea
           ref={taRef}
           value={draft}
