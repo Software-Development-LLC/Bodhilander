@@ -1,0 +1,4 @@
+[
+  { "type": "response", "payload": { "text": "Please add a test for the parser" } },
+  { "type": "response", "payload": { "text": "Also make sure it handles ANSI codes" } }
+]

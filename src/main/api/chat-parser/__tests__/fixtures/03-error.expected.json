@@ -1,0 +1,4 @@
+[
+  { "type": "error", "payload": { "text": "Error: file not found at path /tmp/missing.txt" } },
+  { "type": "error", "payload": { "text": "API Error: rate limit exceeded" } }
+]

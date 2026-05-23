@@ -1,0 +1,2 @@
+Error: file not found at path /tmp/missing.txt
+[31mAPI Error: rate limit exceeded[0m

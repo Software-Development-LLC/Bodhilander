@@ -3,5 +3,6 @@
   "compilerOptions": {
     "outDir": "./dist"
   },
-  "include": ["src/main/**/*", "src/shared/**/*"]
+  "include": ["src/main/**/*", "src/shared/**/*"],
+  "exclude": ["src/**/__tests__/**", "src/**/*.test.ts"]
 }
