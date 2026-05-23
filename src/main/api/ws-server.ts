@@ -2,11 +2,35 @@
  * WebSocket Server
  *
  * Handles real-time terminal streaming and session state updates.
+ *
+ * Authentication (BDHLNDR-60): the WS upgrade is accepted unconditionally
+ * (subject to the same host/origin checks the HTTP layer enforces). The
+ * client MUST send `{type: 'auth', token: '<bearer>'}` as the very first
+ * message within AUTH_TIMEOUT_MS or the server closes the connection.
+ *
+ * Close codes used during auth (outside the 1000–4999 application range
+ * reserved by RFC 6455 §7.4.2):
+ *   4401 — unauthorized (bad token, malformed first frame, or non-auth
+ *          message before auth)
+ *   4408 — auth timeout (no message arrived within AUTH_TIMEOUT_MS)
+ *
+ * On success the server replies with the existing `connected` welcome
+ * frame and normal message handling (terminal:subscribe etc.) begins.
+ *
+ * Wire shape — DO NOT change without coordinating with PWA / mobile
+ * clients (BDHLNDR-55, BDHLNDR-56):
+ *   client → server: {"type":"auth","token":"<bearer>"}
+ *   server → client: {"type":"connected","payload":{"deviceId":"...",
+ *                     "canControl":true,"canModify":false},
+ *                     "timestamp":<ms>}
+ *
+ * Replaces the prior `?token=…` URL-query-string scheme (BDHLNDR-11),
+ * which leaked the bearer token into any URL-style log between the
+ * client and the server (proxies, CDNs, browser history).
  */
 
 import { Server as HttpServer, IncomingMessage } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { URL } from 'url';
 import log from 'electron-log';
 import { PairingManager, PairedDevice } from './pairing/pairing-manager';
 import { ptyManager } from '../pty-manager';
@@ -23,6 +47,10 @@ interface ClientInfo {
   subscribedSessions: Set<string>;
 }
 
+interface PendingAuth {
+  timeout: NodeJS.Timeout;
+}
+
 export interface WsServer {
   broadcast(message: WsMessage): void;
   broadcastToSession(sessionId: string, message: WsMessage): void;
@@ -30,55 +58,80 @@ export interface WsServer {
   close(): void;
 }
 
+/** Max time (ms) a connection may stay in the pending-auth state. */
+const AUTH_TIMEOUT_MS = 5000;
+
+/** WebSocket close codes for the auth handshake (RFC 6455 application range). */
+const WS_CLOSE_UNAUTHORIZED = 4401;
+const WS_CLOSE_AUTH_TIMEOUT = 4408;
+
 /**
  * Create WebSocket server attached to HTTP server
  */
 export function createWsServer(httpServer: HttpServer, pairingManager: PairingManager): WsServer {
   const wss = new WebSocketServer({ noServer: true });
+  // Authenticated clients only — pre-auth sockets live in `pending` until
+  // they pass the handshake, then graduate into `clients`.
   const clients = new Map<WebSocket, ClientInfo>();
+  const pending = new Map<WebSocket, PendingAuth>();
 
-  // Handle upgrade requests
+  // Accept the upgrade unconditionally — auth happens after the socket is
+  // open via the first-message handshake. The HTTP layer is still
+  // responsible for host/origin checks (see http-server.ts).
   httpServer.on('upgrade', (request: IncomingMessage, socket, head) => {
-    // Authenticate the connection
-    const device = authenticateWsConnection(request, pairingManager);
-
-    if (!device) {
-      log.warn('[WsServer] Rejected WebSocket connection: authentication failed');
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
     wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request, device);
+      wss.emit('connection', ws, request);
     });
   });
 
-  // Handle new connections
-  wss.on('connection', (ws: WebSocket, _request: IncomingMessage, device: PairedDevice) => {
-    log.info(`[WsServer] Client connected: ${device.name} (${device.platform})`);
+  // Handle new connections (unauthenticated at this point)
+  wss.on('connection', (ws: WebSocket, _request: IncomingMessage) => {
+    log.debug('[WsServer] Connection opened, awaiting auth handshake');
 
-    clients.set(ws, {
-      device,
-      subscribedSessions: new Set(),
-    });
+    // Arm the auth timeout. If no message arrives within AUTH_TIMEOUT_MS,
+    // close the socket with 4408 and free the slot.
+    const timeout = setTimeout(() => {
+      log.warn('[WsServer] Auth timeout — closing connection');
+      pending.delete(ws);
+      try {
+        ws.close(WS_CLOSE_AUTH_TIMEOUT, 'auth timeout');
+      } catch (error) {
+        log.debug('[WsServer] Error closing on auth timeout:', error);
+      }
+    }, AUTH_TIMEOUT_MS);
 
-    // Send welcome message
-    sendMessage(ws, {
-      type: 'connected',
-      payload: {
-        deviceId: device.id,
-        canControl: device.canControl,
-        canModify: device.canModify,
-      },
-      timestamp: Date.now(),
-    });
+    pending.set(ws, { timeout });
 
-    // Handle incoming messages
     ws.on('message', (data) => {
+      // If still pending, treat the message as an auth attempt.
+      const pendingState = pending.get(ws);
+      if (pendingState) {
+        handleAuthMessage(ws, data.toString(), pendingState, pending, clients, pairingManager);
+        return;
+      }
+
+      // Authenticated path — normal message dispatch.
+      const clientInfo = clients.get(ws);
+      if (!clientInfo) {
+        // Should not happen: socket exists in neither pending nor clients.
+        log.warn('[WsServer] Message from unknown socket — closing');
+        try {
+          ws.close(WS_CLOSE_UNAUTHORIZED, 'unauthorized');
+        } catch {
+          // swallow
+        }
+        return;
+      }
+
       try {
         const message = JSON.parse(data.toString()) as WsMessage;
-        handleClientMessage(ws, message, clients.get(ws)!);
+        // Ignore (but log) any post-auth `auth` frames — clients should not
+        // re-authenticate on an already-authenticated socket.
+        if (message.type === 'auth') {
+          log.warn(`[WsServer] Ignoring duplicate auth frame from ${clientInfo.device.name}`);
+          return;
+        }
+        handleClientMessage(ws, message, clientInfo);
       } catch (error) {
         log.error('[WsServer] Error parsing message:', error);
         sendMessage(ws, {
@@ -89,11 +142,20 @@ export function createWsServer(httpServer: HttpServer, pairingManager: PairingMa
       }
     });
 
-    // Handle disconnection
+    // Handle disconnection — clean up either pending or authenticated state.
     ws.on('close', () => {
+      const pendingState = pending.get(ws);
+      if (pendingState) {
+        clearTimeout(pendingState.timeout);
+        pending.delete(ws);
+        log.debug('[WsServer] Pre-auth connection closed');
+        return;
+      }
       const info = clients.get(ws);
-      log.info(`[WsServer] Client disconnected: ${info?.device.name}`);
-      clients.delete(ws);
+      if (info) {
+        log.info(`[WsServer] Client disconnected: ${info.device.name}`);
+        clients.delete(ws);
+      }
     });
 
     // Handle errors
@@ -129,6 +191,17 @@ export function createWsServer(httpServer: HttpServer, pairingManager: PairingMa
     },
 
     close(): void {
+      // Tear down any in-flight auth attempts first.
+      for (const [ws, state] of pending) {
+        clearTimeout(state.timeout);
+        try {
+          ws.close(1001, 'Server shutting down');
+        } catch {
+          // swallow
+        }
+      }
+      pending.clear();
+
       for (const [ws] of clients) {
         ws.close(1000, 'Server shutting down');
       }
@@ -138,30 +211,83 @@ export function createWsServer(httpServer: HttpServer, pairingManager: PairingMa
 }
 
 /**
- * Authenticate WebSocket connection from query parameter
+ * Process a message arriving on a socket that has not yet authenticated.
  *
- * SECURITY (BDHLNDR-11): the device token is carried in the URL query string,
- * which means it lands in URL-style logs anywhere the request is observed —
- * proxies, CDNs, browser history. Acceptable today because (1) Bodhilander is
- * internal-only and (2) the recommended remote path is Tailscale Funnel, which
- * is a network-level proxy that logs connection metadata, not URLs. If we ever
- * expose the WS endpoint behind an L7 CDN, migrate to first-message auth
- * (read token from initial frame after upgrade) so it never appears in any URL.
+ * On success: graduates the socket from `pending` into `clients` and sends
+ * the `connected` welcome frame.
+ * On any failure: closes the socket with 4401.
  */
-function authenticateWsConnection(request: IncomingMessage, pairingManager: PairingManager): PairedDevice | null {
-  try {
-    const url = new URL(request.url || '', `http://${request.headers.host}`);
-    const token = url.searchParams.get('token');
-
-    if (!token) {
-      return null;
+function handleAuthMessage(
+  ws: WebSocket,
+  raw: string,
+  pendingState: PendingAuth,
+  pending: Map<WebSocket, PendingAuth>,
+  clients: Map<WebSocket, ClientInfo>,
+  pairingManager: PairingManager
+): void {
+  const rejectUnauthorized = (reason: string): void => {
+    log.warn(`[WsServer] Rejecting connection: ${reason}`);
+    clearTimeout(pendingState.timeout);
+    pending.delete(ws);
+    try {
+      ws.close(WS_CLOSE_UNAUTHORIZED, 'unauthorized');
+    } catch (error) {
+      log.debug('[WsServer] Error closing on unauthorized:', error);
     }
+  };
 
-    return pairingManager.validateToken(token);
-  } catch (error) {
-    log.error('[WsServer] Auth error:', error);
-    return null;
+  let message: WsMessage;
+  try {
+    message = JSON.parse(raw) as WsMessage;
+  } catch {
+    rejectUnauthorized('malformed first frame');
+    return;
   }
+
+  if (!message || message.type !== 'auth') {
+    rejectUnauthorized(`expected auth frame, got type=${message?.type}`);
+    return;
+  }
+
+  const token = (message as { token?: unknown }).token;
+  if (typeof token !== 'string' || token.length === 0) {
+    rejectUnauthorized('missing or invalid token field');
+    return;
+  }
+
+  const device = pairingManager.validateToken(token);
+  if (!device) {
+    rejectUnauthorized('token failed validation');
+    return;
+  }
+
+  // Auth success — clear timeout, promote to authenticated client.
+  clearTimeout(pendingState.timeout);
+  pending.delete(ws);
+
+  clients.set(ws, {
+    device,
+    subscribedSessions: new Set(),
+  });
+
+  log.info(`[WsServer] Client authenticated: ${device.name} (${device.platform})`);
+
+  // Touch lastUsedAt so the device list reflects the connection.
+  try {
+    pairingManager.updateLastUsed(device.id);
+  } catch (error) {
+    log.debug('[WsServer] Error updating lastUsedAt:', error);
+  }
+
+  sendMessage(ws, {
+    type: 'connected',
+    payload: {
+      deviceId: device.id,
+      canControl: device.canControl,
+      canModify: device.canModify,
+    },
+    timestamp: Date.now(),
+  });
 }
 
 /**
