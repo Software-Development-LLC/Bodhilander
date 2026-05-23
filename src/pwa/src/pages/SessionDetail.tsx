@@ -87,6 +87,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import { ApiError, fetchChatEvents, sendTerminalInput } from '../lib/api';
+import {
+  getCachedChatEvents,
+  setCachedChatEvents,
+} from '../lib/cache';
 import { maybePromptAndSubscribe } from '../lib/push';
 import {
   narrowChatEvent,
@@ -98,6 +102,7 @@ import { wsClient, type ChatEventMessage, type WsStatus } from '../lib/ws';
 import { ConnectionDot } from '../components/ConnectionDot';
 import { OverflowMenu } from '../components/OverflowMenu';
 import { RawTerminal } from '../components/RawTerminal';
+import { RelativeTime } from '../components/RelativeTime';
 
 // ---------------------------------------------------------------------------
 // View mode (BDHLNDR-57)
@@ -187,6 +192,24 @@ function persistedToDisplay(p: PersistedChatEvent): DisplayEvent {
   };
 }
 
+/**
+ * Inverse of `persistedToDisplay` for caching (BDHLNDR-59). We persist the
+ * in-memory display log into IndexedDB so the next cold open can render
+ * immediately. WS-sourced events synthesized their own `id` (no server id
+ * over the wire) — we keep that synth id in the cache; on the next cold
+ * start the snapshot refetch fires with `?since=last_ts` and the server's
+ * `since` is strict (timestamp >), so the same event isn't re-delivered.
+ */
+function displayToPersisted(sessionId: string, d: DisplayEvent): PersistedChatEvent {
+  return {
+    id: d.id,
+    sessionId,
+    type: d.event.type,
+    payload: d.event.payload,
+    timestamp: d.timestamp,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -215,38 +238,95 @@ function SessionDetailInner({
   sessionId: string;
   navigate: ReturnType<typeof useNavigate>;
 }) {
+  // The combined in-memory log. Seeded from cache first, then merged with
+  // the REST snapshot delta, then appended to by WS frames. See the chunks
+  // below for the three sources.
+  const [events, setEvents] = useState<DisplayEvent[]>([]);
+
+  // ---- Cache hydration (BDHLNDR-59) ------------------------------------
+  // Read the offline cache BEFORE firing the snapshot query so:
+  //   1. We can seed `events` immediately and unblock first paint (PWA may
+  //      be offline at this exact moment — last-known events are better
+  //      than a spinner).
+  //   2. The snapshot fetch can use `since=cached.last_ts` for an
+  //      incremental delta instead of re-downloading the full 500-event
+  //      window. Cheaper, and matches the BDHLNDR-58 endpoint contract.
+  //
+  // `cacheReady` gates the snapshot query — we can't pass `since` until
+  // we've read the cache, and we don't want the snapshot to fire with no
+  // `since` and then immediately again with one.
+  const [cacheReady, setCacheReady] = useState(false);
+  const [cacheLastTs, setCacheLastTs] = useState<number>(0);
+  const [cacheHydratedAt, setCacheHydratedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    // Reset hydration state when navigating between sessions — see the
+    // session-id reset effect below; this one runs alongside it.
+    let cancelled = false;
+    void (async () => {
+      const cached = await getCachedChatEvents(sessionId);
+      if (cancelled) return;
+      if (cached && cached.events.length > 0) {
+        setEvents(cached.events.map(persistedToDisplay));
+        setCacheLastTs(cached.last_ts);
+        setCacheHydratedAt(cached.fetched_at);
+      }
+      setCacheReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
   // ---- Snapshot ---------------------------------------------------------
+  // Gated on `cacheReady` so the request includes `?since=cached.last_ts`
+  // for an incremental refresh when we have prior data. The server returns
+  // events strictly newer than `since` (BDHLNDR-58 contract), so dedup
+  // against the cached set is unnecessary — but we still id-dedup below as
+  // a defensive belt-and-suspenders.
   const snapshot = useQuery({
-    queryKey: ['chat-events', sessionId],
-    queryFn: () => fetchChatEvents(sessionId, { limit: SNAPSHOT_LIMIT }),
+    queryKey: ['chat-events', sessionId, cacheLastTs],
+    queryFn: () =>
+      fetchChatEvents(sessionId, {
+        limit: SNAPSHOT_LIMIT,
+        ...(cacheLastTs > 0 ? { since: cacheLastTs } : {}),
+      }),
     staleTime: Infinity, // live updates come via WS — don't refetch on focus
+    enabled: cacheReady,
   });
 
   // ---- Combined log -----------------------------------------------------
-  const [events, setEvents] = useState<DisplayEvent[]>([]);
   /** WS frames that arrived before the snapshot resolved — flushed on success. */
   const pendingWsRef = useRef<DisplayEvent[]>([]);
   const snapshotLoadedRef = useRef(false);
 
   // Seed from snapshot when it lands; flush any buffered WS frames.
+  // When `cacheLastTs > 0` the snapshot is an incremental delta — we MERGE
+  // it onto the cached events that `events` was hydrated with. Otherwise
+  // (cold first-ever open) it's a full snapshot and we replace.
   useEffect(() => {
     if (!snapshot.data || snapshotLoadedRef.current) return;
     snapshotLoadedRef.current = true;
     const seeded = snapshot.data.events.map(persistedToDisplay);
-    if (pendingWsRef.current.length > 0) {
-      // Filter out WS frames already present in the snapshot (server-side
-      // race: snapshot fetched right as a WS broadcast went out). Match by
-      // id — persisted events have stable IDs, WS frames have synth IDs, so
-      // collisions are impossible by construction; this just normalizes if
-      // the contract ever changes.
-      const ids = new Set(seeded.map((e) => e.id));
-      const newer = pendingWsRef.current.filter((e) => !ids.has(e.id));
+    setEvents((prev) => {
+      const base = cacheLastTs > 0 ? prev : [];
+      const ids = new Set(base.map((e) => e.id));
+      const merged: DisplayEvent[] = [...base];
+      for (const ev of seeded) {
+        if (ids.has(ev.id)) continue;
+        ids.add(ev.id);
+        merged.push(ev);
+      }
+      // Flush any buffered WS frames that landed during the snapshot fetch.
+      for (const ev of pendingWsRef.current) {
+        if (ids.has(ev.id)) continue;
+        ids.add(ev.id);
+        merged.push(ev);
+      }
       pendingWsRef.current = [];
-      setEvents([...seeded, ...newer]);
-    } else {
-      setEvents(seeded);
-    }
-  }, [snapshot.data]);
+      return merged;
+    });
+  }, [snapshot.data, cacheLastTs]);
 
   // ---- WS subscription --------------------------------------------------
   useEffect(() => {
@@ -278,11 +358,31 @@ function SessionDetailInner({
   }, [sessionId]);
 
   // Reset state when navigating between sessions (sessionId in deps).
+  // Cache-hydration state resets too so the new session can re-hydrate from
+  // its own cache row.
   useEffect(() => {
     snapshotLoadedRef.current = false;
     pendingWsRef.current = [];
     setEvents([]);
+    setCacheReady(false);
+    setCacheLastTs(0);
+    setCacheHydratedAt(null);
   }, [sessionId]);
+
+  // ---- Persist to cache (BDHLNDR-59) -----------------------------------
+  // Write the in-memory event log back to IndexedDB whenever it changes
+  // (snapshot resolves, WS frame appends, one-tap response edits). The
+  // cache module dedups + caps internally, so we can pass the full array
+  // unconditionally. Skipping the empty-array case avoids overwriting a
+  // valid cache row on the brief moment between the sessionId-reset effect
+  // clearing state and the cache-hydration effect re-populating it.
+  useEffect(() => {
+    if (events.length === 0) return;
+    void setCachedChatEvents(
+      sessionId,
+      events.map((d) => displayToPersisted(sessionId, d)),
+    );
+  }, [events, sessionId]);
 
   // ---- WS status (for the header dot) ----------------------------------
   const [wsStatus, setWsStatus] = useState<WsStatus>(wsClient.status);
@@ -453,6 +553,18 @@ function SessionDetailInner({
         onToggleViewMode={toggleViewMode}
       />
 
+      {/*
+        Stale-cache indicator (BDHLNDR-59). Surfaced only in chat mode AND
+        when the snapshot query is in an error state AND we hydrated from
+        cache — i.e. we're showing the user something but it might be stale.
+        Healthy network or raw mode → hidden so it doesn't add header noise.
+      */}
+      {viewMode === 'chat' && snapshot.isError && cacheHydratedAt != null && (
+        <div className="border-b border-amber-900/40 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300/90" role="status">
+          Offline — showing cached chat from <RelativeTime ts={cacheHydratedAt} />.
+        </div>
+      )}
+
       {/* BDHLNDR-57: render EITHER chat log + compose OR the raw xterm
           view — never both, to avoid duplicate WS handlers and double
           render of incoming output. Header (incl. overflow menu) stays
@@ -467,9 +579,15 @@ function SessionDetailInner({
             aria-live="polite"
             aria-relevant="additions"
           >
-            {snapshot.isLoading ? (
+            {/*
+              Loading / error gates. If we have cached events (BDHLNDR-59),
+              render them even while the snapshot is loading or has errored —
+              the stale-cache indicator above tells the user what they're
+              looking at.
+            */}
+            {snapshot.isLoading && events.length === 0 ? (
               <ChatSkeleton />
-            ) : snapshot.isError ? (
+            ) : snapshot.isError && events.length === 0 ? (
               <ChatLoadError
                 message={
                   snapshot.error instanceof ApiError && snapshot.error.status === 404
