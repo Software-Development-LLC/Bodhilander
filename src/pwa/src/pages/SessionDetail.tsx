@@ -108,7 +108,43 @@ import {
 import { wsClient, type ChatEventMessage, type WsStatus } from '../lib/ws';
 import { ConnectionDot } from '../components/ConnectionDot';
 import { OverflowMenu } from '../components/OverflowMenu';
+import { RawTerminal } from '../components/RawTerminal';
 import { RelativeTime } from '../components/RelativeTime';
+
+// ---------------------------------------------------------------------------
+// View mode (BDHLNDR-57)
+// ---------------------------------------------------------------------------
+
+/**
+ * SessionDetail can render the parsed chat view (default, BDHLNDR-56) OR
+ * a raw xterm.js view of `terminal:output` (BDHLNDR-57). The choice is
+ * persisted per-session in localStorage so each session remembers the
+ * user's preference across reloads.
+ */
+type ViewMode = 'chat' | 'raw';
+
+const VIEW_MODE_STORAGE_PREFIX = 'bodhilander.view-mode.';
+
+function viewModeStorageKey(sessionId: string): string {
+  return `${VIEW_MODE_STORAGE_PREFIX}${sessionId}`;
+}
+
+function loadViewMode(sessionId: string): ViewMode {
+  try {
+    const v = localStorage.getItem(viewModeStorageKey(sessionId));
+    return v === 'raw' ? 'raw' : 'chat';
+  } catch {
+    return 'chat';
+  }
+}
+
+function saveViewMode(sessionId: string, mode: ViewMode): void {
+  try {
+    localStorage.setItem(viewModeStorageKey(sessionId), mode);
+  } catch {
+    // Quota or disabled storage — non-fatal; just don't remember.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -573,6 +609,23 @@ function SessionDetailInner({
 
   const shortSessionId = useMemo(() => sessionId.slice(0, 8), [sessionId]);
 
+  // ---- View mode (BDHLNDR-57) ------------------------------------------
+  // Persisted per-session in localStorage. Default 'chat'. Toggled via
+  // the overflow-menu item below.
+  const [viewMode, setViewMode] = useState<ViewMode>(() => loadViewMode(sessionId));
+  // Re-read when the session id changes (the inner component is mounted
+  // per-session so this is mostly belt-and-suspenders).
+  useEffect(() => {
+    setViewMode(loadViewMode(sessionId));
+  }, [sessionId]);
+  const toggleViewMode = useCallback(() => {
+    setViewMode((prev) => {
+      const next: ViewMode = prev === 'chat' ? 'raw' : 'chat';
+      saveViewMode(sessionId, next);
+      return next;
+    });
+  }, [sessionId]);
+
   // ---- Render ----------------------------------------------------------
   // TODO(BDHLNDR-56-followup): "Load older" pagination using
   //   fetchChatEvents(sessionId, { since: oldestTs - 1, limit: 500 })
@@ -595,6 +648,8 @@ function SessionDetailInner({
           setMenuOpen(false);
           setKillConfirmOpen(true);
         }}
+        viewMode={viewMode}
+        onToggleViewMode={toggleViewMode}
       />
 
       {/* BDHLNDR-62: session-control feedback. The flash auto-dismisses
@@ -619,84 +674,96 @@ function SessionDetailInner({
       )}
 
       {/*
-        Stale-cache indicator (BDHLNDR-59). Surfaced only when the snapshot
-        query is in an error state AND we hydrated from cache — i.e. we're
-        showing the user something but it might be stale. Healthy network →
-        hidden entirely so it doesn't add header noise during normal use.
+        Stale-cache indicator (BDHLNDR-59). Surfaced only in chat mode AND
+        when the snapshot query is in an error state AND we hydrated from
+        cache — i.e. we're showing the user something but it might be stale.
+        Healthy network or raw mode → hidden so it doesn't add header noise.
       */}
-      {snapshot.isError && cacheHydratedAt != null && (
+      {viewMode === 'chat' && snapshot.isError && cacheHydratedAt != null && (
         <div className="border-b border-amber-900/40 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300/90" role="status">
           Offline — showing cached chat from <RelativeTime ts={cacheHydratedAt} />.
         </div>
       )}
 
-      <div
-        ref={scrollRef}
-        className="relative flex-1 overflow-y-auto px-3 py-3"
-        aria-live="polite"
-        aria-relevant="additions"
-      >
-        {/*
-          Loading / error gates. If we have cached events, render them even
-          while the snapshot is loading or has errored — the stale-cache
-          indicator above tells the user what they're looking at.
-        */}
-        {snapshot.isLoading && events.length === 0 ? (
-          <ChatSkeleton />
-        ) : snapshot.isError && events.length === 0 ? (
-          <ChatLoadError
-            message={
-              snapshot.error instanceof ApiError && snapshot.error.status === 404
-                ? 'Session not found.'
-                : snapshot.error instanceof Error
-                  ? snapshot.error.message
-                  : 'Failed to load chat history.'
-            }
-            onRetry={() => void snapshot.refetch()}
+      {/* BDHLNDR-57: render EITHER chat log + compose OR the raw xterm
+          view — never both, to avoid duplicate WS handlers and double
+          render of incoming output. Header (incl. overflow menu) stays
+          identical between modes. */}
+      {viewMode === 'raw' ? (
+        <RawTerminal sessionId={sessionId} />
+      ) : (
+        <>
+          <div
+            ref={scrollRef}
+            className="relative flex-1 overflow-y-auto px-3 py-3"
+            aria-live="polite"
+            aria-relevant="additions"
+          >
+            {/*
+              Loading / error gates. If we have cached events (BDHLNDR-59),
+              render them even while the snapshot is loading or has errored —
+              the stale-cache indicator above tells the user what they're
+              looking at.
+            */}
+            {snapshot.isLoading && events.length === 0 ? (
+              <ChatSkeleton />
+            ) : snapshot.isError && events.length === 0 ? (
+              <ChatLoadError
+                message={
+                  snapshot.error instanceof ApiError && snapshot.error.status === 404
+                    ? 'Session not found.'
+                    : snapshot.error instanceof Error
+                      ? snapshot.error.message
+                      : 'Failed to load chat history.'
+                }
+                onRetry={() => void snapshot.refetch()}
+              />
+            ) : events.length === 0 ? (
+              <EmptyChat />
+            ) : (
+              <ul className="space-y-2">
+                {events.map((e, idx) => (
+                  <li key={e.id}>
+                    <EventRenderer
+                      display={e}
+                      onTapResponse={handleTapResponse}
+                      isLatest={idx === events.length - 1}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Floating "↓ new messages" pill */}
+          {!pinnedToBottom && unreadCount > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                scrollToBottom('smooth');
+                setUnreadCount(0);
+              }}
+              className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 rounded-full bg-blue-600 px-4 py-1.5 text-xs font-medium text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500"
+            >
+              ↓ {unreadCount} new {unreadCount === 1 ? 'message' : 'messages'}
+            </button>
+          )}
+
+          <Compose
+            draft={draft}
+            onDraftChange={setDraft}
+            onSend={handleSend}
+            sending={sending}
+            readOnly={readOnly}
+            error={sendError}
           />
-        ) : events.length === 0 ? (
-          <EmptyChat />
-        ) : (
-          <ul className="space-y-2">
-            {events.map((e, idx) => (
-              <li key={e.id}>
-                <EventRenderer
-                  display={e}
-                  onTapResponse={handleTapResponse}
-                  isLatest={idx === events.length - 1}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Floating "↓ new messages" pill */}
-      {!pinnedToBottom && unreadCount > 0 && (
-        <button
-          type="button"
-          onClick={() => {
-            scrollToBottom('smooth');
-            setUnreadCount(0);
-          }}
-          className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 rounded-full bg-blue-600 px-4 py-1.5 text-xs font-medium text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500"
-        >
-          ↓ {unreadCount} new {unreadCount === 1 ? 'message' : 'messages'}
-        </button>
+        </>
       )}
-
-      <Compose
-        draft={draft}
-        onDraftChange={setDraft}
-        onSend={handleSend}
-        sending={sending}
-        readOnly={readOnly}
-        error={sendError}
-      />
-
       {/* BDHLNDR-62: Kill-session confirmation. Controlled JSX overlay
           (no native <dialog> to avoid the platform inconsistencies in
-          mobile Safari, which still has incomplete <dialog> support). */}
+          mobile Safari, which still has incomplete <dialog> support).
+          Lives outside the chat/raw view switch so the modal is reachable
+          from both modes. */}
       {killConfirmOpen && (
         <KillConfirmDialog
           shortSessionId={shortSessionId}
@@ -723,6 +790,8 @@ function Header({
   controlBusy,
   onRestart,
   onRequestKill,
+  viewMode,
+  onToggleViewMode,
 }: {
   sessionId: string;
   wsStatus: WsStatus;
@@ -735,6 +804,8 @@ function Header({
   controlBusy: null | 'restarting' | 'stopping';
   onRestart: () => void;
   onRequestKill: () => void;
+  viewMode: ViewMode;
+  onToggleViewMode: () => void;
 }) {
   // We don't fetch the session here just for the name — the session list
   // shows it on the row the user tapped to get here, and the URL id is the
@@ -777,6 +848,16 @@ function Header({
         open={menuOpen}
         onOpenChange={onMenuOpenChange}
         items={[
+          // BDHLNDR-57: view-mode toggle. Placed at the TOP per the
+          // wave-6 coordination notes — BDHLNDR-62 (Kill / Restart) will
+          // append its items at the BOTTOM, so the merge is mechanical.
+          {
+            label: viewMode === 'chat' ? 'Show raw terminal' : 'Show chat view',
+            onSelect: () => {
+              onMenuOpenChange(false);
+              onToggleViewMode();
+            },
+          },
           {
             label: 'Back to sessions',
             onSelect: () => {
