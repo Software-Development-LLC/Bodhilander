@@ -86,7 +86,14 @@ import {
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
-import { ApiError, fetchChatEvents, sendTerminalInput } from '../lib/api';
+import {
+  ApiError,
+  fetchChatEvents,
+  sendTerminalInput,
+  startSession,
+  stopSession,
+} from '../lib/api';
+import { getAuth } from '../lib/auth';
 import { maybePromptAndSubscribe } from '../lib/push';
 import {
   narrowChatEvent,
@@ -381,6 +388,91 @@ function SessionDetailInner({
   // ---- Header bits -----------------------------------------------------
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // ---- Session control (BDHLNDR-62) ------------------------------------
+  // Restart / Kill buttons live in the header overflow menu. Server enforces
+  // canControl on /sessions/:id/start and /stop; we additionally hide the
+  // items client-side so read-only devices don't see disabled affordances
+  // they can't use. Defensive default: assume false until getAuth() resolves
+  // — better to flicker an item IN than show it to a device that turns out
+  // not to have permission.
+  const [canControl, setCanControl] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void getAuth()
+      .then((auth) => {
+        if (!cancelled) setCanControl(auth?.device.canControl === true);
+      })
+      .catch(() => {
+        if (!cancelled) setCanControl(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Modal state for the Kill confirmation. Null when closed. */
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false);
+  /**
+   * In-flight tracker for the two control actions. We disable BOTH buttons
+   * while either is firing — they're mutually-exclusive operations on the
+   * same PTY and racing them server-side would just produce a 400 anyway.
+   */
+  const [controlBusy, setControlBusy] = useState<null | 'restarting' | 'stopping'>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [controlFlash, setControlFlash] = useState<string | null>(null);
+  // Auto-dismiss the success banner so the chat view goes back to normal.
+  useEffect(() => {
+    if (!controlFlash) return;
+    const handle = window.setTimeout(() => setControlFlash(null), 2000);
+    return () => window.clearTimeout(handle);
+  }, [controlFlash]);
+
+  const runControlAction = useCallback(
+    async (
+      kind: 'restarting' | 'stopping',
+      action: () => Promise<void>,
+      successMessage: string,
+    ) => {
+      setControlBusy(kind);
+      setControlError(null);
+      setControlFlash(null);
+      try {
+        await action();
+        setControlFlash(successMessage);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 403) {
+          setControlError("Read-only — this device can't control sessions.");
+        } else if (err instanceof ApiError && err.status === 400) {
+          // Server-side "already running" / "not running" lands here. The
+          // error body usually has a useful `error` field, but we don't want
+          // to render arbitrary server text — keep it generic.
+          setControlError(
+            kind === 'restarting'
+              ? 'Could not start session (already running?).'
+              : 'Could not stop session (not running?).',
+          );
+        } else {
+          setControlError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        setControlBusy(null);
+      }
+    },
+    [],
+  );
+
+  const handleRestart = useCallback(() => {
+    setMenuOpen(false);
+    void runControlAction('restarting', () => startSession(sessionId), 'Session restarted');
+  }, [runControlAction, sessionId]);
+
+  const handleConfirmKill = useCallback(() => {
+    setKillConfirmOpen(false);
+    void runControlAction('stopping', () => stopSession(sessionId), 'Session stopped');
+  }, [runControlAction, sessionId]);
+
+  const shortSessionId = useMemo(() => sessionId.slice(0, 8), [sessionId]);
+
   // ---- Render ----------------------------------------------------------
   // TODO(BDHLNDR-56-followup): "Load older" pagination using
   //   fetchChatEvents(sessionId, { since: oldestTs - 1, limit: 500 })
@@ -396,7 +488,35 @@ function SessionDetailInner({
         menuOpen={menuOpen}
         onMenuOpenChange={setMenuOpen}
         onBack={() => navigate('/sessions')}
+        canControl={canControl}
+        controlBusy={controlBusy}
+        onRestart={handleRestart}
+        onRequestKill={() => {
+          setMenuOpen(false);
+          setKillConfirmOpen(true);
+        }}
       />
+
+      {/* BDHLNDR-62: session-control feedback. The flash auto-dismisses
+          (success); the error banner persists until the user takes another
+          action so they can read it. Matches the inline sendError pattern
+          used by Compose to keep the UX consistent. */}
+      {controlError && (
+        <div
+          role="alert"
+          className="border-b border-red-900/50 bg-red-950/40 px-3 py-2 text-xs text-red-200"
+        >
+          {controlError}
+        </div>
+      )}
+      {controlFlash && (
+        <div
+          role="status"
+          className="border-b border-emerald-900/40 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200"
+        >
+          {controlFlash}
+        </div>
+      )}
 
       <div
         ref={scrollRef}
@@ -456,6 +576,18 @@ function SessionDetailInner({
         readOnly={readOnly}
         error={sendError}
       />
+
+      {/* BDHLNDR-62: Kill-session confirmation. Controlled JSX overlay
+          (no native <dialog> to avoid the platform inconsistencies in
+          mobile Safari, which still has incomplete <dialog> support). */}
+      {killConfirmOpen && (
+        <KillConfirmDialog
+          shortSessionId={shortSessionId}
+          stopping={controlBusy === 'stopping'}
+          onCancel={() => setKillConfirmOpen(false)}
+          onConfirm={handleConfirmKill}
+        />
+      )}
     </main>
   );
 }
@@ -470,12 +602,22 @@ function Header({
   menuOpen,
   onMenuOpenChange,
   onBack,
+  canControl,
+  controlBusy,
+  onRestart,
+  onRequestKill,
 }: {
   sessionId: string;
   wsStatus: WsStatus;
   menuOpen: boolean;
   onMenuOpenChange: (open: boolean) => void;
   onBack: () => void;
+  /** BDHLNDR-62: only render control items when the device may use them. */
+  canControl: boolean;
+  /** Which control action (if any) is currently in flight — disables both. */
+  controlBusy: null | 'restarting' | 'stopping';
+  onRestart: () => void;
+  onRequestKill: () => void;
 }) {
   // We don't fetch the session here just for the name — the session list
   // shows it on the row the user tapped to get here, and the URL id is the
@@ -525,6 +667,36 @@ function Header({
               onBack();
             },
           },
+          // BDHLNDR-62: session control items, appended at the BOTTOM of the
+          // menu by coordination with BDHLNDR-57 (which inserts its "Show
+          // raw terminal" toggle at the TOP). Only rendered when the device
+          // has canControl — the server enforces the same gate, so this is
+          // purely UX clutter reduction for read-only viewers.
+          ...(canControl
+            ? [
+                {
+                  label:
+                    controlBusy === 'restarting'
+                      ? 'Restarting…'
+                      : 'Restart session',
+                  disabled: controlBusy !== null,
+                  onSelect: () => {
+                    if (controlBusy !== null) return;
+                    onRestart();
+                  },
+                },
+                {
+                  label:
+                    controlBusy === 'stopping' ? 'Stopping…' : 'Kill session',
+                  danger: true,
+                  disabled: controlBusy !== null,
+                  onSelect: () => {
+                    if (controlBusy !== null) return;
+                    onRequestKill();
+                  },
+                },
+              ]
+            : []),
         ]}
       />
     </header>
@@ -863,6 +1035,72 @@ function ChatLoadError({ message, onRetry }: { message: string; onRetry: () => v
       >
         Try again
       </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Kill confirmation modal (BDHLNDR-62)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tiny controlled-JSX confirm modal for the destructive "Kill session"
+ * action. We avoid the native `<dialog>` element because mobile Safari's
+ * `<dialog>` implementation still has gaps (focus-trap, backdrop interop)
+ * that aren't worth chasing for a single confirm, and bringing in a modal
+ * lib for one prompt would dwarf the feature. The overlay is fixed-position
+ * with an ARIA-labeled inner card; tapping the dim backdrop cancels.
+ */
+function KillConfirmDialog({
+  shortSessionId,
+  stopping,
+  onCancel,
+  onConfirm,
+}: {
+  shortSessionId: string;
+  stopping: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 px-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="kill-confirm-title"
+      onClick={(e) => {
+        // Click on backdrop only — taps inside the card shouldn't dismiss.
+        if (e.target === e.currentTarget && !stopping) onCancel();
+      }}
+    >
+      <div className="w-full max-w-sm rounded-lg border border-neutral-800 bg-neutral-900 p-4 shadow-xl">
+        <h2 id="kill-confirm-title" className="text-base font-semibold text-neutral-100">
+          Stop session?
+        </h2>
+        <p className="mt-2 text-sm text-neutral-300">
+          This will kill the PTY for session{' '}
+          <span className="font-mono text-neutral-100">{shortSessionId}</span>.
+          Any unsaved work in the terminal will be lost.
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={stopping}
+            className="rounded-md border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={stopping}
+            className="rounded-md border border-red-800 bg-red-700/80 px-3 py-1.5 text-sm font-medium text-red-50 hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {stopping ? 'Stopping…' : 'Stop session'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
