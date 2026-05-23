@@ -12,7 +12,10 @@ import { PairingManager } from '../pairing/pairing-manager';
 import { validatePairingConfirm, getStringParam } from '../middleware/validation';
 import { authenticateDevice } from '../middleware/auth';
 
-export function createPairingRouter(pairingManager: PairingManager): Router {
+export function createPairingRouter(
+  pairingManager: PairingManager,
+  onDeviceUnpaired?: (deviceId: string) => void,
+): Router {
   const router = Router();
 
   /**
@@ -157,16 +160,18 @@ export function createPairingRouter(pairingManager: PairingManager): Router {
 
   /**
    * DELETE /pairing/devices/:id - Unpair a device (requires auth)
+   *
+   * BDHLNDR-67: self-unpair is allowed. The previous "Cannot unpair the
+   * current device" guard broke the PWA's unpair-this-device flow with no
+   * real safety benefit — the user clicked unpair intentionally, and the
+   * PWA already handles re-pairing gracefully (RequireAuth → /pair on 401).
+   * After a successful delete we fire `onDeviceUnpaired` so any open WS
+   * connection from that device is closed (belt-and-suspenders so the WS
+   * doesn't outlive the device row).
    */
   router.delete('/devices/:id', authenticateDevice(pairingManager), (req: Request, res: Response) => {
     try {
       const id = getStringParam(req.params.id);
-
-      // Don't allow device to unpair itself
-      if (req.device?.id === id) {
-        res.status(400).json({ error: 'Cannot unpair the current device' });
-        return;
-      }
 
       const success = pairingManager.unpairDevice(id);
 
@@ -174,6 +179,8 @@ export function createPairingRouter(pairingManager: PairingManager): Router {
         res.status(404).json({ error: 'Device not found' });
         return;
       }
+
+      onDeviceUnpaired?.(id);
 
       res.json({ success: true });
     } catch (error) {
