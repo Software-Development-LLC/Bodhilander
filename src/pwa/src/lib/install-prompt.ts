@@ -20,6 +20,8 @@
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
+import { detectPlatform } from './platform';
+
 const DB_NAME = 'bodhilander';
 /**
  * v2 = added `install_prompt` store (BDHLNDR-61).
@@ -193,9 +195,6 @@ export async function shouldShowPrompt(pairedAt: number | null): Promise<boolean
   if (isStandalone()) return false;
   if (!isTouchDevice()) return false;
 
-  // Lazy-import to avoid pulling platform.ts into modules that don't need
-  // it — and to keep the gating logic self-contained.
-  const { detectPlatform } = await import('./platform');
   const platform = detectPlatform();
   if (platform !== 'ios' && platform !== 'android') return false;
 
