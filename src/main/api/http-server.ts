@@ -5,6 +5,8 @@
  */
 
 import { createServer, Server } from 'http';
+import * as path from 'path';
+import * as fs from 'fs';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -111,6 +113,43 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
 
   // Restrict to local network
   app.use(localNetworkOnly);
+
+  // BDHLNDR-52: Serve the mobile-companion PWA bundle from /m/*.
+  // The PWA is built into dist/pwa/ by the `build:pwa` script. This file
+  // compiles to dist/main/api/http-server.js, so the bundle lives two
+  // directories up at ../../pwa. The static handler covers concrete assets
+  // (/m/assets/*, /m/sw.js, /m/manifest.webmanifest, /m/index.html, etc.);
+  // the SPA fallback below serves dist/pwa/index.html for any unmatched
+  // /m/* path so client-side routing works on hard refresh. No auth is
+  // required here — auth happens inside the PWA after pairing, exactly
+  // like the /api/v1/pairing initiation endpoints.
+  const pwaDistDir = path.join(__dirname, '..', '..', 'pwa');
+  const pwaIndexHtml = path.join(pwaDistDir, 'index.html');
+  app.use(
+    '/m',
+    express.static(pwaDistDir, {
+      // Let the SPA fallback handle the index so we don't double-serve and
+      // so unknown extensions cleanly fall through to the catch-all below.
+      index: false,
+      fallthrough: true,
+      // Aggressive caching for hashed assets; the index is served by the
+      // fallback handler with no-cache headers (see below).
+      maxAge: '1h',
+    }),
+  );
+  app.get(/^\/m(?:\/.*)?$/, (_req, res, next) => {
+    if (!fs.existsSync(pwaIndexHtml)) {
+      // Bundle missing in this build — surface a clear error rather than a
+      // generic 404 from the catch-all handler below.
+      log.warn(`[HttpServer] PWA index missing at ${pwaIndexHtml}`);
+      res.status(404).json({ error: 'PWA bundle not built' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(pwaIndexHtml, (err) => {
+      if (err) next(err);
+    });
+  });
 
   // Parse JSON bodies
   app.use(express.json({ limit: '1mb' }));

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/pwa",
+    "rootDir": "./src/pwa",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "declaration": false
+  },
+  "include": ["src/pwa/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
