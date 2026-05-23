@@ -18,16 +18,27 @@
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
+import { clearAllCaches } from './cache';
+
 const DB_NAME = 'bodhilander';
-// BDHLNDR-61: bumped 1 → 2 to add the `install_prompt` store. The schema
-// change itself is owned by `install-prompt.ts` (this file's upgrade callback
-// only creates the `auth` store at v1); the version number just has to agree
+// BDHLNDR-59: bumped 2 → 3 to add `sessions_cache` + `chat_events_cache`.
+// BDHLNDR-61: bumped 1 → 2 to add the `install_prompt` store.
+// Schema changes for v2/v3 are owned by their respective modules
+// (`install-prompt.ts`, `cache.ts`); this file's upgrade callback only
+// creates the `auth` store at v1. The version number just has to agree
 // across every module that opens the DB, otherwise the second `openDB` call
 // throws a `VersionError`. If you bump again, mirror the new version in
-// `install-prompt.ts:DB_VERSION`.
-const DB_VERSION = 2;
+// `install-prompt.ts:DB_VERSION` AND `cache.ts:DB_VERSION`, and extend the
+// defensive upgrade callbacks in both peer files to cover the new schema.
+const DB_VERSION = 3;
 const STORE_NAME = 'auth';
 const ROW_ID = 'current';
+// New cache stores added in v3 (BDHLNDR-59). We defensively create them
+// here too so whichever module wins the open-DB race lands at the same
+// final shape.
+const SESSIONS_CACHE_STORE = 'sessions_cache';
+const CHAT_EVENTS_CACHE_STORE = 'chat_events_cache';
+const PROMPT_STORE = 'install_prompt';
 
 /**
  * Subset of the device payload the desktop returns from
@@ -55,6 +66,13 @@ interface BodhilanderDB extends DBSchema {
     key: string;
     value: AuthRecord;
   };
+  // Peer stores — typed as `unknown` so we don't reach into other modules'
+  // row shapes from here. Each owner module declares its own DBSchema with
+  // the proper types; idb tolerates the loose declaration as long as the
+  // names match.
+  [PROMPT_STORE]: { key: string; value: unknown };
+  [SESSIONS_CACHE_STORE]: { key: string; value: unknown };
+  [CHAT_EVENTS_CACHE_STORE]: { key: string; value: unknown };
 }
 
 let dbPromise: Promise<IDBPDatabase<BodhilanderDB>> | null = null;
@@ -62,9 +80,25 @@ let dbPromise: Promise<IDBPDatabase<BodhilanderDB>> | null = null;
 function getDB(): Promise<IDBPDatabase<BodhilanderDB>> {
   if (!dbPromise) {
     dbPromise = openDB<BodhilanderDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
+      // Defensive upgrade — handles v0→v3 (fresh install after v3 ships),
+      // v1→v3 (user on the original BDHLNDR-54 build), v2→v3 (user on the
+      // BDHLNDR-61 build). Whichever module wins the open-DB race runs an
+      // identical upgrade path; the `if (!contains)` guards make every
+      // createObjectStore idempotent.
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1 && !db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        }
+        if (oldVersion < 2 && !db.objectStoreNames.contains(PROMPT_STORE)) {
+          db.createObjectStore(PROMPT_STORE, { keyPath: 'id' });
+        }
+        if (oldVersion < 3) {
+          if (!db.objectStoreNames.contains(SESSIONS_CACHE_STORE)) {
+            db.createObjectStore(SESSIONS_CACHE_STORE, { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains(CHAT_EVENTS_CACHE_STORE)) {
+            db.createObjectStore(CHAT_EVENTS_CACHE_STORE, { keyPath: 'sessionId' });
+          }
         }
       },
     });
@@ -108,8 +142,15 @@ export async function getAuth(): Promise<AuthRecord | null> {
 /**
  * Wipe the auth row. Called after the desktop confirms unpair so the PWA
  * forgets the (now-invalid) token and bounces back to /pair.
+ *
+ * Also drops the offline session/event caches (BDHLNDR-59) — a re-pair on
+ * a shared device must not leak the previous user's sessions or chat log.
+ * Cache clear runs after auth delete and is best-effort (own try/catch
+ * inside `clearAllCaches`), so a cache failure can't leave the auth row
+ * stranded.
  */
 export async function clearAuth(): Promise<void> {
   const db = await getDB();
   await db.delete(STORE_NAME, ROW_ID);
+  await clearAllCaches();
 }

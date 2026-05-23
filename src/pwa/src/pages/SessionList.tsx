@@ -23,10 +23,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiFetch, fetchGroups, fetchSessions } from '../lib/api';
 import { clearAuth, getAuth } from '../lib/auth';
+import {
+  getCachedSessions,
+  setCachedSessions,
+} from '../lib/cache';
 import type { Group, Session, SessionState } from '../lib/types';
 import { wsClient, type SessionStateMessage, type WsStatus } from '../lib/ws';
 import { ConnectionDot } from '../components/ConnectionDot';
 import { OverflowMenu } from '../components/OverflowMenu';
+import { RelativeTime } from '../components/RelativeTime';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -67,6 +72,38 @@ export function SessionList() {
   const navigate = useNavigate();
   const qc = useQueryClient();
 
+  // ---- Cache seed (BDHLNDR-59) ----------------------------------------
+  // Hydrate React Query from IndexedDB before the network fetch resolves so
+  // the user sees their last-known session list immediately on PWA open —
+  // critical for offline / spotty-connectivity launches. Network fetch fires
+  // normally below; whichever resolves first wins, and the network response
+  // overwrites the cached snapshot.
+  //
+  // `cacheHydratedAt` powers the "Last updated X ago" indicator below; it
+  // captures the moment we *seeded* from cache, not the moment the cache
+  // was written. We render the indicator only while the network query is
+  // failing AND we have a hydrated value (cached or stale).
+  const [cacheHydratedAt, setCacheHydratedAt] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const cached = await getCachedSessions();
+      if (cancelled || !cached) return;
+      // Only seed if RQ doesn't already have fresher data (e.g. user
+      // navigated away and back within the same session).
+      if (qc.getQueryData<Session[]>(['sessions']) === undefined) {
+        qc.setQueryData<Session[]>(['sessions'], cached.sessions);
+      }
+      if (qc.getQueryData<Group[]>(['groups']) === undefined) {
+        qc.setQueryData<Group[]>(['groups'], cached.groups);
+      }
+      setCacheHydratedAt(cached.fetched_at);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [qc]);
+
   const sessionsQuery = useQuery({
     queryKey: ['sessions'],
     queryFn: fetchSessions,
@@ -75,6 +112,20 @@ export function SessionList() {
     queryKey: ['groups'],
     queryFn: fetchGroups,
   });
+
+  // Persist on every successful fetch — keeps the cache fresh so the next
+  // cold open shows current data. Runs only when *both* succeed so we never
+  // write a partial snapshot (e.g. sessions newer than groups).
+  useEffect(() => {
+    if (!sessionsQuery.isSuccess || !groupsQuery.isSuccess) return;
+    if (!sessionsQuery.data || !groupsQuery.data) return;
+    void setCachedSessions(sessionsQuery.data, groupsQuery.data);
+  }, [
+    sessionsQuery.isSuccess,
+    groupsQuery.isSuccess,
+    sessionsQuery.data,
+    groupsQuery.data,
+  ]);
 
   // ---- WS live updates -------------------------------------------------
   useEffect(() => {
@@ -270,6 +321,19 @@ export function SessionList() {
       {unpairError && (
         <p role="alert" className="px-4 pt-2 text-xs text-red-300">
           {unpairError}
+        </p>
+      )}
+
+      {/*
+        Stale-cache indicator (BDHLNDR-59). Only shown when:
+          - the network query is in an error state (offline / server down), AND
+          - we have a hydrated cache value to display
+        Healthy network → hidden entirely so it doesn't add noise.
+      */}
+      {sessionsQuery.isError && cacheHydratedAt != null && (
+        <p className="px-4 pt-2 text-xs text-amber-300/80" role="status">
+          Showing cached data — last updated{' '}
+          <RelativeTime ts={cacheHydratedAt} />. Reconnecting…
         </p>
       )}
 
