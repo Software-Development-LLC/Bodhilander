@@ -24,17 +24,24 @@ import { detectPlatform } from './platform';
 
 const DB_NAME = 'bodhilander';
 /**
+ * v3 = added `sessions_cache` + `chat_events_cache` stores (BDHLNDR-59).
  * v2 = added `install_prompt` store (BDHLNDR-61).
  * v1 = `auth` store (BDHLNDR-54).
  *
  * If you bump this further, mirror the new version in `auth.ts:DB_VERSION`
- * — both modules must agree on which version they're opening at, otherwise
- * one of them triggers a `VersionError` on `openDB`.
+ * AND `cache.ts:DB_VERSION`, and extend the defensive upgrade callbacks in
+ * each peer file — every module that calls `openDB` must agree on the
+ * version number or the second `openDB` call throws a `VersionError`.
  */
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const AUTH_STORE = 'auth';
 const PROMPT_STORE = 'install_prompt';
 const PROMPT_ROW_ID = 'state';
+// v3 cache stores — owned by `cache.ts`. We defensively create them here
+// too so whichever module wins the open-DB race lands at the same final
+// shape.
+const SESSIONS_CACHE_STORE = 'sessions_cache';
+const CHAT_EVENTS_CACHE_STORE = 'chat_events_cache';
 
 /** 7 days in ms — how long "Maybe later" snoozes the iOS prompt. */
 const DISMISS_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -62,6 +69,12 @@ interface BodhilanderDB extends DBSchema {
     key: string;
     value: InstallState;
   };
+  // Peer cache stores — opaque from this module's POV; real shapes are
+  // owned by `cache.ts`. Declared here so the schema-typed DB handle
+  // doesn't fail typecheck if some future code branched off `getDB()` here
+  // happens to enumerate `db.objectStoreNames`.
+  [SESSIONS_CACHE_STORE]: { key: string; value: unknown };
+  [CHAT_EVENTS_CACHE_STORE]: { key: string; value: unknown };
 }
 
 let dbPromise: Promise<IDBPDatabase<BodhilanderDB>> | null = null;
@@ -70,14 +83,24 @@ function getDB(): Promise<IDBPDatabase<BodhilanderDB>> {
   if (!dbPromise) {
     dbPromise = openDB<BodhilanderDB>(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion) {
-        // v1: create the auth store (BDHLNDR-54). Safe to re-run defensively
-        // in case this module wins the race to open the DB before auth.ts.
+        // Stepwise + idempotent. Whichever of {auth, install-prompt, cache}
+        // wins the open-DB race runs this and lands at the same final shape.
+        // v1: auth store (BDHLNDR-54).
         if (oldVersion < 1 && !db.objectStoreNames.contains(AUTH_STORE)) {
           db.createObjectStore(AUTH_STORE, { keyPath: 'id' });
         }
-        // v2: install-prompt state (this ticket).
+        // v2: install-prompt state (BDHLNDR-61 — this module's own ticket).
         if (oldVersion < 2 && !db.objectStoreNames.contains(PROMPT_STORE)) {
           db.createObjectStore(PROMPT_STORE, { keyPath: 'id' });
+        }
+        // v3: offline cache stores (BDHLNDR-59 — owned by `cache.ts`).
+        if (oldVersion < 3) {
+          if (!db.objectStoreNames.contains(SESSIONS_CACHE_STORE)) {
+            db.createObjectStore(SESSIONS_CACHE_STORE, { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains(CHAT_EVENTS_CACHE_STORE)) {
+            db.createObjectStore(CHAT_EVENTS_CACHE_STORE, { keyPath: 'sessionId' });
+          }
         }
       },
     });
