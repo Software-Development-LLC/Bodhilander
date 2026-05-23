@@ -181,6 +181,36 @@ export async function subscribeToPush(): Promise<SubscribeResult> {
 }
 
 /**
+ * BDHLNDR-68: convenience helper meant to be fire-and-forgotten from a user
+ * gesture (chat-view compose send, one-tap response button, etc.) so that
+ * the user is asked for notification permission at the right moment without
+ * the caller having to know all the gating rules.
+ *
+ * Safe to call repeatedly — idempotent across all branches:
+ *   - push not supported (no SW, no Push API) → no-op
+ *   - not installed via Add-to-Home-Screen on iOS → no-op (push won't work
+ *     in browser-tab mode on iOS, so don't waste the user's permission grant)
+ *   - permission already granted + subscription exists → no-op
+ *   - permission denied → no-op
+ *   - permission default + standalone + supported → prompt + subscribe
+ */
+export async function maybePromptAndSubscribe(): Promise<void> {
+  if (!isPushSupported()) return;
+  // Inline matchMedia check rather than importing from install-prompt to
+  // keep push.ts self-contained and avoid an import cycle.
+  const standalone =
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    (window.navigator as { standalone?: boolean }).standalone === true;
+  if (!standalone) return;
+  if (Notification.permission === 'denied') return;
+  // subscribeToPush internally calls requestPushPermission when the state
+  // is 'default' — the only place that's safe to do so is inside a user-
+  // gesture handler, which is exactly where this helper is meant to be
+  // called from.
+  await subscribeToPush();
+}
+
+/**
  * Best-effort unsubscribe on both ends. Always attempts the browser-side
  * unsubscribe even if the server DELETE fails (orphaning a subscription on
  * the server is far worse than an orphan record — it'd keep pushing to a

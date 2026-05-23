@@ -87,6 +87,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import { ApiError, fetchChatEvents, sendTerminalInput } from '../lib/api';
+import { maybePromptAndSubscribe } from '../lib/push';
 import {
   narrowChatEvent,
   type ChatEvent,
@@ -321,6 +322,13 @@ function SessionDetailInner({
       if (!text || sending) return;
       setSending(true);
       setSendError(null);
+      // BDHLNDR-68: any send (free-text or one-tap response) is a user
+      // gesture — fire the push subscribe in the background. Idempotent and
+      // self-gating in push.ts, so safe to call on every send. Browser
+      // remembers the permission decision, so the user is prompted at most
+      // once per device (and never on iOS until installed via Add to Home
+      // Screen, where push is supported).
+      void maybePromptAndSubscribe();
       try {
         await sendTerminalInput(sessionId, text);
         return true;
