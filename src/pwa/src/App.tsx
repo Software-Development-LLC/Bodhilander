@@ -17,6 +17,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { Pair } from './pages/Pair';
 import { SessionList } from './pages/SessionList';
 import { SessionDetail } from './pages/SessionDetail';
+import { InstallPrompt } from './components/InstallPrompt';
 import { getAuth } from './lib/auth';
 
 export function App() {
@@ -45,6 +46,11 @@ export function App() {
             from the desktop never lands on a blank screen. */}
         <Route path="*" element={<Navigate to="/sessions" replace />} />
       </Routes>
+      {/* BDHLNDR-61: always-mounted install walkthrough. Self-gates on
+          platform + standalone state + paired_at; renders nothing until
+          conditions are met. Placed as a <Routes> sibling so it stays up
+          across navigation. */}
+      <InstallPrompt />
     </div>
   );
 }
