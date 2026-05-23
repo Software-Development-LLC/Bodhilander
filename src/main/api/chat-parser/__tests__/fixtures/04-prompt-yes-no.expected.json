@@ -1,0 +1,4 @@
+[
+  { "type": "prompt_yes_no", "payload": { "question": "Do you want to proceed with deletion?" } },
+  { "type": "prompt_yes_no", "payload": { "question": "Save changes before exit?" } }
+]

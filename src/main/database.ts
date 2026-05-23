@@ -168,6 +168,34 @@ function initializeTables(database: Database.Database): void {
     `);
   }
 
+  // Migration: Create chat_events table (BDHLNDR-51).
+  // Stores parsed chat-shaped events extracted from the PTY data stream — the
+  // server-side foundation for the mobile-companion PWA chat view (BDHLNDR-56)
+  // and the chat-events REST snapshot (BDHLNDR-58). The terminal:output WS
+  // stream is unchanged; chat:event is an additive, parallel channel.
+  //
+  // Payload is JSON whose shape is determined by `type` (see chat-parser/types.ts):
+  //   assistant_text  → { text }
+  //   tool_call       → { tool, argsBrief }
+  //   error           → { text }
+  //   prompt_yes_no   → { question }
+  //   prompt_options  → { question, options: [{ key, label }] }
+  //   response        → { text }
+  //
+  // timestamp is ms since epoch (matches the WS message timestamp field).
+  // Per-session pruning to 1000 most-recent rows happens inside the repo on
+  // each insert — keeps storage bounded without a background sweep.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chat_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      timestamp INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_events_session_ts ON chat_events(session_id, timestamp);
+  `);
+
   // Migration: Create memories table if it doesn't exist
   database.exec(`
     CREATE TABLE IF NOT EXISTS memories (

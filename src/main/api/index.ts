@@ -14,6 +14,7 @@ import { createHttpServer } from './http-server';
 import { createWsServer, WsServer } from './ws-server';
 import { MdnsAdvertiser } from './discovery/mdns-advertiser';
 import { PairingManager } from './pairing/pairing-manager';
+import type { ChatEvent } from './chat-parser';
 
 export interface ApiServerConfig {
   port: number;
@@ -215,6 +216,27 @@ class ApiServer extends EventEmitter {
     if (this.wsServer) {
       this.wsServer.broadcast({
         type: 'sessions:updated',
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  /**
+   * Broadcast a parsed chat event to all clients subscribed to the session
+   * (BDHLNDR-51). Companion channel to broadcastTerminalData — both fire on
+   * every PTY chunk: terminal:output carries the raw bytes for the xterm
+   * view, chat:event carries the structured classification for the PWA chat
+   * view (BDHLNDR-56) and snapshot REST endpoint (BDHLNDR-58).
+   *
+   * Wire shape (downstream contract — do not break without coordinating):
+   *   { type: 'chat:event', sessionId, payload: ChatEvent, timestamp }
+   */
+  broadcastChatEvent(sessionId: string, event: ChatEvent): void {
+    if (this.wsServer) {
+      this.wsServer.broadcastToSession(sessionId, {
+        type: 'chat:event',
+        sessionId,
+        payload: event,
         timestamp: Date.now(),
       });
     }

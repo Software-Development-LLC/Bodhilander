@@ -1,0 +1,3 @@
+● Read(src/main/index.ts)
+⏺ Bash(npm test)
+Edit(README.md)

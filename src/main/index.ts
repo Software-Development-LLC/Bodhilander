@@ -7,6 +7,8 @@ import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
+import * as chatEventsRepo from './repositories/chat-events';
+import { ChatParser } from './api/chat-parser';
 import * as accountsRepo from './repositories/accounts';
 import * as accountAuth from './account-auth';
 import { exportSessions, ExportFormat } from './session-export';
@@ -160,6 +162,13 @@ soundManager.setSessionStateLookup((sessionId: string) => {
 // Track which sessions have already had their state logged in this tick,
 // to deduplicate when both stateMonitor and ptyManager fire for the same transition.
 const recentlyLoggedStates: Map<string, { state: string; timestamp: number }> = new Map();
+
+/**
+ * Per-session ChatParser instances (BDHLNDR-51). Each session needs its own
+ * because the parser buffers incomplete lines across PTY chunks. Lazily
+ * created on first PTY data, freed when the PTY exits.
+ */
+const chatParsers: Map<string, ChatParser> = new Map();
 
 /**
  * Shared handler for session state change event logging (BDHLNDR-17).
@@ -485,11 +494,59 @@ function createWindow(): void {
   ptyManager.on('data', ({ id, data }) => {
     mainWindow?.webContents.send('pty:data', id, data);
     // Broadcast to mobile clients
-    getApiServer().broadcastTerminalData(id, data);
+    const apiServer = getApiServer();
+    apiServer.broadcastTerminalData(id, data);
+
+    // BDHLNDR-51: parallel chat-event stream. Additive — the terminal:output
+    // stream above is untouched. Per-session parser instance buffers
+    // incomplete lines across chunks; lazily created on first data.
+    try {
+      let parser = chatParsers.get(id);
+      if (!parser) {
+        parser = new ChatParser();
+        chatParsers.set(id, parser);
+      }
+      const events = parser.parse(data);
+      for (const event of events) {
+        try {
+          chatEventsRepo.createEvent(id, event);
+        } catch (persistErr) {
+          // DB failure shouldn't drop the WS broadcast — the PWA can still
+          // render the live event even if persistence fails.
+          log.error(`[chat-parser] persist failed for session ${id}:`, persistErr);
+        }
+        apiServer.broadcastChatEvent(id, event);
+      }
+    } catch (parseErr) {
+      // Parser must never crash the data pipeline. Log and move on; the
+      // raw terminal:output stream above keeps the UI alive.
+      log.error(`[chat-parser] parse failed for session ${id}:`, parseErr);
+    }
   });
 
   ptyManager.on('exit', ({ id, exitCode }) => {
     mainWindow?.webContents.send('pty:exit', id, exitCode);
+
+    // BDHLNDR-51: flush any buffered trailing line and free the parser so
+    // we don't leak per-session state for stopped sessions.
+    const parser = chatParsers.get(id);
+    if (parser) {
+      try {
+        const trailing = parser.flush();
+        const apiServer = getApiServer();
+        for (const event of trailing) {
+          try {
+            chatEventsRepo.createEvent(id, event);
+          } catch (persistErr) {
+            log.error(`[chat-parser] persist (flush) failed for session ${id}:`, persistErr);
+          }
+          apiServer.broadcastChatEvent(id, event);
+        }
+      } catch (flushErr) {
+        log.error(`[chat-parser] flush failed for session ${id}:`, flushErr);
+      }
+      chatParsers.delete(id);
+    }
   });
 
   // PTY state detection forwarding

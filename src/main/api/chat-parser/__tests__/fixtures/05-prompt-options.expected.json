@@ -1,0 +1,13 @@
+[
+  {
+    "type": "prompt_options",
+    "payload": {
+      "question": "Which action?",
+      "options": [
+        { "key": "1", "label": "Approve" },
+        { "key": "2", "label": "Deny" },
+        { "key": "3", "label": "Skip" }
+      ]
+    }
+  }
+]

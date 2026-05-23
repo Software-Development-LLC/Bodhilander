@@ -1,0 +1,2 @@
+> Please add a test for the parser
+> Also make sure it handles ANSI codes
