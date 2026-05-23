@@ -156,3 +156,36 @@ export async function sendTerminalInput(sessionId: string, data: string): Promis
   );
 }
 
+// ---------------------------------------------------------------------------
+// Session control (BDHLNDR-62)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/v1/sessions/:id/stop — kill the PTY for an active session.
+ * Requires the device's `canControl` permission server-side; surfaces 403 as
+ * ApiError so the caller can render an inline "no permission" banner. The
+ * server returns 400 if the session is not currently running — also bubbled
+ * up as ApiError for the caller to message.
+ */
+export async function stopSession(sessionId: string): Promise<void> {
+  await apiFetch<{ success: true }>(
+    `/sessions/${encodeURIComponent(sessionId)}/stop`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * POST /api/v1/sessions/:id/start — start a fresh PTY for an existing session.
+ * `launchClaude` defaults to false on the server. Caller decides whether to
+ * relaunch Claude vs. spawn a plain shell. Requires `canControl`.
+ */
+export async function startSession(
+  sessionId: string,
+  opts?: { launchClaude?: boolean },
+): Promise<void> {
+  await apiFetch<{ success: true }>(
+    `/sessions/${encodeURIComponent(sessionId)}/start`,
+    { method: 'POST', body: opts ?? {} },
+  );
+}
+
