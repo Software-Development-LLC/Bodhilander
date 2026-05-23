@@ -19,7 +19,13 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 const DB_NAME = 'bodhilander';
-const DB_VERSION = 1;
+// BDHLNDR-61: bumped 1 → 2 to add the `install_prompt` store. The schema
+// change itself is owned by `install-prompt.ts` (this file's upgrade callback
+// only creates the `auth` store at v1); the version number just has to agree
+// across every module that opens the DB, otherwise the second `openDB` call
+// throws a `VersionError`. If you bump again, mirror the new version in
+// `install-prompt.ts:DB_VERSION`.
+const DB_VERSION = 2;
 const STORE_NAME = 'auth';
 const ROW_ID = 'current';
 
