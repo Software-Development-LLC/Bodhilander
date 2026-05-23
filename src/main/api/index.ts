@@ -79,11 +79,18 @@ class ApiServer extends EventEmitter {
     log.info('[ApiServer] Starting API server...');
 
     try {
-      // Create HTTP server with Express
+      // Create HTTP server with Express.
+      // BDHLNDR-67: onDeviceUnpaired forwards device-id to wsServer so any
+      // open WS owned by the deleted device closes cleanly. The wsServer
+      // doesn't exist at createHttpServer call time, so we read `this.wsServer`
+      // lazily inside the closure — by request-time it's been assigned below.
       const { server, port } = await createHttpServer({
         port: this.config.port,
         bindAddress: this.config.bindAddress,
         pairingManager: this.pairingManager,
+        onDeviceUnpaired: (deviceId) => {
+          this.wsServer?.closeConnectionsForDevice(deviceId);
+        },
       });
 
       this.httpServer = server;

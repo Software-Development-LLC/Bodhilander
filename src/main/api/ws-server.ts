@@ -54,6 +54,12 @@ interface PendingAuth {
 export interface WsServer {
   broadcast(message: WsMessage): void;
   broadcastToSession(sessionId: string, message: WsMessage): void;
+  /**
+   * Close (with code 4401) any open connections owned by `deviceId`. Called
+   * after a device is unpaired (BDHLNDR-67) so the WS connection doesn't
+   * outlive the device row server-side.
+   */
+  closeConnectionsForDevice(deviceId: string): void;
   getClientCount(): number;
   close(): void;
 }
@@ -183,6 +189,18 @@ export function createWsServer(httpServer: HttpServer, pairingManager: PairingMa
         if (ws.readyState === WebSocket.OPEN && info.subscribedSessions.has(sessionId)) {
           ws.send(data);
         }
+      }
+    },
+
+    closeConnectionsForDevice(deviceId: string): void {
+      for (const [ws, info] of clients) {
+        if (info.device.id !== deviceId) continue;
+        try {
+          ws.close(WS_CLOSE_UNAUTHORIZED, 'device unpaired');
+        } catch (error) {
+          log.debug('[WsServer] Error closing connection for unpaired device:', error);
+        }
+        clients.delete(ws);
       }
     },
 

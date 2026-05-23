@@ -27,6 +27,12 @@ export interface HttpServerConfig {
   port: number;
   bindAddress: string;
   pairingManager: PairingManager;
+  /**
+   * Called after a successful unpair (BDHLNDR-67) so the WS server can close
+   * any open connections owned by the deleted device. Wired after wsServer
+   * exists; safe to omit during early bootstrap.
+   */
+  onDeviceUnpaired?: (deviceId: string) => void;
 }
 
 export interface HttpServerResult {
@@ -177,7 +183,7 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   });
 
   // Pairing routes (rate limited, no auth required for initiation)
-  app.use('/api/v1/pairing', pairingLimiter, createPairingRouter(config.pairingManager));
+  app.use('/api/v1/pairing', pairingLimiter, createPairingRouter(config.pairingManager, config.onDeviceUnpaired));
 
   // Memory routes for MCP server (localhost-only, no device auth needed)
   app.use('/api/v1/memories', generalLimiter, createMemoriesRouter());

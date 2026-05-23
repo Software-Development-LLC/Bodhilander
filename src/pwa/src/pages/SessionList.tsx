@@ -1,17 +1,16 @@
 /**
  * /sessions — placeholder list (real list view lands in BDHLNDR-55).
  *
- * For BDHLNDR-54 we add the unpair-this-device button at the bottom so the
- * pair → store → redirect flow has a working "back out" path. When the
- * server-side DELETE succeeds (or returns the specific "Cannot unpair the
- * current device" message — see note below) we wipe IndexedDB and bounce
- * back to /pair.
+ * Includes an unpair-this-device button so the pair → store → redirect flow
+ * has a working "back out" path. Server delete + local IndexedDB clear are
+ * symmetric: the desktop allows self-unpair (BDHLNDR-67) and closes any
+ * WS owned by this device, so the PWA just awaits the delete and bounces.
  */
 
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
-import { ApiError, apiFetch } from '../lib/api';
+import { apiFetch } from '../lib/api';
 import { clearAuth, getAuth } from '../lib/auth';
 
 export function SessionList() {
@@ -30,20 +29,9 @@ export function SessionList() {
         return;
       }
 
-      try {
-        await apiFetch(`/pairing/devices/${encodeURIComponent(auth.device.id)}`, {
-          method: 'DELETE',
-        });
-      } catch (err) {
-        // The desktop rejects self-unpair with HTTP 400 ("Cannot unpair the
-        // current device"). From the PWA's perspective the user is asking
-        // to forget *this* token, so we still clear locally — they can
-        // unpair from the desktop UI if they want the row gone server-side.
-        // Re-throw anything else.
-        if (!(err instanceof ApiError && err.status === 400)) {
-          throw err;
-        }
-      }
+      await apiFetch(`/pairing/devices/${encodeURIComponent(auth.device.id)}`, {
+        method: 'DELETE',
+      });
 
       await clearAuth();
       navigate('/pair', { replace: true });
