@@ -25,6 +25,7 @@ import { Pair } from './pages/Pair';
 import { SessionList } from './pages/SessionList';
 import { SessionDetail } from './pages/SessionDetail';
 import { InstallPrompt } from './components/InstallPrompt';
+import { PushBootstrap } from './components/PushBootstrap';
 import { getAuth } from './lib/auth';
 import { wsClient } from './lib/ws';
 
@@ -59,6 +60,9 @@ export function App() {
           conditions are met. Placed as a <Routes> sibling so it stays up
           across navigation. */}
       <InstallPrompt />
+      {/* BDHLNDR-49: Web Push (re-)bind. Self-gates on standalone + already
+          granted permission; never proactively prompts. */}
+      <PushBootstrap />
     </div>
   );
 }
