@@ -11,6 +11,7 @@
  */
 
 import { getAuth } from './auth';
+import type { Group, Session } from './types';
 
 const API_BASE = '/api/v1';
 
@@ -81,3 +82,29 @@ export async function apiFetch<T = unknown>(
   }
   return (await res.json()) as T;
 }
+
+// ---------------------------------------------------------------------------
+// Typed REST helpers (BDHLNDR-55)
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/sessions — list every session the desktop knows about.
+ *
+ * Server returns `{ sessions: Session[] }`; we unwrap so call sites can
+ * pass the array straight into React Query without dealing with the
+ * envelope. Dates arrive as ISO strings (see `./types.ts`).
+ */
+export async function fetchSessions(): Promise<Session[]> {
+  const { sessions } = await apiFetch<{ sessions: Session[] }>('/sessions');
+  return sessions;
+}
+
+/**
+ * GET /api/v1/groups — list every group. Same unwrap pattern as
+ * `fetchSessions`. Used by the session-list grouping UI.
+ */
+export async function fetchGroups(): Promise<Group[]> {
+  const { groups } = await apiFetch<{ groups: Group[] }>('/groups');
+  return groups;
+}
+
