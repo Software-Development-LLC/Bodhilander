@@ -6,6 +6,7 @@
 
 import { Router, Request, Response } from 'express';
 import { ptyManager } from '../../pty-manager';
+import { requireControlPermission } from '../middleware/auth';
 import { getStringParam } from '../middleware/validation';
 
 export function createTerminalRouter(): Router {
@@ -15,7 +16,7 @@ export function createTerminalRouter(): Router {
    * POST /api/v1/terminal/:sessionId/input
    * Send input to terminal
    */
-  router.post('/:sessionId/input', (req: Request, res: Response) => {
+  router.post('/:sessionId/input', requireControlPermission, (req: Request, res: Response) => {
     const sessionId = getStringParam(req.params.sessionId);
     const { data } = req.body;
 
@@ -38,7 +39,7 @@ export function createTerminalRouter(): Router {
    * POST /api/v1/terminal/:sessionId/resize
    * Resize terminal
    */
-  router.post('/:sessionId/resize', (req: Request, res: Response) => {
+  router.post('/:sessionId/resize', requireControlPermission, (req: Request, res: Response) => {
     const sessionId = getStringParam(req.params.sessionId);
     const { cols, rows } = req.body;
 
