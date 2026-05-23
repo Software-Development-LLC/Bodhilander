@@ -10,6 +10,13 @@
  *     be requested at `/m/sw.js` with scope `/m/`.
  *   - Asset filenames are hashed (vite default) so the desktop's `maxAge: 1h`
  *     cache policy is safe.
+ *
+ * BDHLNDR-49: switched from `generateSW` to `injectManifest` so the SW can
+ * own its own source (`src/pwa/src/sw.ts`) — needed to add the `push` and
+ * `notificationclick` event handlers for Web Push. The custom SW still
+ * calls `precacheAndRoute(self.__WB_MANIFEST)` so the workbox precache +
+ * runtime cache rules previously declared inline below are preserved
+ * (re-expressed in TS inside sw.ts).
  */
 
 import { defineConfig } from 'vite';
@@ -33,7 +40,11 @@ export default defineConfig({
       // `injectRegister: 'auto'` lets vite-plugin-pwa inject the registration
       // snippet into index.html; we don't need a custom hook for now.
       injectRegister: 'auto',
-      strategies: 'generateSW',
+      // BDHLNDR-49: own the SW source so we can add the `push` /
+      // `notificationclick` listeners. `srcDir` + `filename` together tell
+      // vite-plugin-pwa where to find the input TS and what to emit as.
+      strategies: 'injectManifest',
+      srcDir: 'src',
       includeAssets: ['favicon.svg', 'icons/icon-192.png', 'icons/icon-512.png'],
       manifest: {
         name: 'Bodhilander Mobile',
@@ -59,49 +70,11 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
-        // Precache the app shell (everything vite emits). The runtime caches
-        // below handle API responses + future hashed asset rotations.
+      injectManifest: {
+        // Mirrors the previous generateSW globPatterns so the precache
+        // covers the full app shell. The custom SW calls
+        // precacheAndRoute(self.__WB_MANIFEST) to consume this.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
-        // Make sure unmatched navigations fall through to index.html so
-        // client-side routing works offline once we're cached.
-        navigateFallback: '/m/index.html',
-        // Don't intercept navigations to /api/* — the SW should let those
-        // hit the runtime cache rule below (or fall through to the network).
-        navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [
-          {
-            // Bodhilander REST API — NetworkFirst with a short timeout so the
-            // PWA stays responsive on flaky links. 24h expiration is a
-            // reasonable upper bound; chat-event polling will mostly hit the
-            // network anyway.
-            urlPattern: /\/api\/.*/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'bodhilander-api',
-              networkTimeoutSeconds: 5,
-              expiration: {
-                maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24, // 24h
-              },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          {
-            // Hashed bundle assets — CacheFirst is safe because vite emits
-            // content-hashed filenames; new builds invalidate naturally.
-            urlPattern: /\/m\/assets\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'bodhilander-assets',
-              expiration: {
-                maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
-              },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
       },
       devOptions: {
         // Useful when running `bun run dev:pwa` against the desktop's REST API.

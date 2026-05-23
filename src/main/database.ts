@@ -196,6 +196,29 @@ function initializeTables(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_chat_events_session_ts ON chat_events(session_id, timestamp);
   `);
 
+  // Migration: Create push_subscriptions table (BDHLNDR-49).
+  // Stores Web Push (VAPID) subscriptions registered by paired mobile
+  // companions so the desktop can dispatch attention notifications even
+  // when the PWA isn't open. `endpoint` is the browser-issued URL the push
+  // service listens on — it's globally unique per subscription, so we use
+  // it as the natural-key for upsert / dead-subscription cleanup. p256dh
+  // and auth are the subscription's encryption material (URL-base64). No FK
+  // to paired_devices because we want to ON-DELETE cascade these manually
+  // through the repo, and SQLite can't ALTER TABLE to add FKs after the
+  // fact; the deletion path in pairing-manager unpair() can call into the
+  // repo to clean up.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_subs_device ON push_subscriptions(device_id);
+  `);
+
   // Migration: Create memories table if it doesn't exist
   database.exec(`
     CREATE TABLE IF NOT EXISTS memories (

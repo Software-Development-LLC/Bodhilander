@@ -27,6 +27,7 @@ import log from 'electron-log';
 import { getApiServer } from './api';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
+import { dispatchAttentionPush } from './api/web-push/dispatcher';
 
 // ---------------------------------------------------------------------------
 // Logging & crash reporting configuration
@@ -280,6 +281,22 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 
   // Update tray
   updateTrayWithWaitingSessions();
+
+  // BDHLNDR-49: Web Push fan-out to mobile companions when a session needs
+  // attention. The dispatcher is per-(session, state) debounced (30s) and
+  // prunes dead subscriptions on 404/410. Sent to *all* paired devices that
+  // have an active subscription — notification is purely informational, so
+  // canControl gating would only hide useful info from non-controlling
+  // observers. Fire-and-forget: errors are logged inside the dispatcher.
+  if (state === 'waiting' || state === 'error') {
+    void dispatchAttentionPush({
+      sessionId,
+      sessionName: name,
+      state,
+    }).catch((err) => {
+      log.error('[Main] Web Push dispatch failed:', err);
+    });
+  }
 }
 
 function createSplashWindow(): void {
