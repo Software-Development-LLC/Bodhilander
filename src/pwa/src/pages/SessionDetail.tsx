@@ -1,27 +1,860 @@
 /**
- * /sessions/:sessionId — placeholder. Real chat view lands in BDHLNDR-56.
+ * /sessions/:sessionId — mobile chat view (BDHLNDR-56).
+ *
+ * Architecture
+ * ------------
+ * Two data sources feed one in-memory chat log:
+ *
+ *   1. REST snapshot (BDHLNDR-58): GET /sessions/:id/chat-events?limit=500
+ *      Fired on mount via React Query — gives us the persisted history so
+ *      a fresh page-load (or PWA reinstall) doesn't show an empty chat.
+ *
+ *   2. WS live (BDHLNDR-55): `chat:event` frames after subscribing the
+ *      session. Validated through `narrowChatEvent` (the WS client types
+ *      the payload as `unknown` on purpose).
+ *
+ * Both append into the same `events` state array. We keep this as
+ * component state rather than letting React Query own it because:
+ *   - Live frames arrive between RQ refetches and we want them rendered
+ *     instantly without an extra round-trip.
+ *   - Pagination ("Load older") would require manual cache manipulation
+ *     either way; a plain array is easier to reason about than RQ's
+ *     infinite-query glue for this v1 scope.
+ *
+ * Snapshot loads first, then `events` is seeded from the snapshot. WS
+ * frames that arrive BEFORE the snapshot resolves are buffered into a
+ * ref and flushed once the snapshot lands — otherwise the very first WS
+ * frame after mount could be lost or appear above older snapshot rows.
+ *
+ * Compose / send flow
+ * -------------------
+ * On tap-Send we POST /terminal/:id/input with `text + '\n'`. We do NOT
+ * locally render an optimistic `response` bubble — the server parses its
+ * own PTY output and broadcasts a `response` chat:event via WS within
+ * milliseconds. Optimistic rendering would require dedup logic (match on
+ * trimmed text? content hash?) that the server's echo will eventually
+ * displace anyway, and the perceived latency is fine. The exception is
+ * one-tap response buttons (yes/no/option), where we want immediate
+ * visual feedback — those disable themselves on press and we rely on
+ * the WS echo to render the bubble. See `handleTapResponse()`.
+ *
+ * 403 responses surface inline as "Read-only — can't send input to this
+ * session" so view-only paired devices don't get a confusing "request
+ * failed" error.
+ *
+ * Auto-scroll
+ * -----------
+ * We auto-scroll to bottom on each new event IFF the user is currently
+ * within `AUTO_SCROLL_THRESHOLD_PX` of the bottom. If they've scrolled up
+ * to read history, new events accumulate silently and a floating "↓ new
+ * messages" pill appears; tapping it scrolls to bottom and resumes the
+ * auto-scroll behavior. The detection uses scroll position rather than
+ * IntersectionObserver because the chat container can resize (keyboard,
+ * orientation) and IO entries lag those resizes by a frame.
+ *
+ * Markdown
+ * --------
+ * Assistant text is rendered as plain text with `\n` → `<br>` line
+ * breaks. Real markdown rendering (code blocks, lists, bold/italic) is
+ * deferred to a follow-up — the `marked` dependency adds ~30KB to the
+ * PWA bundle and the v1 chat view ships fine without it. When it lands
+ * we'll swap the `<AssistantBubble>` body for a sanitized HTML render.
+ *
+ * Older-history pagination
+ * ------------------------
+ * The snapshot endpoint supports `?since=<ms>` and returns `hasMore`,
+ * but the v1 PWA does not yet expose a "Load older" button — the
+ * server's 500-row default snapshot covers the typical session length.
+ * Marked as a TODO below; tracked in BDHLNDR-56 follow-up notes.
+ *
+ * Cleanup
+ * -------
+ * On unmount: unsubscribe the `chat:event` handler and call the
+ * `subscribeSession()` unsubscribe fn (ref-counted, so other open chat
+ * views — unlikely on mobile — keep working). We do NOT disconnect the
+ * WS itself; the singleton stays warm across navigation.
  */
 
-import { Link, useParams } from 'react-router-dom';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+
+import { ApiError, fetchChatEvents, sendTerminalInput } from '../lib/api';
+import {
+  narrowChatEvent,
+  type ChatEvent,
+  type PersistedChatEvent,
+  type PromptOption,
+} from '../lib/types';
+import { wsClient, type ChatEventMessage, type WsStatus } from '../lib/ws';
+import { ConnectionDot } from '../components/ConnectionDot';
+import { OverflowMenu } from '../components/OverflowMenu';
+
+// ---------------------------------------------------------------------------
+// Tunables
+// ---------------------------------------------------------------------------
+
+/** Snapshot page size; matches the server-side hard cap. */
+const SNAPSHOT_LIMIT = 500;
+
+/**
+ * Distance from the bottom of the scroll container (in CSS pixels) below
+ * which we still consider the user to be "looking at the latest" — new
+ * events auto-scroll silently. Above this, we surface the "↓ new messages"
+ * pill instead. 120px ≈ one chat bubble plus padding on phone screens.
+ */
+const AUTO_SCROLL_THRESHOLD_PX = 120;
+
+/** Compose textarea autosize cap — beyond this we let it scroll internally. */
+const COMPOSE_MAX_ROWS = 4;
+
+// ---------------------------------------------------------------------------
+// Internal display model
+// ---------------------------------------------------------------------------
+
+/**
+ * What we actually render in the log. Combines persisted (REST snapshot)
+ * and live (WS) events under one shape so the renderer doesn't care which
+ * source they came from. WS-sourced events get a synthesized id so React
+ * keys stay stable across re-renders.
+ */
+interface DisplayEvent {
+  id: string;
+  timestamp: number;
+  event: ChatEvent;
+  /** Which prompt option (if any) the user already tapped — disables the buttons. */
+  consumedKey?: string;
+}
+
+let synthIdCounter = 0;
+function makeSynthId(): string {
+  synthIdCounter += 1;
+  return `ws-${Date.now()}-${synthIdCounter}`;
+}
+
+function persistedToDisplay(p: PersistedChatEvent): DisplayEvent {
+  // The REST snapshot returns rows where { type, payload } already match the
+  // ChatEvent union — we just rewrap into the discriminated shape so the
+  // renderer can switch on `event.type` cleanly.
+  return {
+    id: p.id,
+    timestamp: p.timestamp,
+    event: { type: p.type, payload: p.payload } as ChatEvent,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export function SessionDetail() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const navigate = useNavigate();
+
+  // Guard: react-router shouldn't let this happen, but if `sessionId` is
+  // absent there's no point mounting the rest of the view.
+  if (!sessionId) {
+    return (
+      <main className="mx-auto max-w-md p-4">
+        <p className="text-sm text-red-300">Missing session id in URL.</p>
+      </main>
+    );
+  }
+
+  return <SessionDetailInner sessionId={sessionId} navigate={navigate} />;
+}
+
+function SessionDetailInner({
+  sessionId,
+  navigate,
+}: {
+  sessionId: string;
+  navigate: ReturnType<typeof useNavigate>;
+}) {
+  // ---- Snapshot ---------------------------------------------------------
+  const snapshot = useQuery({
+    queryKey: ['chat-events', sessionId],
+    queryFn: () => fetchChatEvents(sessionId, { limit: SNAPSHOT_LIMIT }),
+    staleTime: Infinity, // live updates come via WS — don't refetch on focus
+  });
+
+  // ---- Combined log -----------------------------------------------------
+  const [events, setEvents] = useState<DisplayEvent[]>([]);
+  /** WS frames that arrived before the snapshot resolved — flushed on success. */
+  const pendingWsRef = useRef<DisplayEvent[]>([]);
+  const snapshotLoadedRef = useRef(false);
+
+  // Seed from snapshot when it lands; flush any buffered WS frames.
+  useEffect(() => {
+    if (!snapshot.data || snapshotLoadedRef.current) return;
+    snapshotLoadedRef.current = true;
+    const seeded = snapshot.data.events.map(persistedToDisplay);
+    if (pendingWsRef.current.length > 0) {
+      // Filter out WS frames already present in the snapshot (server-side
+      // race: snapshot fetched right as a WS broadcast went out). Match by
+      // id — persisted events have stable IDs, WS frames have synth IDs, so
+      // collisions are impossible by construction; this just normalizes if
+      // the contract ever changes.
+      const ids = new Set(seeded.map((e) => e.id));
+      const newer = pendingWsRef.current.filter((e) => !ids.has(e.id));
+      pendingWsRef.current = [];
+      setEvents([...seeded, ...newer]);
+    } else {
+      setEvents(seeded);
+    }
+  }, [snapshot.data]);
+
+  // ---- WS subscription --------------------------------------------------
+  useEffect(() => {
+    const handleChatEvent = (msg: ChatEventMessage) => {
+      if (msg.sessionId !== sessionId) return; // shared bus — filter to ours
+      const narrowed = narrowChatEvent(msg.payload);
+      if (!narrowed) {
+        console.warn('[SessionDetail] dropped malformed chat:event', msg);
+        return;
+      }
+      const display: DisplayEvent = {
+        id: makeSynthId(),
+        timestamp: msg.timestamp,
+        event: narrowed,
+      };
+      if (!snapshotLoadedRef.current) {
+        pendingWsRef.current.push(display);
+        return;
+      }
+      setEvents((prev) => [...prev, display]);
+    };
+
+    const unsubHandler = wsClient.on('chat:event', handleChatEvent);
+    const unsubSession = wsClient.subscribeSession(sessionId);
+    return () => {
+      unsubHandler();
+      unsubSession();
+    };
+  }, [sessionId]);
+
+  // Reset state when navigating between sessions (sessionId in deps).
+  useEffect(() => {
+    snapshotLoadedRef.current = false;
+    pendingWsRef.current = [];
+    setEvents([]);
+  }, [sessionId]);
+
+  // ---- WS status (for the header dot) ----------------------------------
+  const [wsStatus, setWsStatus] = useState<WsStatus>(wsClient.status);
+  useEffect(() => wsClient.onStatusChange(setWsStatus), []);
+
+  // ---- Auto-scroll + "new messages" pill -------------------------------
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const prevEventCountRef = useRef(0);
+
+  const isNearBottom = useCallback((): boolean => {
+    const el = scrollRef.current;
+    if (!el) return true;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    return distance <= AUTO_SCROLL_THRESHOLD_PX;
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  // Pin-to-bottom detection — re-evaluated on every user scroll.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const near = isNearBottom();
+      setPinnedToBottom(near);
+      if (near) setUnreadCount(0);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [isNearBottom]);
+
+  // Auto-scroll OR bump unread count on new events. useLayoutEffect so the
+  // measurement happens before paint (avoids a flash where the new bubble is
+  // briefly visible above the viewport before we jump down).
+  useLayoutEffect(() => {
+    const grew = events.length > prevEventCountRef.current;
+    const added = events.length - prevEventCountRef.current;
+    prevEventCountRef.current = events.length;
+    if (!grew) return;
+    if (pinnedToBottom) {
+      scrollToBottom('smooth');
+    } else {
+      setUnreadCount((c) => c + added);
+    }
+  }, [events, pinnedToBottom, scrollToBottom]);
+
+  // On initial mount: jump to bottom without animation once the snapshot
+  // paints — otherwise we'd start at the top and "smooth-scroll" through
+  // hundreds of bubbles, which looks awful on a phone.
+  useLayoutEffect(() => {
+    if (snapshot.isSuccess && events.length > 0 && prevEventCountRef.current === events.length) {
+      scrollToBottom('auto');
+    }
+    // We only want this when the snapshot first loads, not on every event
+    // append — the auto-scroll effect above handles those.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.isSuccess]);
+
+  // ---- Compose ---------------------------------------------------------
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [readOnly, setReadOnly] = useState(false);
+
+  const send = useCallback(
+    async (text: string) => {
+      if (!text || sending) return;
+      setSending(true);
+      setSendError(null);
+      try {
+        await sendTerminalInput(sessionId, text);
+        return true;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 403) {
+          setReadOnly(true);
+          setSendError("Read-only — you can't send input to this session.");
+        } else {
+          setSendError(err instanceof Error ? err.message : String(err));
+        }
+        return false;
+      } finally {
+        setSending(false);
+      }
+    },
+    [sessionId, sending],
+  );
+
+  const handleSend = useCallback(async () => {
+    const text = draft.trim();
+    if (!text) return;
+    const ok = await send(text + '\n');
+    if (ok) setDraft('');
+  }, [draft, send]);
+
+  // ---- One-tap prompt response -----------------------------------------
+  // We need to disable the buttons on a prompt after the user taps one of
+  // them so they can't be re-pressed. We track this by event id on the
+  // DisplayEvent (`consumedKey`). The WS echo will append a `response`
+  // bubble shortly after, which is what the user sees as their answer.
+  const handleTapResponse = useCallback(
+    async (eventId: string, optionKey: string) => {
+      // Optimistically mark the prompt as consumed BEFORE the network round-
+      // trip so the user sees instant feedback (buttons fade out).
+      setEvents((prev) =>
+        prev.map((e) => (e.id === eventId ? { ...e, consumedKey: optionKey } : e)),
+      );
+      const ok = await send(optionKey + '\n');
+      if (!ok) {
+        // Roll back the consumed flag so the user can retry — the inline
+        // error from `send()` tells them why it failed.
+        setEvents((prev) =>
+          prev.map((e) => (e.id === eventId ? { ...e, consumedKey: undefined } : e)),
+        );
+      }
+    },
+    [send],
+  );
+
+  // ---- Header bits -----------------------------------------------------
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // ---- Render ----------------------------------------------------------
+  // TODO(BDHLNDR-56-followup): "Load older" pagination using
+  //   fetchChatEvents(sessionId, { since: oldestTs - 1, limit: 500 })
+  // and snapshot.data.hasMore. Out of scope for v1 — 500 rows covers the
+  // typical session and adding a sticky "Load older" button competes for
+  // attention with the scroll-back UX.
 
   return (
-    <main className="mx-auto max-w-md p-4">
-      <nav className="mb-4 text-sm text-neutral-400">
-        <Link to="/sessions" className="hover:text-neutral-200">
-          Sessions
-        </Link>
-        <span className="mx-2">/</span>
-        <span className="text-neutral-200">{sessionId ?? '(unknown)'}</span>
-      </nav>
-      <h1 className="text-2xl font-semibold">
-        Session <span className="font-mono text-base text-neutral-400">{sessionId}</span>
-      </h1>
-      <p className="mt-2 text-neutral-300">
-        Chat view lands in BDHLNDR-56.
-      </p>
+    <main className="flex h-screen flex-col bg-neutral-900 text-neutral-100">
+      <Header
+        sessionId={sessionId}
+        wsStatus={wsStatus}
+        menuOpen={menuOpen}
+        onMenuOpenChange={setMenuOpen}
+        onBack={() => navigate('/sessions')}
+      />
+
+      <div
+        ref={scrollRef}
+        className="relative flex-1 overflow-y-auto px-3 py-3"
+        aria-live="polite"
+        aria-relevant="additions"
+      >
+        {snapshot.isLoading ? (
+          <ChatSkeleton />
+        ) : snapshot.isError ? (
+          <ChatLoadError
+            message={
+              snapshot.error instanceof ApiError && snapshot.error.status === 404
+                ? 'Session not found.'
+                : snapshot.error instanceof Error
+                  ? snapshot.error.message
+                  : 'Failed to load chat history.'
+            }
+            onRetry={() => void snapshot.refetch()}
+          />
+        ) : events.length === 0 ? (
+          <EmptyChat />
+        ) : (
+          <ul className="space-y-2">
+            {events.map((e, idx) => (
+              <li key={e.id}>
+                <EventRenderer
+                  display={e}
+                  onTapResponse={handleTapResponse}
+                  isLatest={idx === events.length - 1}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Floating "↓ new messages" pill */}
+      {!pinnedToBottom && unreadCount > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            scrollToBottom('smooth');
+            setUnreadCount(0);
+          }}
+          className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 rounded-full bg-blue-600 px-4 py-1.5 text-xs font-medium text-white shadow-lg shadow-blue-900/40 hover:bg-blue-500"
+        >
+          ↓ {unreadCount} new {unreadCount === 1 ? 'message' : 'messages'}
+        </button>
+      )}
+
+      <Compose
+        draft={draft}
+        onDraftChange={setDraft}
+        onSend={handleSend}
+        sending={sending}
+        readOnly={readOnly}
+        error={sendError}
+      />
     </main>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
+
+function Header({
+  sessionId,
+  wsStatus,
+  menuOpen,
+  onMenuOpenChange,
+  onBack,
+}: {
+  sessionId: string;
+  wsStatus: WsStatus;
+  menuOpen: boolean;
+  onMenuOpenChange: (open: boolean) => void;
+  onBack: () => void;
+}) {
+  // We don't fetch the session here just for the name — the session list
+  // shows it on the row the user tapped to get here, and the URL id is the
+  // authoritative pointer. Showing the (short) id keeps the header
+  // self-describing without an extra REST round-trip. A follow-up could pull
+  // the name from the same `['sessions']` cache populated by SessionList.
+  const shortId = useMemo(() => sessionId.slice(0, 8), [sessionId]);
+
+  return (
+    <header className="sticky top-0 z-10 flex items-center justify-between border-b border-neutral-800 bg-neutral-900/95 px-2 py-2 backdrop-blur">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back to sessions"
+          className="flex h-9 w-9 items-center justify-center rounded-md text-neutral-300 hover:bg-neutral-800"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden
+          >
+            <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <div className="min-w-0">
+          <Link
+            to="/sessions"
+            className="block truncate text-sm font-semibold text-neutral-100 hover:text-white"
+          >
+            Session <span className="font-mono text-xs text-neutral-400">{shortId}</span>
+          </Link>
+        </div>
+        <ConnectionDot status={wsStatus} />
+      </div>
+      <OverflowMenu
+        open={menuOpen}
+        onOpenChange={onMenuOpenChange}
+        items={[
+          {
+            label: 'Back to sessions',
+            onSelect: () => {
+              onMenuOpenChange(false);
+              onBack();
+            },
+          },
+        ]}
+      />
+    </header>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Event renderers
+// ---------------------------------------------------------------------------
+
+function EventRenderer({
+  display,
+  onTapResponse,
+  isLatest: _isLatest,
+}: {
+  display: DisplayEvent;
+  onTapResponse: (eventId: string, optionKey: string) => void;
+  isLatest: boolean;
+}) {
+  const { event, id, consumedKey } = display;
+  switch (event.type) {
+    case 'assistant_text':
+      return <AssistantBubble text={event.payload.text} />;
+    case 'tool_call':
+      return <ToolCallRow tool={event.payload.tool} argsBrief={event.payload.argsBrief} />;
+    case 'error':
+      return <ErrorCard text={event.payload.text} />;
+    case 'prompt_yes_no':
+      return (
+        <PromptYesNo
+          question={event.payload.question}
+          consumedKey={consumedKey}
+          onTap={(key) => onTapResponse(id, key)}
+        />
+      );
+    case 'prompt_options':
+      return (
+        <PromptOptions
+          question={event.payload.question}
+          options={event.payload.options}
+          consumedKey={consumedKey}
+          onTap={(key) => onTapResponse(id, key)}
+        />
+      );
+    case 'response':
+      return <ResponseBubble text={event.payload.text} />;
+    default:
+      // Exhaustiveness guard — if a new event type is added to ChatEvent
+      // we want the type error here at compile time.
+      return null;
+  }
+}
+
+function AssistantBubble({ text }: { text: string }) {
+  return (
+    <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+      <PlainTextWithBreaks text={text} />
+    </div>
+  );
+}
+
+function ResponseBubble({ text }: { text: string }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-blue-600/30 px-3 py-2 text-sm text-blue-100">
+        <PlainTextWithBreaks text={text} />
+      </div>
+    </div>
+  );
+}
+
+function ToolCallRow({ tool, argsBrief }: { tool: string; argsBrief: string }) {
+  return (
+    <div className="rounded-md bg-neutral-800/40 px-3 py-1 font-mono text-xs text-neutral-400">
+      <span className="text-neutral-500">⏺ </span>
+      <span className="text-neutral-300">{tool}</span>
+      <span className="text-neutral-500">({argsBrief})</span>
+    </div>
+  );
+}
+
+function ErrorCard({ text }: { text: string }) {
+  return (
+    <div className="max-w-[85%] rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+      {text}
+    </div>
+  );
+}
+
+function PromptYesNo({
+  question,
+  consumedKey,
+  onTap,
+}: {
+  question: string;
+  consumedKey?: string;
+  onTap: (key: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <AssistantBubble text={question} />
+      <div className="flex gap-2 pl-1">
+        <TapResponseButton
+          label="Yes"
+          sendingBytes="y\n"
+          onTap={() => onTap('y')}
+          used={consumedKey === 'y'}
+          dimmed={consumedKey !== undefined && consumedKey !== 'y'}
+        />
+        <TapResponseButton
+          label="No"
+          sendingBytes="n\n"
+          onTap={() => onTap('n')}
+          used={consumedKey === 'n'}
+          dimmed={consumedKey !== undefined && consumedKey !== 'n'}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PromptOptions({
+  question,
+  options,
+  consumedKey,
+  onTap,
+}: {
+  question: string;
+  options: PromptOption[];
+  consumedKey?: string;
+  onTap: (key: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <AssistantBubble text={question} />
+      <div className="flex flex-col gap-2 pl-1">
+        {options.map((opt) => (
+          <TapResponseButton
+            key={opt.key}
+            label={opt.label}
+            sendingBytes={`${opt.key}\\n`}
+            onTap={() => onTap(opt.key)}
+            used={consumedKey === opt.key}
+            dimmed={consumedKey !== undefined && consumedKey !== opt.key}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One-tap response button. The subtext shows the LITERAL bytes about to be
+ * sent — design rule: never hide what's going down the wire. We render
+ * "\n" as the two-character escape sequence rather than an actual newline
+ * (a real newline in the subtext would just produce a blank line and the
+ * user would be left guessing what "Sending: y[blank]" means).
+ *
+ * Once `used` flips true, the button shrinks visually and becomes
+ * non-interactive — the prompt isn't actionable a second time because the
+ * server's next state will be a different event entirely.
+ *
+ * `dimmed` is the sibling-of-used state: the OTHER button(s) on the same
+ * prompt fade further so it's clear which one was picked.
+ */
+function TapResponseButton({
+  label,
+  sendingBytes,
+  onTap,
+  used,
+  dimmed,
+}: {
+  label: string;
+  sendingBytes: string;
+  onTap: () => void;
+  used: boolean;
+  dimmed: boolean;
+}) {
+  const disabled = used || dimmed;
+  return (
+    <button
+      type="button"
+      onClick={onTap}
+      disabled={disabled}
+      className={`flex flex-col items-start rounded-lg border px-4 py-2 text-left transition-all disabled:cursor-not-allowed ${
+        used
+          ? 'border-blue-700 bg-blue-700/40 text-blue-100 opacity-70'
+          : dimmed
+            ? 'border-neutral-800 bg-neutral-900/40 text-neutral-500 opacity-50'
+            : 'border-neutral-700 bg-neutral-800 text-neutral-100 hover:bg-neutral-700 active:bg-neutral-600'
+      }`}
+    >
+      <span className="text-sm font-medium">{label}</span>
+      <span className="mt-0.5 font-mono text-[10px] text-neutral-400">
+        Sending: {sendingBytes}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Render text with `\n` → `<br>`. Minimal "markdown" — actually just
+ * paragraph breaks. See file header for rationale on deferring real MD.
+ */
+function PlainTextWithBreaks({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <>
+      {lines.map((line, i) => (
+        <span key={i}>
+          {line}
+          {i < lines.length - 1 && <br />}
+        </span>
+      ))}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Compose
+// ---------------------------------------------------------------------------
+
+function Compose({
+  draft,
+  onDraftChange,
+  onSend,
+  sending,
+  readOnly,
+  error,
+}: {
+  draft: string;
+  onDraftChange: (s: string) => void;
+  onSend: () => void;
+  sending: boolean;
+  readOnly: boolean;
+  error: string | null;
+}) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-size the textarea up to COMPOSE_MAX_ROWS. We reset height to 'auto'
+  // first so scrollHeight reflects the natural content height; then clamp.
+  useLayoutEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    const max = lineHeight * COMPOSE_MAX_ROWS + 16; // +16 ≈ vertical padding
+    ta.style.height = `${Math.min(ta.scrollHeight, max)}px`;
+  }, [draft]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter sends, Shift+Enter inserts a newline. This matches every chat
+    // app on every platform — users expect it.
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!sending && draft.trim() && !readOnly) onSend();
+    }
+  };
+
+  const canSend = !sending && !readOnly && draft.trim().length > 0;
+
+  return (
+    <div className="sticky bottom-0 z-10 border-t border-neutral-800 bg-neutral-900/95 px-2 py-2 backdrop-blur">
+      {error && (
+        <p role="alert" className="px-2 pb-1 text-xs text-red-300">
+          {error}
+        </p>
+      )}
+      <div className="flex items-end gap-2">
+        {/* TODO(BDHLNDR-15): mic icon placeholder — voice input. */}
+        <textarea
+          ref={taRef}
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={readOnly ? 'Read-only device' : 'Message Claude…'}
+          disabled={readOnly}
+          rows={1}
+          className="min-h-[40px] flex-1 resize-none rounded-2xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-blue-500 focus:outline-none disabled:opacity-50"
+        />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={!canSend}
+          aria-label="Send"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-500"
+        >
+          {sending ? (
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+          ) : (
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
+              <path d="M3.4 20.4l17.45-7.48a1 1 0 0 0 0-1.84L3.4 3.6a1 1 0 0 0-1.4 1.06l1.45 5.79a1 1 0 0 0 .82.74L12 12l-7.73 1.81a1 1 0 0 0-.82.74L2 19.34a1 1 0 0 0 1.4 1.06z" />
+            </svg>
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// States
+// ---------------------------------------------------------------------------
+
+function ChatSkeleton() {
+  return (
+    <div className="space-y-3" aria-hidden>
+      <div className="h-10 w-3/4 animate-pulse rounded-2xl bg-neutral-800" />
+      <div className="ml-auto h-8 w-1/2 animate-pulse rounded-2xl bg-blue-900/30" />
+      <div className="h-16 w-4/5 animate-pulse rounded-2xl bg-neutral-800" />
+      <div className="h-6 w-2/3 animate-pulse rounded-md bg-neutral-800/40" />
+      <div className="h-10 w-3/5 animate-pulse rounded-2xl bg-neutral-800" />
+    </div>
+  );
+}
+
+function EmptyChat() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <p className="px-4 text-center text-sm text-neutral-500">
+        No conversation yet — Claude hasn&apos;t said anything in this session.
+      </p>
+    </div>
+  );
+}
+
+function ChatLoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="rounded-md border border-red-900/60 bg-red-950/30 p-4">
+      <p className="text-sm text-red-200">Couldn&apos;t load chat history.</p>
+      <p className="mt-1 text-xs text-red-300/80">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 rounded-md border border-red-800 bg-red-900/40 px-3 py-1 text-xs text-red-100 hover:bg-red-900/60"
+      >
+        Try again
+      </button>
+    </div>
   );
 }
