@@ -1,12 +1,14 @@
 /**
- * /pair — typed 6-digit code pair flow (BDHLNDR-54).
+ * /pair — pair a mobile PWA to the desktop.
  *
- * The user runs `Pair device` on the desktop, gets a 6-digit code on
- * screen, types it here, and the desktop responds with a bearer token we
- * persist in IndexedDB. On success we redirect to /sessions.
+ * Two input methods, same end-of-flow:
+ *   1. Typed 6-digit code (BDHLNDR-54) — the manual path.
+ *   2. Scanned QR code (BDHLNDR-14) — the fast path; live camera feed
+ *      decodes the QR the desktop renders on its Pair-device screen.
  *
- * QR-code-driven pairing (no typing required) lands in BDHLNDR-14 and
- * will reuse the same POST body shape — `{ code, deviceName, platform }`.
+ * Both methods POST the same `{ code, deviceName, platform }` body to
+ * `/api/v1/pairing/confirm`, persist the returned token via `saveAuth`,
+ * and redirect to /sessions.
  */
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -15,6 +17,11 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { ApiError, apiFetch } from '../lib/api';
 import { type AuthDevice, getAuth, saveAuth } from '../lib/auth';
 import { detectPlatform, suggestDeviceName } from '../lib/platform';
+import {
+  QrScannerOverlay,
+  isCameraSupported,
+  type PairPayload,
+} from '../components/QrScanner';
 
 interface ConfirmResponse {
   token: string;
@@ -49,25 +56,30 @@ export function Pair() {
   }, []);
 
   const platform = useMemo(() => detectPlatform(), []);
+  // Evaluate camera support once; navigator capabilities don't change
+  // mid-session and re-checking on every render is wasted work.
+  const cameraSupported = useMemo(() => isCameraSupported(), []);
   const [deviceName, setDeviceName] = useState(() => suggestDeviceName());
   const [code, setCode] = useState('');
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [scanning, setScanning] = useState(false);
 
   const codeIsValid = /^\d{6}$/.test(code);
   const submitting = status.kind === 'submitting';
   const canSubmit = codeIsValid && deviceName.trim().length > 0 && !submitting;
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!canSubmit) return;
-
+  /**
+   * Shared confirm path used by both the typed form submit and the QR
+   * scan callback. Centralising this keeps the IndexedDB write + nav
+   * behaviour identical between the two flows.
+   */
+  async function confirmPairing(pairCode: string) {
     setStatus({ kind: 'submitting' });
-
     try {
       const res = await apiFetch<ConfirmResponse>('/pairing/confirm', {
         method: 'POST',
         body: {
-          code,
+          code: pairCode,
           deviceName: deviceName.trim(),
           platform,
         },
@@ -91,6 +103,39 @@ export function Pair() {
     }
   }
 
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    await confirmPairing(code);
+  }
+
+  function handleScan(payload: PairPayload) {
+    // The scanner already validated `type` + `expiresAt`. Hide the
+    // overlay before kicking off confirm so the user sees the spinner
+    // come back instead of staring at a frozen camera frame.
+    setScanning(false);
+    void confirmPairing(payload.code);
+  }
+
+  function handleScanError(err: Error) {
+    setScanning(false);
+    // Tailor the message to the common cases the overlay surfaces so
+    // the user knows whether to grant permission or just type instead.
+    let message = 'Scan failed. Try again or type the code below.';
+    if (/denied/i.test(err.message)) {
+      message = 'Camera access denied — type the code instead.';
+    } else if (/timed out/i.test(err.message)) {
+      message = 'Scan timed out — try again or type the code.';
+    } else if (/not supported|could not start/i.test(err.message)) {
+      message = 'Could not start camera — type the code instead.';
+    }
+    setStatus({ kind: 'error', message, raw: err.message });
+  }
+
+  function handleScanCancel() {
+    setScanning(false);
+  }
+
   if (alreadyPaired) {
     return <Navigate to="/sessions" replace />;
   }
@@ -99,11 +144,35 @@ export function Pair() {
     <main className="mx-auto max-w-md p-4">
       <h1 className="text-2xl font-semibold">Pair device</h1>
       <p className="mt-2 text-sm text-neutral-300">
-        On your desktop, open Bodhilander &rarr; <em>Pair device</em> to get a
-        6-digit code, then type it here.
+        On your desktop, open Bodhilander &rarr; <em>Pair device</em>, then
+        scan the QR code or type the 6-digit code shown there.
       </p>
 
-      <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
+      {cameraSupported && (
+        <button
+          type="button"
+          onClick={() => {
+            // Clear any prior error so the next attempt starts clean —
+            // a leftover "denied" banner under a fresh scan is confusing.
+            setStatus({ kind: 'idle' });
+            setScanning(true);
+          }}
+          disabled={submitting}
+          className="mt-6 flex w-full items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-3 text-base font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+        >
+          <span aria-hidden>📷</span> Scan QR code
+        </button>
+      )}
+
+      {cameraSupported && (
+        <div className="my-4 flex items-center gap-3 text-xs uppercase tracking-wide text-neutral-500">
+          <div className="h-px flex-1 bg-neutral-700" />
+          or
+          <div className="h-px flex-1 bg-neutral-700" />
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="mt-2 space-y-4" noValidate>
         <label className="block">
           <span className="text-sm font-medium text-neutral-200">Device name</span>
           <input
@@ -129,7 +198,6 @@ export function Pair() {
             inputMode="numeric"
             pattern="\d{6}"
             maxLength={6}
-            autoFocus
             autoComplete="one-time-code"
             placeholder="000000"
             aria-invalid={code.length > 0 && !codeIsValid}
@@ -140,9 +208,13 @@ export function Pair() {
         <button
           type="submit"
           disabled={!canSubmit}
-          className="w-full rounded-md bg-emerald-600 px-4 py-3 text-base font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400"
+          className={`w-full rounded-md px-4 py-3 text-base font-medium text-white transition-colors disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400 ${
+            cameraSupported
+              ? 'bg-neutral-700 hover:bg-neutral-600'
+              : 'bg-emerald-600 hover:bg-emerald-500'
+          }`}
         >
-          {submitting ? 'Pairing…' : 'Pair'}
+          {submitting ? 'Pairing…' : 'Pair with code'}
         </button>
 
         {status.kind === 'error' && (
@@ -160,6 +232,14 @@ export function Pair() {
           </div>
         )}
       </form>
+
+      {scanning && (
+        <QrScannerOverlay
+          onScan={handleScan}
+          onError={handleScanError}
+          onCancel={handleScanCancel}
+        />
+      )}
     </main>
   );
 }
