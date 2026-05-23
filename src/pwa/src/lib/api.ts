@@ -1,25 +1,27 @@
 /**
  * Minimal fetch wrapper for the Bodhilander REST API.
  *
- * Real token loading from IndexedDB lands in BDHLNDR-54 (pair flow). For now
- * this exposes a stub `getAuthToken()` hook so call sites can be written now
- * and swapped to the real implementation without touching every call site.
+ * Token loading is delegated to `./auth.ts` (IndexedDB-backed, wired in
+ * BDHLNDR-54). Call sites import `apiFetch` and `getAuthToken` from here;
+ * neither cares where the token actually lives.
  *
  * Contract (from BDHLNDR-51):
  *   - Bearer token in the `Authorization` header for paired devices.
  *   - All endpoints are namespaced under `/api/v1/...`.
  */
 
+import { getAuth } from './auth';
+
 const API_BASE = '/api/v1';
 
 /**
- * Stub — replaced by an IndexedDB-backed implementation in BDHLNDR-54.
- * Returns `null` today so requests go out un-authenticated and the desktop's
- * auth middleware can reject them with a clean 401 (which the UI can then
- * route to /pair). That keeps the call sites stable across tickets.
+ * Resolve the current device bearer token, or null if the PWA isn't paired.
+ * Reads from IndexedDB via `getAuth()` so the result survives reloads and
+ * matches whatever the user paired with on the desktop.
  */
 export async function getAuthToken(): Promise<string | null> {
-  return null;
+  const auth = await getAuth();
+  return auth?.token ?? null;
 }
 
 export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
