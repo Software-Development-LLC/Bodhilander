@@ -25,6 +25,8 @@ import { apiFetch, fetchGroups, fetchSessions } from '../lib/api';
 import { clearAuth, getAuth } from '../lib/auth';
 import type { Group, Session, SessionState } from '../lib/types';
 import { wsClient, type SessionStateMessage, type WsStatus } from '../lib/ws';
+import { ConnectionDot } from '../components/ConnectionDot';
+import { OverflowMenu } from '../components/OverflowMenu';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -431,100 +433,6 @@ function SessionRow({
         {pill.label}
       </span>
     </button>
-  );
-}
-
-function ConnectionDot({ status }: { status: WsStatus }) {
-  const tone =
-    status === 'connected'
-      ? { color: 'bg-emerald-500', label: 'Connected' }
-      : status === 'connecting' || status === 'reconnecting'
-        ? { color: 'bg-amber-400 animate-pulse', label: 'Reconnecting' }
-        : { color: 'bg-red-500', label: 'Disconnected' };
-  return (
-    <span
-      role="status"
-      aria-label={tone.label}
-      title={tone.label}
-      className={`inline-block h-2 w-2 rounded-full ${tone.color}`}
-    />
-  );
-}
-
-interface MenuItem {
-  label: string;
-  onSelect: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-}
-
-/**
- * Tiny 3-dot overflow menu. Inline rather than a standalone component
- * because right now SessionList is the only consumer; when SessionDetail
- * (BDHLNDR-56) needs the same menu we'll lift it to
- * `src/pwa/src/components/OverflowMenu.tsx` and parameterize the items.
- */
-function OverflowMenu({
-  open,
-  onOpenChange,
-  items,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  items: MenuItem[];
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on outside click.
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onOpenChange(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open, onOpenChange]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Open menu"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => onOpenChange(!open)}
-        className="flex h-9 w-9 items-center justify-center rounded-md text-neutral-300 hover:bg-neutral-800"
-      >
-        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
-          <circle cx="12" cy="5" r="1.6" />
-          <circle cx="12" cy="12" r="1.6" />
-          <circle cx="12" cy="19" r="1.6" />
-        </svg>
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="absolute right-0 z-20 mt-1 w-48 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900 shadow-lg"
-        >
-          {items.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              disabled={item.disabled}
-              onClick={item.onSelect}
-              className={`block w-full px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                item.danger
-                  ? 'text-red-300 hover:bg-red-900/30'
-                  : 'text-neutral-200 hover:bg-neutral-800'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 

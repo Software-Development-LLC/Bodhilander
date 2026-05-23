@@ -11,7 +11,7 @@
  */
 
 import { getAuth } from './auth';
-import type { Group, Session } from './types';
+import type { Group, PersistedChatEvent, Session } from './types';
 
 const API_BASE = '/api/v1';
 
@@ -106,5 +106,53 @@ export async function fetchSessions(): Promise<Session[]> {
 export async function fetchGroups(): Promise<Group[]> {
   const { groups } = await apiFetch<{ groups: Group[] }>('/groups');
   return groups;
+}
+
+// ---------------------------------------------------------------------------
+// Chat events (BDHLNDR-56)
+// ---------------------------------------------------------------------------
+
+export interface ChatEventsPage {
+  events: PersistedChatEvent[];
+  nextSince: number | null;
+  hasMore: boolean;
+}
+
+export interface FetchChatEventsParams {
+  /** ms-epoch — server returns events strictly newer than this. */
+  since?: number;
+  /** Default 100, max 500. */
+  limit?: number;
+}
+
+/**
+ * GET /api/v1/sessions/:id/chat-events — persisted snapshot of the chat log.
+ * Ascending chronological order. 404 on unknown sessionId surfaces as ApiError.
+ *
+ * Used by the PWA chat view (BDHLNDR-56) for the initial render before live
+ * WS updates start streaming in.
+ */
+export async function fetchChatEvents(
+  sessionId: string,
+  params: FetchChatEventsParams = {},
+): Promise<ChatEventsPage> {
+  const query = new URLSearchParams();
+  if (params.since !== undefined) query.set('since', String(params.since));
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  const path = `/sessions/${encodeURIComponent(sessionId)}/chat-events${qs ? `?${qs}` : ''}`;
+  return apiFetch<ChatEventsPage>(path);
+}
+
+/**
+ * POST /api/v1/terminal/:id/input — send literal bytes to the PTY.
+ * 403 (no canControl perm) bubbles up as ApiError; the chat view surfaces
+ * that inline as "Read-only" feedback.
+ */
+export async function sendTerminalInput(sessionId: string, data: string): Promise<void> {
+  await apiFetch<{ success: true }>(
+    `/terminal/${encodeURIComponent(sessionId)}/input`,
+    { method: 'POST', body: { data } },
+  );
 }
 
