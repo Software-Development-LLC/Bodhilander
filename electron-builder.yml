@@ -15,6 +15,12 @@ asarUnpack:
   - dist/mcp-server/**/*
   - dist/hooks/**/*
   - dist/main/vector-search/**/*
+  # BDHLNDR-69: the PWA bundle is served at runtime by express.static, which
+  # streams files via fs.createReadStream — that path doesn't work reliably
+  # inside an asar archive (sendFile errors propagate, and static handler
+  # falls through to the SPA fallback returning JSON-typed errors). Unpacking
+  # gives us real on-disk paths for express to serve cleanly.
+  - dist/pwa/**/*
   - node_modules/node-pty/**/*
   - node_modules/better-sqlite3/**/*
   - node_modules/sodium-native/**/*
