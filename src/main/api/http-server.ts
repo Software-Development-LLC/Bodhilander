@@ -130,7 +130,19 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   // /m/* path so client-side routing works on hard refresh. No auth is
   // required here — auth happens inside the PWA after pairing, exactly
   // like the /api/v1/pairing initiation endpoints.
-  const pwaDistDir = path.join(__dirname, '..', '..', 'pwa');
+  //
+  // BDHLNDR-69 follow-up: in packaged builds dist/pwa is asarUnpacked (see
+  // electron-builder.yml), so the real files live under app.asar.unpacked/.
+  // Electron's fs wrapper auto-redirects asar paths for most calls, but the
+  // `send` package that express.static uses internally resolves paths in
+  // ways that don't always trigger the redirect — the result was 500s on
+  // asset requests that fell through to the SPA fallback. Substituting the
+  // unpacked path here means express.static gets a real on-disk path. In
+  // dev mode the substitution is a no-op (the path doesn't contain
+  // `app.asar`), so the same code works in both modes.
+  const pwaDistDir = path
+    .join(__dirname, '..', '..', 'pwa')
+    .replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
   const pwaIndexHtml = path.join(pwaDistDir, 'index.html');
   app.use(
     '/m',
