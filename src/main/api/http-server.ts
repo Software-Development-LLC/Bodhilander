@@ -105,13 +105,25 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
     crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow cross-origin for mobile app
   }));
 
-  // CORS - allow requests from any origin on local network
+  // CORS — accept any origin. The previous "reject anything with an Origin
+  // header" logic was based on a wrong assumption: browsers DO send Origin
+  // for same-origin requests when the resource is loaded with `crossorigin`
+  // (which vite emits on every <script type="module"> and the matching
+  // <link rel="stylesheet">). The PWA's own asset requests were getting
+  // 500 + application/json bodies from this middleware, which the browser
+  // refused to apply (MIME mismatch on CSS, broken JS) — hence white screen
+  // on every mobile load of /m/ (BDHLNDR-69 again, real fix).
+  //
+  // Threat model: the localNetworkOnly middleware above is the real access
+  // gate. CORS is a browser-enforced same-origin policy meant for public
+  // services; for a LAN-only API there's no cross-origin attacker scenario
+  // it can prevent that localNetworkOnly doesn't already block at the
+  // network layer. Reflect the requesting origin so credentials-bearing
+  // requests work (CORS spec disallows `*` with credentials).
   app.use(cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (same-origin, mobile apps, curl)
       if (!origin) return callback(null, true);
-      // Block cross-origin requests from browsers
-      callback(new Error('CORS not allowed'));
+      callback(null, origin);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
