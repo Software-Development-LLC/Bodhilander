@@ -491,10 +491,14 @@ function SessionDetailInner({
     [sessionId, sending],
   );
 
+  // Terminal "Enter" is carriage return (\r), not LF. xterm.js's onData
+  // sends \r when the user hits Enter, and Claude Code's TUI (like most
+  // terminal apps) only treats \r as submit — LF alone shows the text but
+  // never triggers the prompt. BDHLNDR-70.
   const handleSend = useCallback(async () => {
     const text = draft.trim();
     if (!text) return;
-    const ok = await send(text + '\n');
+    const ok = await send(text + '\r');
     if (ok) setDraft('');
   }, [draft, send]);
 
@@ -510,7 +514,8 @@ function SessionDetailInner({
       setEvents((prev) =>
         prev.map((e) => (e.id === eventId ? { ...e, consumedKey: optionKey } : e)),
       );
-      const ok = await send(optionKey + '\n');
+      // \r (CR), not \n — terminal Enter convention. See handleSend above.
+      const ok = await send(optionKey + '\r');
       if (!ok) {
         // Roll back the consumed flag so the user can retry — the inline
         // error from `send()` tells them why it failed.
@@ -955,7 +960,7 @@ function EventRenderer({
 
 function AssistantBubble({ text }: { text: string }) {
   return (
-    <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+    <div className="max-w-[85%] break-words rounded-2xl rounded-tl-sm bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
       <PlainTextWithBreaks text={text} />
     </div>
   );
@@ -964,7 +969,7 @@ function AssistantBubble({ text }: { text: string }) {
 function ResponseBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-blue-600/30 px-3 py-2 text-sm text-blue-100">
+      <div className="max-w-[85%] break-words rounded-2xl rounded-tr-sm bg-blue-600/30 px-3 py-2 text-sm text-blue-100">
         <PlainTextWithBreaks text={text} />
       </div>
     </div>
@@ -973,7 +978,7 @@ function ResponseBubble({ text }: { text: string }) {
 
 function ToolCallRow({ tool, argsBrief }: { tool: string; argsBrief: string }) {
   return (
-    <div className="rounded-md bg-neutral-800/40 px-3 py-1 font-mono text-xs text-neutral-400">
+    <div className="break-all rounded-md bg-neutral-800/40 px-3 py-1 font-mono text-xs text-neutral-400">
       <span className="text-neutral-500">⏺ </span>
       <span className="text-neutral-300">{tool}</span>
       <span className="text-neutral-500">({argsBrief})</span>
