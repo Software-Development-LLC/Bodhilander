@@ -189,6 +189,47 @@ function makeSynthId(): string {
   return `ws-${Date.now()}-${synthIdCounter}`;
 }
 
+/**
+ * BDHLNDR-75: collapse consecutive `assistant_text` events that arrive
+ * within a short window into one display event. The parser emits one event
+ * per terminal row, so a single Claude paragraph painted across 3-6 rows
+ * shows up as 3-6 separate bubbles. Within a single turn the timestamps
+ * are tightly clustered (Claude renders the whole paragraph in <1s), so a
+ * 2s window cleanly groups one paragraph without ever merging across
+ * separate turns (which always have a user input + assistant response
+ * cycle separating them by several seconds).
+ *
+ * Non-`assistant_text` events (tool calls, errors, prompts, responses)
+ * break any in-progress group so they keep their own bubble.
+ */
+const ASSISTANT_GROUP_WINDOW_MS = 2_000;
+
+function groupAssistantTexts(events: DisplayEvent[]): DisplayEvent[] {
+  const result: DisplayEvent[] = [];
+  for (const e of events) {
+    const last = result[result.length - 1];
+    if (
+      e.event.type === 'assistant_text' &&
+      last?.event.type === 'assistant_text' &&
+      e.timestamp - last.timestamp <= ASSISTANT_GROUP_WINDOW_MS
+    ) {
+      result[result.length - 1] = {
+        ...last,
+        timestamp: e.timestamp,
+        event: {
+          type: 'assistant_text',
+          payload: {
+            text: last.event.payload.text + '\n' + e.event.payload.text,
+          },
+        },
+      };
+    } else {
+      result.push(e);
+    }
+  }
+  return result;
+}
+
 function persistedToDisplay(p: PersistedChatEvent): DisplayEvent {
   // The REST snapshot returns rows where { type, payload } already match the
   // ChatEvent union — we just rewrap into the discriminated shape so the
@@ -728,15 +769,18 @@ function SessionDetailInner({
               <EmptyChat />
             ) : (
               <ul className="space-y-2">
-                {events.map((e, idx) => (
-                  <li key={e.id}>
-                    <EventRenderer
-                      display={e}
-                      onTapResponse={handleTapResponse}
-                      isLatest={idx === events.length - 1}
-                    />
-                  </li>
-                ))}
+                {(() => {
+                  const grouped = groupAssistantTexts(events);
+                  return grouped.map((e, idx) => (
+                    <li key={e.id}>
+                      <EventRenderer
+                        display={e}
+                        onTapResponse={handleTapResponse}
+                        isLatest={idx === grouped.length - 1}
+                      />
+                    </li>
+                  ));
+                })()}
               </ul>
             )}
           </div>

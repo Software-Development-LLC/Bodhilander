@@ -267,6 +267,44 @@ describe('ChatParser classifier tuning (BDHLNDR-73)', () => {
   });
 });
 
+describe('ChatParser classifier v3 (BDHLNDR-75)', () => {
+  test('drops "※ Churned for 37s" — ※ glyph used by Claude Code', async () => {
+    const events = await runFixture('※ Churned for 37s\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops "※ recap: ..." status lines', async () => {
+    const events = await runFixture('※ recap: doing a thing\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops bare ※ glyphs (glyph-only line)', async () => {
+    const events = await runFixture('※\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops "※ Distilling…" by shape (※ in spinner-shape charset)', async () => {
+    const events = await runFixture('※ Distilling…\n');
+    expect(events).toEqual([]);
+  });
+
+  test('dedupe holds across >16 interleaved unique events', async () => {
+    // Synthesise: 25 unique lines, then a repeat of the FIRST one. The old
+    // 16-entry ring would have already evicted "line 0" by event #25, so
+    // the repeat would slip through. New dedupe should remember it.
+    let input = '';
+    for (let i = 0; i < 25; i++) input += `unique line ${i}\n`;
+    input += 'unique line 0\n'; // duplicate of the very first line
+    const events = await runFixture(input);
+    const texts = events
+      .filter((e) => e.type === 'assistant_text')
+      .map((e) => (e as { payload: { text: string } }).payload.text);
+    // Should see each unique line exactly once — 25 events, not 26.
+    expect(texts.length).toBe(25);
+    expect(texts.filter((t) => t === 'unique line 0').length).toBe(1);
+  });
+});
+
 describe('ChatParser wrap-space recovery (BDHLNDR-73 #40)', () => {
   /** Run with a narrow terminal so wraps trigger on small inputs. */
   async function runNarrow(input: string, cols = 10): Promise<ChatEvent[]> {
