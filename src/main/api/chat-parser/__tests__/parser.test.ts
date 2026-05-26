@@ -228,10 +228,116 @@ describe('ChatParser classifier tuning (BDHLNDR-73)', () => {
     expect(events[0].type).toBe('assistant_text');
   });
 
+  test('drops spinner + present-progressive verb + ellipsis with no trailing timing', async () => {
+    // Bare `· Rewriting…` (no `(Ns · ↓tokens)` tail) is still a spinner
+    // status — earlier observations showed these leak through. Narrow shape:
+    // leading spinner glyph as the only leader, single capitalized -ing verb,
+    // trailing ellipsis.
+    const events = await runFixture('· Rewriting…\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops "✶ Pondering…" (spinner + verb + ellipsis)', async () => {
+    const events = await runFixture('✶ Pondering…\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops novel-verb spinner statuses by shape (glyph + word + ellipsis)', async () => {
+    // Claude rotates verbs continuously; the verb-alternation list will
+    // always lag. A spinner glyph + short text + ellipsis is the durable
+    // shape signal. Tested with two synthesized verbs not in the alternation.
+    const events1 = await runFixture('✶ Distilling…\n');
+    expect(events1).toEqual([]);
+    const events2 = await runFixture('✻ Crystallizing the response…\n');
+    expect(events2).toEqual([]);
+  });
+
+  test('does NOT drop prose "Rewriting the parser for clarity"', async () => {
+    // No leading spinner glyph, no ellipsis — real prose, must survive.
+    const events = await runFixture('Rewriting the parser for clarity\n');
+    expect(events.length).toBe(1);
+    expect(events[0].type).toBe('assistant_text');
+  });
+
   test('does NOT drop real user input "❯ run tests"', async () => {
     const events = await runFixture('❯ run tests\n');
     expect(events).toEqual([
       { type: 'response', payload: { text: 'run tests' } },
+    ]);
+  });
+});
+
+describe('ChatParser wrap-space recovery (BDHLNDR-73 #40)', () => {
+  /** Run with a narrow terminal so wraps trigger on small inputs. */
+  async function runNarrow(input: string, cols = 10): Promise<ChatEvent[]> {
+    const events: ChatEvent[] = [];
+    const parser = new ChatParser((evs) => events.push(...evs), {
+      settleMs: 0,
+      cols,
+    });
+    await parser.parse(input);
+    await new Promise((r) => setTimeout(r, 5));
+    parser.flush();
+    parser.dispose();
+    return events;
+  }
+
+  test('preserves space at wrap boundary (Claude wrote "memory usage")', async () => {
+    // 10-col terminal. "memory usage" is 12 chars — wraps between "memory" + space.
+    // Without recovery: "memoryusage". With recovery: "memory usage".
+    const events = await runNarrow('memory usage\n', 10);
+    expect(events).toEqual([
+      { type: 'assistant_text', payload: { text: 'memory usage' } },
+    ]);
+  });
+
+  test('preserves space at wrap boundary (longer phrase)', async () => {
+    // "Slack and Discord" — 17 chars, wraps mid-phrase. Expect spaces preserved.
+    const events = await runNarrow('Slack and Discord\n', 10);
+    expect(events).toEqual([
+      { type: 'assistant_text', payload: { text: 'Slack and Discord' } },
+    ]);
+  });
+
+  test('does NOT insert a space mid-token when no original space existed', async () => {
+    // A 15-char single identifier (no spaces). 10-col wrap. Must NOT become "abc...def xyz".
+    const ident = 'abcdefghijklmno';
+    const events = await runNarrow(ident + '\n', 10);
+    expect(events).toEqual([
+      { type: 'assistant_text', payload: { text: ident } },
+    ]);
+  });
+
+  test('preserves Claude-Code cursor-positioned text wider than 120 cols', async () => {
+    // Real-corpus pattern: Claude paints with absolute cursor positioning
+    // (`ESC[NG` = cursor to col N). The captured corpus contains instructions
+    // up to col 197+. With TERM_COLS=120, `ESC[121G` clamps to col 120 and
+    // xterm autowraps, fusing "memory" + "usage" into "memoryusage".
+    //
+    // Synthesises the exact corpus byte pattern around "memory usage".
+    const ESC = '\x1b';
+    const input =
+      `${ESC}[110Gand${ESC}[114Gmemory${ESC}[121Gusage${ESC}[127Gis\r\n`;
+    // Use default cols (no override) — this is the production scenario.
+    const events: ChatEvent[] = [];
+    const parser = new ChatParser((e) => events.push(...e), { settleMs: 0 });
+    await parser.parse(input);
+    await new Promise((r) => setTimeout(r, 5));
+    parser.flush();
+    parser.dispose();
+    // The full logical text should preserve word boundaries.
+    const allText = events
+      .filter((e) => e.type === 'assistant_text')
+      .map((e) => (e as { payload: { text: string } }).payload.text)
+      .join(' ');
+    expect(allText).toContain('memory usage');
+  });
+
+  test('preserves space when wrap falls between word and punctuation', async () => {
+    // "concerns (windows," — space + paren is the natural break.
+    const events = await runNarrow('concerns (windows)\n', 10);
+    expect(events).toEqual([
+      { type: 'assistant_text', payload: { text: 'concerns (windows)' } },
     ]);
   });
 });
@@ -303,5 +409,16 @@ describe('ChatParser real-corpus regression (BDHLNDR-72)', () => {
         return false;
       });
     expect(leakers).toEqual([]);
+
+    // BDHLNDR-73 #40: wrap-space recovery — these three corrupted strings
+    // were present in the v1 (TERM_COLS=120) output of the real corpus.
+    // After bumping TERM_COLS to cover Claude's cursor-positioning range,
+    // they should be repaired.
+    const allText = events
+      .map(text)
+      .join('\n');
+    expect(allText).toContain('memory usage');
+    expect(allText).toContain('concerns (windows');
+    expect(allText).toContain('Slack, and Figma');
   });
 });

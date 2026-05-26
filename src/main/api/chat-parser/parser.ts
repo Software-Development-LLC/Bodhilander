@@ -64,7 +64,12 @@ import type {
   PromptYesNoEvent,
 } from './types';
 
-const TERM_COLS = 120;
+// BDHLNDR-73 #40: Claude Code paints with absolute cursor positioning
+// (`ESC[NG`). Captured corpora show instructions up to col 209 — clamping
+// at 120 caused autowrap to fuse adjacent words (`memory usage` →
+// `memoryusage`, `concerns (windows,` → `concerns(windows,`). 220 covers
+// observed max + headroom; xterm-headless handles wide buffers fine.
+const TERM_COLS = 220;
 const TERM_ROWS = 40;
 const SCROLLBACK = 10_000;
 /** Debounce window before harvesting (ms). */
@@ -124,6 +129,18 @@ const SPINNER_GLYPH_ONLY_RE =
  */
 const LOADING_STATUS_RE =
   /^[\s✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧*·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏][^.!?\n]*?\s*(?:\(\s*\d+[ms](?:\s|·)|\d+\s*shell|tokens|thinking|loading|generating|reasoning|pondering|musing|cogitat|deliberat|razzle[-\s]?dazzl|rewrit|sauté|brew|stew|simmer|whisk|knead)/i;
+
+/**
+ * BDHLNDR-73: shape-only catch for novel spinner verbs. Claude Code rotates
+ * its verb list continuously ("Distilling…", "Crystallizing…", new ones
+ * shipping in every Claude Code release) and the alternation in
+ * LOADING_STATUS_RE will always lag. This catches the durable shape:
+ * spinner glyph as the leading non-space char, followed by short content
+ * (under ~80 chars, no terminal punctuation), ending in `…` or `...`.
+ * The leading-glyph requirement keeps it from eating prose.
+ */
+const LOADING_STATUS_SHAPE_RE =
+  /^\s*[✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏][^.!?\n]{0,80}(?:…|\.\.\.)\s*$/;
 
 /**
  * Claude Code's TUI task-list rows (decorative): "◼ Title" / "✓ Title" /
@@ -397,6 +414,7 @@ function classifyLine(line: string, hasRed: boolean): ChatEvent | null {
   if (BOX_DRAWING_ONLY_RE.test(trimmed)) return null;
   if (SPINNER_GLYPH_ONLY_RE.test(trimmed)) return null;
   if (LOADING_STATUS_RE.test(trimmed)) return null;
+  if (LOADING_STATUS_SHAPE_RE.test(trimmed)) return null;
   if (TASK_LIST_CHROME_RE.test(trimmed)) return null;
   if (HELP_HINT_CHROME_RE.test(trimmed)) return null;
   if (DECORATIVE_HEADER_RE.test(trimmed)) return null;
