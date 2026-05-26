@@ -514,53 +514,54 @@ function createWindow(): void {
     const apiServer = getApiServer();
     apiServer.broadcastTerminalData(id, data);
 
-    // BDHLNDR-51: parallel chat-event stream. Additive — the terminal:output
-    // stream above is untouched. Per-session parser instance buffers
-    // incomplete lines across chunks; lazily created on first data.
+    // BDHLNDR-72: chat-event extraction via a headless xterm Terminal per
+    // session. The parser harvests committed rows asynchronously (debounced
+    // by ~250ms after each chunk burst) and delivers events through the
+    // onEvents callback rather than synchronously from parse(). Persistence
+    // + WS broadcast happen inside that callback. The terminal:output
+    // stream above is untouched and remains the authoritative live view.
     try {
       let parser = chatParsers.get(id);
       if (!parser) {
-        parser = new ChatParser();
+        parser = new ChatParser((events) => {
+          for (const event of events) {
+            try {
+              chatEventsRepo.createEvent(id, event);
+            } catch (persistErr) {
+              log.error(`[chat-parser] persist failed for session ${id}:`, persistErr);
+            }
+            apiServer.broadcastChatEvent(id, event);
+          }
+        });
         chatParsers.set(id, parser);
       }
-      const events = parser.parse(data);
-      for (const event of events) {
-        try {
-          chatEventsRepo.createEvent(id, event);
-        } catch (persistErr) {
-          // DB failure shouldn't drop the WS broadcast — the PWA can still
-          // render the live event even if persistence fails.
-          log.error(`[chat-parser] persist failed for session ${id}:`, persistErr);
-        }
-        apiServer.broadcastChatEvent(id, event);
-      }
+      // Fire-and-forget — onEvents handles delivery on settle, not here.
+      void parser.parse(data).catch((parseErr) => {
+        log.error(`[chat-parser] parse failed for session ${id}:`, parseErr);
+      });
     } catch (parseErr) {
-      // Parser must never crash the data pipeline. Log and move on; the
-      // raw terminal:output stream above keeps the UI alive.
-      log.error(`[chat-parser] parse failed for session ${id}:`, parseErr);
+      // Parser construction error etc. — never crash the data pipeline.
+      log.error(`[chat-parser] setup failed for session ${id}:`, parseErr);
     }
   });
 
   ptyManager.on('exit', ({ id, exitCode }) => {
     mainWindow?.webContents.send('pty:exit', id, exitCode);
 
-    // BDHLNDR-51: flush any buffered trailing line and free the parser so
-    // we don't leak per-session state for stopped sessions.
+    // BDHLNDR-72: force-harvest the cursor row (which the settle loop skips),
+    // dispose the underlying Terminal, and free the parser so we don't leak
+    // a 800KB-ish virtual screen for every stopped session.
     const parser = chatParsers.get(id);
     if (parser) {
       try {
-        const trailing = parser.flush();
-        const apiServer = getApiServer();
-        for (const event of trailing) {
-          try {
-            chatEventsRepo.createEvent(id, event);
-          } catch (persistErr) {
-            log.error(`[chat-parser] persist (flush) failed for session ${id}:`, persistErr);
-          }
-          apiServer.broadcastChatEvent(id, event);
-        }
+        parser.flush();
       } catch (flushErr) {
         log.error(`[chat-parser] flush failed for session ${id}:`, flushErr);
+      }
+      try {
+        parser.dispose();
+      } catch (disposeErr) {
+        log.error(`[chat-parser] dispose failed for session ${id}:`, disposeErr);
       }
       chatParsers.delete(id);
     }
