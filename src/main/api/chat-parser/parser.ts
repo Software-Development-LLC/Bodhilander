@@ -111,12 +111,17 @@ const LONE_PROMPT_RE = /^\s*[>❯]\s*$/;
 // short padding intact.
 const TRAILING_DECORATION_RE = /[─━═]{20,}\s*$/;
 
+// BDHLNDR-75: Claude Code uses ※ exclusively as a chrome leader — recap
+// banners, status timings ("※ Churned for 37s"), summaries. Never seen in
+// prose. Drop any line whose first non-space char is ※.
+const REFERENCE_MARK_LEADER_RE = /^\s*※/;
+
 const ERROR_PREFIX_RE = /^(?:\s*)(?:API\s+)?Error[:\s]/i;
 
 const YES_NO_RE = /\(\s*y\s*\/\s*n\s*\)|\[\s*[Yy]\s*\/\s*[Nn]\s*\]/;
 
 const SPINNER_GLYPH_ONLY_RE =
-  /^[\s✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧*·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]+$/;
+  /^[\s✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧※*·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]+$/;
 
 /**
  * Loading-status / "what claude is doing now" lines. Claude Code rotates a
@@ -128,7 +133,7 @@ const SPINNER_GLYPH_ONLY_RE =
  * that shape rather than an unbounded verb list.
  */
 const LOADING_STATUS_RE =
-  /^[\s✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧*·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏][^.!?\n]*?\s*(?:\(\s*\d+[ms](?:\s|·)|\d+\s*shell|tokens|thinking|loading|generating|reasoning|pondering|musing|cogitat|deliberat|razzle[-\s]?dazzl|rewrit|sauté|brew|stew|simmer|whisk|knead)/i;
+  /^[\s✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧※*·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏][^.!?\n]*?\s*(?:\(\s*\d+[ms](?:\s|·)|\d+\s*shell|tokens|thinking|loading|generating|reasoning|pondering|musing|cogitat|deliberat|razzle[-\s]?dazzl|rewrit|sauté|brew|stew|simmer|whisk|knead)/i;
 
 /**
  * BDHLNDR-73: shape-only catch for novel spinner verbs. Claude Code rotates
@@ -140,7 +145,7 @@ const LOADING_STATUS_RE =
  * The leading-glyph requirement keeps it from eating prose.
  */
 const LOADING_STATUS_SHAPE_RE =
-  /^\s*[✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏][^.!?\n]{0,80}(?:…|\.\.\.)\s*$/;
+  /^\s*[✶✻✽✢●○◌◍◐◑◒◓◔◕✱✦✧※·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏][^.!?\n]{0,80}(?:…|\.\.\.)\s*$/;
 
 /**
  * Claude Code's TUI task-list rows (decorative): "◼ Title" / "✓ Title" /
@@ -217,17 +222,18 @@ export class ChatParser {
   private readonly settleMs: number;
   private readonly maxSettleMs: number;
   /**
-   * Ring buffer of the last N emitted event texts — used to dedupe
-   * near-consecutive duplicates. Claude Code's TUI does periodic
-   * full-screen repaints (e.g. when a status row at the bottom updates,
-   * the entire viewport redraws), which causes xterm to push the same
-   * content into scrollback twice: once as the original paint and again
-   * after the repaint. A simple "equals previous" guard misses cases
-   * where a few interleaved rows (an input prompt `❯`, a status update)
-   * appear between the duplicates, so we keep a small ring instead.
+   * Recent emit map for dedupe. Keys are event texts, values are emit
+   * timestamps (ms). Claude Code's TUI does periodic full-screen repaints
+   * which push the same content into scrollback twice. The previous
+   * implementation was a 16-entry ring (BDHLNDR-72), but BDHLNDR-75 found
+   * cases where >16 unique events interleave between a duplicate pair —
+   * the ring evicted the first instance before the second arrived. TTL
+   * approach: dedupe within `DEDUPE_TTL_MS`, allow re-emit after that.
+   * Hard size cap prevents unbounded growth in long sessions.
    */
-  private recentTexts: string[] = [];
-  private static readonly DEDUPE_RING_SIZE = 16;
+  private recentTexts = new Map<string, number>();
+  private static readonly DEDUPE_TTL_MS = 30_000;
+  private static readonly DEDUPE_MAX_SIZE = 512;
 
   constructor(
     private readonly onEvents: ChatEventsCallback,
@@ -348,11 +354,22 @@ export class ChatParser {
         const event = classifyLine(logical, hasRed);
         if (event) {
           const text = eventText(event);
-          if (!this.recentTexts.includes(text)) {
+          const now = Date.now();
+          const prevTs = this.recentTexts.get(text);
+          if (prevTs === undefined || now - prevTs >= ChatParser.DEDUPE_TTL_MS) {
             events.push(event);
-            this.recentTexts.push(text);
-            if (this.recentTexts.length > ChatParser.DEDUPE_RING_SIZE) {
-              this.recentTexts.shift();
+            this.recentTexts.set(text, now);
+            if (this.recentTexts.size > ChatParser.DEDUPE_MAX_SIZE) {
+              // Purge expired entries; if still too big, drop the oldest.
+              const cutoff = now - ChatParser.DEDUPE_TTL_MS;
+              for (const [k, ts] of this.recentTexts) {
+                if (ts < cutoff) this.recentTexts.delete(k);
+              }
+              while (this.recentTexts.size > ChatParser.DEDUPE_MAX_SIZE) {
+                const oldestKey = this.recentTexts.keys().next().value;
+                if (oldestKey === undefined) break;
+                this.recentTexts.delete(oldestKey);
+              }
             }
           }
         }
@@ -421,6 +438,7 @@ function classifyLine(line: string, hasRed: boolean): ChatEvent | null {
   if (BARE_TIMING_RE.test(trimmed)) return null;
   if (LONE_PROMPT_RE.test(trimmed)) return null;
   if (TRAILING_DECORATION_RE.test(trimmed)) return null;
+  if (REFERENCE_MARK_LEADER_RE.test(trimmed)) return null;
 
   // 1. User input echo. Claude Code prefixes with `>` (older versions) or
   //    `❯` (newer). Both signal "user typed this".
