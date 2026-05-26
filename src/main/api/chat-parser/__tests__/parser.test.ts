@@ -153,6 +153,89 @@ describe('ChatParser streaming + terminal-emulator behaviour', () => {
   });
 });
 
+describe('ChatParser classifier tuning (BDHLNDR-73)', () => {
+  test('classifies "Reading N file…" as a Read tool call', async () => {
+    const events = await runFixture('Reading 1 file… (ctrl+o to expand)\n');
+    expect(events).toEqual([
+      { type: 'tool_call', payload: { tool: 'Read', argsBrief: '1 file' } },
+    ]);
+  });
+
+  test('classifies "Read N file (ctrl+o to expand)" as a Read tool call', async () => {
+    const events = await runFixture('Read 1 file (ctrl+o to expand)\n');
+    expect(events).toEqual([
+      { type: 'tool_call', payload: { tool: 'Read', argsBrief: '1 file' } },
+    ]);
+  });
+
+  test('classifies "Searching for N pattern…" as a Grep tool call', async () => {
+    const events = await runFixture('Searching for 1 pattern… (ctrl+o to expand)\n');
+    expect(events).toEqual([
+      { type: 'tool_call', payload: { tool: 'Grep', argsBrief: '1 pattern' } },
+    ]);
+  });
+
+  test('classifies "Searched for N pattern" as a Grep tool call', async () => {
+    const events = await runFixture('Searched for 1 pattern (ctrl+o to expand)\n');
+    expect(events).toEqual([
+      { type: 'tool_call', payload: { tool: 'Grep', argsBrief: '1 pattern' } },
+    ]);
+  });
+
+  test('drops decorative tool-result header "──Read package.json"', async () => {
+    const events = await runFixture('──Read package.json\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops decorative tool-result header with quoted arg', async () => {
+    const events = await runFixture('──── "src/main/api/**/*"\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops bare timing "(3s)"', async () => {
+    const events = await runFixture('(3s)\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops bare timing "(1m 30s)"', async () => {
+    const events = await runFixture('(1m 30s)\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops lone prompt indicator "❯"', async () => {
+    const events = await runFixture('❯\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops lone prompt indicator ">"', async () => {
+    const events = await runFixture('>\n');
+    expect(events).toEqual([]);
+  });
+
+  test('drops "Shell details" header with long trailing decoration', async () => {
+    const events = await runFixture(
+      'Shell details' + '─'.repeat(75) + '\n',
+    );
+    expect(events).toEqual([]);
+  });
+
+  test('keeps tree-render lines with short trailing padding', async () => {
+    // Real content — a few trailing dashes shouldn't trigger the filter.
+    const events = await runFixture(
+      '├── parser.ts          ← The new state machine\n',
+    );
+    expect(events.length).toBe(1);
+    expect(events[0].type).toBe('assistant_text');
+  });
+
+  test('does NOT drop real user input "❯ run tests"', async () => {
+    const events = await runFixture('❯ run tests\n');
+    expect(events).toEqual([
+      { type: 'response', payload: { text: 'run tests' } },
+    ]);
+  });
+});
+
 describe('ChatParser real-corpus regression (BDHLNDR-72)', () => {
   test('5-min real Claude session captures: extracts real content, suppresses noise', async () => {
     // Real PTY capture from one of @Will Long's Bodhilander sessions on
@@ -195,5 +278,30 @@ describe('ChatParser real-corpus regression (BDHLNDR-72)', () => {
 
     // At least one user-input echo correctly classified.
     expect(events.some((e) => e.type === 'response')).toBe(true);
+
+    // BDHLNDR-73: real-corpus tool-call recovery — at least one of the
+    // Read/Glob tool calls in the corpus should now classify correctly.
+    expect(events.some((e) => e.type === 'tool_call')).toBe(true);
+
+    // BDHLNDR-73: leaker regressions — none of these chrome patterns
+    // should survive classification.
+    const text = (e: ChatEvent) =>
+      e.type === 'assistant_text' || e.type === 'error' || e.type === 'response'
+        ? e.payload.text
+        : '';
+    const leakers = events
+      .map(text)
+      .filter((t) => {
+        const s = t.trim();
+        if (!s) return false;
+        // Lone prompt indicator
+        if (/^[>❯]$/.test(s)) return true;
+        // Bare timing
+        if (/^\(\s*\d+\s*[smh]\s*(?:\d+\s*[smh]\s*)?\)$/i.test(s)) return true;
+        // Decorative header (line starts with 2+ box-drawing dashes)
+        if (/^[─━]{2,}\s*\S/.test(s)) return true;
+        return false;
+      });
+    expect(leakers).toEqual([]);
   });
 });

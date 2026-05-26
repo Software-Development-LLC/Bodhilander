@@ -77,6 +77,35 @@ const MAX_SETTLE_MS = 1500;
 const TOOL_CALL_RE =
   /^\s*[●⏺*•◦]?\s*([A-Z][A-Za-z0-9_]+)\s*\(([^)]*)\)\s*$/;
 
+// BDHLNDR-73: Claude Code's real TUI renders Read tool calls as
+// `Reading 1 file… (ctrl+o to expand)` (pre-result) or `Read 1 file
+// (ctrl+o to expand)` (post-result). Neither matches TOOL_CALL_RE.
+const TOOL_CALL_READ_RE =
+  /^\s*Read(?:ing)?\s+(\d+)\s+(files?)(?:\s*[…]|\s*\.\.\.)?\s*(?:\(.*\))?\s*$/;
+
+// BDHLNDR-73: Grep/Glob render as `Searching for 1 pattern…` and
+// `Searched for 1 pattern (ctrl+o to expand)`.
+const TOOL_CALL_SEARCH_RE =
+  /^\s*Search(?:ing|ed)\s+(?:for\s+)?(\d+)\s+(patterns?|files?)(?:\s*[…]|\s*\.\.\.)?\s*(?:\(.*\))?\s*$/;
+
+// BDHLNDR-73: decorative tool-result header line, e.g. `──Read package.json`
+// or `──── "src/main/api/**/*"──────...`. Two-or-more leading box-drawing
+// chars followed by content — drop as chrome.
+const DECORATIVE_HEADER_RE = /^\s*[─━]{2,}\s*\S/;
+
+// BDHLNDR-73: bare timing line like `(3s)`, `( 12s )`, `(1m 30s)`.
+const BARE_TIMING_RE =
+  /^\s*\(\s*\d+\s*[smh]\s*(?:\d+\s*[smh]\s*)?\)\s*$/i;
+
+// BDHLNDR-73: lone prompt indicator with no input after it.
+const LONE_PROMPT_RE = /^\s*[>❯]\s*$/;
+
+// BDHLNDR-73: line ending in a long run of box-drawing chars — TUI section
+// header like `Shell details─────────...` (Bash tool result label expanded
+// across the full pane width). Threshold of 20 keeps tree-render lines with
+// short padding intact.
+const TRAILING_DECORATION_RE = /[─━═]{20,}\s*$/;
+
 const ERROR_PREFIX_RE = /^(?:\s*)(?:API\s+)?Error[:\s]/i;
 
 const YES_NO_RE = /\(\s*y\s*\/\s*n\s*\)|\[\s*[Yy]\s*\/\s*[Nn]\s*\]/;
@@ -370,6 +399,10 @@ function classifyLine(line: string, hasRed: boolean): ChatEvent | null {
   if (LOADING_STATUS_RE.test(trimmed)) return null;
   if (TASK_LIST_CHROME_RE.test(trimmed)) return null;
   if (HELP_HINT_CHROME_RE.test(trimmed)) return null;
+  if (DECORATIVE_HEADER_RE.test(trimmed)) return null;
+  if (BARE_TIMING_RE.test(trimmed)) return null;
+  if (LONE_PROMPT_RE.test(trimmed)) return null;
+  if (TRAILING_DECORATION_RE.test(trimmed)) return null;
 
   // 1. User input echo. Claude Code prefixes with `>` (older versions) or
   //    `❯` (newer). Both signal "user typed this".
@@ -378,12 +411,26 @@ function classifyLine(line: string, hasRed: boolean): ChatEvent | null {
     if (text) return { type: 'response', payload: { text } };
   }
 
-  // 2. Tool call.
+  // 2. Tool call (multiple render shapes).
   const toolMatch = TOOL_CALL_RE.exec(trimmed);
   if (toolMatch) {
     return {
       type: 'tool_call',
       payload: { tool: toolMatch[1], argsBrief: toolMatch[2].trim() },
+    };
+  }
+  const readMatch = TOOL_CALL_READ_RE.exec(trimmed);
+  if (readMatch) {
+    return {
+      type: 'tool_call',
+      payload: { tool: 'Read', argsBrief: `${readMatch[1]} ${readMatch[2]}` },
+    };
+  }
+  const searchMatch = TOOL_CALL_SEARCH_RE.exec(trimmed);
+  if (searchMatch) {
+    return {
+      type: 'tool_call',
+      payload: { tool: 'Grep', argsBrief: `${searchMatch[1]} ${searchMatch[2]}` },
     };
   }
 
