@@ -958,9 +958,16 @@ function EventRenderer({
   }
 }
 
+// BDHLNDR-70 follow-up: wrap-anywhere (Tailwind 4 → `overflow-wrap: anywhere`)
+// instead of break-words, because break-words only breaks at word boundaries
+// and the parser emits payloads with long unbreakable runs (URLs, paths,
+// ANSI sequences that the renderer treats as raw chars). The flex wrapper
+// on ResponseBubble also gets `min-w-0` — without it, flex items don't
+// shrink below their content's intrinsic width, which defeats max-w on the
+// inner bubble.
 function AssistantBubble({ text }: { text: string }) {
   return (
-    <div className="max-w-[85%] break-words rounded-2xl rounded-tl-sm bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+    <div className="max-w-[85%] wrap-anywhere rounded-2xl rounded-tl-sm bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
       <PlainTextWithBreaks text={text} />
     </div>
   );
@@ -968,8 +975,8 @@ function AssistantBubble({ text }: { text: string }) {
 
 function ResponseBubble({ text }: { text: string }) {
   return (
-    <div className="flex justify-end">
-      <div className="max-w-[85%] break-words rounded-2xl rounded-tr-sm bg-blue-600/30 px-3 py-2 text-sm text-blue-100">
+    <div className="flex min-w-0 justify-end">
+      <div className="max-w-[85%] wrap-anywhere rounded-2xl rounded-tr-sm bg-blue-600/30 px-3 py-2 text-sm text-blue-100">
         <PlainTextWithBreaks text={text} />
       </div>
     </div>
@@ -978,7 +985,7 @@ function ResponseBubble({ text }: { text: string }) {
 
 function ToolCallRow({ tool, argsBrief }: { tool: string; argsBrief: string }) {
   return (
-    <div className="break-all rounded-md bg-neutral-800/40 px-3 py-1 font-mono text-xs text-neutral-400">
+    <div className="wrap-anywhere rounded-md bg-neutral-800/40 px-3 py-1 font-mono text-xs text-neutral-400">
       <span className="text-neutral-500">⏺ </span>
       <span className="text-neutral-300">{tool}</span>
       <span className="text-neutral-500">({argsBrief})</span>
@@ -988,7 +995,7 @@ function ToolCallRow({ tool, argsBrief }: { tool: string; argsBrief: string }) {
 
 function ErrorCard({ text }: { text: string }) {
   return (
-    <div className="max-w-[85%] rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+    <div className="max-w-[85%] wrap-anywhere rounded-md border border-red-900/60 bg-red-950/30 px-3 py-2 text-sm text-red-200">
       {text}
     </div>
   );
