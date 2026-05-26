@@ -162,8 +162,21 @@ self.addEventListener('notificationclick', (event: NotificationEvent) => {
   );
 });
 
-// Allow the page to immediately activate a fresh SW (matches the
-// `registerType: 'autoUpdate'` config in vite.config.ts).
+// BDHLNDR-74: take over open clients as soon as a new SW activates, so
+// users don't have to close + reopen the PWA to pick up a bug fix. Without
+// these two hooks, `registerType: 'autoUpdate'` only swaps the SW after the
+// last client tab unloads — which most users never do. Symptom we hit:
+// BDHLNDR-70 send fix (CR instead of LF) shipped, but PWAs installed on a
+// prior build kept running cached old JS that used LF.
+self.addEventListener('install', () => {
+  void self.skipWaiting();
+});
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
+// Manual SKIP_WAITING channel kept for completeness (vite-plugin-pwa's
+// register snippet can call it when prompting users to refresh).
 self.addEventListener('message', (event) => {
   if ((event.data as { type?: string } | undefined)?.type === 'SKIP_WAITING') {
     void self.skipWaiting();
