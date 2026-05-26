@@ -1175,7 +1175,9 @@ function Compose({
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter sends, Shift+Enter inserts a newline. This matches every chat
     // app on every platform — users expect it.
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // BDHLNDR-74: skip Enter that's part of an IME composition (CJK input,
+    // some Android keyboards) so accepting a suggestion doesn't send.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       if (!sending && draft.trim() && !readOnly) onSend();
     }
@@ -1206,6 +1208,11 @@ function Compose({
           placeholder={readOnly ? 'Read-only device' : 'Message Claude…'}
           disabled={readOnly}
           rows={1}
+          // BDHLNDR-74: enterKeyHint surfaces "Send" on mobile soft keyboards
+          // instead of the default ↵. autoComplete=off blocks browser
+          // autocomplete from injecting events that race onKeyDown.
+          enterKeyHint="send"
+          autoComplete="off"
           className="min-h-[40px] flex-1 resize-none rounded-2xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-blue-500 focus:outline-none disabled:opacity-50"
         />
         <button
