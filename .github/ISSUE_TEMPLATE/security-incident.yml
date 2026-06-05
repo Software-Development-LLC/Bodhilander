@@ -1,0 +1,61 @@
+name: Security Incident
+description: Report a confirmed or suspected security incident (breach, exposure, vulnerability being exploited)
+title: "Security Incident: "
+type: Security Incident
+labels: ["security-incident", "urgent", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **If this is an active breach or data exposure, escalate immediately through the security on-call channel in addition to filing this issue.**
+        Avoid pasting live credentials, secrets, or customer PII into this issue. Reference them indirectly.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: Summary of the incident — what was observed and when.
+    validations:
+      required: true
+  - type: textarea
+    id: affected
+    attributes:
+      label: Affected systems / data
+      description: Which systems, services, repos, or data are involved?
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical - active breach / data exposure / RCE
+        - High - exploitable, no confirmed exposure yet
+        - Medium - vulnerability, limited exploitability
+        - Low - hardening / informational
+    validations:
+      required: true
+  - type: dropdown
+    id: containment
+    attributes:
+      label: Containment status
+      options:
+        - Not contained
+        - Partially contained
+        - Contained
+        - Investigating
+    validations:
+      required: true
+  - type: input
+    id: discovered
+    attributes:
+      label: When discovered
+      placeholder: "e.g. 2026-06-05 14:00 UTC"
+    validations:
+      required: false
+  - type: textarea
+    id: actions
+    attributes:
+      label: Actions already taken
+      description: Optional — containment / mitigation steps performed so far.
+    validations:
+      required: false
