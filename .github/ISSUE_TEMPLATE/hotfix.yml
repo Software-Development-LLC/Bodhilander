@@ -1,0 +1,38 @@
+name: Hotfix
+description: Emergency fix for a production problem
+title: "Hotfix: "
+type: Hotfix
+labels: ["urgent", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this only for issues requiring an out-of-cycle production fix. For normal defects, file a Bug Report instead.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Production impact
+      description: What is broken in production right now, and who/what is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: cause
+    attributes:
+      label: Root cause (if known)
+      description: Optional — what's causing it.
+    validations:
+      required: false
+  - type: textarea
+    id: fix
+    attributes:
+      label: Proposed fix
+      description: What change resolves it?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Affected version / environment
+      placeholder: "e.g. production v1.2.3"
+    validations:
+      required: true
