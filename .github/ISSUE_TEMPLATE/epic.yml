@@ -1,0 +1,53 @@
+name: Epic
+description: A large body of work that groups related stories, tasks, and bugs
+title: "Epic: "
+type: Epic
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Track child issues below using GitHub sub-issues or a checklist of issue references (e.g. `- [ ] #123`).
+  - type: textarea
+    id: goal
+    attributes:
+      label: Summary / goal
+      description: What is this epic delivering, at a high level?
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: Why / business value
+      description: Optional — why this matters.
+    validations:
+      required: false
+  - type: textarea
+    id: children
+    attributes:
+      label: Child issues / scope
+      description: List the stories/tasks/bugs that make up this epic.
+      placeholder: |
+        - [ ] #...
+        - [ ] #...
+    validations:
+      required: false
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of done
+      description: When is the whole epic complete?
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Highest
+        - High
+        - Medium
+        - Low
+        - Lowest
+    validations:
+      required: false
