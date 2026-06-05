@@ -1,0 +1,41 @@
+name: Task
+description: A discrete piece of work that isn't a bug or feature
+title: "Task: "
+type: Task
+labels: ["needs-triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs doing
+      description: A clear, concise description of the work.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / why
+      description: Optional — background or reason this is needed.
+    validations:
+      required: false
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: How we know this task is complete.
+      placeholder: |
+        - [ ] ...
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Highest
+        - High
+        - Medium
+        - Low
+        - Lowest
+    validations:
+      required: false
