@@ -1,0 +1,60 @@
+name: Bug Report
+description: Something isn't working
+title: "Bug: "
+type: Bug
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Fill out the fields below — the more precise the repro, the faster the fix.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear, concise description of what's wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Tap ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include error messages / screenshots.
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How bad is the impact?
+      options:
+        - Critical - production down / data loss
+        - High - major feature broken, no workaround
+        - Medium - feature broken, workaround exists
+        - Low - minor / cosmetic
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Affected version / environment
+      placeholder: "e.g. development, production, app v1.2.3, iOS 17"
+    validations:
+      required: false
