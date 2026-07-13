@@ -1,4 +1,4 @@
-import { ProviderDefinition, ProviderLaunchConfig, ProviderCommand } from './types';
+import { passthroughProvider } from './passthrough';
 
 /**
  * OpenAI Codex CLI (`codex`). Auth is handled by the CLI itself
@@ -6,26 +6,8 @@ import { ProviderDefinition, ProviderLaunchConfig, ProviderCommand } from './typ
  * (`codex resume` picker) and offers no flag to assign one up front, so
  * Bodhilander's stored-UUID resume machinery is disabled.
  */
-export const codexProvider: ProviderDefinition = {
+export const codexProvider = passthroughProvider({
   id: 'codex',
   name: 'Codex (OpenAI)',
   command: 'codex',
-  capabilities: {
-    resume: false,
-    hooks: false,
-    systemPrompt: false,
-    accounts: false,
-  },
-
-  buildCommand(config: ProviderLaunchConfig): ProviderCommand {
-    return {
-      command: 'codex',
-      args: [],
-      env: {
-        ...process.env,
-        BODHILANDER_SESSION_ID: config.sessionId,
-        BODHILANDER_SOCKET: config.socketPath,
-      },
-    };
-  },
-};
+});

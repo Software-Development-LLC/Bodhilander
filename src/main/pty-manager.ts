@@ -48,8 +48,6 @@ interface PtySession {
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
   lastOutputTime: number;
-  /** Agent conversation UUID for resume-capable providers (BDHLNDR-9). Null otherwise. */
-  agentSessionId: string | null;
   /** Whether this spawn used the provider's resume flag. Used to detect resume failure on early exit. */
   resumeAttempted: boolean;
   /** Wall-clock spawn time (ms) for early-exit detection. */
@@ -113,6 +111,71 @@ const GENERIC_WAITING_PATTERNS = [
   /want me to.{0,50}\?/i,                 // "Want me to continue?"
   /proceed with/i,                        // "Proceed with this approach?"
 ] as const;
+
+/**
+ * How to launch a command string under the user's shell: the executable to
+ * spawn, how to wrap the command into argv, and the shell's syntax for
+ * referencing an environment variable inside that command string. Single
+ * source of truth for both regular agent sessions and login ptys.
+ */
+interface ShellLaunch {
+  shell: string;
+  wrap(cmd: string): string[];
+  envRef(name: string): string;
+}
+
+function getShellLaunch(shellInfo: ShellInfo): ShellLaunch {
+  if (shellInfo.isWSL) {
+    // Launch the agent inside WSL
+    return {
+      shell: 'wsl.exe',
+      wrap: (cmd) => [...shellInfo.args, '--', 'bash', '-c', cmd],
+      envRef: (name) => `"$${name}"`,
+    };
+  }
+  if (process.platform === 'win32') {
+    const shellName = shellInfo.shell.toLowerCase();
+    if (shellName.includes('powershell')) {
+      return {
+        shell: shellInfo.shell,
+        wrap: (cmd) => ['-NoLogo', '-Command', cmd],
+        envRef: (name) => `$env:${name}`,
+      };
+    }
+    if (shellName.includes('cmd')) {
+      return {
+        shell: shellInfo.shell,
+        wrap: (cmd) => ['/c', cmd],
+        envRef: (name) => `"%${name}%"`,
+      };
+    }
+    // Assume bash-like shell (Git Bash, etc.)
+    return {
+      shell: shellInfo.shell,
+      wrap: (cmd) => ['-c', cmd],
+      envRef: (name) => `"$${name}"`,
+    };
+  }
+  // macOS/Linux: run through interactive login shell
+  return {
+    shell: shellInfo.shell,
+    wrap: (cmd) => ['-l', '-i', '-c', cmd],
+    envRef: (name) => `"$${name}"`,
+  };
+}
+
+/** Merged generic + provider waiting patterns, computed once per provider id. */
+const mergedWaitingPatterns = new Map<string, readonly RegExp[]>();
+
+function getWaitingPatterns(provider: ProviderDefinition | null): readonly RegExp[] {
+  if (!provider?.waitingPatterns?.length) return GENERIC_WAITING_PATTERNS;
+  let merged = mergedWaitingPatterns.get(provider.id);
+  if (!merged) {
+    merged = [...GENERIC_WAITING_PATTERNS, ...provider.waitingPatterns];
+    mergedWaitingPatterns.set(provider.id, merged);
+  }
+  return merged;
+}
 
 export class PtyManager extends EventEmitter {
   private sessions: Map<string, PtySession> = new Map();
@@ -231,47 +294,13 @@ export class PtyManager extends EventEmitter {
       // capability so an inherited BODHILANDER_SYSTEM_PROMPT in the parent
       // environment can't produce a bogus flag for providers without one.
       const injectSystemPrompt = supportsSystemPrompt && !!processEnv.BODHILANDER_SYSTEM_PROMPT;
-      const withSystemPrompt = (envRef: string) =>
-        `${launch.command} ${provider.systemPromptFlag} ${envRef}${sessionFlag}`;
-
-      if (shellInfo.isWSL) {
-        // Launch the agent inside WSL
-        shell = 'wsl.exe';
-        if (injectSystemPrompt) {
-          agentCmd = withSystemPrompt('"$BODHILANDER_SYSTEM_PROMPT"');
-        }
-        args = [...shellInfo.args, '--', 'bash', '-c', agentCmd];
-        env = processEnv;
-      } else if (process.platform === 'win32') {
-        // On Windows without WSL, run the agent through the shell
-        shell = shellInfo.shell;
-        if (shellInfo.shell.toLowerCase().includes('powershell')) {
-          if (injectSystemPrompt) {
-            agentCmd = withSystemPrompt('$env:BODHILANDER_SYSTEM_PROMPT');
-          }
-          args = ['-NoLogo', '-Command', agentCmd];
-        } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
-          if (injectSystemPrompt) {
-            agentCmd = withSystemPrompt('"%BODHILANDER_SYSTEM_PROMPT%"');
-          }
-          args = ['/c', agentCmd];
-        } else {
-          // Assume bash-like shell (Git Bash, etc.)
-          if (injectSystemPrompt) {
-            agentCmd = withSystemPrompt('"$BODHILANDER_SYSTEM_PROMPT"');
-          }
-          args = ['-c', agentCmd];
-        }
-        env = processEnv;
-      } else {
-        // macOS/Linux: run the agent through interactive login shell
-        shell = shellInfo.shell;
-        if (injectSystemPrompt) {
-          agentCmd = withSystemPrompt('"$BODHILANDER_SYSTEM_PROMPT"');
-        }
-        args = ['-l', '-i', '-c', agentCmd];
-        env = processEnv;
+      const shellLaunch = getShellLaunch(shellInfo);
+      if (injectSystemPrompt) {
+        agentCmd = `${launch.command} ${provider.systemPromptFlag} ${shellLaunch.envRef('BODHILANDER_SYSTEM_PROMPT')}${sessionFlag}`;
       }
+      shell = shellLaunch.shell;
+      args = shellLaunch.wrap(agentCmd);
+      env = processEnv;
     } else {
       shell = shellInfo.shell;
       args = shellInfo.args;
@@ -364,8 +393,9 @@ export class PtyManager extends EventEmitter {
       this.sessions.delete(id);
     });
 
-    // Write memory file for agent sessions (for reference)
-    if (provider && groupId) {
+    // Write memory file for reference — only for providers that can actually
+    // consume it via system-prompt injection.
+    if (provider?.capabilities.systemPrompt && groupId) {
       writeMemoryFile(id, groupId, cwd);
     }
 
@@ -383,7 +413,6 @@ export class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
-      agentSessionId,
       resumeAttempted: agentSessionMode === 'resume',
       spawnedAt: Date.now(),
       lastCols: 80,
@@ -419,25 +448,9 @@ export class PtyManager extends EventEmitter {
     };
     const agentCmd = claudeProvider.command;
 
-    let shell: string;
-    let args: string[];
-
-    if (shellInfo.isWSL) {
-      shell = 'wsl.exe';
-      args = [...shellInfo.args, '--', 'bash', '-c', agentCmd];
-    } else if (process.platform === 'win32') {
-      shell = shellInfo.shell;
-      if (shellInfo.shell.toLowerCase().includes('powershell')) {
-        args = ['-NoLogo', '-Command', agentCmd];
-      } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
-        args = ['/c', agentCmd];
-      } else {
-        args = ['-c', agentCmd];
-      }
-    } else {
-      shell = shellInfo.shell;
-      args = ['-l', '-i', '-c', agentCmd];
-    }
+    const shellLaunch = getShellLaunch(shellInfo);
+    const shell = shellLaunch.shell;
+    const args = shellLaunch.wrap(agentCmd);
 
     log.info(`[PTY] Starting login pty ${id} with CLAUDE_CONFIG_DIR=${configDir}`);
 
@@ -501,7 +514,6 @@ export class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
-      agentSessionId: null,
       resumeAttempted: false,
       spawnedAt: Date.now(),
       lastCols: 80,
@@ -703,9 +715,7 @@ export class PtyManager extends EventEmitter {
     // Generic prompt shapes plus whatever the session's provider knows about
     // its own TUI (selection menus, permission dialogs).
     const recentBuffer = session.outputBuffer.slice(-500);
-    const waitingPatterns: readonly RegExp[] = session.provider?.waitingPatterns
-      ? [...GENERIC_WAITING_PATTERNS, ...session.provider.waitingPatterns]
-      : GENERIC_WAITING_PATTERNS;
+    const waitingPatterns = getWaitingPatterns(session.provider);
 
     let isWaiting = false;
     for (const pattern of waitingPatterns) {

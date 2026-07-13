@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { app } from 'electron';
 import { ProviderDefinition, ProviderLaunchConfig, ProviderCommand } from './types';
+import { baseSessionEnv } from './passthrough';
 
 /** Env var Claude Code reads its isolated config dir from (BDHLNDR-31). */
 export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
@@ -41,9 +42,7 @@ export const claudeProvider: ProviderDefinition = {
     ensureHookScript(hookScriptPath);
 
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      BODHILANDER_SESSION_ID: config.sessionId,
-      BODHILANDER_SOCKET: config.socketPath,
+      ...baseSessionEnv(config),
       // Point Claude to use our hook
       CLAUDE_HOOKS_DIR: path.dirname(hookScriptPath),
       // Enable experimental MCP CLI features
