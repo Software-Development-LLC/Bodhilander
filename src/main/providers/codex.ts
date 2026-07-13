@@ -1,4 +1,5 @@
 import { passthroughProvider } from './passthrough';
+import { codexParser } from '../arena/parsers';
 
 /**
  * OpenAI Codex CLI (`codex`). Auth is handled by the CLI itself
@@ -10,6 +11,11 @@ export const codexProvider = passthroughProvider({
   id: 'codex',
   name: 'Codex (OpenAI)',
   command: 'codex',
+  arena: {
+    // JSONL events; turn.completed carries token usage (OpenAI headless docs).
+    buildCommand: (promptRef) => `codex exec --json ${promptRef}`,
+    createParser: codexParser,
+  },
   setup: {
     installHint: 'npm install -g @openai/codex',
     docsUrl: 'https://developers.openai.com/codex/cli',

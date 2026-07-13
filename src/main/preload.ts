@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -185,6 +185,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   detectProviders: (): Promise<ProviderStatus[]> => ipcRenderer.invoke('providers:detect'),
+
+  // Arena mode (#100)
+  arenaStart: (prompt: string, contestants: string[]): Promise<ArenaRun> =>
+    ipcRenderer.invoke('arena:start', prompt, contestants),
+  arenaCancel: (runId: string): Promise<void> =>
+    ipcRenderer.invoke('arena:cancel', runId),
+  arenaListRuns: (): Promise<ArenaRun[]> =>
+    ipcRenderer.invoke('arena:listRuns'),
+  arenaGetRun: (id: string): Promise<ArenaRun | null> =>
+    ipcRenderer.invoke('arena:getRun', id),
+  onArenaUpdate: (callback: (update: ArenaUpdate) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, update: ArenaUpdate) => callback(update);
+    ipcRenderer.on('arena:update', listener);
+    return () => {
+      ipcRenderer.removeListener('arena:update', listener);
+    };
+  },
 
   // Sound notifications
   testSound: (event: 'waiting' | 'error' | 'start' | 'complete') =>

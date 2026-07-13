@@ -33,6 +33,59 @@ export interface Session {
   provider: string;
 }
 
+// ---------------------------------------------------------------------------
+// Arena mode (#100) — one prompt fanned out to multiple agents, compared.
+// ---------------------------------------------------------------------------
+
+export type ArenaResponseStatus = 'running' | 'done' | 'error';
+
+export interface ArenaResponse {
+  id: string;
+  runId: string;
+  /** Arena contestant id: a provider registry id or 'ollama'. */
+  provider: string;
+  status: ArenaResponseStatus;
+  /** Accumulated response text (streamed). */
+  text: string;
+  /** Milliseconds from spawn to first output. Null until first chunk. */
+  ttftMs: number | null;
+  /** Milliseconds from spawn to completion. Null while running. */
+  totalMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /**
+   * API-equivalent cost in USD when the CLI reports one (subscription-backed
+   * runs don't bill this; it's shown as "included in subscription"). Null
+   * when the CLI doesn't report cost.
+   */
+  costUsd: number | null;
+  /** Error detail when status === 'error'. */
+  error: string | null;
+}
+
+export interface ArenaRun {
+  id: string;
+  prompt: string;
+  createdAt: Date;
+  responses: ArenaResponse[];
+}
+
+/** Renderer-facing progress event for a streaming arena response. */
+export interface ArenaUpdate {
+  runId: string;
+  responseId: string;
+  provider: string;
+  /** New text appended since the last update (may be empty on status-only updates). */
+  chunk: string;
+  status: ArenaResponseStatus;
+  ttftMs: number | null;
+  totalMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  error: string | null;
+}
+
 /** Result of probing one provider CLI's availability (#97). */
 export interface ProviderStatus {
   id: string;

@@ -9,6 +9,8 @@ import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
+import * as arenaRepo from './repositories/arena';
+import { arenaEngine } from './arena/engine';
 import * as chatEventsRepo from './repositories/chat-events';
 import { ChatParser } from './api/chat-parser';
 import * as accountsRepo from './repositories/accounts';
@@ -507,6 +509,11 @@ function createWindow(): void {
 
   vsManager.on('indexing-error', (data) => {
     mainWindow?.webContents.send('vector-search:error', data);
+  });
+
+  // Arena streaming updates (#100)
+  arenaEngine.on('update', (update) => {
+    mainWindow?.webContents.send('arena:update', update);
   });
 
   // PTY data forwarding
@@ -1177,6 +1184,23 @@ safeHandle('editor:detectAvailable', async () => {
 
 safeHandle('providers:detect', async () => {
   return detectProviders();
+});
+
+// Arena mode (#100)
+safeHandle('arena:start', async (prompt: string, contestants: string[]) => {
+  if (!prompt?.trim() || !Array.isArray(contestants) || contestants.length === 0) {
+    throw new Error('Arena run needs a prompt and at least one contestant');
+  }
+  return arenaEngine.start(prompt, contestants);
+});
+safeHandle('arena:cancel', async (runId: string) => {
+  arenaEngine.cancelRun(runId);
+});
+safeHandle('arena:listRuns', async () => {
+  return arenaRepo.listRuns();
+});
+safeHandle('arena:getRun', async (id: string) => {
+  return arenaRepo.getRun(id);
 });
 
 safeHandle('editor:getOptions', () => {

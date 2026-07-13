@@ -436,6 +436,30 @@ function initializeCodeSearchTables(database: Database.Database): void {
   } catch (e) {
     log.error('Vector table setup error:', e);
   }
+
+  // Migration: Arena mode tables (#100, epic #94). One run = one prompt
+  // fanned out to N contestants; responses persist final text + metrics.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS arena_runs (
+      id TEXT PRIMARY KEY,
+      prompt TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS arena_responses (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES arena_runs(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      response_text TEXT NOT NULL DEFAULT '',
+      ttft_ms INTEGER DEFAULT NULL,
+      total_ms INTEGER DEFAULT NULL,
+      input_tokens INTEGER DEFAULT NULL,
+      output_tokens INTEGER DEFAULT NULL,
+      cost_usd REAL DEFAULT NULL,
+      error TEXT DEFAULT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_arena_responses_run ON arena_responses(run_id);
+  `);
 }
 
 export function closeDatabase(): void {

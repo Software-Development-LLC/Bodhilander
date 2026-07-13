@@ -1,3 +1,5 @@
+import { ArenaStreamParser } from '../arena/parsers';
+
 /**
  * Provider abstraction for agentic CLI sessions (#95).
  *
@@ -75,6 +77,17 @@ export interface ProviderDefinition {
    * merged with the generic pattern set by the pty state detector.
    */
   waitingPatterns?: readonly RegExp[];
+  /**
+   * Headless invocation for arena mode (#100). promptRef is the
+   * shell-appropriate env-var reference for the prompt (e.g.
+   * `"$ARENA_PROMPT"`), so the prompt text itself never touches the command
+   * string — it travels via the environment, immune to shell injection.
+   * Runs under the user's existing CLI login (subscription), never an API key.
+   */
+  arena: {
+    buildCommand(promptRef: string): string;
+    createParser(): ArenaStreamParser;
+  };
   /** Setup guidance surfaced in Settings → Providers when the CLI is missing (#97). */
   setup: {
     /** Install command or instruction, shown as copyable text. */

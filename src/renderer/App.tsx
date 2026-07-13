@@ -7,6 +7,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
+import { ArenaPanel } from './components/ArenaPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { CodeSearchModal } from './components/CodeSearchModal';
 import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
@@ -84,6 +85,7 @@ const App: React.FC = () => {
 
   // Analytics view state (BDHLNDR-18)
   const [analyticsViewOpen, setAnalyticsViewOpen] = useState(false);
+  const [arenaViewOpen, setArenaViewOpen] = useState(false);
 
   // Code search modal state
   const [codeSearchOpen, setCodeSearchOpen] = useState(false);
@@ -904,6 +906,14 @@ const App: React.FC = () => {
               📊
             </button>
             <button
+              className={`icon-button ${arenaViewOpen ? 'active' : ''}`}
+              onClick={() => setArenaViewOpen(prev => !prev)}
+              title="Arena — compare agents"
+              aria-label="Arena"
+            >
+              ⚔️
+            </button>
+            <button
               className="icon-button"
               onClick={() => setCodeSearchOpen(true)}
               title="Code Search (Ctrl+Shift+F)"
@@ -1324,7 +1334,8 @@ const App: React.FC = () => {
             activeSessionId={activeSessionId}
           />
         )}
-        <div className="terminal-area" style={{ display: analyticsViewOpen ? 'none' : undefined }}>
+        {arenaViewOpen && <ArenaPanel onClose={() => setArenaViewOpen(false)} />}
+        <div className="terminal-area" style={{ display: analyticsViewOpen || arenaViewOpen ? 'none' : undefined }}>
           {sessions.map(session => (
             <div
               key={session.id}

@@ -118,13 +118,13 @@ const GENERIC_WAITING_PATTERNS = [
  * referencing an environment variable inside that command string. Single
  * source of truth for both regular agent sessions and login ptys.
  */
-interface ShellLaunch {
+export interface ShellLaunch {
   shell: string;
   wrap(cmd: string): string[];
   envRef(name: string): string;
 }
 
-function getShellLaunch(shellInfo: ShellInfo): ShellLaunch {
+export function getShellLaunch(shellInfo: ShellInfo): ShellLaunch {
   if (shellInfo.isWSL) {
     // Launch the agent inside WSL
     return {
