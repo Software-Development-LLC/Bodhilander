@@ -10,9 +10,10 @@ interface TerminalProps {
   cwd: string;
   launchClaude?: boolean;
   /**
-   * Provider id for agent sessions (#98). Passed explicitly to pty:create so
-   * the launch never depends on the DB row already being persisted (the
-   * Terminal mounts optimistically before createDbSession resolves).
+   * Provider id for agent sessions (#98). Forwarded to pty:create as a
+   * fallback for first launches where the Terminal mounted before
+   * createDbSession persisted the row; once the row exists it is
+   * authoritative (#96).
    */
   provider?: string;
   isStopped?: boolean;

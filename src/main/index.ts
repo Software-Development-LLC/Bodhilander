@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
-import { DEFAULT_PROVIDER_ID } from './providers';
+import { resolveLaunchProviderId } from './providers';
 import { detectProviders } from './provider-detector';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
@@ -662,11 +662,11 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     const session = sessions.find(s => s.id === id);
     const groupId = session?.groupId || null;
 
-    // An explicitly-passed provider (#98) wins over the stored row — the
-    // renderer mounts terminals optimistically, so the row may not be
-    // persisted yet on first launch. Unknown ids degrade to the default
-    // inside PtyManager.createSession (resolveProvider).
-    ptyManager.createSession(id, cwd, launchClaude, groupId, providerId ?? session?.provider ?? DEFAULT_PROVIDER_ID);
+    // The persisted row is authoritative (#96); the explicit providerId (#98)
+    // only bridges first launches where the terminal mounted before the row
+    // was persisted. Unknown ids degrade to the default inside
+    // PtyManager.createSession (resolveProvider).
+    ptyManager.createSession(id, cwd, launchClaude, groupId, resolveLaunchProviderId(session?.provider, providerId));
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {

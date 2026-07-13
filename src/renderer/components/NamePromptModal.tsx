@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ClaudeAccount, ProviderStatus, DEFAULT_SESSION_PROVIDER } from '../../shared/types';
+import { buildProviderOptions } from './providerPickerOptions';
 import './NamePromptModal.css';
 
 interface NamePromptModalProps {
@@ -78,7 +79,7 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
     const finalName = trimmed || defaultValue;
     const finalAccountId = accountPicker ? selectedAccountId : undefined;
     const finalProvider = providerPicker ? selectedProvider : undefined;
-    onConfirm(finalName, selectedPath || undefined, finalAccountId, finalProvider);
+    onConfirm(finalName, selectedPath ?? undefined, finalAccountId, finalProvider);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -171,18 +172,9 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
                 className="path-input"
                 style={{ width: '100%', padding: '10px 12px', cursor: 'pointer' }}
               >
-                {providers === null && (
-                  <option value={DEFAULT_SESSION_PROVIDER}>Claude Code (detecting others…)</option>
-                )}
-                {(providers ?? []).map(p => (
-                  // The default provider stays selectable even when undetected
-                  // so session creation never dead-ends.
-                  <option
-                    key={p.id}
-                    value={p.id}
-                    disabled={!p.installed && p.id !== DEFAULT_SESSION_PROVIDER}
-                  >
-                    {p.name}{p.installed ? '' : ' — not installed'}
+                {buildProviderOptions(providers).map(opt => (
+                  <option key={opt.id} value={opt.id} disabled={opt.disabled}>
+                    {opt.label}
                   </option>
                 ))}
               </select>
