@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   homedir,
 
   // PTY operations
-  createSession: (id: string, cwd: string, launchClaude: boolean = false) =>
-    ipcRenderer.invoke('pty:create', id, cwd, launchClaude),
+  createSession: (id: string, cwd: string, launchClaude: boolean = false, providerId?: string) =>
+    ipcRenderer.invoke('pty:create', id, cwd, launchClaude, providerId),
   writeToSession: (id: string, data: string) =>
     ipcRenderer.send('pty:write', id, data),
   resizeSession: (id: string, cols: number, rows: number) =>

@@ -655,16 +655,18 @@ function safeOn(channel: string, handler: (...args: any[]) => void): void {
 }
 
 // IPC Handlers
-ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false) => {
+ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false, providerId?: string) => {
   try {
     // Look up the session to get its groupId for memory injection
     const sessions = sessionsRepo.getAllSessions();
     const session = sessions.find(s => s.id === id);
     const groupId = session?.groupId || null;
 
-    // The session's stored provider drives the launch (#96); unknown ids are
-    // degraded to the default inside PtyManager.createSession (resolveProvider).
-    ptyManager.createSession(id, cwd, launchClaude, groupId, session?.provider ?? DEFAULT_PROVIDER_ID);
+    // An explicitly-passed provider (#98) wins over the stored row — the
+    // renderer mounts terminals optimistically, so the row may not be
+    // persisted yet on first launch. Unknown ids degrade to the default
+    // inside PtyManager.createSession (resolveProvider).
+    ptyManager.createSession(id, cwd, launchClaude, groupId, providerId ?? session?.provider ?? DEFAULT_PROVIDER_ID);
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {

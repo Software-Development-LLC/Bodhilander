@@ -211,10 +211,15 @@ const App: React.FC = () => {
   }, [getSessionsByGroup]);
 
   // Actually create the session after name is confirmed
-  const handleConfirmSession = useCallback(async (name: string) => {
+  const handleConfirmSession = useCallback(async (
+    name: string,
+    _path?: string,
+    _claudeAccountId?: string | null,
+    provider?: string,
+  ) => {
     if (!sessionPrompt) return;
     const cwd = getEffectiveWorkingDir(sessionPrompt.groupId) || homedir;
-    await createSession(sessionPrompt.groupId, name, cwd, true); // launchClaude = true
+    await createSession(sessionPrompt.groupId, name, cwd, true, provider); // launchClaude = true
     setSessionPrompt(null);
   }, [sessionPrompt, getEffectiveWorkingDir, createSession, homedir]);
 
@@ -1338,6 +1343,7 @@ const App: React.FC = () => {
                   sessionId={session.id}
                   cwd={session.workingDir}
                   launchClaude={session.shellType === 'claude'}
+                  provider={session.provider}
                   isStopped={session.state === 'stopped'}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
@@ -1414,6 +1420,7 @@ const App: React.FC = () => {
         defaultValue={sessionPrompt?.defaultName || ''}
         onConfirm={handleConfirmSession}
         onCancel={() => setSessionPrompt(null)}
+        providerPicker
       />
 
       <NamePromptModal

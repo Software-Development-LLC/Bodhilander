@@ -9,6 +9,12 @@ interface TerminalProps {
   sessionId: string;
   cwd: string;
   launchClaude?: boolean;
+  /**
+   * Provider id for agent sessions (#98). Passed explicitly to pty:create so
+   * the launch never depends on the DB row already being persisted (the
+   * Terminal mounts optimistically before createDbSession resolves).
+   */
+  provider?: string;
   isStopped?: boolean;
   restartKey?: number;
   isActive?: boolean;
@@ -42,7 +48,7 @@ const AUTO_SCROLL_THRESHOLD = 5;
 const MIN_COLS = 10;
 const MIN_ROWS = 2;
 
-const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError, externalPty = false }) => {
+const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, provider, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError, externalPty = false }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -340,7 +346,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         }
       }
     } else {
-      window.electronAPI.createSession(sessionId, cwd, launchClaude)
+      window.electronAPI.createSession(sessionId, cwd, launchClaude, provider)
         .then(() => {
           // Send resize after PTY creation to fix Windows ConPTY race condition
           // where input doesn't register until a resize event syncs the terminal.

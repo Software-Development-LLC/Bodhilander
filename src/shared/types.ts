@@ -47,6 +47,13 @@ export interface ProviderStatus {
   loginHint: string;
 }
 
+/**
+ * Default provider for new sessions. Must match the main-process registry's
+ * DEFAULT_PROVIDER_ID (the registry lives main-side because provider
+ * definitions import electron; the renderer only needs the id).
+ */
+export const DEFAULT_SESSION_PROVIDER = 'claude';
+
 /** Display labels for session providers (registry ids → short names). */
 export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude',
