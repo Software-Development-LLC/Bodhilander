@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode, ProviderStatus } from '../../shared/types';
+import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 
 interface SettingsModalProps {
@@ -15,29 +15,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [updateChannel, setUpdateChannelState] = useState<'stable' | 'beta'>('stable');
   const [updateChannelLoading, setUpdateChannelLoading] = useState(false);
 
-  // Provider CLI detection state (#97)
-  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[] | null>(null);
-  const [providersLoading, setProvidersLoading] = useState(false);
-
-  const refreshProviders = useCallback(async () => {
-    setProvidersLoading(true);
-    try {
-      setProviderStatuses(await window.electronAPI.detectProviders());
-    } catch (error) {
-      console.error('Provider detection failed:', error);
-      setProviderStatuses([]);
-    } finally {
-      setProvidersLoading(false);
-    }
-  }, []);
-
-  // Detect provider CLIs the first time the Providers tab is opened (#97);
-  // the Refresh button re-runs detection on demand without an app restart.
-  useEffect(() => {
-    if (isOpen && activeTab === 'providers' && providerStatuses === null && !providersLoading) {
-      refreshProviders();
-    }
-  }, [isOpen, activeTab, providerStatuses, providersLoading, refreshProviders]);
 
   // Mobile API state
   const [apiStatus, setApiStatus] = useState<ApiServerStatus>({ running: false });
@@ -788,13 +765,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               </div>
             )}
 
-            {activeTab === 'providers' && (
-              <ProviderSettings
-                statuses={providerStatuses}
-                loading={providersLoading}
-                onRefresh={refreshProviders}
-              />
-            )}
+            {activeTab === 'providers' && <ProviderSettings />}
 
             {activeTab === 'mobile' && (
               <div className="settings-section">
