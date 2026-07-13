@@ -300,15 +300,15 @@ export class PtyManager extends EventEmitter {
       // The renderer never sees an 'exit' event for this path — it just sees
       // new output from the replacement pty.
       const session = this.sessions.get(id);
-      const isResumeFailure = session?.provider
+      if (
+        session?.provider
         && session.resumeAttempted
         && exitCode !== 0
-        && (Date.now() - session.spawnedAt) < RESUME_FAILURE_WINDOW_MS;
-
-      if (isResumeFailure) {
+        && Date.now() - session.spawnedAt < RESUME_FAILURE_WINDOW_MS
+      ) {
         log.warn(
-          `[PTY] ${session!.provider!.name} resume failed for session ${id} (exitCode=${exitCode}, ` +
-          `age=${Date.now() - session!.spawnedAt}ms). Clearing stored session ID ` +
+          `[PTY] ${session.provider.name} resume failed for session ${id} (exitCode=${exitCode}, ` +
+          `age=${Date.now() - session.spawnedAt}ms). Clearing stored session ID ` +
           `and retrying with a fresh agent session.`
         );
         try {
@@ -693,6 +693,49 @@ export class PtyManager extends EventEmitter {
     }, 2000);
   }
 
+  /**
+   * Move a session between waiting/working based on whether the recent
+   * output matched a waiting-for-input prompt. Waiting transitions apply
+   * immediately; working transitions are debounced behind 300ms of
+   * sustained output to avoid flickering.
+   */
+  private applyStateTransition(id: string, session: PtySession, isWaiting: boolean, now: number): void {
+    if (isWaiting && session.lastState !== 'waiting') {
+      // Immediately transition to waiting
+      if (session.workingDebounce) {
+        clearTimeout(session.workingDebounce);
+        session.workingDebounce = null;
+      }
+      session.lastState = 'waiting';
+      this.emit('stateChange', {
+        sessionId: id,
+        state: 'waiting',
+        event: 'prompt_detected',
+        timestamp: Math.floor(now / 1000),
+      });
+    } else if (!isWaiting && session.lastState !== 'working') {
+      // Only transition to working after sustained output (200+ bytes)
+      // Use debounce to avoid flickering
+      if (session.recentOutputBytes > 200 && !session.workingDebounce) {
+        session.workingDebounce = setTimeout(() => {
+          const currentSession = this.sessions.get(id);
+          if (currentSession && currentSession.recentOutputBytes > 200) {
+            currentSession.lastState = 'working';
+            currentSession.workingDebounce = null;
+            this.emit('stateChange', {
+              sessionId: id,
+              state: 'working',
+              event: 'sustained_output',
+              timestamp: Math.floor(Date.now() / 1000),
+            });
+            // Set idle timeout immediately after transitioning to working
+            this.scheduleIdleTimeout(id);
+          }
+        }, 300); // Wait 300ms of sustained output
+      }
+    }
+  }
+
   private detectAgentState(id: string, data: string): void {
     const session = this.sessions.get(id);
     if (!session) return;
@@ -752,48 +795,8 @@ export class PtyManager extends EventEmitter {
     const recentBuffer = session.outputBuffer.slice(-500);
     const waitingPatterns = getWaitingPatterns(session.provider);
 
-    let isWaiting = false;
-    for (const pattern of waitingPatterns) {
-      if (pattern.test(recentBuffer)) {
-        isWaiting = true;
-        break;
-      }
-    }
-
-    if (isWaiting && session.lastState !== 'waiting') {
-      // Immediately transition to waiting
-      if (session.workingDebounce) {
-        clearTimeout(session.workingDebounce);
-        session.workingDebounce = null;
-      }
-      session.lastState = 'waiting';
-      this.emit('stateChange', {
-        sessionId: id,
-        state: 'waiting',
-        event: 'prompt_detected',
-        timestamp: Math.floor(now / 1000),
-      });
-    } else if (!isWaiting && session.lastState !== 'working') {
-      // Only transition to working after sustained output (200+ bytes)
-      // Use debounce to avoid flickering
-      if (session.recentOutputBytes > 200 && !session.workingDebounce) {
-        session.workingDebounce = setTimeout(() => {
-          const currentSession = this.sessions.get(id);
-          if (currentSession && currentSession.recentOutputBytes > 200) {
-            currentSession.lastState = 'working';
-            currentSession.workingDebounce = null;
-            this.emit('stateChange', {
-              sessionId: id,
-              state: 'working',
-              event: 'sustained_output',
-              timestamp: Math.floor(Date.now() / 1000),
-            });
-            // Set idle timeout immediately after transitioning to working
-            this.scheduleIdleTimeout(id);
-          }
-        }, 300); // Wait 300ms of sustained output
-      }
-    }
+    const isWaiting = waitingPatterns.some((pattern) => pattern.test(recentBuffer));
+    this.applyStateTransition(id, session, isWaiting, now);
 
     // Only reset idle timeout if there's substantial output (>10 printable chars)
     // This prevents cursor blinks and status updates from keeping "working" alive
