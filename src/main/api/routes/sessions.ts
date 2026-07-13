@@ -195,6 +195,7 @@ export function createSessionsRouter(): Router {
           endedAt: null,
           durationSeconds: 0,
           claudeAccountId: null,
+          provider: 'claude',
         };
 
         sessionsRepo.createSession(session);
@@ -208,7 +209,7 @@ export function createSessionsRouter(): Router {
 
         // Start PTY if requested
         if (launchClaude) {
-          ptyManager.createSession(id, session.workingDir, true, groupId);
+          ptyManager.createSession(id, session.workingDir, true, groupId, session.provider);
         }
 
         log.info(`[SessionsAPI] Created session: ${id}`);
@@ -305,7 +306,7 @@ export function createSessionsRouter(): Router {
           return;
         }
 
-        ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.groupId);
+        ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.groupId, session.provider);
 
         log.info(`[SessionsAPI] Started session: ${id}`);
         res.json({ success: true });

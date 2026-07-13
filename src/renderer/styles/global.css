@@ -478,6 +478,17 @@ body {
   flex-shrink: 0;
 }
 
+/* Provider label on non-Claude agent sessions (#96) */
+.session-provider-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+  background: #2d3a4d;
+  color: #9fc3f0;
+}
+
 .status-pill.idle {
   background: #3c3c3c;
   color: #888;

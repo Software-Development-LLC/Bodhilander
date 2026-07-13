@@ -16,6 +16,10 @@ const REGISTRY: ReadonlyMap<string, ProviderDefinition> = new Map(
   [claudeProvider, codexProvider, geminiProvider, grokProvider].map((p) => [p.id, p])
 );
 
+export function isKnownProvider(id: string): boolean {
+  return REGISTRY.has(id);
+}
+
 export function getProvider(id: string): ProviderDefinition {
   const provider = REGISTRY.get(id);
   if (!provider) {

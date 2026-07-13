@@ -10,7 +10,7 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { CodeSearchModal } from './components/CodeSearchModal';
 import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
-import { ClaudeAccount } from '../shared/types';
+import { ClaudeAccount, PROVIDER_LABELS } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -1099,6 +1099,15 @@ const App: React.FC = () => {
                       )}
                       <SessionStatsBadge sessionId={session.id} />
                     </div>
+                    {session.shellType === 'claude' && session.provider !== 'claude' && (
+                      <span
+                        className="session-provider-badge"
+                        title={`Provider: ${PROVIDER_LABELS[session.provider] ?? session.provider}`}
+                        draggable={false}
+                      >
+                        {PROVIDER_LABELS[session.provider] ?? session.provider}
+                      </span>
+                    )}
                     <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
                     <button
                       className="session-close"

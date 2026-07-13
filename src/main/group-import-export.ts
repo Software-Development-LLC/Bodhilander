@@ -40,6 +40,8 @@ interface PortableSession {
   order: number;
   createdAt: string;
   lastActivityAt: string;
+  /** Agent provider registry id (#96); absent in exports from older versions. */
+  provider?: string;
 }
 
 interface PortableData {
@@ -100,6 +102,7 @@ export async function exportGroupsAndSessions(): Promise<ExportResult> {
         order: s.order,
         createdAt: s.createdAt instanceof Date ? s.createdAt.toISOString() : String(s.createdAt),
         lastActivityAt: s.lastActivityAt instanceof Date ? s.lastActivityAt.toISOString() : String(s.lastActivityAt),
+        provider: s.provider ?? 'claude',
       })),
     };
 
@@ -225,6 +228,7 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
         endedAt: null,
         durationSeconds: 0,
         claudeAccountId: null,
+        provider: s.provider ?? 'claude',
       });
       sessionCount++;
     }
@@ -363,6 +367,7 @@ export async function importFromClaudeLander(): Promise<ImportResult> {
         endedAt: null,
         durationSeconds: 0,
         claudeAccountId: null,
+        provider: row.provider ?? 'claude',
       });
       sessionCount++;
     }

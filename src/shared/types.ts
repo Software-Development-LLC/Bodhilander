@@ -25,7 +25,21 @@ export interface Session {
    * to the global default account, then to the legacy ~/.claude config).
    */
   claudeAccountId: string | null;
+  /**
+   * Agent provider this session runs (providers registry id: 'claude',
+   * 'codex', 'gemini', 'grok') (#96). Only meaningful when shellType is
+   * 'claude'; plain shell sessions keep the default.
+   */
+  provider: string;
 }
+
+/** Display labels for session providers (registry ids → short names). */
+export const PROVIDER_LABELS: Record<string, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  gemini: 'Gemini',
+  grok: 'Grok',
+};
 
 export interface Group {
   id: string;
