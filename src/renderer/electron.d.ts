@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -83,6 +83,7 @@ interface ElectronAPI {
 
   // Shell
   openExternal: (url: string) => Promise<void>;
+  detectProviders: () => Promise<ProviderStatus[]>;
 
   // Sound notifications
   testSound: (event: 'waiting' | 'error' | 'start' | 'complete') => Promise<void>;

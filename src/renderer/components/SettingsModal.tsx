@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
+import { ApiServerStatus, PairedDevice, PairingCode, ProviderStatus } from '../../shared/types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -7,12 +7,36 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'mobile' | 'updates';
+  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'providers' | 'mobile' | 'updates';
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   // Update channel state (BDHLNDR-32)
   const [updateChannel, setUpdateChannelState] = useState<'stable' | 'beta'>('stable');
   const [updateChannelLoading, setUpdateChannelLoading] = useState(false);
+
+  // Provider CLI detection state (#97)
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[] | null>(null);
+  const [providersLoading, setProvidersLoading] = useState(false);
+
+  const refreshProviders = useCallback(async () => {
+    setProvidersLoading(true);
+    try {
+      setProviderStatuses(await window.electronAPI.detectProviders());
+    } catch (error) {
+      console.error('Provider detection failed:', error);
+      setProviderStatuses([]);
+    } finally {
+      setProvidersLoading(false);
+    }
+  }, []);
+
+  // Detect provider CLIs the first time the Providers tab is opened (#97);
+  // the Refresh button re-runs detection on demand without an app restart.
+  useEffect(() => {
+    if (isOpen && activeTab === 'providers' && providerStatuses === null && !providersLoading) {
+      refreshProviders();
+    }
+  }, [isOpen, activeTab, providerStatuses, providersLoading, refreshProviders]);
 
   // Mobile API state
   const [apiStatus, setApiStatus] = useState<ApiServerStatus>({ running: false });
@@ -422,6 +446,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               Integrations
             </button>
             <button
+              className={`settings-nav-item ${activeTab === 'providers' ? 'active' : ''}`}
+              onClick={() => setActiveTab('providers')}
+            >
+              Providers
+            </button>
+            <button
               className={`settings-nav-item ${activeTab === 'updates' ? 'active' : ''}`}
               onClick={() => setActiveTab('updates')}
             >
@@ -753,6 +783,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       current beta will auto-install.
                     </p>
                   )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'providers' && (
+              <div className="settings-section">
+                <h3>Session Providers</h3>
+                <p className="settings-description">
+                  Agent CLIs available for new sessions. Detection runs through your
+                  login shell, matching how sessions launch.
+                </p>
+
+                <div className="settings-group">
+                  <div className="settings-row">
+                    <span className="settings-hint">
+                      {providersLoading && 'Detecting installed CLIs…'}
+                      {!providersLoading && providerStatuses &&
+                        `${providerStatuses.filter(p => p.installed).length} of ${providerStatuses.length} providers detected`}
+                    </span>
+                    <button
+                      className="settings-button"
+                      onClick={refreshProviders}
+                      disabled={providersLoading}
+                    >
+                      {providersLoading ? 'Detecting…' : 'Refresh'}
+                    </button>
+                  </div>
+
+                  {(providerStatuses ?? []).map(p => (
+                    <div key={p.id} className="provider-status-row">
+                      <div className="provider-status-header">
+                        <span className={`provider-status-dot ${p.installed ? 'installed' : 'missing'}`} />
+                        <span className="provider-status-name">{p.name}</span>
+                        <code className="provider-status-command">{p.command}</code>
+                        {p.installed ? (
+                          <span className="provider-status-version">{p.version ?? 'detected'}</span>
+                        ) : (
+                          <span className="provider-status-missing">not found</span>
+                        )}
+                      </div>
+                      {!p.installed && (
+                        <div className="provider-status-setup">
+                          <div>Install: <code>{p.installHint}</code></div>
+                          <div>Sign in: {p.loginHint}</div>
+                          <button
+                            className="settings-link-button"
+                            onClick={() => window.electronAPI.openExternal(p.docsUrl)}
+                          >
+                            Documentation ↗
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

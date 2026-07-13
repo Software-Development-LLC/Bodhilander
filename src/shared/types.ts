@@ -33,6 +33,20 @@ export interface Session {
   provider: string;
 }
 
+/** Result of probing one provider CLI's availability (#97). */
+export interface ProviderStatus {
+  id: string;
+  name: string;
+  /** CLI binary probed for. */
+  command: string;
+  installed: boolean;
+  /** First version-looking line of `<command> --version`, when available. */
+  version: string | null;
+  installHint: string;
+  docsUrl: string;
+  loginHint: string;
+}
+
 /** Display labels for session providers (registry ids → short names). */
 export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude',

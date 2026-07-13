@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'elect
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { DEFAULT_PROVIDER_ID } from './providers';
+import { detectProviders } from './provider-detector';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
@@ -1170,6 +1171,10 @@ safeHandle('editor:open', async (filePath: string, line?: number, column?: numbe
 
 safeHandle('editor:detectAvailable', async () => {
   return detectAvailableEditors();
+});
+
+safeHandle('providers:detect', async () => {
+  return detectProviders();
 });
 
 safeHandle('editor:getOptions', () => {

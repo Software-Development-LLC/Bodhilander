@@ -75,6 +75,15 @@ export interface ProviderDefinition {
    * merged with the generic pattern set by the pty state detector.
    */
   waitingPatterns?: readonly RegExp[];
+  /** Setup guidance surfaced in Settings → Providers when the CLI is missing (#97). */
+  setup: {
+    /** Install command or instruction, shown as copyable text. */
+    installHint: string;
+    /** Official installation/authentication documentation URL. */
+    docsUrl: string;
+    /** How to authenticate after installing. */
+    loginHint: string;
+  };
   /** Build the command, args, and env for launching a session. */
   buildCommand(config: ProviderLaunchConfig): ProviderCommand;
 }

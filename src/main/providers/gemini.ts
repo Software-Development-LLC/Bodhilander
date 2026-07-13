@@ -9,4 +9,9 @@ export const geminiProvider = passthroughProvider({
   id: 'gemini',
   name: 'Gemini CLI (Google)',
   command: 'gemini',
+  setup: {
+    installHint: 'npm install -g @google/gemini-cli',
+    docsUrl: 'https://github.com/google-gemini/gemini-cli',
+    loginHint: 'Run `gemini` and sign in with your Google account, or set GEMINI_API_KEY',
+  },
 });
