@@ -10,4 +10,9 @@ export const codexProvider = passthroughProvider({
   id: 'codex',
   name: 'Codex (OpenAI)',
   command: 'codex',
+  setup: {
+    installHint: 'npm install -g @openai/codex',
+    docsUrl: 'https://developers.openai.com/codex/cli',
+    loginHint: 'Run `codex login` (ChatGPT account) or set OPENAI_API_KEY',
+  },
 });

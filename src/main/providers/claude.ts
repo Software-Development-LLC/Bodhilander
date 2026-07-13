@@ -34,6 +34,11 @@ export const claudeProvider: ProviderDefinition = {
   },
   systemPromptFlag: '--append-system-prompt',
   waitingPatterns: CLAUDE_WAITING_PATTERNS,
+  setup: {
+    installHint: 'npm install -g @anthropic-ai/claude-code',
+    docsUrl: 'https://docs.anthropic.com/en/docs/claude-code/setup',
+    loginHint: 'Run `claude` and complete /login in the browser',
+  },
 
   buildCommand(config: ProviderLaunchConfig): ProviderCommand {
     const hookScriptPath = getHookScriptPath();

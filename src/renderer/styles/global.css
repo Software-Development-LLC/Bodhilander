@@ -478,6 +478,91 @@ body {
   flex-shrink: 0;
 }
 
+/* Settings → Providers CLI detection (#97) */
+.provider-status-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #333;
+}
+
+.provider-status-row:last-child {
+  border-bottom: none;
+}
+
+.provider-status-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.provider-status-dot.installed {
+  background: #4caf50;
+}
+
+.provider-status-dot.missing {
+  background: #757575;
+}
+
+.provider-status-name {
+  font-weight: 500;
+}
+
+.provider-status-command {
+  font-size: 11px;
+  color: #999;
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.provider-status-version {
+  margin-left: auto;
+  font-size: 11px;
+  color: #4caf50;
+}
+
+.provider-status-missing {
+  margin-left: auto;
+  font-size: 11px;
+  color: #999;
+}
+
+.provider-status-setup {
+  margin: 8px 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #bbb;
+}
+
+.provider-status-setup code {
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 4px;
+  user-select: all;
+}
+
+.settings-link-button {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: #6ab0f3;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+}
+
+.settings-link-button:hover {
+  text-decoration: underline;
+}
+
 /* Provider label on non-Claude agent sessions (#96) */
 .session-provider-badge {
   font-size: 10px;
