@@ -6,9 +6,10 @@
 import { describe, expect, test, mock } from 'bun:test';
 
 // providers/claude.ts calls electron's app.getPath at buildCommand time only,
-// but the module import chain still pulls in 'electron' — stub it.
+// but the module import chain still pulls in 'electron' — stub it. The path
+// is never dereferenced by these tests (buildCommand is not exercised here).
 mock.module('electron', () => ({
-  app: { getPath: () => '/tmp/bodhilander-test-userdata' },
+  app: { getPath: () => '/nonexistent-bodhilander-test-userdata' },
 }));
 
 const providers = await import('../index');
