@@ -12,6 +12,6 @@ export const grokProvider = passthroughProvider({
   setup: {
     installHint: 'curl -fsSL https://x.ai/cli/install.sh | bash',
     docsUrl: 'https://docs.x.ai/build/overview',
-    loginHint: 'Run `grok-build login` (requires SuperGrok or X Premium+)',
+    loginHint: 'Run `grok` — the first launch prompts sign-in with your X/xAI account (requires SuperGrok or X Premium+)',
   },
 });

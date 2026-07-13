@@ -22,7 +22,8 @@ interface Probe {
   version: [string, string[]];
 }
 
-function buildProbe(command: string): Probe {
+/** Exported for tests — platform branches can't all run on one machine. */
+export function buildProbe(command: string): Probe {
   const shellInfo = detectShell(getPreference('customShellPath') ?? '');
 
   if (shellInfo.isWSL) {
@@ -50,12 +51,20 @@ function run([file, args]: [string, string[]]): Promise<{ ok: boolean; stdout: s
   });
 }
 
-/** Pick the first output line that looks like a version (contains a digit). */
-function extractVersion(stdout: string): string | null {
+/** Matches a semver-looking token (1.2, v1.2.3, 2.1.207) — not just any digit. */
+const VERSION_TOKEN = /\bv?\d+\.\d+(\.\d+)?\b/;
+
+/**
+ * Pick the first output line containing a semver-looking token. Best effort:
+ * a pre-version banner that itself contains a version string (update nag,
+ * runtime version) can still win, but plain text banners are skipped.
+ * Exported for tests.
+ */
+export function extractVersion(stdout: string): string | null {
   const line = stdout
     .split('\n')
     .map((l) => l.trim())
-    .find((l) => l && /\d/.test(l));
+    .find((l) => VERSION_TOKEN.test(l));
   return line ? line.slice(0, 100) : null;
 }
 
