@@ -10,6 +10,8 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'providers' | 'mobile' | 'updates';
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const navClass = (tab: SettingsTab) =>
+    `settings-nav-item ${activeTab === tab ? 'active' : ''}`;
 
   // Update channel state (BDHLNDR-32)
   const [updateChannel, setUpdateChannelState] = useState<'stable' | 'beta'>('stable');
@@ -388,49 +390,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         <div className="settings-layout">
           <nav className="settings-nav">
             <button
-              className={`settings-nav-item ${activeTab === 'general' ? 'active' : ''}`}
+              className={navClass('general')}
               onClick={() => setActiveTab('general')}
             >
               General
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'appearance' ? 'active' : ''}`}
+              className={navClass('appearance')}
               onClick={() => setActiveTab('appearance')}
             >
               Appearance
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'terminal' ? 'active' : ''}`}
+              className={navClass('terminal')}
               onClick={() => setActiveTab('terminal')}
             >
               Terminal
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'mobile' ? 'active' : ''}`}
+              className={navClass('mobile')}
               onClick={() => setActiveTab('mobile')}
             >
               Mobile App
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'sound' ? 'active' : ''}`}
+              className={navClass('sound')}
               onClick={() => setActiveTab('sound')}
             >
               Sound
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'integrations' ? 'active' : ''}`}
+              className={navClass('integrations')}
               onClick={() => setActiveTab('integrations')}
             >
               Integrations
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'providers' ? 'active' : ''}`}
+              className={navClass('providers')}
               onClick={() => setActiveTab('providers')}
             >
               Providers
             </button>
             <button
-              className={`settings-nav-item ${activeTab === 'updates' ? 'active' : ''}`}
+              className={navClass('updates')}
               onClick={() => setActiveTab('updates')}
             >
               Updates
