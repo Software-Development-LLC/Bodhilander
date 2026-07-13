@@ -232,75 +232,14 @@ export class PtyManager extends EventEmitter {
 
     // Track agent resume state for early-exit fallback (BDHLNDR-9)
     const provider = launchClaude ? getProvider(providerId) : null;
-    let agentSessionId: string | null = null;
-    let agentSessionMode: AgentSessionMode | null = null;
+    let resumeAttempted = false;
 
     if (provider) {
-      if (provider.capabilities.resume) {
-        // Resolve the agent conversation UUID + mode (BDHLNDR-9).
-        // If we have a stored ID, we're restarting and should resume. Otherwise
-        // generate a fresh UUID, pass it via the provider's new-session flag,
-        // and persist it so the NEXT launch can resume.
-        const storedAgentSessionId = getStoredClaudeSessionId(id);
-        if (storedAgentSessionId) {
-          agentSessionId = storedAgentSessionId;
-          agentSessionMode = 'resume';
-        } else {
-          agentSessionId = generateAgentSessionId();
-          agentSessionMode = 'new';
-          storeClaudeSessionId(id, agentSessionId);
-        }
-      }
-
-      // Resolve which account this session should launch under (BDHLNDR-31).
-      // Returns null when no accounts are registered, preserving legacy ~/.claude behavior.
-      const account = provider.capabilities.accounts ? resolveAccountForSession(id) : null;
-      if (account) {
-        touchAccount(account.id);
-      }
-
-      const launch = provider.buildCommand({
-        sessionId: id,
-        projectDir: cwd,
-        socketPath: this.socketPath,
-        agentSession: agentSessionId && agentSessionMode
-          ? { id: agentSessionId, mode: agentSessionMode }
-          : undefined,
-        configDir: account?.configDir,
-      });
-
-      // Suffix appended to every shell's agent command. UUIDs are alphanumeric
-      // + hyphens, so they are safe to inline without escaping.
-      // e.g. ' --resume 7a3f...' or ' --session-id 7a3f...'
-      const sessionFlag = launch.args.length > 0
-        ? ' ' + launch.args.join(' ')
-        : '';
-
-      // Get memory content for system prompt injection
-      // Pass via environment variable to avoid shell escaping issues with newlines
-      let agentCmd = `${launch.command}${sessionFlag}`;
-      let processEnv = { ...env, ...launch.env } as { [key: string]: string };
-
-      const supportsSystemPrompt = provider.capabilities.systemPrompt && !!provider.systemPromptFlag;
-      if (groupId && supportsSystemPrompt) {
-        const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
-        if (memoryContent) {
-          processEnv.BODHILANDER_SYSTEM_PROMPT = memoryContent;
-        }
-      }
-
-      // Rebuild the command with the system prompt flag reading from an env
-      // var, using the shell-appropriate variable reference syntax. Gated on
-      // capability so an inherited BODHILANDER_SYSTEM_PROMPT in the parent
-      // environment can't produce a bogus flag for providers without one.
-      const injectSystemPrompt = supportsSystemPrompt && !!processEnv.BODHILANDER_SYSTEM_PROMPT;
-      const shellLaunch = getShellLaunch(shellInfo);
-      if (injectSystemPrompt) {
-        agentCmd = `${launch.command} ${provider.systemPromptFlag} ${shellLaunch.envRef('BODHILANDER_SYSTEM_PROMPT')}${sessionFlag}`;
-      }
-      shell = shellLaunch.shell;
-      args = shellLaunch.wrap(agentCmd);
-      env = processEnv;
+      const agentSpawn = this.buildAgentSpawn(provider, id, cwd, groupId, shellInfo);
+      shell = agentSpawn.shell;
+      args = agentSpawn.args;
+      env = agentSpawn.env;
+      resumeAttempted = agentSpawn.resumeAttempted;
     } else {
       shell = shellInfo.shell;
       args = shellInfo.args;
@@ -361,8 +300,7 @@ export class PtyManager extends EventEmitter {
       // The renderer never sees an 'exit' event for this path — it just sees
       // new output from the replacement pty.
       const session = this.sessions.get(id);
-      const isResumeFailure = session
-        && session.provider
+      const isResumeFailure = session?.provider
         && session.resumeAttempted
         && exitCode !== 0
         && (Date.now() - session.spawnedAt) < RESUME_FAILURE_WINDOW_MS;
@@ -413,7 +351,7 @@ export class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
-      resumeAttempted: agentSessionMode === 'resume',
+      resumeAttempted,
       spawnedAt: Date.now(),
       lastCols: 80,
       lastRows: 24,
@@ -423,6 +361,92 @@ export class PtyManager extends EventEmitter {
       deferEmission: false,
     });
 
+  }
+
+  /**
+   * Resolve everything needed to spawn an agent session under the user's
+   * shell: conversation UUID + resume mode (BDHLNDR-9), account config dir
+   * (BDHLNDR-31), the provider's command/env, optional system-prompt
+   * injection, and the shell-appropriate argv wrapping.
+   */
+  private buildAgentSpawn(
+    provider: ProviderDefinition,
+    id: string,
+    cwd: string,
+    groupId: string | null,
+    shellInfo: ShellInfo
+  ): { shell: string; args: string[]; env: { [key: string]: string }; resumeAttempted: boolean } {
+    let agentSessionId: string | null = null;
+    let agentSessionMode: AgentSessionMode | null = null;
+
+    if (provider.capabilities.resume) {
+      // Resolve the agent conversation UUID + mode (BDHLNDR-9).
+      // If we have a stored ID, we're restarting and should resume. Otherwise
+      // generate a fresh UUID, pass it via the provider's new-session flag,
+      // and persist it so the NEXT launch can resume.
+      const storedAgentSessionId = getStoredClaudeSessionId(id);
+      if (storedAgentSessionId) {
+        agentSessionId = storedAgentSessionId;
+        agentSessionMode = 'resume';
+      } else {
+        agentSessionId = generateAgentSessionId();
+        agentSessionMode = 'new';
+        storeClaudeSessionId(id, agentSessionId);
+      }
+    }
+
+    // Resolve which account this session should launch under (BDHLNDR-31).
+    // Returns null when no accounts are registered, preserving legacy ~/.claude behavior.
+    const account = provider.capabilities.accounts ? resolveAccountForSession(id) : null;
+    if (account) {
+      touchAccount(account.id);
+    }
+
+    const launch = provider.buildCommand({
+      sessionId: id,
+      projectDir: cwd,
+      socketPath: this.socketPath,
+      agentSession: agentSessionId && agentSessionMode
+        ? { id: agentSessionId, mode: agentSessionMode }
+        : undefined,
+      configDir: account?.configDir,
+    });
+
+    // Suffix appended to every shell's agent command. UUIDs are alphanumeric
+    // + hyphens, so they are safe to inline without escaping.
+    // e.g. ' --resume 7a3f...' or ' --session-id 7a3f...'
+    const sessionFlag = launch.args.length > 0
+      ? ' ' + launch.args.join(' ')
+      : '';
+
+    // Get memory content for system prompt injection
+    // Pass via environment variable to avoid shell escaping issues with newlines
+    let agentCmd = `${launch.command}${sessionFlag}`;
+    const processEnv = { ...process.env, ...launch.env } as { [key: string]: string };
+
+    const supportsSystemPrompt = provider.capabilities.systemPrompt && !!provider.systemPromptFlag;
+    if (groupId && supportsSystemPrompt) {
+      const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
+      if (memoryContent) {
+        processEnv.BODHILANDER_SYSTEM_PROMPT = memoryContent;
+      }
+    }
+
+    // Rebuild the command with the system prompt flag reading from an env
+    // var, using the shell-appropriate variable reference syntax. Gated on
+    // capability so an inherited BODHILANDER_SYSTEM_PROMPT in the parent
+    // environment can't produce a bogus flag for providers without one.
+    const shellLaunch = getShellLaunch(shellInfo);
+    if (supportsSystemPrompt && processEnv.BODHILANDER_SYSTEM_PROMPT) {
+      agentCmd = `${launch.command} ${provider.systemPromptFlag} ${shellLaunch.envRef('BODHILANDER_SYSTEM_PROMPT')}${sessionFlag}`;
+    }
+
+    return {
+      shell: shellLaunch.shell,
+      args: shellLaunch.wrap(agentCmd),
+      env: processEnv,
+      resumeAttempted: agentSessionMode === 'resume',
+    };
   }
 
   /**
@@ -645,6 +669,30 @@ export class PtyManager extends EventEmitter {
     return session?.scrollbackBuffer || '';
   }
 
+  /**
+   * Arm the working→idle timeout for a session: after 2s without further
+   * substantial output the session is marked idle. No-op when a timeout is
+   * already armed or the session is gone.
+   */
+  private scheduleIdleTimeout(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session || session.idleTimeout) return;
+    session.idleTimeout = setTimeout(() => {
+      const sess = this.sessions.get(id);
+      if (sess && sess.lastState === 'working') {
+        sess.lastState = 'idle';
+        sess.recentOutputBytes = 0;
+        sess.idleTimeout = null;
+        this.emit('stateChange', {
+          sessionId: id,
+          state: 'idle',
+          event: 'idle_timeout',
+          timestamp: Math.floor(Date.now() / 1000),
+        });
+      }
+    }, 2000);
+  }
+
   private detectAgentState(id: string, data: string): void {
     const session = this.sessions.get(id);
     if (!session) return;
@@ -653,21 +701,8 @@ export class PtyManager extends EventEmitter {
 
     // Safety: ensure working state always has an idle timeout
     // This catches cases where filtered events come in but timeout was never set
-    if (session.lastState === 'working' && !session.idleTimeout) {
-      session.idleTimeout = setTimeout(() => {
-        const sess = this.sessions.get(id);
-        if (sess && sess.lastState === 'working') {
-          sess.lastState = 'idle';
-          sess.recentOutputBytes = 0;
-          sess.idleTimeout = null;
-          this.emit('stateChange', {
-            sessionId: id,
-            state: 'idle',
-            event: 'idle_timeout',
-            timestamp: Math.floor(Date.now() / 1000),
-          });
-        }
-      }, 2000);
+    if (session.lastState === 'working') {
+      this.scheduleIdleTimeout(id);
     }
 
     // Ignore mouse events (xterm mouse reporting)
@@ -754,22 +789,7 @@ export class PtyManager extends EventEmitter {
               timestamp: Math.floor(Date.now() / 1000),
             });
             // Set idle timeout immediately after transitioning to working
-            if (!currentSession.idleTimeout) {
-              currentSession.idleTimeout = setTimeout(() => {
-                const sess = this.sessions.get(id);
-                if (sess && sess.lastState === 'working') {
-                  sess.lastState = 'idle';
-                  sess.recentOutputBytes = 0;
-                  sess.idleTimeout = null;
-                  this.emit('stateChange', {
-                    sessionId: id,
-                    state: 'idle',
-                    event: 'idle_timeout',
-                    timestamp: Math.floor(Date.now() / 1000),
-                  });
-                }
-              }, 2000);
-            }
+            this.scheduleIdleTimeout(id);
           }
         }, 300); // Wait 300ms of sustained output
       }
@@ -787,21 +807,8 @@ export class PtyManager extends EventEmitter {
     }
 
     // Set idle timeout if in working state and no active timeout
-    if (session.lastState === 'working' && !session.idleTimeout) {
-      session.idleTimeout = setTimeout(() => {
-        const currentSession = this.sessions.get(id);
-        if (currentSession && currentSession.lastState === 'working') {
-          currentSession.lastState = 'idle';
-          currentSession.recentOutputBytes = 0;
-          currentSession.idleTimeout = null;
-          this.emit('stateChange', {
-            sessionId: id,
-            state: 'idle',
-            event: 'idle_timeout',
-            timestamp: Math.floor(Date.now() / 1000),
-          });
-        }
-      }, 2000);
+    if (session.lastState === 'working') {
+      this.scheduleIdleTimeout(id);
     }
   }
 }
