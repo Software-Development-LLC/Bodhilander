@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
+import { DEFAULT_PROVIDER_ID } from './providers';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
@@ -660,7 +661,9 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     const session = sessions.find(s => s.id === id);
     const groupId = session?.groupId || null;
 
-    ptyManager.createSession(id, cwd, launchClaude, groupId);
+    // The session's stored provider drives the launch (#96); unknown ids are
+    // degraded to the default inside PtyManager.createSession (resolveProvider).
+    ptyManager.createSession(id, cwd, launchClaude, groupId, session?.provider ?? DEFAULT_PROVIDER_ID);
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {

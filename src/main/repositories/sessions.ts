@@ -25,14 +25,15 @@ export function getAllSessions(): Session[] {
     endedAt: row.ended_at ? new Date(row.ended_at) : null,
     durationSeconds: row.duration_seconds ?? 0,
     claudeAccountId: row.claude_account_id ?? null,
+    provider: row.provider ?? 'claude',
   }));
 }
 
 export function createSession(session: Session): void {
   const db = getDatabase();
   db.prepare(`
-    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at, claude_session_id, ended_at, duration_seconds, claude_account_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at, claude_session_id, ended_at, duration_seconds, claude_account_id, provider)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id,
     session.groupId,
@@ -46,7 +47,8 @@ export function createSession(session: Session): void {
     session.claudeSessionId ?? null,
     session.endedAt ? session.endedAt.toISOString() : null,
     session.durationSeconds ?? 0,
-    session.claudeAccountId ?? null
+    session.claudeAccountId ?? null,
+    session.provider ?? 'claude'
   );
 }
 
@@ -115,6 +117,16 @@ export function updateSession(id: string, updates: Partial<Session>): void {
   if (updates.claudeAccountId !== undefined) {
     fields.push('claude_account_id = ?');
     values.push(updates.claudeAccountId);
+  }
+  if (updates.provider !== undefined) {
+    // Changing provider invalidates any stored conversation UUID — it belongs
+    // to the previous provider's CLI and must never be replayed as another
+    // provider's resume flag (#96). SET expressions evaluate against the
+    // pre-update row, so `provider` here is the old value.
+    fields.push('claude_session_id = CASE WHEN provider IS ? THEN claude_session_id ELSE NULL END');
+    values.push(updates.provider);
+    fields.push('provider = ?');
+    values.push(updates.provider);
   }
 
   if (fields.length > 0) {

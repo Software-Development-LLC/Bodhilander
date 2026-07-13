@@ -143,6 +143,13 @@ function initializeTables(database: Database.Database): void {
     database.exec("ALTER TABLE sessions ADD COLUMN claude_account_id TEXT DEFAULT NULL");
   }
 
+  // Migration: Add provider column to sessions (#96, epic #94).
+  // Which agent provider the session runs (providers registry id). Existing
+  // rows are Claude sessions by definition, so they default to 'claude'.
+  if (!sessionColsBdhlndr17.includes('provider')) {
+    database.exec("ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
+  }
+
   // Migration: Create session_events table (BDHLNDR-17)
   database.exec(`
     CREATE TABLE IF NOT EXISTS session_events (

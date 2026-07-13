@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { EventEmitter } from 'events';
 import {
-  getProvider,
+  resolveProvider,
   getSocketPath,
   generateAgentSessionId,
   claudeProvider,
@@ -230,8 +230,10 @@ export class PtyManager extends EventEmitter {
       throw new Error(errorMsg);
     }
 
-    // Track agent resume state for early-exit fallback (BDHLNDR-9)
-    const provider = launchClaude ? getProvider(providerId) : null;
+    // Track agent resume state for early-exit fallback (BDHLNDR-9).
+    // resolveProvider degrades unknown ids (e.g. rows written by a newer app
+    // version) to the default provider instead of failing the launch (#96).
+    const provider = launchClaude ? resolveProvider(providerId, `session ${id}`) : null;
     let resumeAttempted = false;
 
     if (provider) {

@@ -39,6 +39,8 @@ export interface Session {
   endedAt: string | null;
   durationSeconds: number;
   claudeAccountId: string | null;
+  /** Agent provider registry id (#96); absent from older API versions. */
+  provider?: string;
 }
 
 export interface Group {
