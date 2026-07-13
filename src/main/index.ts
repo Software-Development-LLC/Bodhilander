@@ -1186,12 +1186,16 @@ safeHandle('providers:detect', async () => {
   return detectProviders();
 });
 
-// Arena mode (#100)
+// Arena mode (#100). Two-phase: 'start' only creates the run so the renderer
+// can subscribe with the run id; 'launch' then spawns the contestants.
 safeHandle('arena:start', async (prompt: string, contestants: string[]) => {
   if (!prompt?.trim() || !Array.isArray(contestants) || contestants.length === 0) {
     throw new Error('Arena run needs a prompt and at least one contestant');
   }
-  return arenaEngine.start(prompt, contestants);
+  return arenaEngine.prepare(prompt, contestants);
+});
+safeHandle('arena:launch', async (runId: string) => {
+  arenaEngine.launch(runId);
 });
 safeHandle('arena:cancel', async (runId: string) => {
   arenaEngine.cancelRun(runId);

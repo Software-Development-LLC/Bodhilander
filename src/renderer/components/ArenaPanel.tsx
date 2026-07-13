@@ -15,6 +15,11 @@ const STATUS_PILL_CLASS: Record<string, string> = {
   error: 'error',
 };
 
+function columnText(text: string, status: string): string {
+  if (text) return text;
+  return status === 'running' ? '…' : '';
+}
+
 function formatMs(ms: number | null): string {
   if (ms === null) return '—';
   return ms >= 10_000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
@@ -59,31 +64,37 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
     window.electronAPI.arenaListRuns().then(setHistory).catch(() => setHistory([]));
   }, []);
 
-  // Live streaming updates for the active run.
-  useEffect(() => {
-    const unsubscribe = window.electronAPI.onArenaUpdate((update: ArenaUpdate) => {
-      if (update.runId !== runIdRef.current) return;
-      setRun(prev => {
-        if (!prev) return prev;
-        const next = applyArenaUpdate(prev, update);
-        if (update.status !== 'running' && isRunSettled(next)) {
-          setRunning(false);
-          window.electronAPI.arenaListRuns().then(setHistory).catch(() => undefined);
-        }
-        return next;
-      });
-    });
-    return unsubscribe;
+  const refreshHistory = useCallback(() => {
+    window.electronAPI.arenaListRuns().then(setHistory).catch(() => undefined);
   }, []);
+
+  // Live streaming updates for the active run.
+  const handleUpdate = useCallback((update: ArenaUpdate) => {
+    if (update.runId !== runIdRef.current) return;
+    setRun(prev => (prev ? applyArenaUpdate(prev, update) : prev));
+  }, []);
+
+  useEffect(() => window.electronAPI.onArenaUpdate(handleUpdate), [handleUpdate]);
+
+  // When every column has settled, unlock the Run button and refresh history.
+  useEffect(() => {
+    if (running && run && run.id === runIdRef.current && isRunSettled(run)) {
+      setRunning(false);
+      refreshHistory();
+    }
+  }, [run, running, refreshHistory]);
 
   const startRun = useCallback(async () => {
     const trimmed = prompt.trim();
     if (!trimmed || selected.size === 0 || running) return;
     setRunning(true);
     try {
+      // Two-phase: subscribe with the run id BEFORE contestants launch, so
+      // even an instantly-failing CLI's updates are never dropped.
       const newRun = await window.electronAPI.arenaStart(trimmed, Array.from(selected));
       runIdRef.current = newRun.id;
       setRun(newRun);
+      await window.electronAPI.arenaLaunch(newRun.id);
     } catch (error) {
       console.error('Arena start failed:', error);
       setRunning(false);
@@ -188,7 +199,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
               <span title="Cost">{formatCost(r.costUsd)}</span>
             </div>
             {r.error && <div className="arena-column-error">{r.error}</div>}
-            <pre className="arena-column-text">{r.text || (r.status === 'running' ? '…' : '')}</pre>
+            <pre className="arena-column-text">{columnText(r.text, r.status)}</pre>
           </div>
         ))}
         {!run && (

@@ -39,7 +39,7 @@ const EMPTY_FINAL: ArenaFinal = {
   trailingText: '',
 };
 
-function tryParseJson(line: string): any | null {
+function tryParseJson(line: string): any {
   const trimmed = line.trim();
   if (!trimmed.startsWith('{')) return null;
   try {

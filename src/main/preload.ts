@@ -189,6 +189,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Arena mode (#100)
   arenaStart: (prompt: string, contestants: string[]): Promise<ArenaRun> =>
     ipcRenderer.invoke('arena:start', prompt, contestants),
+  arenaLaunch: (runId: string): Promise<void> =>
+    ipcRenderer.invoke('arena:launch', runId),
   arenaCancel: (runId: string): Promise<void> =>
     ipcRenderer.invoke('arena:cancel', runId),
   arenaListRuns: (): Promise<ArenaRun[]> =>

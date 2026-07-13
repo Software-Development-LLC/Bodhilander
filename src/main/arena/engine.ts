@@ -10,14 +10,20 @@
  *
  * Ollama is the one non-CLI contestant: a keyless HTTP call to the local
  * daemon, streaming /api/chat.
+ *
+ * Two-phase start: prepare() creates the run + response rows WITHOUT
+ * launching anything, so the renderer can learn the run id and subscribe
+ * before launch() spawns the contestants — otherwise a fast-failing CLI
+ * could emit its final update before the renderer knew the run id, leaving
+ * a column stuck on "running".
  */
-import { spawn } from 'child_process';
+import { spawn, execFile, ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import log from 'electron-log';
 import { getProvider } from '../providers';
-import { getShellLaunch } from '../pty-manager';
+import { getShellLaunch } from '../shell-launch';
 import { detectShell } from '../shell-detector';
 import { getPreference } from '../repositories/preferences';
 import * as arenaRepo from '../repositories/arena';
@@ -26,47 +32,85 @@ import { ArenaRun, ArenaUpdate, ArenaResponseStatus } from '../../shared/types';
 
 export const OLLAMA_CONTESTANT_ID = 'ollama';
 const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
-/** Generous cap so a hung CLI can't leave a column spinning forever. */
-const CONTESTANT_TIMEOUT_MS = 5 * 60 * 1000;
+/** Generous default cap so a hung CLI can't leave a column spinning forever. */
+const DEFAULT_CONTESTANT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Kill the contestant's whole process tree. The CLI runs as a child of the
+ * wrapper shell, so signalling just the shell would leave the actual agent
+ * process running detached. POSIX contestants are spawned detached (own
+ * process group) and killed by group; Windows uses taskkill /T.
+ */
+function killTree(child: ChildProcess): void {
+  if (!child.pid) {
+    child.kill();
+    return;
+  }
+  if (process.platform === 'win32') {
+    execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => undefined);
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGTERM');
+  } catch {
+    child.kill();
+  }
+}
 
 interface LiveResponse {
   runId: string;
   provider: string;
+  prompt: string;
   text: string;
   startedAt: number;
   ttftMs: number | null;
+  launched: boolean;
   kill: (() => void) | null;
 }
 
 export class ArenaEngine extends EventEmitter {
   private readonly live: Map<string, LiveResponse> = new Map();
+  private readonly timeoutMs: number;
 
-  /** Create the run + response rows and launch every contestant. */
-  start(prompt: string, contestants: string[]): ArenaRun {
+  constructor(timeoutMs: number = DEFAULT_CONTESTANT_TIMEOUT_MS) {
+    super();
+    this.timeoutMs = timeoutMs;
+  }
+
+  /** Phase 1: create the run + response rows; nothing is spawned yet. */
+  prepare(prompt: string, contestants: string[]): ArenaRun {
     const runId = randomUUID();
     arenaRepo.createRun(runId, prompt);
-
     for (const provider of contestants) {
       const responseId = randomUUID();
       arenaRepo.createResponse(responseId, runId, provider);
       this.live.set(responseId, {
         runId,
         provider,
+        prompt,
         text: '',
         startedAt: Date.now(),
         ttftMs: null,
+        launched: false,
         kill: null,
       });
-      if (provider === OLLAMA_CONTESTANT_ID) {
-        void this.runOllama(responseId, prompt);
-      } else {
-        this.runCli(responseId, provider, prompt);
-      }
     }
-
     const run = arenaRepo.getRun(runId);
     if (!run) throw new Error('Arena run vanished immediately after creation');
     return run;
+  }
+
+  /** Phase 2: spawn every contestant of a prepared run. */
+  launch(runId: string): void {
+    for (const [responseId, entry] of this.live) {
+      if (entry.runId !== runId || entry.launched) continue;
+      entry.launched = true;
+      if (entry.provider === OLLAMA_CONTESTANT_ID) {
+        void this.runOllama(responseId, entry.prompt);
+      } else {
+        this.runCli(responseId, entry.provider, entry.prompt);
+      }
+    }
   }
 
   cancelRun(runId: string): void {
@@ -97,16 +141,18 @@ export class ArenaEngine extends EventEmitter {
     const child = spawn(shellLaunch.shell, shellLaunch.wrap(cmd), {
       env: { ...process.env, ARENA_PROMPT: prompt },
       windowsHide: true,
+      // Own process group on POSIX so killTree can signal the whole tree.
+      detached: process.platform !== 'win32',
     });
     entry.startedAt = Date.now();
 
     const timeout = setTimeout(() => {
-      log.warn(`[Arena] ${providerId} timed out after ${CONTESTANT_TIMEOUT_MS}ms`);
-      child.kill();
-    }, CONTESTANT_TIMEOUT_MS);
+      log.warn(`[Arena] ${providerId} timed out after ${this.timeoutMs}ms`);
+      killTree(child);
+    }, this.timeoutMs);
     entry.kill = () => {
       clearTimeout(timeout);
-      child.kill();
+      killTree(child);
     };
 
     let stderrTail = '';
@@ -132,7 +178,9 @@ export class ArenaEngine extends EventEmitter {
       if (code === 0) {
         this.finish(responseId, 'done', final, null);
       } else {
-        const detail = stderrTail.trim() || `exit code ${code}`;
+        // code === null means killed by signal (timeout or cancel).
+        const fallback = code === null ? 'terminated' : `exit code ${code}`;
+        const detail = stderrTail.trim() || fallback;
         this.finish(responseId, 'error', final, detail.slice(0, 500));
       }
     });
@@ -143,7 +191,7 @@ export class ArenaEngine extends EventEmitter {
     if (!entry) return;
     const parser = ollamaParser();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), CONTESTANT_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     entry.kill = () => {
       clearTimeout(timeout);
       controller.abort();
@@ -199,9 +247,7 @@ export class ArenaEngine extends EventEmitter {
     if (!chunk) return;
     const entry = this.live.get(responseId);
     if (!entry) return;
-    if (entry.ttftMs === null) {
-      entry.ttftMs = Date.now() - entry.startedAt;
-    }
+    entry.ttftMs ??= Date.now() - entry.startedAt;
     entry.text += chunk;
     this.emitUpdate(responseId, entry, 'running', chunk, null, null);
   }

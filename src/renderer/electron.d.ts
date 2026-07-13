@@ -85,6 +85,7 @@ interface ElectronAPI {
   openExternal: (url: string) => Promise<void>;
   detectProviders: () => Promise<ProviderStatus[]>;
   arenaStart: (prompt: string, contestants: string[]) => Promise<ArenaRun>;
+  arenaLaunch: (runId: string) => Promise<void>;
   arenaCancel: (runId: string) => Promise<void>;
   arenaListRuns: () => Promise<ArenaRun[]>;
   arenaGetRun: (id: string) => Promise<ArenaRun | null>;

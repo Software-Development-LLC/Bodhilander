@@ -111,7 +111,3 @@ export function listRuns(limit: number = 50): ArenaRun[] {
     responses: (responsesStmt.all(run.id) as ResponseRow[]).map(rowToResponse),
   }));
 }
-
-export function deleteRun(id: string): void {
-  getDatabase().prepare('DELETE FROM arena_runs WHERE id = ?').run(id);
-}
