@@ -1,0 +1,39 @@
+name: SonarQube
+
+on:
+  # Analyze long-lived branches on push, and every pull request.
+  push:
+    branches:
+      - development
+      - production
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Cancel superseded analyses only on pull requests. Pushes to development/production
+# run to completion so quality-gate analysis history on protected branches is preserved.
+concurrency:
+  group: sonarqube-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality-gate:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Disabling shallow clone is recommended for improving relevancy of reporting.
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube Quality Gate check
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
