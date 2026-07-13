@@ -118,3 +118,11 @@
 .name-prompt-modal .browse-btn:hover {
   background: #4c4c4c;
 }
+
+/* Provider picker hint (#98) */
+.name-prompt-modal .provider-picker-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #999;
+}

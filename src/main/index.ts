@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
-import { DEFAULT_PROVIDER_ID } from './providers';
+import { resolveLaunchProviderId } from './providers';
 import { detectProviders } from './provider-detector';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
@@ -655,16 +655,18 @@ function safeOn(channel: string, handler: (...args: any[]) => void): void {
 }
 
 // IPC Handlers
-ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false) => {
+ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false, providerId?: string) => {
   try {
     // Look up the session to get its groupId for memory injection
     const sessions = sessionsRepo.getAllSessions();
     const session = sessions.find(s => s.id === id);
     const groupId = session?.groupId || null;
 
-    // The session's stored provider drives the launch (#96); unknown ids are
-    // degraded to the default inside PtyManager.createSession (resolveProvider).
-    ptyManager.createSession(id, cwd, launchClaude, groupId, session?.provider ?? DEFAULT_PROVIDER_ID);
+    // The persisted row is authoritative (#96); the explicit providerId (#98)
+    // only bridges first launches where the terminal mounted before the row
+    // was persisted. Unknown ids degrade to the default inside
+    // PtyManager.createSession (resolveProvider).
+    ptyManager.createSession(id, cwd, launchClaude, groupId, resolveLaunchProviderId(session?.provider, providerId));
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {

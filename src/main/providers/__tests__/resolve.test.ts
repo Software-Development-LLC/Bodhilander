@@ -44,3 +44,23 @@ describe('provider registry resolution', () => {
     expect(() => providers.getProvider('nope')).toThrow(/Unknown session provider/);
   });
 });
+
+describe('resolveLaunchProviderId precedence (#98)', () => {
+  test('the persisted row wins once it exists (#96 invariant)', () => {
+    expect(providers.resolveLaunchProviderId('grok', 'codex')).toBe('grok');
+  });
+
+  test('the explicit id bridges the not-yet-persisted-row gap', () => {
+    expect(providers.resolveLaunchProviderId(undefined, 'codex')).toBe('codex');
+    expect(providers.resolveLaunchProviderId(null, 'gemini')).toBe('gemini');
+  });
+
+  test('falls back to the default when neither is available', () => {
+    expect(providers.resolveLaunchProviderId(undefined, undefined)).toBe(providers.DEFAULT_PROVIDER_ID);
+  });
+
+  test('main and renderer defaults agree', async () => {
+    const shared = await import('../../../shared/types');
+    expect(providers.DEFAULT_PROVIDER_ID).toBe(shared.DEFAULT_SESSION_PROVIDER);
+  });
+});

@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import log from 'electron-log';
+import { DEFAULT_SESSION_PROVIDER } from '../../shared/types';
 import { ProviderDefinition } from './types';
 import { claudeProvider } from './claude';
 import { codexProvider } from './codex';
@@ -11,11 +12,16 @@ import { grokProvider } from './grok';
 export * from './types';
 export { claudeProvider, CLAUDE_CONFIG_DIR_ENV } from './claude';
 
-export const DEFAULT_PROVIDER_ID = claudeProvider.id;
+/** Single source of truth for the default lives in shared/types so the renderer agrees. */
+export const DEFAULT_PROVIDER_ID = DEFAULT_SESSION_PROVIDER;
 
 const REGISTRY: ReadonlyMap<string, ProviderDefinition> = new Map(
   [claudeProvider, codexProvider, geminiProvider, grokProvider].map((p) => [p.id, p])
 );
+
+if (!REGISTRY.has(DEFAULT_PROVIDER_ID)) {
+  throw new Error(`Default provider '${DEFAULT_PROVIDER_ID}' is not registered`);
+}
 
 export function isKnownProvider(id: string): boolean {
   return REGISTRY.has(id);
@@ -38,6 +44,19 @@ export function resolveProvider(id: string | null | undefined, context?: string)
     log.warn(`[Providers] Unknown provider '${id}'${where}; falling back to '${DEFAULT_PROVIDER_ID}'`);
   }
   return claudeProvider;
+}
+
+/**
+ * Which provider id a session launch should use (#98). The persisted row is
+ * authoritative once it exists (#96 invariant); the explicitly-passed id only
+ * bridges the gap where the renderer mounted a terminal before the row was
+ * persisted. Falls back to the default when neither is available.
+ */
+export function resolveLaunchProviderId(
+  stored: string | null | undefined,
+  explicit: string | null | undefined
+): string {
+  return stored ?? explicit ?? DEFAULT_PROVIDER_ID;
 }
 
 export function getProvider(id: string): ProviderDefinition {
