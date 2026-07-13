@@ -13,7 +13,23 @@ import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
+import { isKnownProvider, DEFAULT_PROVIDER_ID } from './providers';
 import log from 'electron-log';
+
+/**
+ * Validate an imported provider id at import time (#96). Unknown ids — e.g.
+ * an export written by a newer app version — are logged and defaulted here so
+ * they never land in the DB, rather than relying solely on the launch-path
+ * fallback. Exported for tests.
+ */
+export function sanitizeImportedProvider(provider: string | null | undefined): string {
+  const id = provider ?? DEFAULT_PROVIDER_ID;
+  if (!isKnownProvider(id)) {
+    log.warn(`[Import/Export] Unknown provider '${id}' in imported session; defaulting to '${DEFAULT_PROVIDER_ID}'`);
+    return DEFAULT_PROVIDER_ID;
+  }
+  return id;
+}
 
 // ---------------------------------------------------------------------------
 // Portable format types
@@ -228,7 +244,7 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
         endedAt: null,
         durationSeconds: 0,
         claudeAccountId: null,
-        provider: s.provider ?? 'claude',
+        provider: sanitizeImportedProvider(s.provider),
       });
       sessionCount++;
     }
@@ -367,7 +383,7 @@ export async function importFromClaudeLander(): Promise<ImportResult> {
         endedAt: null,
         durationSeconds: 0,
         claudeAccountId: null,
-        provider: row.provider ?? 'claude',
+        provider: sanitizeImportedProvider(row.provider),
       });
       sessionCount++;
     }

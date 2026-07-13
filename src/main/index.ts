@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
-import { DEFAULT_PROVIDER_ID, isKnownProvider } from './providers';
+import { DEFAULT_PROVIDER_ID } from './providers';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
@@ -661,16 +661,9 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     const session = sessions.find(s => s.id === id);
     const groupId = session?.groupId || null;
 
-    // Resolve the session's provider from its stored row (#96). Fall back to
-    // the default when the row references a provider this app version doesn't
-    // know (e.g. written by a newer version) instead of failing the launch.
-    let providerId = session?.provider ?? DEFAULT_PROVIDER_ID;
-    if (!isKnownProvider(providerId)) {
-      log.warn(`[Main] Unknown provider '${providerId}' on session ${id}; falling back to '${DEFAULT_PROVIDER_ID}'`);
-      providerId = DEFAULT_PROVIDER_ID;
-    }
-
-    ptyManager.createSession(id, cwd, launchClaude, groupId, providerId);
+    // The session's stored provider drives the launch (#96); unknown ids are
+    // degraded to the default inside PtyManager.createSession (resolveProvider).
+    ptyManager.createSession(id, cwd, launchClaude, groupId, session?.provider ?? DEFAULT_PROVIDER_ID);
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {
