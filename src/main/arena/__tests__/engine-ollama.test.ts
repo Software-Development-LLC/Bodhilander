@@ -38,6 +38,17 @@ afterEach(() => {
   finalized.length = 0;
 });
 
+/** A stream that never produces data and never closes; errors with AbortError on abort. */
+function hungStream(signal: AbortSignal | null | undefined): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      signal?.addEventListener('abort', () => {
+        controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      });
+    },
+  });
+}
+
 function ndjsonStream(lines: object[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream({
@@ -132,17 +143,7 @@ describe('ArenaEngine — Ollama contestant', () => {
       if (String(url).endsWith('/api/tags')) {
         return new Response(JSON.stringify({ models: [{ name: 'llama3' }] }), { status: 200 });
       }
-      // A stream that never produces data and never closes; reject on abort.
-      return new Response(
-        new ReadableStream({
-          start(controller) {
-            init?.signal?.addEventListener('abort', () => {
-              controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
-            });
-          },
-        }),
-        { status: 200 }
-      );
+      return new Response(hungStream(init?.signal), { status: 200 });
     }) as typeof fetch;
 
     const updates = await runOllamaAndSettle(new ArenaEngine(400));
