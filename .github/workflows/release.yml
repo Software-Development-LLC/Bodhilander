@@ -73,7 +73,14 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
-          - os: windows-latest
+          # Pinned to windows-2022 (VS 2022) deliberately (#109). GitHub moved
+          # the `windows-latest` label to windows-2025-vs2026 (Visual Studio
+          # 2026), which the project's node-gyp doesn't yet detect — the
+          # postinstall electron-rebuild fails with "Could not find any Visual
+          # Studio installation to use". Same build-reproducibility reasoning as
+          # the pinned macOS runners below. Revisit when node-gyp/node-pty gain
+          # VS 2026 support (or if windows-2022 is retired).
+          - os: windows-2022
             platform: win
           # BDHLNDR-38: build each Mac arch on its native runner so postinstall
           # (electron-rebuild) and sharp's optional-dep resolution produce
