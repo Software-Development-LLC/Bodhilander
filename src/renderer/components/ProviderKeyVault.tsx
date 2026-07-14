@@ -15,6 +15,7 @@ const ProviderKeyRow: React.FC<KeyRowProps> = ({ status, onChanged }) => {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const run = useCallback(async (action: () => Promise<string>) => {
     setBusy(true);
@@ -39,10 +40,20 @@ const ProviderKeyRow: React.FC<KeyRowProps> = ({ status, onChanged }) => {
     return describeTest(result);
   });
 
-  const deleteKey = () => run(async () => {
-    await window.electronAPI.vaultDeleteKey(status.providerId);
-    return 'Key deleted';
-  });
+  // Delete is irreversible (the key is never displayed again), so require a
+  // second click to confirm.
+  const deleteKey = () => {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      setMessage('Click again to permanently delete the stored key');
+      return;
+    }
+    setConfirmingDelete(false);
+    run(async () => {
+      await window.electronAPI.vaultDeleteKey(status.providerId);
+      return 'Key deleted';
+    });
+  };
 
   const toggleUse = (use: boolean) => run(async () => {
     await window.electronAPI.vaultSetUseKey(status.providerId, use);
@@ -64,6 +75,7 @@ const ProviderKeyRow: React.FC<KeyRowProps> = ({ status, onChanged }) => {
       <div className="vault-row-controls">
         <input
           type="password"
+          autoComplete="off"
           className="settings-text-input vault-key-input"
           placeholder={status.hasKey ? 'Replace key…' : 'Paste API key…'}
           value={draft}
@@ -77,7 +89,7 @@ const ProviderKeyRow: React.FC<KeyRowProps> = ({ status, onChanged }) => {
           Test
         </button>
         <button className="settings-button" onClick={deleteKey} disabled={!canTouchKey}>
-          Delete
+          {confirmingDelete ? 'Confirm delete' : 'Delete'}
         </button>
       </div>
       <label className="vault-use-toggle">
