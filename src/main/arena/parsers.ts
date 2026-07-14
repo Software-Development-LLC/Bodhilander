@@ -9,8 +9,6 @@
  *   carries usage, total_cost_usd, ttft_ms and duration_ms (verified live).
  * - codex: `exec --json` emits JSONL; agent_message items carry text,
  *   `turn.completed` carries token usage (per OpenAI headless docs).
- * - gemini: `-p --output-format json` emits ONE JSON document at the end
- *   with `response` + per-model token `stats` (per Gemini CLI headless docs).
  * - grok: `-p` emits plain text.
  */
 
@@ -20,7 +18,7 @@ export interface ArenaFinal {
   costUsd: number | null;
   /** CLI-reported time-to-first-token, when available (claude). */
   reportedTtftMs: number | null;
-  /** Text only available at finalize time (gemini's single-doc output). */
+  /** Text only available at finalize time (single-doc output styles). */
   trailingText: string;
 }
 
@@ -104,41 +102,6 @@ export function codexParser(): ArenaStreamParser {
       return '';
     },
     finalize: () => final,
-  };
-}
-
-/** gemini -p --output-format json — one JSON document, no streaming. */
-export function geminiParser(): ArenaStreamParser {
-  let buffer = '';
-  return {
-    onLine(line) {
-      buffer += line + '\n';
-      return '';
-    },
-    finalize() {
-      const doc = tryParseJson(buffer);
-      if (!doc) {
-        // Not JSON after all (older CLI or plain error text) — show it raw.
-        return { ...EMPTY_FINAL, trailingText: buffer.trim() };
-      }
-      let inputTokens: number | null = null;
-      let outputTokens: number | null = null;
-      const models = doc.stats?.models ?? {};
-      for (const model of Object.values<any>(models)) {
-        const tokens = model?.tokens ?? {};
-        const prompt = asFiniteNumber(tokens.prompt);
-        const candidates = asFiniteNumber(tokens.candidates);
-        if (prompt !== null) inputTokens = (inputTokens ?? 0) + prompt;
-        if (candidates !== null) outputTokens = (outputTokens ?? 0) + candidates;
-      }
-      return {
-        inputTokens,
-        outputTokens,
-        costUsd: null,
-        reportedTtftMs: null,
-        trailingText: typeof doc.response === 'string' ? doc.response : '',
-      };
-    },
   };
 }
 

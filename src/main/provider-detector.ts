@@ -2,10 +2,11 @@
  * Provider CLI detection (#97).
  *
  * Probes each registered provider's CLI the same way sessions launch it:
- * through the user's login shell on macOS/Linux (GUI-launched Electron does
- * not inherit shell PATH additions), via `wsl.exe bash` when the configured
- * shell is WSL, and via `where.exe` on native Windows. Command names come
- * from the static provider registry, never from user input.
+ * through the user's interactive login shell on macOS/Linux (GUI-launched
+ * Electron does not inherit shell PATH additions), via `wsl.exe bash` when
+ * the configured shell is WSL, and via `where.exe` on native Windows.
+ * Command names come from the static provider registry, never from user
+ * input.
  */
 import { execFile } from 'child_process';
 import { listProviders } from './providers';
@@ -37,9 +38,14 @@ export function buildProbe(command: string): Probe {
       version: ['cmd.exe', ['/c', `${command} --version`]],
     };
   }
-  // Login (non-interactive) shell: picks up PATH from the user's profile
-  // without interactive-rc noise on stdout.
-  const wrap = (cmd: string): [string, string[]] => [shellInfo.shell, ['-l', '-c', cmd]];
+  // Interactive login shell (-l -i), matching how sessions and arena
+  // contestants actually launch. Interactive matters: installers commonly
+  // add their bin dir to PATH in the interactive rc only (e.g. the grok
+  // installer writes ~/.zshrc, which `-l -c` never reads), so a
+  // non-interactive probe reports "not installed" for a CLI that launches
+  // fine in a session. Interactive-rc noise on stdout is tolerable: lookup
+  // only needs the exit code, and extractVersion skips non-version lines.
+  const wrap = (cmd: string): [string, string[]] => [shellInfo.shell, ['-l', '-i', '-c', cmd]];
   return { lookup: wrap(`command -v ${command}`), version: wrap(`${command} --version`) };
 }
 

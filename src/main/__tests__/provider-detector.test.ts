@@ -68,13 +68,13 @@ describe('detectProviders', () => {
 });
 
 describe('buildProbe platform branches', () => {
-  test('POSIX: probes through the login shell (-l -c)', () => {
+  test('POSIX: probes through the interactive login shell (-l -i -c), matching session launches', () => {
     setPlatform('darwin');
     shellInfoOverride = { shell: '/bin/zsh', args: ['-l', '-i'], isWSL: false };
 
     const probe = buildProbe('claude');
-    expect(probe.lookup).toEqual(['/bin/zsh', ['-l', '-c', 'command -v claude']]);
-    expect(probe.version).toEqual(['/bin/zsh', ['-l', '-c', 'claude --version']]);
+    expect(probe.lookup).toEqual(['/bin/zsh', ['-l', '-i', '-c', 'command -v claude']]);
+    expect(probe.version).toEqual(['/bin/zsh', ['-l', '-i', '-c', 'claude --version']]);
   });
 
   test('native Windows: where.exe lookup, cmd.exe version', () => {
@@ -94,9 +94,9 @@ describe('buildProbe platform branches', () => {
     setPlatform('win32');
     shellInfoOverride = { shell: 'wsl.exe', args: ['-d', 'Ubuntu'], isWSL: true };
 
-    const probe = buildProbe('gemini');
-    expect(probe.lookup).toEqual(['wsl.exe', ['-d', 'Ubuntu', '--', 'bash', '-lc', 'command -v gemini']]);
-    expect(probe.version).toEqual(['wsl.exe', ['-d', 'Ubuntu', '--', 'bash', '-lc', 'gemini --version']]);
+    const probe = buildProbe('grok');
+    expect(probe.lookup).toEqual(['wsl.exe', ['-d', 'Ubuntu', '--', 'bash', '-lc', 'command -v grok']]);
+    expect(probe.version).toEqual(['wsl.exe', ['-d', 'Ubuntu', '--', 'bash', '-lc', 'grok --version']]);
   });
 });
 

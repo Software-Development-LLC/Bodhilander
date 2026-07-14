@@ -27,7 +27,7 @@ export interface Session {
   claudeAccountId: string | null;
   /**
    * Agent provider this session runs (providers registry id: 'claude',
-   * 'codex', 'gemini', 'grok') (#96). Only meaningful when shellType is
+   * 'codex', 'grok') (#96). Only meaningful when shellType is
    * 'claude'; plain shell sessions keep the default.
    */
   provider: string;
@@ -127,7 +127,6 @@ export const DEFAULT_SESSION_PROVIDER = 'claude';
 export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude',
   codex: 'Codex',
-  gemini: 'Gemini',
   grok: 'Grok',
 };
 
