@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { app } from 'electron';
 import { ProviderDefinition, ProviderLaunchConfig, ProviderCommand } from './types';
 import { baseSessionEnv } from './passthrough';
+import { claudeParser as claudeArenaParser } from '../arena/parsers';
 
 /** Env var Claude Code reads its isolated config dir from (BDHLNDR-31). */
 export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
@@ -34,6 +35,14 @@ export const claudeProvider: ProviderDefinition = {
   },
   systemPromptFlag: '--append-system-prompt',
   waitingPatterns: CLAUDE_WAITING_PATTERNS,
+  arena: {
+    // --max-turns 1 keeps the arena chat-shaped (no agentic tool loops);
+    // stream-json requires --verbose. Verified live: the result event
+    // reports usage, total_cost_usd, ttft_ms.
+    buildCommand: (promptRef) =>
+      `claude -p ${promptRef} --output-format stream-json --verbose --max-turns 1`,
+    createParser: claudeArenaParser,
+  },
   setup: {
     installHint: 'npm install -g @anthropic-ai/claude-code',
     docsUrl: 'https://docs.anthropic.com/en/docs/claude-code/setup',

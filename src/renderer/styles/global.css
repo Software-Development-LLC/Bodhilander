@@ -1481,3 +1481,150 @@ body {
   gap: 12px;
   justify-content: center;
 }
+
+/* Arena mode (#100) */
+.arena-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  z-index: 5;
+  padding: 16px;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.arena-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.arena-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.arena-subtitle {
+  color: #999;
+  font-size: 12px;
+  flex: 1;
+}
+
+.arena-history-select {
+  max-width: 320px;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.arena-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.arena-prompt {
+  width: 100%;
+  resize: vertical;
+  background: #252525;
+  color: #eee;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.arena-contestants {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.arena-contestant {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.arena-contestant.unavailable {
+  color: #777;
+  cursor: default;
+}
+
+.arena-run-button {
+  margin-left: auto;
+  min-width: 90px;
+}
+
+.arena-results {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-x: auto;
+}
+
+.arena-column {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: #252525;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 10px;
+  gap: 6px;
+  min-height: 0;
+}
+
+.arena-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.arena-column-name {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.arena-column-metrics {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #9fc3f0;
+}
+
+.arena-column-error {
+  color: #f28b82;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.arena-column-text {
+  flex: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  margin: 0;
+  color: #ddd;
+}
+
+.arena-empty {
+  color: #888;
+  margin: auto;
+  font-size: 14px;
+  max-width: 420px;
+  text-align: center;
+}

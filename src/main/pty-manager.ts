@@ -13,6 +13,7 @@ import {
   ProviderDefinition,
 } from './providers';
 import { detectShell, ShellInfo } from './shell-detector';
+import { getShellLaunch } from './shell-launch';
 import { getPreference } from './repositories/preferences';
 import {
   getClaudeSessionId as getStoredClaudeSessionId,
@@ -118,52 +119,6 @@ const GENERIC_WAITING_PATTERNS = [
  * referencing an environment variable inside that command string. Single
  * source of truth for both regular agent sessions and login ptys.
  */
-interface ShellLaunch {
-  shell: string;
-  wrap(cmd: string): string[];
-  envRef(name: string): string;
-}
-
-function getShellLaunch(shellInfo: ShellInfo): ShellLaunch {
-  if (shellInfo.isWSL) {
-    // Launch the agent inside WSL
-    return {
-      shell: 'wsl.exe',
-      wrap: (cmd) => [...shellInfo.args, '--', 'bash', '-c', cmd],
-      envRef: (name) => `"$${name}"`,
-    };
-  }
-  if (process.platform === 'win32') {
-    const shellName = shellInfo.shell.toLowerCase();
-    if (shellName.includes('powershell')) {
-      return {
-        shell: shellInfo.shell,
-        wrap: (cmd) => ['-NoLogo', '-Command', cmd],
-        envRef: (name) => `$env:${name}`,
-      };
-    }
-    if (shellName.includes('cmd')) {
-      return {
-        shell: shellInfo.shell,
-        wrap: (cmd) => ['/c', cmd],
-        envRef: (name) => `"%${name}%"`,
-      };
-    }
-    // Assume bash-like shell (Git Bash, etc.)
-    return {
-      shell: shellInfo.shell,
-      wrap: (cmd) => ['-c', cmd],
-      envRef: (name) => `"$${name}"`,
-    };
-  }
-  // macOS/Linux: run through interactive login shell
-  return {
-    shell: shellInfo.shell,
-    wrap: (cmd) => ['-l', '-i', '-c', cmd],
-    envRef: (name) => `"$${name}"`,
-  };
-}
-
 /** Merged generic + provider waiting patterns, computed once per provider id. */
 const mergedWaitingPatterns = new Map<string, readonly RegExp[]>();
 

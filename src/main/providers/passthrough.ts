@@ -20,7 +20,7 @@ export function baseSessionEnv(config: ProviderLaunchConfig): NodeJS.ProcessEnv 
  * management stay entirely inside the CLI itself.
  */
 export function passthroughProvider(
-  opts: Pick<ProviderDefinition, 'id' | 'name' | 'command' | 'setup'>
+  opts: Pick<ProviderDefinition, 'id' | 'name' | 'command' | 'setup' | 'arena'>
 ): ProviderDefinition {
   return {
     ...opts,

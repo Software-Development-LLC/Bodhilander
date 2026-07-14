@@ -1,4 +1,5 @@
 import { passthroughProvider } from './passthrough';
+import { textParser } from '../arena/parsers';
 
 /**
  * xAI Grok Build (`grok`, per https://docs.x.ai/build/overview). Auth is
@@ -9,6 +10,11 @@ export const grokProvider = passthroughProvider({
   id: 'grok',
   name: 'Grok Build (xAI)',
   command: 'grok',
+  arena: {
+    // Plain-text headless output; no documented JSON/usage reporting yet.
+    buildCommand: (promptRef) => `grok -p ${promptRef}`,
+    createParser: textParser,
+  },
   setup: {
     installHint: 'curl -fsSL https://x.ai/cli/install.sh | bash',
     docsUrl: 'https://docs.x.ai/build/overview',
