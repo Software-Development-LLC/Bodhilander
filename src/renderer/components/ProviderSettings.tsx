@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ProviderStatus } from '../../shared/types';
+import { ProviderKeyVault } from './ProviderKeyVault';
 
 /**
  * Settings → Providers panel: provider CLI detection status + setup guidance
@@ -73,6 +74,8 @@ export const ProviderSettings: React.FC = () => {
           </div>
         ))}
       </div>
+
+      <ProviderKeyVault />
     </div>
   );
 };

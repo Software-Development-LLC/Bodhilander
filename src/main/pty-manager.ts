@@ -22,6 +22,7 @@ import {
 } from './repositories/sessions';
 import { resolveAccountForSession, touchAccount } from './repositories/accounts';
 import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
+import { vaultEnvFor } from './key-vault';
 import log from 'electron-log';
 
 function redactEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
@@ -379,7 +380,9 @@ export class PtyManager extends EventEmitter {
     // Get memory content for system prompt injection
     // Pass via environment variable to avoid shell escaping issues with newlines
     let agentCmd = `${launch.command}${sessionFlag}`;
-    const processEnv = { ...process.env, ...launch.env } as { [key: string]: string };
+    // vaultEnvFor is empty unless the user explicitly opted this provider
+    // into API-key auth (#99) — CLI login/subscription stays the default.
+    const processEnv = { ...process.env, ...launch.env, ...vaultEnvFor(provider.id) } as { [key: string]: string };
 
     const supportsSystemPrompt = provider.capabilities.systemPrompt && !!provider.systemPromptFlag;
     if (groupId && supportsSystemPrompt) {

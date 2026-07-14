@@ -3,6 +3,7 @@ import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { resolveLaunchProviderId } from './providers';
 import { detectProviders } from './provider-detector';
+import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
@@ -1184,6 +1185,24 @@ safeHandle('editor:detectAvailable', async () => {
 
 safeHandle('providers:detect', async () => {
   return detectProviders();
+});
+
+// Provider API-key vault (#99). Keys go in and are tested; they are never
+// returned to the renderer.
+safeHandle('vault:list', async () => {
+  return keyVault.listVaultStatuses();
+});
+safeHandle('vault:setKey', async (providerId: string, key: string) => {
+  keyVault.setKey(providerId, key);
+});
+safeHandle('vault:deleteKey', async (providerId: string) => {
+  keyVault.deleteKey(providerId);
+});
+safeHandle('vault:setUseKey', async (providerId: string, use: boolean) => {
+  keyVault.setUseKey(providerId, use);
+});
+safeHandle('vault:testKey', async (providerId: string) => {
+  return keyVault.testKey(providerId);
 });
 
 // Arena mode (#100). Two-phase: 'start' only creates the run so the renderer

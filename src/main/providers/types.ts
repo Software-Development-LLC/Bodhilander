@@ -78,6 +78,19 @@ export interface ProviderDefinition {
    */
   waitingPatterns?: readonly RegExp[];
   /**
+   * Direct-API credential support (#99). A stored key is used only when the
+   * user explicitly enables it per provider — CLI login/subscription remains
+   * the default (issue #100 decision). The CLI reads the key from envVar;
+   * `test` names a cheap authenticated endpoint for validating a stored key.
+   */
+  apiKey: {
+    envVar: string;
+    test: {
+      url: string;
+      headers(key: string): Record<string, string>;
+    };
+  };
+  /**
    * Headless invocation for arena mode (#100). promptRef is the
    * shell-appropriate env-var reference for the prompt (e.g.
    * `"$ARENA_PROMPT"`), so the prompt text itself never touches the command
