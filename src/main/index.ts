@@ -1192,7 +1192,7 @@ safeHandle('arena:start', async (prompt: string, contestants: string[]) => {
   if (!prompt?.trim() || !Array.isArray(contestants) || contestants.length === 0) {
     throw new Error('Arena run needs a prompt and at least one contestant');
   }
-  return arenaEngine.prepare(prompt, contestants);
+  return arenaEngine.prepare(prompt, Array.from(new Set(contestants)));
 });
 safeHandle('arena:launch', async (runId: string) => {
   arenaEngine.launch(runId);

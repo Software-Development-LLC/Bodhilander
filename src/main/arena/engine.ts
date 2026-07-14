@@ -36,28 +36,44 @@ const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 /** Generous default cap so a hung CLI can't leave a column spinning forever. */
 const DEFAULT_CONTESTANT_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** Grace period between SIGTERM and the SIGKILL escalation. */
+const KILL_GRACE_MS = 3000;
+
 /**
  * Kill the contestant's whole process tree. The CLI runs as a child of the
  * wrapper shell, so signalling just the shell would leave the actual agent
  * process running detached. POSIX contestants are spawned detached (own
- * process group) and killed by group; Windows uses taskkill /T.
+ * process group) and killed by group, escalating to SIGKILL if the tree
+ * ignores SIGTERM — otherwise 'close' never fires and the column would sit
+ * on "running" forever. Windows taskkill /F is already forceful.
  */
 function killTree(child: ChildProcess): void {
-  if (!child.pid) {
+  const pid = child.pid;
+  if (!pid) {
     child.kill();
     return;
   }
   if (process.platform === 'win32') {
     // Absolute path so a poisoned PATH can't substitute the binary (S4036).
     const taskkill = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
-    execFile(taskkill, ['/F', '/T', '/PID', String(child.pid)], () => undefined);
+    execFile(taskkill, ['/F', '/T', '/PID', String(pid)], () => undefined);
     return;
   }
   try {
-    process.kill(-child.pid, 'SIGTERM');
+    process.kill(-pid, 'SIGTERM');
   } catch {
     child.kill();
+    return;
   }
+  const escalation = setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      // Process group already gone — nothing to escalate.
+    }
+  }, KILL_GRACE_MS);
+  escalation.unref?.();
+  child.once('close', () => clearTimeout(escalation));
 }
 
 interface LiveResponse {
@@ -199,6 +215,9 @@ export class ArenaEngine extends EventEmitter {
       clearTimeout(timeout);
       controller.abort();
     };
+    // Clock starts at the launch attempt so error paths (no models, daemon
+    // down) don't inherit the prepare()→launch() gap in totalMs.
+    entry.startedAt = Date.now();
 
     try {
       // Use the first locally available model.
@@ -208,7 +227,6 @@ export class ArenaEngine extends EventEmitter {
         this.finish(responseId, 'error', null, 'Ollama is running but has no models pulled');
         return;
       }
-      entry.startedAt = Date.now();
 
       const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
         method: 'POST',

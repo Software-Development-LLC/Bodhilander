@@ -196,7 +196,9 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
               <span title="Time to first token">TTFT {formatMs(r.ttftMs)}</span>
               <span title="Total duration">total {formatMs(r.totalMs)}</span>
               <span title="Token usage">{formatTokens(r.inputTokens, r.outputTokens)}</span>
-              <span title="Cost">{formatCost(r.costUsd)}</span>
+              <span title="Runs bill against the CLI's own subscription — no direct cost. When the CLI reports a figure, it's what the same call would cost on the provider's API.">
+                {formatCost(r.costUsd)}
+              </span>
             </div>
             {r.error && <div className="arena-column-error">{r.error}</div>}
             <pre className="arena-column-text">{columnText(r.text, r.status)}</pre>

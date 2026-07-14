@@ -50,6 +50,7 @@ export function getDatabase(): Database.Database {
 
   initializeTables(db);
   initializeCodeSearchTables(db);
+  initializeArenaTables(db);
 
   return db;
 }
@@ -437,8 +438,11 @@ function initializeCodeSearchTables(database: Database.Database): void {
     log.error('Vector table setup error:', e);
   }
 
-  // Migration: Arena mode tables (#100, epic #94). One run = one prompt
-  // fanned out to N contestants; responses persist final text + metrics.
+}
+
+// Arena mode tables (#100, epic #94). One run = one prompt fanned out to N
+// contestants; responses persist final text + metrics.
+function initializeArenaTables(database: Database.Database): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS arena_runs (
       id TEXT PRIMARY KEY,
