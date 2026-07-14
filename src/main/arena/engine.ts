@@ -18,6 +18,7 @@
  * a column stuck on "running".
  */
 import { spawn, execFile, ChildProcess } from 'child_process';
+import * as path from 'path';
 import * as readline from 'readline';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -47,7 +48,9 @@ function killTree(child: ChildProcess): void {
     return;
   }
   if (process.platform === 'win32') {
-    execFile('taskkill', ['/F', '/T', '/PID', String(child.pid)], () => undefined);
+    // Absolute path so a poisoned PATH can't substitute the binary (S4036).
+    const taskkill = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
+    execFile(taskkill, ['/F', '/T', '/PID', String(child.pid)], () => undefined);
     return;
   }
   try {
