@@ -392,7 +392,7 @@ export class PtyManager extends EventEmitter {
     // var, using the shell-appropriate variable reference syntax. Gated on
     // capability so an inherited BODHILANDER_SYSTEM_PROMPT in the parent
     // environment can't produce a bogus flag for providers without one.
-    const shellLaunch = getShellLaunch(shellInfo);
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: true });
     if (supportsSystemPrompt && processEnv.BODHILANDER_SYSTEM_PROMPT) {
       agentCmd = `${launch.command} ${provider.systemPromptFlag} ${shellLaunch.envRef('BODHILANDER_SYSTEM_PROMPT')}${sessionFlag}`;
     }
@@ -428,7 +428,9 @@ export class PtyManager extends EventEmitter {
     };
     const agentCmd = claudeProvider.command;
 
-    const shellLaunch = getShellLaunch(shellInfo);
+    // The login pty just runs `claude` — no env-ref interpolation — so it
+    // keeps the user's cmd.exe shell rather than rerouting to PowerShell (#106).
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
     const shell = shellLaunch.shell;
     const args = shellLaunch.wrap(agentCmd);
 
