@@ -196,6 +196,22 @@ describe('ArenaEngine', () => {
     expect(text.includes('sekret-123')).toBe(false);
   }, 25_000);
 
+  test('shell metacharacters in the prompt are never executed (#106)', async () => {
+    finalized.length = 0;
+    const engine = new ArenaEngine();
+    const settled = collectUntilSettled(engine, 1);
+    // If the env-ref path ever re-parsed the prompt, the substitution would
+    // run and the literal `$(echo ...)` wrapper would vanish from output.
+    const hostile = 'hi"; $(echo EXECUTED_MARKER); `echo BACKTICK_MARKER`; & echo AMP "bye';
+    const run = engine.prepare(hostile, ['echoer']);
+    engine.launch(run.id);
+    const updates = await settled;
+    const text = updates.map((u) => u.chunk).join('');
+    expect(updates[updates.length - 1].status).toBe('done');
+    expect(text).toContain('$(echo EXECUTED_MARKER)');
+    expect(text).toContain('`echo BACKTICK_MARKER`');
+  }, 25_000);
+
   test('unknown contestant fails fast without spawning', async () => {
     finalized.length = 0;
     const engine = new ArenaEngine();

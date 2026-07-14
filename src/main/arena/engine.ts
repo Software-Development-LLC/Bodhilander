@@ -155,7 +155,7 @@ export class ArenaEngine extends EventEmitter {
     }
 
     const shellInfo = detectShell(getPreference('customShellPath') ?? '');
-    const shellLaunch = getShellLaunch(shellInfo);
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: true });
     const cmd = provider.arena.buildCommand(shellLaunch.envRef('ARENA_PROMPT'));
     const parser = provider.arena.createParser();
 
