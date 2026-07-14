@@ -50,6 +50,8 @@ const ProviderKeyRow: React.FC<KeyRowProps> = ({ status, onChanged }) => {
   });
 
   const label = PROVIDER_LABELS[status.providerId] ?? status.providerId;
+  const canSave = !busy && draft.trim().length > 0;
+  const canTouchKey = !busy && status.hasKey;
 
   return (
     <div className="vault-row">
@@ -68,13 +70,13 @@ const ProviderKeyRow: React.FC<KeyRowProps> = ({ status, onChanged }) => {
           onChange={e => setDraft(e.target.value)}
           disabled={busy}
         />
-        <button className="settings-button" onClick={saveKey} disabled={busy || !draft.trim()}>
+        <button className="settings-button" onClick={saveKey} disabled={!canSave}>
           Save
         </button>
-        <button className="settings-button" onClick={testKey} disabled={busy || !status.hasKey}>
+        <button className="settings-button" onClick={testKey} disabled={!canTouchKey}>
           Test
         </button>
-        <button className="settings-button" onClick={deleteKey} disabled={busy || !status.hasKey}>
+        <button className="settings-button" onClick={deleteKey} disabled={!canTouchKey}>
           Delete
         </button>
       </div>
@@ -82,10 +84,12 @@ const ProviderKeyRow: React.FC<KeyRowProps> = ({ status, onChanged }) => {
         <input
           type="checkbox"
           checked={status.useKey}
-          disabled={busy || !status.hasKey}
+          disabled={!canTouchKey}
           onChange={e => toggleUse(e.target.checked)}
         />
-        Use API key for launches — bills your API account; off = CLI login / subscription (default)
+        <span>
+          Use API key for launches — bills your API account; off = CLI login / subscription (default)
+        </span>
       </label>
       {message && <span className="vault-message">{message}</span>}
     </div>

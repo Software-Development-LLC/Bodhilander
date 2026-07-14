@@ -13,12 +13,23 @@
 import { safeStorage } from 'electron';
 import log from 'electron-log';
 import { getPreference, setPreference, deletePreference } from './repositories/preferences';
-import { getProvider, listProviders } from './providers';
+import { getProvider, listProviders, ProviderDefinition } from './providers';
 import { KeyVaultStatus } from '../shared/types';
 
 const KEY_PREF_PREFIX = 'providerApiKey.';
 const USE_PREF_PREFIX = 'providerApiKeyUse.';
 const TEST_TIMEOUT_MS = 10_000;
+
+type ApiKeyConfig = NonNullable<ProviderDefinition['apiKey']>;
+
+/** Resolve a provider that supports API keys; throws for unknown ids or key-less providers. */
+function requireApiKeyConfig(providerId: string): ApiKeyConfig {
+  const config = getProvider(providerId).apiKey;
+  if (!config) {
+    throw new Error(`Provider '${providerId}' does not support API keys`);
+  }
+  return config;
+}
 
 export function isVaultAvailable(): boolean {
   return safeStorage.isEncryptionAvailable();
@@ -33,7 +44,7 @@ export function useKey(providerId: string): boolean {
 }
 
 export function setKey(providerId: string, key: string): void {
-  getProvider(providerId); // throws on unknown ids
+  requireApiKeyConfig(providerId);
   if (!isVaultAvailable()) {
     throw new Error('Secure key storage is not available on this system');
   }
@@ -46,11 +57,13 @@ export function setKey(providerId: string, key: string): void {
 }
 
 export function deleteKey(providerId: string): void {
+  getProvider(providerId); // throws on unknown ids
   deletePreference(KEY_PREF_PREFIX + providerId);
   deletePreference(USE_PREF_PREFIX + providerId);
 }
 
 export function setUseKey(providerId: string, use: boolean): void {
+  requireApiKeyConfig(providerId);
   if (use && !hasKey(providerId)) {
     throw new Error('No API key stored for this provider');
   }
@@ -81,8 +94,9 @@ export function vaultEnvFor(providerId: string): Record<string, string> {
   const key = decryptKey(providerId);
   if (key === null) return {};
   try {
-    return { [getProvider(providerId).apiKey.envVar]: key };
+    return { [requireApiKeyConfig(providerId).envVar]: key };
   } catch {
+    // Unknown provider or one without API-key support — inject nothing.
     return {};
   }
 }
@@ -96,7 +110,7 @@ export interface KeyTestResult {
 
 /** Validate the stored key against the provider's cheap models endpoint. */
 export async function testKey(providerId: string): Promise<KeyTestResult> {
-  const provider = getProvider(providerId);
+  const config = requireApiKeyConfig(providerId);
   const key = decryptKey(providerId);
   if (key === null) {
     return { ok: false, status: null, error: 'No API key stored' };
@@ -104,8 +118,8 @@ export async function testKey(providerId: string): Promise<KeyTestResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
   try {
-    const res = await fetch(provider.apiKey.test.url, {
-      headers: provider.apiKey.test.headers(key),
+    const res = await fetch(config.test.url, {
+      headers: config.test.headers(key),
       signal: controller.signal,
     });
     if (res.ok) return { ok: true, status: res.status, error: null };
@@ -121,10 +135,13 @@ export async function testKey(providerId: string): Promise<KeyTestResult> {
 
 export function listVaultStatuses(): KeyVaultStatus[] {
   const available = isVaultAvailable();
-  return listProviders().map((p) => ({
-    providerId: p.id,
-    available,
-    hasKey: hasKey(p.id),
-    useKey: useKey(p.id),
-  }));
+  // Providers without apiKey support are not applicable and don't appear.
+  return listProviders()
+    .filter((p) => p.apiKey !== undefined)
+    .map((p) => ({
+      providerId: p.id,
+      available,
+      hasKey: hasKey(p.id),
+      useKey: useKey(p.id),
+    }));
 }

@@ -26,8 +26,12 @@ mock.module('electron', () => ({
 const prefs = new Map<string, string>();
 mock.module('../repositories/preferences', () => ({
   getPreference: (k: string) => prefs.get(k) ?? null,
-  setPreference: (k: string, v: string) => void prefs.set(k, v),
-  deletePreference: (k: string) => void prefs.delete(k),
+  setPreference: (k: string, v: string) => {
+    prefs.set(k, v);
+  },
+  deletePreference: (k: string) => {
+    prefs.delete(k);
+  },
 }));
 
 const vault = await import('../key-vault');

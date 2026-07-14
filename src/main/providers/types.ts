@@ -78,12 +78,15 @@ export interface ProviderDefinition {
    */
   waitingPatterns?: readonly RegExp[];
   /**
-   * Direct-API credential support (#99). A stored key is used only when the
-   * user explicitly enables it per provider — CLI login/subscription remains
-   * the default (issue #100 decision). The CLI reads the key from envVar;
-   * `test` names a cheap authenticated endpoint for validating a stored key.
+   * Direct-API credential support (#99), for providers whose CLI can
+   * authenticate via an API-key env var. Absent = API keys don't apply
+   * (e.g. a purely local provider) and the vault treats the provider as
+   * not applicable. A stored key is used only when the user explicitly
+   * enables it per provider — CLI login/subscription remains the default
+   * (issue #100 decision). `test` names a cheap authenticated endpoint
+   * for validating a stored key.
    */
-  apiKey: {
+  apiKey?: {
     envVar: string;
     test: {
       url: string;

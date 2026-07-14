@@ -25,16 +25,6 @@ import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 import { vaultEnvFor } from './key-vault';
 import log from 'electron-log';
 
-function redactEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
-  if (!env) return undefined;
-  return Object.fromEntries(
-    Object.entries(env).map(([k, v]) => [
-      k,
-      /key|secret|token|password|auth/i.test(k) ? '[REDACTED]' : v,
-    ])
-  );
-}
-
 interface PtySession {
   id: string;
   pty: pty.IPty;
