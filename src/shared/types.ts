@@ -86,6 +86,22 @@ export interface ArenaUpdate {
   error: string | null;
 }
 
+/**
+ * Renderer-facing state of one provider's API-key vault entry (#99). The key
+ * itself is never returned to the renderer — only whether one is stored.
+ */
+export interface KeyVaultStatus {
+  providerId: string;
+  /** Whether OS-keychain-backed encryption is available on this platform. */
+  available: boolean;
+  hasKey: boolean;
+  /**
+   * Whether the stored key is injected into launches for this provider.
+   * Defaults to false — CLI login/subscription stays the default.
+   */
+  useKey: boolean;
+}
+
 /** Result of probing one provider CLI's availability (#97). */
 export interface ProviderStatus {
   id: string;

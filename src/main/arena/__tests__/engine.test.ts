@@ -27,6 +27,12 @@ mock.module('../../repositories/arena', () => ({
   listRuns: () => [],
 }));
 
+// Vault stub (#99): only the 'keyed' contestant gets an injected env var.
+mock.module('../../key-vault', () => ({
+  vaultEnvFor: (id: string) =>
+    id === 'keyed' ? { FAKE_PROVIDER_KEY: 'sekret-123' } : {},
+}));
+
 const { textParser } = await import('../parsers');
 
 // Fake contestants: ordinary shell commands standing in for agent CLIs.
@@ -35,6 +41,13 @@ const FAKE_PROVIDERS: Record<string, any> = {
     id: 'echoer',
     arena: {
       buildCommand: (ref: string) => `echo hello; echo ${ref}`,
+      createParser: textParser,
+    },
+  },
+  keyed: {
+    id: 'keyed',
+    arena: {
+      buildCommand: () => 'echo "key=$FAKE_PROVIDER_KEY"',
       createParser: textParser,
     },
   },
@@ -153,6 +166,34 @@ describe('ArenaEngine', () => {
     // The killed child's close event must not finalize a second time.
     await new Promise((r) => setTimeout(r, 500));
     expect(finalized.length).toBe(1);
+  }, 25_000);
+
+  test('vault env is merged into the contestant spawn and wins over ambient env (#99)', async () => {
+    finalized.length = 0;
+    // An ambient value must lose to the vault-injected one (merge order).
+    process.env.FAKE_PROVIDER_KEY = 'ambient-value';
+    try {
+      const engine = new ArenaEngine();
+      const settled = collectUntilSettled(engine, 1);
+      const run = engine.prepare('p', ['keyed']);
+      engine.launch(run.id);
+      const updates = await settled;
+      const text = updates.map((u) => u.chunk).join('');
+      expect(text).toContain('key=sekret-123');
+    } finally {
+      delete process.env.FAKE_PROVIDER_KEY;
+    }
+  }, 25_000);
+
+  test('contestants without vault opt-in get no injected env (#99)', async () => {
+    finalized.length = 0;
+    const engine = new ArenaEngine();
+    const settled = collectUntilSettled(engine, 1);
+    const run = engine.prepare('p', ['echoer']);
+    engine.launch(run.id);
+    const updates = await settled;
+    const text = updates.map((u) => u.chunk).join('');
+    expect(text.includes('sekret-123')).toBe(false);
   }, 25_000);
 
   test('unknown contestant fails fast without spawning', async () => {

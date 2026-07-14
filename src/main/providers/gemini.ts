@@ -10,6 +10,13 @@ export const geminiProvider = passthroughProvider({
   id: 'gemini',
   name: 'Gemini CLI (Google)',
   command: 'gemini',
+  apiKey: {
+    envVar: 'GEMINI_API_KEY',
+    test: {
+      url: 'https://generativelanguage.googleapis.com/v1beta/models',
+      headers: (key) => ({ 'x-goog-api-key': key }),
+    },
+  },
   arena: {
     // Single JSON document with response + per-model token stats
     // (Gemini CLI headless docs); no streaming.

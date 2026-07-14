@@ -35,6 +35,13 @@ export const claudeProvider: ProviderDefinition = {
   },
   systemPromptFlag: '--append-system-prompt',
   waitingPatterns: CLAUDE_WAITING_PATTERNS,
+  apiKey: {
+    envVar: 'ANTHROPIC_API_KEY',
+    test: {
+      url: 'https://api.anthropic.com/v1/models',
+      headers: (key) => ({ 'x-api-key': key, 'anthropic-version': '2023-06-01' }),
+    },
+  },
   arena: {
     // --max-turns 1 keeps the arena chat-shaped (no agentic tool loops);
     // stream-json requires --verbose. Verified live: the result event

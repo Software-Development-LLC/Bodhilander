@@ -3,6 +3,7 @@ import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { resolveLaunchProviderId } from './providers';
 import { detectProviders } from './provider-detector';
+import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
@@ -1184,6 +1185,34 @@ safeHandle('editor:detectAvailable', async () => {
 
 safeHandle('providers:detect', async () => {
   return detectProviders();
+});
+
+// Provider API-key vault (#99). Keys go in and are tested; they are never
+// returned to the renderer. IPC is a trust boundary — validate argument
+// types at runtime rather than relying on the preload's TS types.
+function requireIpcString(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Invalid ${name}`);
+  }
+  return value;
+}
+safeHandle('vault:list', async () => {
+  return keyVault.listVaultStatuses();
+});
+safeHandle('vault:setKey', async (providerId: unknown, key: unknown) => {
+  keyVault.setKey(requireIpcString(providerId, 'providerId'), requireIpcString(key, 'key'));
+});
+safeHandle('vault:deleteKey', async (providerId: unknown) => {
+  keyVault.deleteKey(requireIpcString(providerId, 'providerId'));
+});
+safeHandle('vault:setUseKey', async (providerId: unknown, use: unknown) => {
+  if (typeof use !== 'boolean') {
+    throw new Error('Invalid use flag');
+  }
+  keyVault.setUseKey(requireIpcString(providerId, 'providerId'), use);
+});
+safeHandle('vault:testKey', async (providerId: unknown) => {
+  return keyVault.testKey(requireIpcString(providerId, 'providerId'));
 });
 
 // Arena mode (#100). Two-phase: 'start' only creates the run so the renderer

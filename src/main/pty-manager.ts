@@ -22,17 +22,9 @@ import {
 } from './repositories/sessions';
 import { resolveAccountForSession, touchAccount } from './repositories/accounts';
 import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
+import { vaultEnvFor } from './key-vault';
+import { redactEnv } from './redact-env';
 import log from 'electron-log';
-
-function redactEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
-  if (!env) return undefined;
-  return Object.fromEntries(
-    Object.entries(env).map(([k, v]) => [
-      k,
-      /key|secret|token|password|auth/i.test(k) ? '[REDACTED]' : v,
-    ])
-  );
-}
 
 interface PtySession {
   id: string;
@@ -379,7 +371,14 @@ export class PtyManager extends EventEmitter {
     // Get memory content for system prompt injection
     // Pass via environment variable to avoid shell escaping issues with newlines
     let agentCmd = `${launch.command}${sessionFlag}`;
-    const processEnv = { ...process.env, ...launch.env } as { [key: string]: string };
+    // vaultEnvFor is empty unless the user explicitly opted this provider
+    // into API-key auth (#99) — CLI login/subscription stays the default.
+    const vaultEnv = vaultEnvFor(provider.id);
+    if (Object.keys(vaultEnv).length > 0) {
+      // Visibility that key auth is active; values scrubbed via redactEnv.
+      log.info(`[PTY] API-key auth enabled for '${provider.id}':`, redactEnv(vaultEnv));
+    }
+    const processEnv = { ...process.env, ...launch.env, ...vaultEnv } as { [key: string]: string };
 
     const supportsSystemPrompt = provider.capabilities.systemPrompt && !!provider.systemPromptFlag;
     if (groupId && supportsSystemPrompt) {

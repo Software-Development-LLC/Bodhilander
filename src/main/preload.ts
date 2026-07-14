@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -185,6 +185,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   detectProviders: (): Promise<ProviderStatus[]> => ipcRenderer.invoke('providers:detect'),
+
+  // Provider API-key vault (#99) — keys go in, never come back out.
+  vaultList: (): Promise<KeyVaultStatus[]> => ipcRenderer.invoke('vault:list'),
+  vaultSetKey: (providerId: string, key: string): Promise<void> =>
+    ipcRenderer.invoke('vault:setKey', providerId, key),
+  vaultDeleteKey: (providerId: string): Promise<void> =>
+    ipcRenderer.invoke('vault:deleteKey', providerId),
+  vaultSetUseKey: (providerId: string, use: boolean): Promise<void> =>
+    ipcRenderer.invoke('vault:setUseKey', providerId, use),
+  vaultTestKey: (providerId: string): Promise<{ ok: boolean; status: number | null; error: string | null }> =>
+    ipcRenderer.invoke('vault:testKey', providerId),
 
   // Arena mode (#100)
   arenaStart: (prompt: string, contestants: string[]): Promise<ArenaRun> =>

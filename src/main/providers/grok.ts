@@ -10,6 +10,13 @@ export const grokProvider = passthroughProvider({
   id: 'grok',
   name: 'Grok Build (xAI)',
   command: 'grok',
+  apiKey: {
+    envVar: 'XAI_API_KEY',
+    test: {
+      url: 'https://api.x.ai/v1/models',
+      headers: (key) => ({ authorization: `Bearer ${key}` }),
+    },
+  },
   arena: {
     // Plain-text headless output; no documented JSON/usage reporting yet.
     buildCommand: (promptRef) => `grok -p ${promptRef}`,

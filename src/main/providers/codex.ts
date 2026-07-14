@@ -11,6 +11,13 @@ export const codexProvider = passthroughProvider({
   id: 'codex',
   name: 'Codex (OpenAI)',
   command: 'codex',
+  apiKey: {
+    envVar: 'OPENAI_API_KEY',
+    test: {
+      url: 'https://api.openai.com/v1/models',
+      headers: (key) => ({ authorization: `Bearer ${key}` }),
+    },
+  },
   arena: {
     // JSONL events; turn.completed carries token usage (OpenAI headless docs).
     buildCommand: (promptRef) => `codex exec --json ${promptRef}`,

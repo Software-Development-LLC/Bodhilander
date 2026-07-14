@@ -28,6 +28,8 @@ import { getShellLaunch } from '../shell-launch';
 import { detectShell } from '../shell-detector';
 import { getPreference } from '../repositories/preferences';
 import * as arenaRepo from '../repositories/arena';
+import { vaultEnvFor } from '../key-vault';
+import { redactEnv } from '../redact-env';
 import { ArenaStreamParser, ollamaParser } from './parsers';
 import { ArenaRun, ArenaUpdate, ArenaResponseStatus } from '../../shared/types';
 
@@ -157,8 +159,15 @@ export class ArenaEngine extends EventEmitter {
     const cmd = provider.arena.buildCommand(shellLaunch.envRef('ARENA_PROMPT'));
     const parser = provider.arena.createParser();
 
+    // vaultEnvFor is empty unless the user opted this provider into
+    // API-key auth (#99) — subscription/CLI login stays the default.
+    const vaultEnv = vaultEnvFor(providerId);
+    if (Object.keys(vaultEnv).length > 0) {
+      // Visibility that key auth is active; values scrubbed via redactEnv.
+      log.info(`[Arena] API-key auth enabled for '${providerId}':`, redactEnv(vaultEnv));
+    }
     const child = spawn(shellLaunch.shell, shellLaunch.wrap(cmd), {
-      env: { ...process.env, ARENA_PROMPT: prompt },
+      env: { ...process.env, ARENA_PROMPT: prompt, ...vaultEnv },
       windowsHide: true,
       // Own process group on POSIX so killTree can signal the whole tree.
       detached: process.platform !== 'win32',

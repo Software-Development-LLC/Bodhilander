@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -84,6 +84,11 @@ interface ElectronAPI {
   // Shell
   openExternal: (url: string) => Promise<void>;
   detectProviders: () => Promise<ProviderStatus[]>;
+  vaultList: () => Promise<KeyVaultStatus[]>;
+  vaultSetKey: (providerId: string, key: string) => Promise<void>;
+  vaultDeleteKey: (providerId: string) => Promise<void>;
+  vaultSetUseKey: (providerId: string, use: boolean) => Promise<void>;
+  vaultTestKey: (providerId: string) => Promise<{ ok: boolean; status: number | null; error: string | null }>;
   arenaStart: (prompt: string, contestants: string[]) => Promise<ArenaRun>;
   arenaLaunch: (runId: string) => Promise<void>;
   arenaCancel: (runId: string) => Promise<void>;

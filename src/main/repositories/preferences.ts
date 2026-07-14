@@ -22,6 +22,11 @@ export function setPreference(key: string, value: string): void {
   `).run(key, value);
 }
 
+export function deletePreference(key: string): void {
+  const db = getDatabase();
+  db.prepare('DELETE FROM preferences WHERE key = ?').run(key);
+}
+
 export function getWindowBounds(): WindowBounds | null {
   const value = getPreference('windowBounds');
   if (!value) return null;

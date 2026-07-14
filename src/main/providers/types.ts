@@ -78,6 +78,22 @@ export interface ProviderDefinition {
    */
   waitingPatterns?: readonly RegExp[];
   /**
+   * Direct-API credential support (#99), for providers whose CLI can
+   * authenticate via an API-key env var. Absent = API keys don't apply
+   * (e.g. a purely local provider) and the vault treats the provider as
+   * not applicable. A stored key is used only when the user explicitly
+   * enables it per provider — CLI login/subscription remains the default
+   * (issue #100 decision). `test` names a cheap authenticated endpoint
+   * for validating a stored key.
+   */
+  apiKey?: {
+    envVar: string;
+    test: {
+      url: string;
+      headers(key: string): Record<string, string>;
+    };
+  };
+  /**
    * Headless invocation for arena mode (#100). promptRef is the
    * shell-appropriate env-var reference for the prompt (e.g.
    * `"$ARENA_PROMPT"`), so the prompt text itself never touches the command
