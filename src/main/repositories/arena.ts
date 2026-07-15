@@ -31,10 +31,10 @@ function rowToResponse(row: ResponseRow): ArenaResponse {
   };
 }
 
-export function createRun(id: string, prompt: string): void {
+export function createRun(id: string, prompt: string, workingDir: string | null = null): void {
   getDatabase()
-    .prepare('INSERT INTO arena_runs (id, prompt) VALUES (?, ?)')
-    .run(id, prompt);
+    .prepare('INSERT INTO arena_runs (id, prompt, working_dir) VALUES (?, ?, ?)')
+    .run(id, prompt, workingDir);
 }
 
 export function createResponse(id: string, runId: string, provider: string): void {
@@ -80,11 +80,18 @@ export function finalizeResponse(id: string, final: FinalizeResponseInput): void
     );
 }
 
+interface RunRow {
+  id: string;
+  prompt: string;
+  working_dir: string | null;
+  created_at: string;
+}
+
 export function getRun(id: string): ArenaRun | null {
   const db = getDatabase();
-  const run = db.prepare('SELECT id, prompt, created_at FROM arena_runs WHERE id = ?').get(id) as
-    | { id: string; prompt: string; created_at: string }
-    | undefined;
+  const run = db
+    .prepare('SELECT id, prompt, working_dir, created_at FROM arena_runs WHERE id = ?')
+    .get(id) as RunRow | undefined;
   if (!run) return null;
   const rows = db
     .prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY provider')
@@ -92,6 +99,7 @@ export function getRun(id: string): ArenaRun | null {
   return {
     id: run.id,
     prompt: run.prompt,
+    workingDir: run.working_dir,
     createdAt: new Date(run.created_at),
     responses: rows.map(rowToResponse),
   };
@@ -101,12 +109,13 @@ export function getRun(id: string): ArenaRun | null {
 export function listRuns(limit: number = 50): ArenaRun[] {
   const db = getDatabase();
   const runs = db
-    .prepare('SELECT id, prompt, created_at FROM arena_runs ORDER BY created_at DESC LIMIT ?')
-    .all(limit) as { id: string; prompt: string; created_at: string }[];
+    .prepare('SELECT id, prompt, working_dir, created_at FROM arena_runs ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as RunRow[];
   const responsesStmt = db.prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY provider');
   return runs.map((run) => ({
     id: run.id,
     prompt: run.prompt,
+    workingDir: run.working_dir,
     createdAt: new Date(run.created_at),
     responses: (responsesStmt.all(run.id) as ResponseRow[]).map(rowToResponse),
   }));

@@ -66,6 +66,8 @@ export interface ArenaResponse {
 export interface ArenaRun {
   id: string;
   prompt: string;
+  /** Project folder the contestants ran in (null = no project context). */
+  workingDir: string | null;
   createdAt: Date;
   responses: ArenaResponse[];
 }

@@ -6,12 +6,17 @@
  * Run with: bun test src/main/__tests__
  */
 import { describe, expect, test, afterEach, mock } from 'bun:test';
+import * as realFs from 'node:fs';
 import type { ShellInfo } from '../shell-detector';
 
 // The cmd→PowerShell reroute resolves an absolute powershell.exe on disk;
-// stub fs.existsSync so that path is testable on a POSIX runner.
+// stub fs.existsSync so that path is testable on a POSIX runner. The rest
+// of fs is passed through: mock.module is process-global in bun, so a
+// bare {existsSync} would gut fs for every test file that runs after this
+// one (the real module is grabbed via 'node:fs', which stays unmocked).
 let powershellExists = true;
 mock.module('fs', () => ({
+  ...realFs,
   existsSync: () => powershellExists,
 }));
 

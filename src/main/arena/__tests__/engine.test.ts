@@ -65,6 +65,13 @@ const FAKE_PROVIDERS: Record<string, any> = {
       createParser: textParser,
     },
   },
+  pwder: {
+    id: 'pwder',
+    arena: {
+      buildCommand: () => 'pwd',
+      createParser: textParser,
+    },
+  },
 };
 mock.module('../../providers', () => ({
   getProvider: (id: string) => {
@@ -210,6 +217,37 @@ describe('ArenaEngine', () => {
     expect(updates[updates.length - 1].status).toBe('done');
     expect(text).toContain('$(echo EXECUTED_MARKER)');
     expect(text).toContain('`echo BACKTICK_MARKER`');
+  }, 25_000);
+
+  test('a scoped run spawns contestants inside the working directory', async () => {
+    finalized.length = 0;
+    const os = await import('os');
+    const fs = await import('fs');
+    const path = await import('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-cwd-'));
+    try {
+      const engine = new ArenaEngine();
+      const settled = collectUntilSettled(engine, 1);
+      const run = engine.prepare('p', ['pwder'], dir);
+      engine.launch(run.id);
+      const updates = await settled;
+      expect(updates[updates.length - 1].status).toBe('done');
+      const text = updates.map((u) => u.chunk).join('');
+      // realpath: the shell resolves symlinked tmpdirs (/tmp → /private/tmp).
+      expect(text).toContain(fs.realpathSync(dir));
+    } finally {
+      fs.rmdirSync(dir);
+    }
+  }, 25_000);
+
+  test('an unscoped run keeps the engine process cwd behavior', async () => {
+    finalized.length = 0;
+    const engine = new ArenaEngine();
+    const settled = collectUntilSettled(engine, 1);
+    const run = engine.prepare('p', ['pwder']);
+    engine.launch(run.id);
+    const updates = await settled;
+    expect(updates[updates.length - 1].status).toBe('done');
   }, 25_000);
 
   test('unknown contestant fails fast without spawning', async () => {

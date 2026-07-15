@@ -447,6 +447,7 @@ function initializeArenaTables(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS arena_runs (
       id TEXT PRIMARY KEY,
       prompt TEXT NOT NULL,
+      working_dir TEXT DEFAULT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS arena_responses (
@@ -464,6 +465,13 @@ function initializeArenaTables(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_arena_responses_run ON arena_responses(run_id);
   `);
+
+  // Migration: scope a run to a project folder (group working dir) so
+  // contestant CLIs answer with that codebase as context. NULL = unscoped.
+  const runColumns = database.prepare('PRAGMA table_info(arena_runs)').all() as { name: string }[];
+  if (!runColumns.some((col) => col.name === 'working_dir')) {
+    database.exec('ALTER TABLE arena_runs ADD COLUMN working_dir TEXT DEFAULT NULL');
+  }
 }
 
 export function closeDatabase(): void {

@@ -1540,6 +1540,24 @@ body {
   box-sizing: border-box;
 }
 
+.arena-folder-select {
+  max-width: 320px;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 4px 8px;
+  text-overflow: ellipsis;
+}
+
+.arena-run-scope {
+  color: #999;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .arena-contestants {
   display: flex;
   align-items: center;

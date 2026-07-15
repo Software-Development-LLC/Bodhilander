@@ -86,6 +86,8 @@ const App: React.FC = () => {
   // Analytics view state (BDHLNDR-18)
   const [analyticsViewOpen, setAnalyticsViewOpen] = useState(false);
   const [arenaViewOpen, setArenaViewOpen] = useState(false);
+  // Group whose working dir the arena panel should scope to ("Ask Arena" menu).
+  const [arenaGroupId, setArenaGroupId] = useState<string | null>(null);
 
   // Code search modal state
   const [codeSearchOpen, setCodeSearchOpen] = useState(false);
@@ -358,6 +360,15 @@ const App: React.FC = () => {
       { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
       { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
       { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
+      {
+        label: 'Ask Arena About This Folder',
+        onClick: () => {
+          setArenaGroupId(groupId);
+          setArenaViewOpen(true);
+        },
+        // Arena scoping runs the CLIs inside the group's working dir.
+        disabled: !group?.workingDir,
+      },
     ];
 
     // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
@@ -1334,7 +1345,13 @@ const App: React.FC = () => {
             activeSessionId={activeSessionId}
           />
         )}
-        {arenaViewOpen && <ArenaPanel onClose={() => setArenaViewOpen(false)} />}
+        {arenaViewOpen && (
+          <ArenaPanel
+            onClose={() => setArenaViewOpen(false)}
+            groups={groups}
+            initialGroupId={arenaGroupId}
+          />
+        )}
         <div className="terminal-area" style={{ display: analyticsViewOpen || arenaViewOpen ? 'none' : undefined }}>
           {sessions.map(session => (
             <div
