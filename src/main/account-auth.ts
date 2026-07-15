@@ -23,6 +23,7 @@ import log from 'electron-log';
 import { PtyManager } from './pty-manager';
 import * as accountsRepo from './repositories/accounts';
 import { registerMcpServer, registerHooks } from './mcp-config';
+import { seedLegacyConversations } from './legacy-claude-seed';
 import { ClaudeAccount } from '../shared/types';
 
 interface LoginFlow {
@@ -53,17 +54,24 @@ function configDirFor(accountId: string): string {
  * Begin an interactive login flow for a new account.
  * Returns the new account row + the login pty id the renderer should attach to.
  */
-export function startLoginFlow(
+export async function startLoginFlow(
   ptyManager: PtyManager,
   mainWindow: BrowserWindow | null,
   label: string,
-): StartLoginResult {
+): Promise<StartLoginResult> {
   const accountId = crypto.randomUUID();
   const configDir = configDirFor(accountId);
   fs.mkdirSync(configDir, { recursive: true });
 
-  // First account becomes the default fallback.
+  // First account becomes the default fallback — which re-homes every
+  // unassigned session's CLAUDE_CONFIG_DIR here on its next launch. Seed the
+  // dir with the legacy ~/.claude transcripts first, so those sessions'
+  // stored --resume UUIDs keep resolving instead of coming back "No
+  // conversation found" (the pre-accounts history lives in ~/.claude).
   const isFirst = accountsRepo.getAllAccounts().length === 0;
+  if (isFirst) {
+    await seedLegacyConversations(configDir);
+  }
   const account = accountsRepo.createAccount({
     id: accountId,
     label,

@@ -10,14 +10,19 @@ import * as realFs from 'node:fs';
 import type { ShellInfo } from '../shell-detector';
 
 // The cmd→PowerShell reroute resolves an absolute powershell.exe on disk;
-// stub fs.existsSync so that path is testable on a POSIX runner. The rest
-// of fs is passed through: mock.module is process-global in bun, so a
-// bare {existsSync} would gut fs for every test file that runs after this
-// one (the real module is grabbed via 'node:fs', which stays unmocked).
+// stub fs.existsSync for that one path so it is testable on a POSIX runner.
+// Everything else delegates to the real module: mock.module is process-global
+// in bun (and covers 'node:fs' too), so a blanket stub would poison fs for
+// every test file that runs after this one. The real existsSync is captured
+// into a plain const BEFORE the mock registers — going through the module
+// namespace inside the stub would resolve to the mock itself once bun
+// retargets the binding, recursing forever.
+const realExistsSync = realFs.existsSync;
 let powershellExists = true;
 mock.module('fs', () => ({
   ...realFs,
-  existsSync: () => powershellExists,
+  existsSync: (p: realFs.PathLike) =>
+    String(p).includes('WindowsPowerShell') ? powershellExists : realExistsSync(p),
 }));
 
 const { getShellLaunch } = await import('../shell-launch');
