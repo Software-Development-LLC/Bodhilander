@@ -19,7 +19,8 @@ import type { PtyManager } from '../pty-manager';
 let userDataDir = '';
 mock.module('electron', () => ({
   app: { getPath: () => userDataDir },
-  BrowserWindow: class {},
+  // Only referenced in type positions by account-auth; never constructed.
+  BrowserWindow: Object,
 }));
 
 interface AccountRow {
@@ -61,8 +62,8 @@ mock.module('../legacy-claude-seed', () => ({
 }));
 
 // Keep node-pty out of the test process; the flow only calls methods on the
-// instance we pass in.
-mock.module('../pty-manager', () => ({ PtyManager: class {} }));
+// instance we pass in (PtyManager is only referenced in type positions).
+mock.module('../pty-manager', () => ({ PtyManager: Object }));
 
 const accountAuth = await import('../account-auth');
 
