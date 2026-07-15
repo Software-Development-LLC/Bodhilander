@@ -89,7 +89,7 @@ interface ElectronAPI {
   vaultDeleteKey: (providerId: string) => Promise<void>;
   vaultSetUseKey: (providerId: string, use: boolean) => Promise<void>;
   vaultTestKey: (providerId: string) => Promise<{ ok: boolean; status: number | null; error: string | null }>;
-  arenaStart: (prompt: string, contestants: string[]) => Promise<ArenaRun>;
+  arenaStart: (prompt: string, contestants: string[], workingDir?: string | null) => Promise<ArenaRun>;
   arenaLaunch: (runId: string) => Promise<void>;
   arenaCancel: (runId: string) => Promise<void>;
   arenaListRuns: () => Promise<ArenaRun[]>;

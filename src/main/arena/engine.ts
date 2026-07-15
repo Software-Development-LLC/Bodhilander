@@ -82,6 +82,8 @@ interface LiveResponse {
   runId: string;
   provider: string;
   prompt: string;
+  /** Project folder CLI contestants spawn in (null = engine process cwd). */
+  workingDir: string | null;
   text: string;
   startedAt: number;
   ttftMs: number | null;
@@ -98,10 +100,14 @@ export class ArenaEngine extends EventEmitter {
     this.timeoutMs = timeoutMs;
   }
 
-  /** Phase 1: create the run + response rows; nothing is spawned yet. */
-  prepare(prompt: string, contestants: string[]): ArenaRun {
+  /**
+   * Phase 1: create the run + response rows; nothing is spawned yet.
+   * workingDir scopes CLI contestants to a project folder so they answer
+   * with that codebase as context (Ollama, a bare HTTP chat, ignores it).
+   */
+  prepare(prompt: string, contestants: string[], workingDir: string | null = null): ArenaRun {
     const runId = randomUUID();
-    arenaRepo.createRun(runId, prompt);
+    arenaRepo.createRun(runId, prompt, workingDir);
     for (const provider of contestants) {
       const responseId = randomUUID();
       arenaRepo.createResponse(responseId, runId, provider);
@@ -109,6 +115,7 @@ export class ArenaEngine extends EventEmitter {
         runId,
         provider,
         prompt,
+        workingDir,
         text: '',
         startedAt: Date.now(),
         ttftMs: null,
@@ -168,6 +175,10 @@ export class ArenaEngine extends EventEmitter {
     }
     const child = spawn(shellLaunch.shell, shellLaunch.wrap(cmd), {
       env: { ...process.env, ARENA_PROMPT: prompt, ...vaultEnv },
+      // Scoped runs put the CLI inside the project folder, exactly like a
+      // terminal session there. A vanished dir surfaces via the 'error'
+      // handler below (spawn ENOENT), settling the column as an error.
+      cwd: entry.workingDir ?? undefined,
       windowsHide: true,
       // Own process group on POSIX so killTree can signal the whole tree.
       detached: process.platform !== 'win32',

@@ -11,6 +11,7 @@ function makeRun(): ArenaRun {
   return {
     id: 'run1',
     prompt: 'p',
+    workingDir: null,
     createdAt: new Date(0),
     responses: [
       {

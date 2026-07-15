@@ -1,9 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ArenaRun, ArenaUpdate, ProviderStatus } from '../../shared/types';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { ArenaRun, ArenaUpdate, Group, ProviderStatus } from '../../shared/types';
 import { applyArenaUpdate, isRunSettled } from './arenaUpdates';
+import { buildFolderOptions } from './arenaFolderOptions';
 
 interface ArenaPanelProps {
   onClose: () => void;
+  /** Sidebar groups — the ones with a working directory become folder scopes. */
+  groups: Group[];
+  /** Group to pre-select as the folder scope (e.g. "Ask Arena" from its menu). */
+  initialGroupId?: string | null;
 }
 
 const OLLAMA_ID = 'ollama';
@@ -42,14 +47,24 @@ function formatCost(costUsd: number | null): string {
  * streamed side-by-side with latency/token/cost metrics. Runs persist and
  * can be reloaded from the history dropdown.
  */
-export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
+export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initialGroupId }) => {
   const [prompt, setPrompt] = useState('');
   const [contestants, setContestants] = useState<{ id: string; name: string; available: boolean }[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [run, setRun] = useState<ArenaRun | null>(null);
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState<ArenaRun[]>([]);
+  // '' = no folder scope; otherwise a group id from folderOptions.
+  const [folderGroupId, setFolderGroupId] = useState<string>(initialGroupId ?? '');
   const runIdRef = useRef<string | null>(null);
+
+  const folderOptions = useMemo(() => buildFolderOptions(groups), [groups]);
+  const scopedDir = folderOptions.find(o => o.groupId === folderGroupId)?.dir ?? null;
+
+  // "Ask Arena" from a group's context menu retargets an already-open panel.
+  useEffect(() => {
+    if (initialGroupId) setFolderGroupId(initialGroupId);
+  }, [initialGroupId]);
 
   // Contestant list: detected provider CLIs plus the local Ollama daemon.
   useEffect(() => {
@@ -91,7 +106,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
     try {
       // Two-phase: subscribe with the run id BEFORE contestants launch, so
       // even an instantly-failing CLI's updates are never dropped.
-      const newRun = await window.electronAPI.arenaStart(trimmed, Array.from(selected));
+      const newRun = await window.electronAPI.arenaStart(trimmed, Array.from(selected), scopedDir);
       runIdRef.current = newRun.id;
       setRun(newRun);
       await window.electronAPI.arenaLaunch(newRun.id);
@@ -99,7 +114,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
       console.error('Arena start failed:', error);
       setRunning(false);
     }
-  }, [prompt, selected, running]);
+  }, [prompt, selected, running, scopedDir]);
 
   const cancelRun = useCallback(() => {
     if (runIdRef.current) {
@@ -162,6 +177,18 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
           rows={3}
         />
         <div className="arena-contestants">
+          <select
+            className="arena-folder-select"
+            value={folderGroupId}
+            onChange={e => setFolderGroupId(e.target.value)}
+            title="Run inside a project folder so agents answer about that codebase"
+            aria-label="Project folder scope"
+          >
+            <option value="">No folder (generic)</option>
+            {folderOptions.map(o => (
+              <option key={o.groupId} value={o.groupId}>{o.label}</option>
+            ))}
+          </select>
           {contestants.map(c => (
             <label key={c.id} className={`arena-contestant ${c.available ? '' : 'unavailable'}`}>
               <input
@@ -182,6 +209,12 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose }) => {
           </button>
         </div>
       </div>
+
+      {run?.workingDir && (
+        <div className="arena-run-scope" title={run.workingDir}>
+          📁 {run.workingDir}
+        </div>
+      )}
 
       <div className="arena-results">
         {run?.responses.map(r => (

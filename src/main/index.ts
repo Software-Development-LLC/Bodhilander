@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { resolveLaunchProviderId } from './providers';
@@ -1217,11 +1218,20 @@ safeHandle('vault:testKey', async (providerId: unknown) => {
 
 // Arena mode (#100). Two-phase: 'start' only creates the run so the renderer
 // can subscribe with the run id; 'launch' then spawns the contestants.
-safeHandle('arena:start', async (prompt: string, contestants: string[]) => {
+safeHandle('arena:start', async (prompt: string, contestants: string[], workingDir?: string | null) => {
   if (!prompt?.trim() || !Array.isArray(contestants) || contestants.length === 0) {
     throw new Error('Arena run needs a prompt and at least one contestant');
   }
-  return arenaEngine.prepare(prompt, Array.from(new Set(contestants)));
+  // Optional project scoping: contestants spawn inside this folder. Checked
+  // up front so a stale group dir fails the run before any rows are created.
+  let dir: string | null = null;
+  if (typeof workingDir === 'string' && workingDir.trim()) {
+    dir = workingDir.trim();
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      throw new Error(`Arena working directory does not exist: ${dir}`);
+    }
+  }
+  return arenaEngine.prepare(prompt, Array.from(new Set(contestants)), dir);
 });
 safeHandle('arena:launch', async (runId: string) => {
   arenaEngine.launch(runId);
