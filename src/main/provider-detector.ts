@@ -43,17 +43,23 @@ export function buildProbe(command: string): Probe {
   // add their bin dir to PATH in the interactive rc only (e.g. the grok
   // installer writes ~/.zshrc, which `-l -c` never reads), so a
   // non-interactive probe reports "not installed" for a CLI that launches
-  // fine in a session. Interactive-rc noise on stdout is tolerable: lookup
-  // only needs the exit code, and extractVersion skips non-version lines.
+  // fine in a session. Interactive-rc side effects are contained: stdout
+  // noise is tolerable (lookup only needs the exit code; extractVersion
+  // skips non-version lines), rc prompts that read stdin see EOF because
+  // run() ends the pipe, and PROBE_TIMEOUT_MS caps anything else.
   const wrap = (cmd: string): [string, string[]] => [shellInfo.shell, ['-l', '-i', '-c', cmd]];
   return { lookup: wrap(`command -v ${command}`), version: wrap(`${command} --version`) };
 }
 
 function run([file, args]: [string, string[]]): Promise<{ ok: boolean; stdout: string }> {
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+    const child = execFile(file, args, { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
       resolve({ ok: !err, stdout: stdout?.toString() ?? '' });
     });
+    // Interactive rc files can wait on stdin (e.g. Oh My Zsh's periodic
+    // "update?" prompt). End the piped stdin so such reads hit EOF and
+    // move on immediately instead of stalling until the probe timeout.
+    child.stdin?.end();
   });
 }
 
