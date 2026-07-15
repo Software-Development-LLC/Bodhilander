@@ -6,7 +6,6 @@ import { DEFAULT_SESSION_PROVIDER } from '../../shared/types';
 import { ProviderDefinition } from './types';
 import { claudeProvider } from './claude';
 import { codexProvider } from './codex';
-import { geminiProvider } from './gemini';
 import { grokProvider } from './grok';
 
 export * from './types';
@@ -15,8 +14,11 @@ export { claudeProvider, CLAUDE_CONFIG_DIR_ENV } from './claude';
 /** Single source of truth for the default lives in shared/types so the renderer agrees. */
 export const DEFAULT_PROVIDER_ID = DEFAULT_SESSION_PROVIDER;
 
+// gemini was removed: Google retired the CLI's consumer OAuth login
+// (June 2026), so out of the box it dead-ends at "client is no longer
+// supported". Persisted 'gemini' sessions degrade via resolveProvider().
 const REGISTRY: ReadonlyMap<string, ProviderDefinition> = new Map(
-  [claudeProvider, codexProvider, geminiProvider, grokProvider].map((p) => [p.id, p])
+  [claudeProvider, codexProvider, grokProvider].map((p) => [p.id, p])
 );
 
 if (!REGISTRY.has(DEFAULT_PROVIDER_ID)) {

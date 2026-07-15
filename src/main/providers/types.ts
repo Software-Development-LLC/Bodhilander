@@ -4,7 +4,7 @@ import { ArenaStreamParser } from '../arena/parsers';
  * Provider abstraction for agentic CLI sessions (#95).
  *
  * A provider describes how to launch and observe one terminal-native coding
- * agent (Claude Code, OpenAI Codex, Gemini CLI, Grok Build, ...). Sessions
+ * agent (Claude Code, OpenAI Codex, Grok Build, ...). Sessions
  * spawn the provider's CLI inside the user's shell via node-pty; nothing here
  * talks to a model API directly.
  */

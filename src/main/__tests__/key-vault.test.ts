@@ -95,7 +95,7 @@ describe('subscription-preservation invariant', () => {
   });
 
   test('providers without keys always inject nothing', () => {
-    expect(vault.vaultEnvFor('gemini')).toEqual({});
+    expect(vault.vaultEnvFor('grok')).toEqual({});
   });
 });
 
@@ -136,7 +136,7 @@ describe('testKey', () => {
   });
 
   test('no stored key short-circuits without a network call', async () => {
-    const result = await vault.testKey('gemini');
+    const result = await vault.testKey('codex');
     expect(result.ok).toBe(false);
     expect(result.error).toContain('No API key');
   });

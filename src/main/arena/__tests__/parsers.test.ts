@@ -1,12 +1,12 @@
 /**
  * Arena parser tests (#100). The claude fixture lines are from a real
  * `claude -p --output-format stream-json --verbose --max-turns 1` run;
- * codex/gemini/ollama fixtures follow their documented output contracts.
+ * codex/ollama fixtures follow their documented output contracts.
  *
  * Run with: bun test src/main/arena
  */
 import { describe, expect, test } from 'bun:test';
-import { claudeParser, codexParser, geminiParser, textParser, ollamaParser } from '../parsers';
+import { claudeParser, codexParser, textParser, ollamaParser } from '../parsers';
 
 describe('claudeParser', () => {
   test('extracts assistant text and result metrics from stream-json', () => {
@@ -72,37 +72,6 @@ describe('codexParser', () => {
     expect(
       p.onLine(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'alt' } }))
     ).toBe('alt');
-  });
-});
-
-describe('geminiParser', () => {
-  test('parses the single JSON document with response and model stats', () => {
-    const doc = {
-      response: 'hello from gemini',
-      stats: {
-        models: {
-          'gemini-2.5-pro': { tokens: { prompt: 10, candidates: 30, total: 40 } },
-          'gemini-2.5-flash': { tokens: { prompt: 5, candidates: 7, total: 12 } },
-        },
-      },
-    };
-    const p = geminiParser();
-    for (const line of JSON.stringify(doc, null, 2).split('\n')) {
-      expect(p.onLine(line)).toBe('');
-    }
-    expect(p.finalize()).toEqual({
-      inputTokens: 15,
-      outputTokens: 37,
-      costUsd: null,
-      reportedTtftMs: null,
-      trailingText: 'hello from gemini',
-    });
-  });
-
-  test('falls back to raw text when output is not JSON', () => {
-    const p = geminiParser();
-    p.onLine('plain output');
-    expect(p.finalize().trailingText).toBe('plain output');
   });
 });
 

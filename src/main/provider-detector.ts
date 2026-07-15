@@ -2,10 +2,11 @@
  * Provider CLI detection (#97).
  *
  * Probes each registered provider's CLI the same way sessions launch it:
- * through the user's login shell on macOS/Linux (GUI-launched Electron does
- * not inherit shell PATH additions), via `wsl.exe bash` when the configured
- * shell is WSL, and via `where.exe` on native Windows. Command names come
- * from the static provider registry, never from user input.
+ * through the user's interactive login shell on macOS/Linux (GUI-launched
+ * Electron does not inherit shell PATH additions), via `wsl.exe bash` when
+ * the configured shell is WSL, and via `where.exe` on native Windows.
+ * Command names come from the static provider registry, never from user
+ * input.
  */
 import { execFile } from 'child_process';
 import { listProviders } from './providers';
@@ -37,17 +38,28 @@ export function buildProbe(command: string): Probe {
       version: ['cmd.exe', ['/c', `${command} --version`]],
     };
   }
-  // Login (non-interactive) shell: picks up PATH from the user's profile
-  // without interactive-rc noise on stdout.
-  const wrap = (cmd: string): [string, string[]] => [shellInfo.shell, ['-l', '-c', cmd]];
+  // Interactive login shell (-l -i), matching how sessions and arena
+  // contestants actually launch. Interactive matters: installers commonly
+  // add their bin dir to PATH in the interactive rc only (e.g. the grok
+  // installer writes ~/.zshrc, which `-l -c` never reads), so a
+  // non-interactive probe reports "not installed" for a CLI that launches
+  // fine in a session. Interactive-rc side effects are contained: stdout
+  // noise is tolerable (lookup only needs the exit code; extractVersion
+  // skips non-version lines), rc prompts that read stdin see EOF because
+  // run() ends the pipe, and PROBE_TIMEOUT_MS caps anything else.
+  const wrap = (cmd: string): [string, string[]] => [shellInfo.shell, ['-l', '-i', '-c', cmd]];
   return { lookup: wrap(`command -v ${command}`), version: wrap(`${command} --version`) };
 }
 
 function run([file, args]: [string, string[]]): Promise<{ ok: boolean; stdout: string }> {
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+    const child = execFile(file, args, { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
       resolve({ ok: !err, stdout: stdout?.toString() ?? '' });
     });
+    // Interactive rc files can wait on stdin (e.g. Oh My Zsh's periodic
+    // "update?" prompt). End the piped stdin so such reads hit EOF and
+    // move on immediately instead of stalling until the probe timeout.
+    child.stdin?.end();
   });
 }
 
