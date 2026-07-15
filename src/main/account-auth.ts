@@ -63,21 +63,29 @@ export async function startLoginFlow(
   const configDir = configDirFor(accountId);
   fs.mkdirSync(configDir, { recursive: true });
 
-  // First account becomes the default fallback — which re-homes every
-  // unassigned session's CLAUDE_CONFIG_DIR here on its next launch. Seed the
-  // dir with the legacy ~/.claude transcripts first, so those sessions'
-  // stored --resume UUIDs keep resolving instead of coming back "No
-  // conversation found" (the pre-accounts history lives in ~/.claude).
+  // First account becomes the default fallback. The check and the insert
+  // stay synchronous — no await between them — so two overlapping
+  // startLoginFlow calls can't both observe "no accounts yet" and both
+  // become the default.
   const isFirst = accountsRepo.getAllAccounts().length === 0;
-  if (isFirst) {
-    await seedLegacyConversations(configDir);
-  }
   const account = accountsRepo.createAccount({
     id: accountId,
     label,
     configDir,
     isDefault: isFirst,
   });
+
+  // Becoming the default re-homes every unassigned session's
+  // CLAUDE_CONFIG_DIR here on its next launch. Seed the dir with the legacy
+  // ~/.claude transcripts so those sessions' stored --resume UUIDs keep
+  // resolving instead of coming back "No conversation found" (pre-accounts
+  // history lives in ~/.claude). Awaited before the login pty spawns: the
+  // account only becomes reachable for session launches once the user logs
+  // in, so finishing the copy first avoids resumes against a half-seeded
+  // dir. Subsequent accounts are separate identities and inherit nothing.
+  if (isFirst) {
+    await seedLegacyConversations(configDir);
+  }
 
   // Register the Bodhilander MCP server + hooks into the new account's
   // isolated config before spawning the login pty, so the session has them
