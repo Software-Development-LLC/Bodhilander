@@ -9,6 +9,15 @@ on:
       - '**.md'
       - '.gitignore'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Exercise the full pipeline (build → artifacts → release job) but
+          publish to a DRAFT release with a -dryrun tag suffix. Drafts create
+          no git tag and are invisible to auto-updaters. For validating
+          workflow changes end-to-end; delete the draft afterwards.
+        type: boolean
+        default: false
 
 jobs:
   check-version:
@@ -31,6 +40,7 @@ jobs:
         env:
           BRANCH: ${{ github.ref_name }}
           VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           # Beta versions carry a "-beta." pre-release segment (e.g. 3.3.0-beta.1).
           if [[ "$VERSION" == *"-beta."* ]]; then
@@ -39,6 +49,15 @@ jobs:
             IS_PRERELEASE=false
           fi
           echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+          # Dry run (manual dispatch only): exercise every job regardless of
+          # branch/tag gates. The release job publishes a DRAFT with a
+          # -dryrun tag suffix — no tag is created, updaters can't see it.
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry run: forcing should_release=true (draft release, -dryrun tag suffix)"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           # Gate which channel each branch is allowed to cut.
           # - production → stable only (no -beta. suffix)
@@ -207,9 +226,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          tag_name: v${{ needs.check-version.outputs.version }}
-          name: ${{ needs.check-version.outputs.is_prerelease == 'true' && format('Bodhilander v{0} (beta)', needs.check-version.outputs.version) || format('Bodhilander v{0}', needs.check-version.outputs.version) }}
-          draft: false
+          # Dry runs publish a DRAFT under a -dryrun tag suffix: drafts never
+          # create the git tag and are invisible to auto-updaters.
+          tag_name: v${{ needs.check-version.outputs.version }}${{ inputs.dry_run == true && '-dryrun' || '' }}
+          name: ${{ inputs.dry_run == true && format('DRY RUN — Bodhilander v{0}', needs.check-version.outputs.version) || needs.check-version.outputs.is_prerelease == 'true' && format('Bodhilander v{0} (beta)', needs.check-version.outputs.version) || format('Bodhilander v{0}', needs.check-version.outputs.version) }}
+          draft: ${{ inputs.dry_run == true }}
           prerelease: ${{ needs.check-version.outputs.is_prerelease }}
           generate_release_notes: true
           files: |
