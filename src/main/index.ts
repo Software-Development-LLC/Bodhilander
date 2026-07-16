@@ -394,6 +394,17 @@ function createWindow(): void {
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
 
+  // Settle arena responses orphaned mid-run by a quit/restart, so history
+  // never shows a column stuck on "running" (#100).
+  try {
+    const settled = arenaRepo.settleInterruptedResponses();
+    if (settled > 0) {
+      log.info(`[Arena] Settled ${settled} response(s) interrupted by a previous app run`);
+    }
+  } catch (error) {
+    log.error('[Arena] Failed to settle interrupted responses:', error);
+  }
+
   // Prune session events older than 90 days (BDHLNDR-17)
   try {
     const pruned = sessionEventsRepo.pruneEvents(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000));

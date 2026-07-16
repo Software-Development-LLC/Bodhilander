@@ -80,6 +80,19 @@ export function finalizeResponse(id: string, final: FinalizeResponseInput): void
     );
 }
 
+/**
+ * Settle responses left 'running' by a previous app run. Contestant
+ * processes don't survive restarts (and finalize never fired for them), so
+ * without this sweep a quit mid-run leaves permanently spinning columns in
+ * history. Mirrors sessions' markAllSessionsStopped() on startup.
+ */
+export function settleInterruptedResponses(): number {
+  const result = getDatabase()
+    .prepare("UPDATE arena_responses SET status = 'error', error = 'Interrupted by app restart' WHERE status = 'running'")
+    .run();
+  return result.changes;
+}
+
 interface RunRow {
   id: string;
   prompt: string;

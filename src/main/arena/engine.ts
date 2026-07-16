@@ -183,6 +183,11 @@ export class ArenaEngine extends EventEmitter {
       // Own process group on POSIX so killTree can signal the whole tree.
       detached: process.platform !== 'win32',
     });
+    // The prompt travels via ARENA_PROMPT, never stdin — close it so CLIs
+    // that read stdin to EOF when it isn't a TTY don't block forever waiting
+    // for input that will never come (codex exec hangs; claude warns). Same
+    // fix as the provider detector's probe (#111).
+    child.stdin?.end();
     entry.startedAt = Date.now();
 
     const timeout = setTimeout(() => {

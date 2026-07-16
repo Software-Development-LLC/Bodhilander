@@ -72,6 +72,15 @@ const FAKE_PROVIDERS: Record<string, any> = {
       createParser: textParser,
     },
   },
+  stdinReader: {
+    id: 'stdinReader',
+    arena: {
+      // `cat` reads stdin to EOF — exactly what codex exec does headlessly.
+      // If the engine leaves the stdin pipe open this never exits.
+      buildCommand: () => 'cat; echo after-stdin-eof',
+      createParser: textParser,
+    },
+  },
 };
 mock.module('../../providers', () => ({
   getProvider: (id: string) => {
@@ -249,6 +258,18 @@ describe('ArenaEngine', () => {
     const updates = await settled;
     expect(updates[updates.length - 1].status).toBe('done');
   }, 25_000);
+
+  test('stdin is closed at spawn so stdin-to-EOF CLIs cannot hang (codex exec)', async () => {
+    finalized.length = 0;
+    const engine = new ArenaEngine();
+    const settled = collectUntilSettled(engine, 1, 10_000);
+    const run = engine.prepare('p', ['stdinReader']);
+    engine.launch(run.id);
+    const updates = await settled;
+    const final = updates[updates.length - 1];
+    expect(final.status).toBe('done');
+    expect(updates.map((u) => u.chunk).join('')).toContain('after-stdin-eof');
+  }, 15_000);
 
   test('unknown contestant fails fast without spawning', async () => {
     finalized.length = 0;
