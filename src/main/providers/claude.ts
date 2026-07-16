@@ -43,11 +43,14 @@ export const claudeProvider: ProviderDefinition = {
     },
   },
   arena: {
-    // --max-turns 1 keeps the arena chat-shaped (no agentic tool loops);
+    // No --max-turns cap: folder-scoped arena questions need the agentic
+    // loop (reading files), and hitting the cap makes the CLI exit 1 with
+    // result subtype error_max_turns even after streaming a full answer.
+    // Runaway runs are already bounded by the engine's contestant timeout.
     // stream-json requires --verbose. Verified live: the result event
     // reports usage, total_cost_usd, ttft_ms.
     buildCommand: (promptRef) =>
-      `claude -p ${promptRef} --output-format stream-json --verbose --max-turns 1`,
+      `claude -p ${promptRef} --output-format stream-json --verbose`,
     createParser: claudeArenaParser,
   },
   setup: {

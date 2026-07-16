@@ -19,7 +19,12 @@ export const grokProvider = passthroughProvider({
   },
   arena: {
     // Plain-text headless output; no documented JSON/usage reporting yet.
-    buildCommand: (promptRef) => `grok -p ${promptRef}`,
+    // `-p` is hard single-turn: it prints the model's first message and
+    // exits 0, so with default plan mode on, a codebase question ends after
+    // an "I'll explore..." preamble with the tools never run. --no-plan +
+    // auto permissions let the model finish its exploration and answer
+    // within that single turn (verified live; --max-turns does not help).
+    buildCommand: (promptRef) => `grok --no-plan --permission-mode auto -p ${promptRef}`,
     createParser: textParser,
   },
   setup: {

@@ -4,8 +4,8 @@
  * electron dependencies — so every parser is directly unit-testable.
  *
  * Verified output contracts:
- * - claude: `-p --output-format stream-json --verbose --max-turns 1` emits
- *   JSONL; `assistant` events carry text content, the final `result` event
+ * - claude: `-p --output-format stream-json --verbose` emits JSONL;
+ *   `assistant` events carry text content, the final `result` event
  *   carries usage, total_cost_usd, ttft_ms and duration_ms (verified live).
  * - codex: `exec --json` emits JSONL; agent_message items carry text,
  *   `turn.completed` carries token usage (per OpenAI headless docs).
