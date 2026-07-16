@@ -39,6 +39,16 @@ export function buildColumns(run: ArenaRun): ArenaColumn[] {
  * a CLI session ref, or (Ollama) prior text to replay as chat history.
  * The engine re-checks this authoritatively; here it only gates the reply UI.
  */
+/**
+ * Human-readable message for a failed follow-up. IPC rejections arrive
+ * wrapped as "Error invoking remote method 'arena:followUp': Error: <detail>"
+ * — strip the plumbing so the user sees the detail.
+ */
+export function followUpErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw.replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, '') || 'Follow-up failed';
+}
+
 export function canFollowUp(run: ArenaRun): boolean {
   if (run.responses.some((r) => r.status === 'running')) return false;
   return buildColumns(run).some(

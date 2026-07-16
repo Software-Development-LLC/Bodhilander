@@ -1669,9 +1669,21 @@ body {
 /* Follow-up reply bar (arena rounds) */
 .arena-reply {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.arena-reply-bar {
+  display: flex;
   gap: 8px;
   align-items: flex-end;
-  margin-top: 8px;
+}
+
+.arena-reply-error {
+  color: #f28b82;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .arena-reply-input {

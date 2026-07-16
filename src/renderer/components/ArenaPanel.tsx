@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { ArenaRun, ArenaUpdate, Group, ProviderStatus } from '../../shared/types';
 import { applyArenaUpdate, isRunSettled } from './arenaUpdates';
 import { buildFolderOptions } from './arenaFolderOptions';
-import { buildColumns, canFollowUp } from './arenaRounds';
+import { buildColumns, canFollowUp, followUpErrorMessage } from './arenaRounds';
 
 interface ArenaPanelProps {
   onClose: () => void;
@@ -55,6 +55,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
   const [run, setRun] = useState<ArenaRun | null>(null);
   const [running, setRunning] = useState(false);
   const [reply, setReply] = useState('');
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [history, setHistory] = useState<ArenaRun[]>([]);
   // '' = no folder scope; otherwise a group id from folderOptions.
   const [folderGroupId, setFolderGroupId] = useState<string>(initialGroupId ?? '');
@@ -105,6 +106,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
     const trimmed = prompt.trim();
     if (!trimmed || selected.size === 0 || running) return;
     setRunning(true);
+    setFollowUpError(null);
     try {
       // Two-phase: subscribe with the run id BEFORE contestants launch, so
       // even an instantly-failing CLI's updates are never dropped.
@@ -131,6 +133,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
     const trimmed = reply.trim();
     if (!run || !trimmed || running) return;
     setRunning(true);
+    setFollowUpError(null);
     try {
       const updated = await window.electronAPI.arenaFollowUp(run.id, trimmed);
       runIdRef.current = updated.id;
@@ -138,7 +141,11 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
       setReply('');
       await window.electronAPI.arenaLaunch(updated.id);
     } catch (error) {
+      // canFollowUp is a UI-side heuristic; the engine's resumability check
+      // is authoritative and can reject — surface that instead of silently
+      // doing nothing. The typed reply is kept so the user can retry.
       console.error('Arena follow-up failed:', error);
+      setFollowUpError(followUpErrorMessage(error));
       setRunning(false);
     }
   }, [run, reply, running]);
@@ -151,6 +158,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
       setRun(loaded);
       setPrompt(loaded.prompt);
       setReply('');
+      setFollowUpError(null);
       setRunning(false);
     }
   }, []);
@@ -280,20 +288,23 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
 
       {run && !running && isRunSettled(run) && canFollowUp(run) && (
         <div className="arena-reply">
-          <textarea
-            className="arena-reply-input"
-            value={reply}
-            onChange={e => setReply(e.target.value)}
-            placeholder="Reply to all agents — each continues its own conversation…"
-            rows={2}
-          />
-          <button
-            className="confirm-btn"
-            onClick={sendFollowUp}
-            disabled={!reply.trim()}
-          >
-            Reply
-          </button>
+          {followUpError && <div className="arena-reply-error">{followUpError}</div>}
+          <div className="arena-reply-bar">
+            <textarea
+              className="arena-reply-input"
+              value={reply}
+              onChange={e => setReply(e.target.value)}
+              placeholder="Reply to all agents — each continues its own conversation…"
+              rows={2}
+            />
+            <button
+              className="confirm-btn"
+              onClick={sendFollowUp}
+              disabled={!reply.trim()}
+            >
+              Reply
+            </button>
+          </div>
         </div>
       )}
     </div>

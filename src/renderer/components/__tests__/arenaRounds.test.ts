@@ -4,7 +4,7 @@
  * Run with: bun test src/renderer/components/__tests__
  */
 import { describe, expect, test } from 'bun:test';
-import { buildColumns, canFollowUp } from '../arenaRounds';
+import { buildColumns, canFollowUp, followUpErrorMessage } from '../arenaRounds';
 import { ArenaResponse, ArenaRun } from '../../../shared/types';
 
 function response(overrides: Partial<ArenaResponse>): ArenaResponse {
@@ -60,5 +60,23 @@ describe('canFollowUp', () => {
       response({ id: 'c0', round: 0, sessionRef: 's1' }),
       response({ id: 'c1', round: 1, status: 'error', error: 'boom', text: '', sessionRef: null }),
     ]))).toBe(false);
+  });
+});
+
+describe('followUpErrorMessage', () => {
+  test('strips the IPC remote-method wrapper down to the engine detail', () => {
+    expect(followUpErrorMessage(new Error(
+      "Error invoking remote method 'arena:followUp': Error: No contestant in this run can be resumed"
+    ))).toBe('No contestant in this run can be resumed');
+  });
+
+  test('passes plain errors and non-Errors through', () => {
+    expect(followUpErrorMessage(new Error('Arena run still has contestants running')))
+      .toBe('Arena run still has contestants running');
+    expect(followUpErrorMessage('boom')).toBe('boom');
+  });
+
+  test('never returns an empty message', () => {
+    expect(followUpErrorMessage(new Error(''))).toBe('Follow-up failed');
   });
 });
