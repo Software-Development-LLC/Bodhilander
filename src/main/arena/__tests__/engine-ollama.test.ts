@@ -16,12 +16,36 @@ mock.module('../../repositories/preferences', () => ({
   getPreference: () => '',
 }));
 
+// In-memory stand-in mirroring the repo's semantics so prepareFollowUp's
+// history replay can be exercised (it reads prior rounds via getRun).
 const finalized: any[] = [];
+const store = { runs: new Map<string, any>(), responses: [] as any[] };
 mock.module('../../repositories/arena', () => ({
-  createRun: () => undefined,
-  createResponse: () => undefined,
-  finalizeResponse: (id: string, final: any) => finalized.push({ id, ...final }),
-  getRun: (id: string) => ({ id, prompt: 'p', createdAt: new Date(0), responses: [] }),
+  createRun: (id: string, prompt: string, workingDir: string | null = null) => {
+    store.runs.set(id, { id, prompt, workingDir, createdAt: new Date(0) });
+  },
+  createResponse: (id: string, runId: string, provider: string, round = 0, prompt: string | null = null) => {
+    store.responses.push({
+      id, runId, provider, round, prompt,
+      sessionRef: null, status: 'running', text: '',
+      ttftMs: null, totalMs: null, inputTokens: null, outputTokens: null, costUsd: null, error: null,
+    });
+  },
+  finalizeResponse: (id: string, final: any) => {
+    finalized.push({ id, ...final });
+    const row = store.responses.find((r) => r.id === id);
+    if (row) {
+      Object.assign(row, { status: final.status, text: final.text, sessionRef: final.sessionRef, error: final.error });
+    }
+  },
+  getRun: (id: string) => {
+    const run = store.runs.get(id);
+    if (!run) return null;
+    const responses = store.responses
+      .filter((r) => r.runId === id)
+      .sort((a, b) => a.round - b.round);
+    return { ...run, responses };
+  },
   listRuns: () => [],
 }));
 mock.module('../../providers', () => ({
@@ -137,6 +161,52 @@ describe('ArenaEngine — Ollama contestant', () => {
     expect(final.status).toBe('error');
     expect(final.error).toContain('not reachable');
   });
+
+  test('follow-up replays prior rounds as explicit chat history', async () => {
+    const chatBodies: any[] = [];
+    globalThis.fetch = (async (url: any, init?: RequestInit) => {
+      if (String(url).endsWith('/api/tags')) {
+        return new Response(JSON.stringify({ models: [{ name: 'llama3' }] }), { status: 200 });
+      }
+      chatBodies.push(JSON.parse(String(init?.body)));
+      return new Response(
+        ndjsonStream([{ message: { content: chatBodies.length === 1 ? 'hello' : 'again' }, done: true }]),
+        { status: 200 }
+      );
+    }) as typeof fetch;
+
+    const engine = new ArenaEngine();
+    const settle = () =>
+      new Promise<void>((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('never settled')), 10_000);
+        const listener = (u: ArenaUpdate) => {
+          if (u.status !== 'running') {
+            clearTimeout(t);
+            engine.off('update', listener);
+            resolve();
+          }
+        };
+        engine.on('update', listener);
+      });
+
+    let settled = settle();
+    const run = engine.prepare('ollama-prompt', ['ollama']);
+    engine.launch(run.id);
+    await settled;
+
+    settled = settle();
+    engine.prepareFollowUp(run.id, 'and again?');
+    engine.launch(run.id);
+    await settled;
+
+    // Ollama has no server-side session: the second call must carry the
+    // whole conversation, ending with the follow-up prompt.
+    expect(chatBodies[1].messages).toEqual([
+      { role: 'user', content: 'ollama-prompt' },
+      { role: 'assistant', content: 'hello' },
+      { role: 'user', content: 'and again?' },
+    ]);
+  }, 15_000);
 
   test('aborts a hung stream at the contestant timeout', async () => {
     globalThis.fetch = (async (url: any, init?: RequestInit) => {

@@ -31,6 +31,9 @@ function freshDb(): Database {
       id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL REFERENCES arena_runs(id) ON DELETE CASCADE,
       provider TEXT NOT NULL,
+      round INTEGER NOT NULL DEFAULT 0,
+      prompt TEXT DEFAULT NULL,
+      session_ref TEXT DEFAULT NULL,
       status TEXT NOT NULL DEFAULT 'running',
       response_text TEXT NOT NULL DEFAULT '',
       ttft_ms INTEGER DEFAULT NULL,
@@ -76,6 +79,7 @@ describe('settleInterruptedResponses', () => {
       outputTokens: 2,
       costUsd: 0.01,
       error: null,
+      sessionRef: null,
     });
 
     expect(arenaRepo.settleInterruptedResponses()).toBe(1);
@@ -90,5 +94,33 @@ describe('settleInterruptedResponses', () => {
 
   test('no-op on an empty table', () => {
     expect(arenaRepo.settleInterruptedResponses()).toBe(0);
+  });
+});
+
+describe('follow-up rounds', () => {
+  test('round, prompt, and session_ref round-trip; responses come back round-ordered', () => {
+    arenaRepo.createRun('r1', 'initial prompt');
+    arenaRepo.createResponse('a0', 'r1', 'claude');
+    arenaRepo.finalizeResponse('a0', {
+      status: 'done', text: 'first answer', ttftMs: 5, totalMs: 10,
+      inputTokens: null, outputTokens: null, costUsd: null, error: null,
+      sessionRef: '7f3e9a10-1111-4222-8333-944445555666',
+    });
+    arenaRepo.createResponse('a1', 'r1', 'claude', 1, 'follow-up prompt');
+
+    const run = arenaRepo.getRun('r1')!;
+    expect(run.responses.map((r) => r.id)).toEqual(['a0', 'a1']);
+    expect(run.responses[0]).toMatchObject({
+      round: 0,
+      prompt: null,
+      sessionRef: '7f3e9a10-1111-4222-8333-944445555666',
+      status: 'done',
+    });
+    expect(run.responses[1]).toMatchObject({
+      round: 1,
+      prompt: 'follow-up prompt',
+      sessionRef: null,
+      status: 'running',
+    });
   });
 });

@@ -1629,14 +1629,61 @@ body {
   white-space: pre-wrap;
 }
 
-.arena-column-text {
+/* Rounds wrapper scrolls the whole conversation; individual round texts
+   flow at natural height so earlier rounds stay readable. */
+.arena-column-rounds {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.arena-round {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arena-round + .arena-round {
+  border-top: 1px solid #333;
+  padding-top: 8px;
+}
+
+.arena-round-prompt {
+  font-size: 12px;
+  color: #c5a4e8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.arena-column-text {
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12.5px;
   margin: 0;
   color: #ddd;
+}
+
+/* Follow-up reply bar (arena rounds) */
+.arena-reply {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+.arena-reply-input {
+  flex: 1;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #ddd;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
 }
 
 .arena-empty {

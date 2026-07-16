@@ -19,8 +19,15 @@ export const codexProvider = passthroughProvider({
     },
   },
   arena: {
-    // JSONL events; turn.completed carries token usage (OpenAI headless docs).
-    buildCommand: (promptRef) => `codex exec --json ${promptRef}`,
+    // JSONL events; turn.completed carries token usage (OpenAI headless
+    // docs). --skip-git-repo-check: codex refuses to run outside a trusted
+    // git directory otherwise, which breaks unscoped arena runs (cwd = the
+    // app dir). Codex mints its own thread id — the engine's assigned
+    // sessionRef is ignored and the parser captures thread.started instead;
+    // follow-up rounds resume that thread (verified live).
+    buildCommand: (promptRef) => `codex exec --json --skip-git-repo-check ${promptRef}`,
+    buildResumeCommand: (promptRef, sessionRef) =>
+      `codex exec resume ${sessionRef} --json --skip-git-repo-check ${promptRef}`,
     createParser: codexParser,
   },
   setup: {

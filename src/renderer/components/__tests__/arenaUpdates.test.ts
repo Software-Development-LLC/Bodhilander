@@ -15,11 +15,13 @@ function makeRun(): ArenaRun {
     createdAt: new Date(0),
     responses: [
       {
-        id: 'a', runId: 'run1', provider: 'claude', status: 'running', text: 'he',
+        id: 'a', runId: 'run1', provider: 'claude', round: 0, prompt: null, sessionRef: null,
+        status: 'running', text: 'he',
         ttftMs: 100, totalMs: null, inputTokens: null, outputTokens: null, costUsd: null, error: null,
       },
       {
-        id: 'b', runId: 'run1', provider: 'grok', status: 'running', text: '',
+        id: 'b', runId: 'run1', provider: 'grok', round: 0, prompt: null, sessionRef: null,
+        status: 'running', text: '',
         ttftMs: null, totalMs: null, inputTokens: null, outputTokens: null, costUsd: null, error: null,
       },
     ],

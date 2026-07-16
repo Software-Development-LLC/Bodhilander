@@ -78,18 +78,41 @@ function killTree(child: ChildProcess): void {
   child.once('close', () => clearTimeout(escalation));
 }
 
+interface OllamaMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 interface LiveResponse {
   runId: string;
   provider: string;
   prompt: string;
   /** Project folder CLI contestants spawn in (null = engine process cwd). */
   workingDir: string | null;
+  /** Conversation round: 0 = initial prompt, 1+ = follow-ups. */
+  round: number;
+  /** CLI session id: engine-assigned on round 0, resumed on later rounds. */
+  sessionRef: string | null;
+  /** True when this entry resumes an earlier round's session. */
+  resume: boolean;
+  /**
+   * Ollama has no CLI session to resume — follow-ups replay the prior
+   * conversation as an explicit message history (null for CLI contestants).
+   */
+  ollamaMessages: OllamaMessage[] | null;
   text: string;
   startedAt: number;
   ttftMs: number | null;
   launched: boolean;
   kill: (() => void) | null;
 }
+
+/**
+ * Session refs are inlined into shell command strings (--resume <ref>), so
+ * only pass ones that cannot break out of the command: UUIDs and codex
+ * thread ids match this; anything else is rejected rather than spawned.
+ */
+const SESSION_REF_SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export class ArenaEngine extends EventEmitter {
   private readonly live: Map<string, LiveResponse> = new Map();
@@ -116,6 +139,13 @@ export class ArenaEngine extends EventEmitter {
         provider,
         prompt,
         workingDir,
+        round: 0,
+        // Name the CLI session upfront so the run can be resumed later.
+        // CLIs that mint their own id (codex) ignore this; their parser
+        // reports the real one, which wins at finalize.
+        sessionRef: provider === OLLAMA_CONTESTANT_ID ? null : randomUUID(),
+        resume: false,
+        ollamaMessages: null,
         text: '',
         startedAt: Date.now(),
         ttftMs: null,
@@ -128,15 +158,87 @@ export class ArenaEngine extends EventEmitter {
     return run;
   }
 
+  /**
+   * Phase 1 of a follow-up round: create response rows for every contestant
+   * of the run that can continue — CLI contestants resume their session
+   * (session_ref + a resume command), Ollama replays the conversation as
+   * message history. Columns whose latest round errored (or whose CLI has no
+   * headless resume) simply don't get a new round. Same two-phase contract
+   * as prepare(): nothing spawns until launch().
+   */
+  prepareFollowUp(runId: string, prompt: string): ArenaRun {
+    const run = arenaRepo.getRun(runId);
+    if (!run) throw new Error(`Arena run not found: ${runId}`);
+    if (run.responses.some((r) => r.status === 'running')) {
+      throw new Error('Arena run still has contestants running');
+    }
+
+    const nextRound = Math.max(...run.responses.map((r) => r.round)) + 1;
+    let continued = 0;
+
+    for (const provider of new Set(run.responses.map((r) => r.provider))) {
+      const rounds = run.responses.filter((r) => r.provider === provider);
+      const latest = rounds[rounds.length - 1]; // responses are round-ordered
+      if (latest.status !== 'done') continue;
+
+      let entrySeed: Pick<LiveResponse, 'sessionRef' | 'ollamaMessages'>;
+      if (provider === OLLAMA_CONTESTANT_ID) {
+        if (!latest.text) continue;
+        // Replay every prior round as explicit chat history.
+        const messages: OllamaMessage[] = rounds.flatMap((r) => [
+          { role: 'user' as const, content: r.prompt ?? run.prompt },
+          { role: 'assistant' as const, content: r.text },
+        ]);
+        messages.push({ role: 'user', content: prompt });
+        entrySeed = { sessionRef: null, ollamaMessages: messages };
+      } else {
+        if (!latest.sessionRef || !SESSION_REF_SAFE.test(latest.sessionRef)) continue;
+        let providerDef: ReturnType<typeof getProvider>;
+        try {
+          providerDef = getProvider(provider);
+        } catch {
+          continue; // provider removed from the registry since the run
+        }
+        if (!providerDef.arena.buildResumeCommand) continue;
+        entrySeed = { sessionRef: latest.sessionRef, ollamaMessages: null };
+      }
+
+      const responseId = randomUUID();
+      arenaRepo.createResponse(responseId, runId, provider, nextRound, prompt);
+      this.live.set(responseId, {
+        runId,
+        provider,
+        prompt,
+        workingDir: run.workingDir,
+        round: nextRound,
+        resume: true,
+        text: '',
+        startedAt: Date.now(),
+        ttftMs: null,
+        launched: false,
+        kill: null,
+        ...entrySeed,
+      });
+      continued += 1;
+    }
+
+    if (continued === 0) {
+      throw new Error('No contestant in this run can be resumed');
+    }
+    const updated = arenaRepo.getRun(runId);
+    if (!updated) throw new Error('Arena run vanished during follow-up');
+    return updated;
+  }
+
   /** Phase 2: spawn every contestant of a prepared run. */
   launch(runId: string): void {
     for (const [responseId, entry] of this.live) {
       if (entry.runId !== runId || entry.launched) continue;
       entry.launched = true;
       if (entry.provider === OLLAMA_CONTESTANT_ID) {
-        void this.runOllama(responseId, entry.prompt);
+        void this.runOllama(responseId, entry);
       } else {
-        this.runCli(responseId, entry.provider, entry.prompt);
+        this.runCli(responseId, entry);
       }
     }
   }
@@ -150,9 +252,8 @@ export class ArenaEngine extends EventEmitter {
     }
   }
 
-  private runCli(responseId: string, providerId: string, prompt: string): void {
-    const entry = this.live.get(responseId);
-    if (!entry) return;
+  private runCli(responseId: string, entry: LiveResponse): void {
+    const providerId = entry.provider;
     let provider: ReturnType<typeof getProvider>;
     try {
       provider = getProvider(providerId);
@@ -161,9 +262,24 @@ export class ArenaEngine extends EventEmitter {
       return;
     }
 
+    if (!entry.sessionRef || !SESSION_REF_SAFE.test(entry.sessionRef)) {
+      // prepare()/prepareFollowUp() always set a validated ref for CLI
+      // contestants; reaching here means a bug upstream, not user input.
+      this.finish(responseId, 'error', null, 'Invalid session reference');
+      return;
+    }
+
+    // prepareFollowUp only continues providers that declare a resume
+    // command, so this is belt-and-braces rather than a reachable path.
+    const build = entry.resume ? provider.arena.buildResumeCommand : provider.arena.buildCommand;
+    if (!build) {
+      this.finish(responseId, 'error', null, `${providerId} cannot resume a session`);
+      return;
+    }
+
     const shellInfo = detectShell(getPreference('customShellPath') ?? '');
     const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: true });
-    const cmd = provider.arena.buildCommand(shellLaunch.envRef('ARENA_PROMPT'));
+    const cmd = build(shellLaunch.envRef('ARENA_PROMPT'), entry.sessionRef);
     const parser = provider.arena.createParser();
 
     // vaultEnvFor is empty unless the user opted this provider into
@@ -174,7 +290,7 @@ export class ArenaEngine extends EventEmitter {
       log.info(`[Arena] API-key auth enabled for '${providerId}':`, redactEnv(vaultEnv));
     }
     const child = spawn(shellLaunch.shell, shellLaunch.wrap(cmd), {
-      env: { ...process.env, ARENA_PROMPT: prompt, ...vaultEnv },
+      env: { ...process.env, ARENA_PROMPT: entry.prompt, ...vaultEnv },
       // Scoped runs put the CLI inside the project folder, exactly like a
       // terminal session there. A vanished dir surfaces via the 'error'
       // handler below (spawn ENOENT), settling the column as an error.
@@ -230,9 +346,11 @@ export class ArenaEngine extends EventEmitter {
     });
   }
 
-  private async runOllama(responseId: string, prompt: string): Promise<void> {
-    const entry = this.live.get(responseId);
-    if (!entry) return;
+  private async runOllama(responseId: string, entry: LiveResponse): Promise<void> {
+    // Follow-ups replay the prior rounds as message history (Ollama has no
+    // server-side session); round 0 is just the single prompt.
+    const messages: OllamaMessage[] =
+      entry.ollamaMessages ?? [{ role: 'user', content: entry.prompt }];
     const parser = ollamaParser();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -257,7 +375,7 @@ export class ArenaEngine extends EventEmitter {
         method: 'POST',
         signal: controller.signal,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: true }),
+        body: JSON.stringify({ model, messages, stream: true }),
       });
       if (!res.ok || !res.body) {
         this.finish(responseId, 'error', null, `Ollama returned HTTP ${res.status}`);
@@ -313,6 +431,10 @@ export class ArenaEngine extends EventEmitter {
     // it excludes process startup, ours includes it — theirs is the honest
     // model-latency number, ours still shows in total.
     const ttftMs = final?.reportedTtftMs ?? entry.ttftMs;
+    // Same preference for the session ref: CLIs that mint their own id
+    // report it in-stream (codex thread.started); otherwise the engine's
+    // assigned id stands. Persisted so follow-up rounds can resume.
+    const sessionRef = final?.sessionRef ?? entry.sessionRef;
 
     try {
       arenaRepo.finalizeResponse(responseId, {
@@ -324,6 +446,7 @@ export class ArenaEngine extends EventEmitter {
         outputTokens: final?.outputTokens ?? null,
         costUsd: final?.costUsd ?? null,
         error,
+        sessionRef,
       });
     } catch (e) {
       log.error(`[Arena] Failed to persist response ${responseId}:`, e);

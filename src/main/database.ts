@@ -472,6 +472,16 @@ function initializeArenaTables(database: Database.Database): void {
   if (!runColumns.some((col) => col.name === 'working_dir')) {
     database.exec('ALTER TABLE arena_runs ADD COLUMN working_dir TEXT DEFAULT NULL');
   }
+
+  // Migration: follow-up rounds. round 0 = the run's initial prompt; later
+  // rounds carry their own prompt. session_ref stores the CLI session/thread
+  // id the response can be resumed from (NULL = column can't continue).
+  const responseColumns = database.prepare('PRAGMA table_info(arena_responses)').all() as { name: string }[];
+  if (!responseColumns.some((col) => col.name === 'round')) {
+    database.exec('ALTER TABLE arena_responses ADD COLUMN round INTEGER NOT NULL DEFAULT 0');
+    database.exec('ALTER TABLE arena_responses ADD COLUMN prompt TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE arena_responses ADD COLUMN session_ref TEXT DEFAULT NULL');
+  }
 }
 
 export function closeDatabase(): void {

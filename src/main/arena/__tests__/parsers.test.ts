@@ -25,6 +25,7 @@ describe('claudeParser', () => {
         duration_ms: 5973,
         ttft_ms: 5423,
         result: 'pong',
+        session_id: '7f3e9a10-1111-4222-8333-944445555666',
         total_cost_usd: 0.194027,
         usage: { input_tokens: 2, output_tokens: 21 },
       }))
@@ -35,6 +36,7 @@ describe('claudeParser', () => {
       costUsd: 0.194027,
       reportedTtftMs: 5423,
       trailingText: '',
+      sessionRef: '7f3e9a10-1111-4222-8333-944445555666',
     });
   });
 
@@ -49,6 +51,9 @@ describe('claudeParser', () => {
 describe('codexParser', () => {
   test('extracts agent messages and turn usage from exec --json', () => {
     const p = codexParser();
+    // Codex mints its own thread id — the parser must surface it so
+    // follow-up rounds can `codex exec resume` it.
+    expect(p.onLine(JSON.stringify({ type: 'thread.started', thread_id: '019f6af3-ba0e-76d0-88c4-01952d138a85' }))).toBe('');
     expect(p.onLine(JSON.stringify({ type: 'turn.started' }))).toBe('');
     expect(
       p.onLine(JSON.stringify({
@@ -65,6 +70,7 @@ describe('codexParser', () => {
     const final = p.finalize();
     expect(final.inputTokens).toBe(120);
     expect(final.outputTokens).toBe(45);
+    expect(final.sessionRef).toBe('019f6af3-ba0e-76d0-88c4-01952d138a85');
   });
 
   test('accepts item.type as an alternative to item_type', () => {
