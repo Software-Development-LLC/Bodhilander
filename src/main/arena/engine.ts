@@ -31,7 +31,7 @@ import * as arenaRepo from '../repositories/arena';
 import { vaultEnvFor } from '../key-vault';
 import { redactEnv } from '../redact-env';
 import { ArenaStreamParser, ollamaParser } from './parsers';
-import { ArenaRun, ArenaUpdate, ArenaResponseStatus } from '../../shared/types';
+import { ArenaResponse, ArenaRun, ArenaUpdate, ArenaResponseStatus } from '../../shared/types';
 
 export const OLLAMA_CONTESTANT_ID = 'ollama';
 const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
@@ -114,6 +114,44 @@ interface LiveResponse {
  */
 const SESSION_REF_SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/**
+ * Continuation seed for one provider's next round, or null when the column
+ * can't continue (latest round didn't finish cleanly, nothing to resume, or
+ * the CLI has no headless resume). `rounds` is that provider's responses in
+ * round order.
+ */
+function followUpSeed(
+  provider: string,
+  rounds: ArenaResponse[],
+  runPrompt: string,
+  prompt: string,
+): Pick<LiveResponse, 'sessionRef' | 'ollamaMessages'> | null {
+  const latest = rounds[rounds.length - 1];
+  if (latest.status !== 'done') return null;
+
+  if (provider === OLLAMA_CONTESTANT_ID) {
+    if (!latest.text) return null;
+    // Ollama has no server-side session — replay every prior round as
+    // explicit chat history.
+    const messages: OllamaMessage[] = rounds.flatMap((r) => [
+      { role: 'user' as const, content: r.prompt ?? runPrompt },
+      { role: 'assistant' as const, content: r.text },
+    ]);
+    messages.push({ role: 'user', content: prompt });
+    return { sessionRef: null, ollamaMessages: messages };
+  }
+
+  if (!latest.sessionRef || !SESSION_REF_SAFE.test(latest.sessionRef)) return null;
+  let providerDef: ReturnType<typeof getProvider>;
+  try {
+    providerDef = getProvider(provider);
+  } catch {
+    return null; // provider removed from the registry since the run
+  }
+  if (!providerDef.arena.buildResumeCommand) return null;
+  return { sessionRef: latest.sessionRef, ollamaMessages: null };
+}
+
 export class ArenaEngine extends EventEmitter {
   private readonly live: Map<string, LiveResponse> = new Map();
   private readonly timeoutMs: number;
@@ -178,30 +216,8 @@ export class ArenaEngine extends EventEmitter {
 
     for (const provider of new Set(run.responses.map((r) => r.provider))) {
       const rounds = run.responses.filter((r) => r.provider === provider);
-      const latest = rounds[rounds.length - 1]; // responses are round-ordered
-      if (latest.status !== 'done') continue;
-
-      let entrySeed: Pick<LiveResponse, 'sessionRef' | 'ollamaMessages'>;
-      if (provider === OLLAMA_CONTESTANT_ID) {
-        if (!latest.text) continue;
-        // Replay every prior round as explicit chat history.
-        const messages: OllamaMessage[] = rounds.flatMap((r) => [
-          { role: 'user' as const, content: r.prompt ?? run.prompt },
-          { role: 'assistant' as const, content: r.text },
-        ]);
-        messages.push({ role: 'user', content: prompt });
-        entrySeed = { sessionRef: null, ollamaMessages: messages };
-      } else {
-        if (!latest.sessionRef || !SESSION_REF_SAFE.test(latest.sessionRef)) continue;
-        let providerDef: ReturnType<typeof getProvider>;
-        try {
-          providerDef = getProvider(provider);
-        } catch {
-          continue; // provider removed from the registry since the run
-        }
-        if (!providerDef.arena.buildResumeCommand) continue;
-        entrySeed = { sessionRef: latest.sessionRef, ollamaMessages: null };
-      }
+      const entrySeed = followUpSeed(provider, rounds, run.prompt, prompt);
+      if (!entrySeed) continue;
 
       const responseId = randomUUID();
       arenaRepo.createResponse(responseId, runId, provider, nextRound, prompt);

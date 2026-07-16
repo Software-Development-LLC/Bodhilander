@@ -85,6 +85,21 @@ function ndjsonStream(lines: object[]): ReadableStream<Uint8Array> {
   });
 }
 
+/** Resolve when the engine's next settle (non-running update) arrives. */
+function settleOnce(engine: InstanceType<typeof ArenaEngine>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('never settled')), 10_000);
+    const listener = (u: ArenaUpdate) => {
+      if (u.status !== 'running') {
+        clearTimeout(t);
+        engine.off('update', listener);
+        resolve();
+      }
+    };
+    engine.on('update', listener);
+  });
+}
+
 function runOllamaAndSettle(engine: InstanceType<typeof ArenaEngine>): Promise<ArenaUpdate[]> {
   const updates: ArenaUpdate[] = [];
   return new Promise((resolve, reject) => {
@@ -176,25 +191,13 @@ describe('ArenaEngine — Ollama contestant', () => {
     }) as typeof fetch;
 
     const engine = new ArenaEngine();
-    const settle = () =>
-      new Promise<void>((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error('never settled')), 10_000);
-        const listener = (u: ArenaUpdate) => {
-          if (u.status !== 'running') {
-            clearTimeout(t);
-            engine.off('update', listener);
-            resolve();
-          }
-        };
-        engine.on('update', listener);
-      });
 
-    let settled = settle();
+    let settled = settleOnce(engine);
     const run = engine.prepare('ollama-prompt', ['ollama']);
     engine.launch(run.id);
     await settled;
 
-    settled = settle();
+    settled = settleOnce(engine);
     engine.prepareFollowUp(run.id, 'and again?');
     engine.launch(run.id);
     await settled;
