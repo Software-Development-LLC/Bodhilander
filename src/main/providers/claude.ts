@@ -48,9 +48,13 @@ export const claudeProvider: ProviderDefinition = {
     // result subtype error_max_turns even after streaming a full answer.
     // Runaway runs are already bounded by the engine's contestant timeout.
     // stream-json requires --verbose. Verified live: the result event
-    // reports usage, total_cost_usd, ttft_ms.
-    buildCommand: (promptRef) =>
-      `claude -p ${promptRef} --output-format stream-json --verbose`,
+    // reports usage, total_cost_usd, ttft_ms. --session-id names the
+    // session upfront so follow-up rounds can --resume it (headless resume
+    // keeps the same id — verified live).
+    buildCommand: (promptRef, sessionRef) =>
+      `claude -p ${promptRef} --output-format stream-json --verbose --session-id ${sessionRef}`,
+    buildResumeCommand: (promptRef, sessionRef) =>
+      `claude -p ${promptRef} --output-format stream-json --verbose --resume ${sessionRef}`,
     createParser: claudeArenaParser,
   },
   setup: {

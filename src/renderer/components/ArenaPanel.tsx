@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { ArenaRun, ArenaUpdate, Group, ProviderStatus } from '../../shared/types';
 import { applyArenaUpdate, isRunSettled } from './arenaUpdates';
 import { buildFolderOptions } from './arenaFolderOptions';
+import { buildColumns, canFollowUp, followUpErrorMessage } from './arenaRounds';
 
 interface ArenaPanelProps {
   onClose: () => void;
@@ -53,6 +54,8 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [run, setRun] = useState<ArenaRun | null>(null);
   const [running, setRunning] = useState(false);
+  const [reply, setReply] = useState('');
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [history, setHistory] = useState<ArenaRun[]>([]);
   // '' = no folder scope; otherwise a group id from folderOptions.
   const [folderGroupId, setFolderGroupId] = useState<string>(initialGroupId ?? '');
@@ -103,6 +106,7 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
     const trimmed = prompt.trim();
     if (!trimmed || selected.size === 0 || running) return;
     setRunning(true);
+    setFollowUpError(null);
     try {
       // Two-phase: subscribe with the run id BEFORE contestants launch, so
       // even an instantly-failing CLI's updates are never dropped.
@@ -122,6 +126,30 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
     }
   }, []);
 
+  // Follow-up round: each contestant resumes its own CLI session (Ollama
+  // replays history), so answering an agent's question keeps full context.
+  // Works on history-loaded runs too — sessions persist on disk.
+  const sendFollowUp = useCallback(async () => {
+    const trimmed = reply.trim();
+    if (!run || !trimmed || running) return;
+    setRunning(true);
+    setFollowUpError(null);
+    try {
+      const updated = await window.electronAPI.arenaFollowUp(run.id, trimmed);
+      runIdRef.current = updated.id;
+      setRun(updated);
+      setReply('');
+      await window.electronAPI.arenaLaunch(updated.id);
+    } catch (error) {
+      // canFollowUp is a UI-side heuristic; the engine's resumability check
+      // is authoritative and can reject — surface that instead of silently
+      // doing nothing. The typed reply is kept so the user can retry.
+      console.error('Arena follow-up failed:', error);
+      setFollowUpError(followUpErrorMessage(error));
+      setRunning(false);
+    }
+  }, [run, reply, running]);
+
   const loadHistoryRun = useCallback(async (id: string) => {
     if (!id) return;
     const loaded = await window.electronAPI.arenaGetRun(id);
@@ -129,6 +157,8 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
       runIdRef.current = null; // viewing history — ignore live updates
       setRun(loaded);
       setPrompt(loaded.prompt);
+      setReply('');
+      setFollowUpError(null);
       setRunning(false);
     }
   }, []);
@@ -217,24 +247,35 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
       )}
 
       <div className="arena-results">
-        {run?.responses.map(r => (
-          <div key={r.id} className={`arena-column ${r.status}`}>
+        {run && buildColumns(run).map(col => (
+          <div key={col.provider} className={`arena-column ${col.latest.status}`}>
             <div className="arena-column-header">
-              <span className="arena-column-name">{r.provider}</span>
-              <span className={`status-pill ${STATUS_PILL_CLASS[r.status]}`}>
-                {r.status}
+              <span className="arena-column-name">{col.provider}</span>
+              <span className={`status-pill ${STATUS_PILL_CLASS[col.latest.status]}`}>
+                {col.latest.status}
               </span>
             </div>
-            <div className="arena-column-metrics">
-              <span title="Time to first token">TTFT {formatMs(r.ttftMs)}</span>
-              <span title="Total duration">total {formatMs(r.totalMs)}</span>
-              <span title="Token usage">{formatTokens(r.inputTokens, r.outputTokens)}</span>
-              <span title="Runs bill against the CLI's own subscription — no direct cost. When the CLI reports a figure, it's what the same call would cost on the provider's API.">
-                {formatCost(r.costUsd)}
-              </span>
+            <div className="arena-column-rounds">
+              {col.responses.map(r => (
+                <div key={r.id} className="arena-round">
+                  {r.round > 0 && (
+                    <div className="arena-round-prompt" title={r.prompt ?? ''}>
+                      ↳ {r.prompt}
+                    </div>
+                  )}
+                  <div className="arena-column-metrics">
+                    <span title="Time to first token">TTFT {formatMs(r.ttftMs)}</span>
+                    <span title="Total duration">total {formatMs(r.totalMs)}</span>
+                    <span title="Token usage">{formatTokens(r.inputTokens, r.outputTokens)}</span>
+                    <span title="Runs bill against the CLI's own subscription — no direct cost. When the CLI reports a figure, it's what the same call would cost on the provider's API.">
+                      {formatCost(r.costUsd)}
+                    </span>
+                  </div>
+                  {r.error && <div className="arena-column-error">{r.error}</div>}
+                  <pre className="arena-column-text">{columnText(r.text, r.status)}</pre>
+                </div>
+              ))}
             </div>
-            {r.error && <div className="arena-column-error">{r.error}</div>}
-            <pre className="arena-column-text">{columnText(r.text, r.status)}</pre>
           </div>
         ))}
         {!run && (
@@ -244,6 +285,28 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
           </div>
         )}
       </div>
+
+      {run && !running && isRunSettled(run) && canFollowUp(run) && (
+        <div className="arena-reply">
+          {followUpError && <div className="arena-reply-error">{followUpError}</div>}
+          <div className="arena-reply-bar">
+            <textarea
+              className="arena-reply-input"
+              value={reply}
+              onChange={e => setReply(e.target.value)}
+              placeholder="Reply to all agents — each continues its own conversation…"
+              rows={2}
+            />
+            <button
+              className="confirm-btn"
+              onClick={sendFollowUp}
+              disabled={!reply.trim()}
+            >
+              Reply
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

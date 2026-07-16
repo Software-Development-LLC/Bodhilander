@@ -24,7 +24,12 @@ export const grokProvider = passthroughProvider({
     // an "I'll explore..." preamble with the tools never run. --no-plan +
     // auto permissions let the model finish its exploration and answer
     // within that single turn (verified live; --max-turns does not help).
-    buildCommand: (promptRef) => `grok --no-plan --permission-mode auto -p ${promptRef}`,
+    // --session-id names the session upfront; follow-up rounds --resume it
+    // (same id is kept — grok only rotates with --fork-session).
+    buildCommand: (promptRef, sessionRef) =>
+      `grok --session-id ${sessionRef} --no-plan --permission-mode auto -p ${promptRef}`,
+    buildResumeCommand: (promptRef, sessionRef) =>
+      `grok --resume ${sessionRef} --no-plan --permission-mode auto -p ${promptRef}`,
     createParser: textParser,
   },
   setup: {

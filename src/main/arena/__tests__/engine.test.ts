@@ -18,12 +18,44 @@ mock.module('../../repositories/preferences', () => ({
   getPreference: () => '',
 }));
 
+// In-memory stand-in mirroring the repo's semantics (round ordering,
+// session_ref persistence) so prepareFollowUp can be exercised for real.
 const finalized: any[] = [];
+const store = {
+  runs: new Map<string, any>(),
+  responses: [] as any[],
+};
 mock.module('../../repositories/arena', () => ({
-  createRun: () => undefined,
-  createResponse: () => undefined,
-  finalizeResponse: (id: string, final: any) => finalized.push({ id, ...final }),
-  getRun: (id: string) => ({ id, prompt: 'p', createdAt: new Date(0), responses: [] }),
+  createRun: (id: string, prompt: string, workingDir: string | null = null) => {
+    store.runs.set(id, { id, prompt, workingDir, createdAt: new Date(0) });
+  },
+  createResponse: (id: string, runId: string, provider: string, round = 0, prompt: string | null = null) => {
+    store.responses.push({
+      id, runId, provider, round, prompt,
+      sessionRef: null, status: 'running', text: '',
+      ttftMs: null, totalMs: null, inputTokens: null, outputTokens: null, costUsd: null, error: null,
+    });
+  },
+  finalizeResponse: (id: string, final: any) => {
+    finalized.push({ id, ...final });
+    const row = store.responses.find((r) => r.id === id);
+    if (row) {
+      Object.assign(row, {
+        status: final.status,
+        text: final.text,
+        sessionRef: final.sessionRef,
+        error: final.error,
+      });
+    }
+  },
+  getRun: (id: string) => {
+    const run = store.runs.get(id);
+    if (!run) return null;
+    const responses = store.responses
+      .filter((r) => r.runId === id)
+      .sort((a, b) => a.round - b.round || a.provider.localeCompare(b.provider));
+    return { ...run, responses };
+  },
   listRuns: () => [],
 }));
 
@@ -78,6 +110,14 @@ const FAKE_PROVIDERS: Record<string, any> = {
       // `cat` reads stdin to EOF — exactly what codex exec does headlessly.
       // If the engine leaves the stdin pipe open this never exits.
       buildCommand: () => 'cat; echo after-stdin-eof',
+      createParser: textParser,
+    },
+  },
+  resumer: {
+    id: 'resumer',
+    arena: {
+      buildCommand: (ref: string, sid: string) => `echo start:${sid}; echo ${ref}`,
+      buildResumeCommand: (ref: string, sid: string) => `echo resumed:${sid}; echo ${ref}`,
       createParser: textParser,
     },
   },
@@ -270,6 +310,57 @@ describe('ArenaEngine', () => {
     expect(final.status).toBe('done');
     expect(updates.map((u) => u.chunk).join('')).toContain('after-stdin-eof');
   }, 15_000);
+
+  test('follow-up round resumes the persisted session ref and records the new prompt', async () => {
+    finalized.length = 0;
+    const engine = new ArenaEngine();
+
+    const settled1 = collectUntilSettled(engine, 1);
+    const run = engine.prepare('first question', ['resumer']);
+    engine.launch(run.id);
+    await settled1;
+    const sessionRef = finalized[0].sessionRef;
+    expect(sessionRef).toBeTruthy();
+
+    // Registered after round 0 settled, so it only observes round 1.
+    const settled2 = collectUntilSettled(engine, 1);
+    const updated = engine.prepareFollowUp(run.id, 'follow-up question');
+    expect(updated.responses.length).toBe(2);
+    expect(updated.responses[1].round).toBe(1);
+    expect(updated.responses[1].prompt).toBe('follow-up question');
+
+    engine.launch(run.id);
+    await settled2;
+
+    expect(finalized.length).toBe(2);
+    expect(finalized[1].status).toBe('done');
+    // The resume command line ran, against the round-0 session ref, and the
+    // follow-up prompt travelled through the environment.
+    expect(finalized[1].text).toContain(`resumed:${sessionRef}`);
+    expect(finalized[1].text).toContain('follow-up question');
+    // Session ref carries forward so a third round can resume again.
+    expect(finalized[1].sessionRef).toBe(sessionRef);
+  }, 25_000);
+
+  test('follow-up refuses a run whose only contestant errored', async () => {
+    finalized.length = 0;
+    const engine = new ArenaEngine();
+    const settled = collectUntilSettled(engine, 1);
+    const run = engine.prepare('p', ['failer']);
+    engine.launch(run.id);
+    await settled;
+    expect(() => engine.prepareFollowUp(run.id, 'follow')).toThrow(/resumed/);
+  }, 25_000);
+
+  test('follow-up skips providers without a resume command', async () => {
+    finalized.length = 0;
+    const engine = new ArenaEngine();
+    const settled = collectUntilSettled(engine, 1);
+    const run = engine.prepare('p', ['echoer']); // echoer has no buildResumeCommand
+    engine.launch(run.id);
+    await settled;
+    expect(() => engine.prepareFollowUp(run.id, 'follow')).toThrow(/resumed/);
+  }, 25_000);
 
   test('unknown contestant fails fast without spawning', async () => {
     finalized.length = 0;

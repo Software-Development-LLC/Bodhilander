@@ -20,6 +20,12 @@ export interface ArenaFinal {
   reportedTtftMs: number | null;
   /** Text only available at finalize time (single-doc output styles). */
   trailingText: string;
+  /**
+   * CLI-reported session/thread id for resuming (claude result.session_id,
+   * codex thread.started.thread_id). Null for CLIs that don't report one —
+   * the engine falls back to the session id it assigned upfront.
+   */
+  sessionRef: string | null;
 }
 
 export interface ArenaStreamParser {
@@ -35,7 +41,12 @@ const EMPTY_FINAL: ArenaFinal = {
   costUsd: null,
   reportedTtftMs: null,
   trailingText: '',
+  sessionRef: null,
 };
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
 
 function tryParseJson(line: string): any {
   const trimmed = line.trim();
@@ -71,6 +82,7 @@ export function claudeParser(): ArenaStreamParser {
           costUsd: asFiniteNumber(event.total_cost_usd),
           reportedTtftMs: asFiniteNumber(event.ttft_ms),
           trailingText: '',
+          sessionRef: asNonEmptyString(event.session_id),
         };
       }
       return '';
@@ -86,6 +98,10 @@ export function codexParser(): ArenaStreamParser {
     onLine(line) {
       const event = tryParseJson(line);
       if (!event) return '';
+      if (event.type === 'thread.started') {
+        final = { ...final, sessionRef: asNonEmptyString(event.thread_id) };
+        return '';
+      }
       const item = event.item;
       const itemType = item?.item_type ?? item?.type;
       if (event.type === 'item.completed' && itemType === 'agent_message' && typeof item?.text === 'string') {

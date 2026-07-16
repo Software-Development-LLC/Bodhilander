@@ -5,6 +5,9 @@ interface ResponseRow {
   id: string;
   run_id: string;
   provider: string;
+  round: number;
+  prompt: string | null;
+  session_ref: string | null;
   status: string;
   response_text: string;
   ttft_ms: number | null;
@@ -20,6 +23,9 @@ function rowToResponse(row: ResponseRow): ArenaResponse {
     id: row.id,
     runId: row.run_id,
     provider: row.provider,
+    round: row.round,
+    prompt: row.prompt,
+    sessionRef: row.session_ref,
     status: row.status as ArenaResponseStatus,
     text: row.response_text,
     ttftMs: row.ttft_ms,
@@ -37,10 +43,16 @@ export function createRun(id: string, prompt: string, workingDir: string | null 
     .run(id, prompt, workingDir);
 }
 
-export function createResponse(id: string, runId: string, provider: string): void {
+export function createResponse(
+  id: string,
+  runId: string,
+  provider: string,
+  round: number = 0,
+  prompt: string | null = null,
+): void {
   getDatabase()
-    .prepare("INSERT INTO arena_responses (id, run_id, provider, status) VALUES (?, ?, ?, 'running')")
-    .run(id, runId, provider);
+    .prepare("INSERT INTO arena_responses (id, run_id, provider, round, prompt, status) VALUES (?, ?, ?, ?, ?, 'running')")
+    .run(id, runId, provider, round, prompt);
 }
 
 export interface FinalizeResponseInput {
@@ -52,6 +64,8 @@ export interface FinalizeResponseInput {
   outputTokens: number | null;
   costUsd: number | null;
   error: string | null;
+  /** CLI session/thread id for follow-up rounds (null = not resumable). */
+  sessionRef: string | null;
 }
 
 /**
@@ -64,7 +78,8 @@ export function finalizeResponse(id: string, final: FinalizeResponseInput): void
     .prepare(`
       UPDATE arena_responses
       SET status = ?, response_text = ?, ttft_ms = ?, total_ms = ?,
-          input_tokens = ?, output_tokens = ?, cost_usd = ?, error = ?
+          input_tokens = ?, output_tokens = ?, cost_usd = ?, error = ?,
+          session_ref = ?
       WHERE id = ?
     `)
     .run(
@@ -76,6 +91,7 @@ export function finalizeResponse(id: string, final: FinalizeResponseInput): void
       final.outputTokens,
       final.costUsd,
       final.error,
+      final.sessionRef,
       id
     );
 }
@@ -107,7 +123,7 @@ export function getRun(id: string): ArenaRun | null {
     .get(id) as RunRow | undefined;
   if (!run) return null;
   const rows = db
-    .prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY provider')
+    .prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY round, provider')
     .all(id) as ResponseRow[];
   return {
     id: run.id,
@@ -124,7 +140,7 @@ export function listRuns(limit: number = 50): ArenaRun[] {
   const runs = db
     .prepare('SELECT id, prompt, working_dir, created_at FROM arena_runs ORDER BY created_at DESC LIMIT ?')
     .all(limit) as RunRow[];
-  const responsesStmt = db.prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY provider');
+  const responsesStmt = db.prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY round, provider');
   return runs.map((run) => ({
     id: run.id,
     prompt: run.prompt,

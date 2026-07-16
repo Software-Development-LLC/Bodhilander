@@ -99,9 +99,20 @@ export interface ProviderDefinition {
    * `"$ARENA_PROMPT"`), so the prompt text itself never touches the command
    * string — it travels via the environment, immune to shell injection.
    * Runs under the user's existing CLI login (subscription), never an API key.
+   *
+   * sessionRef is an engine-generated UUID naming the CLI session so the run
+   * can be resumed later for follow-up rounds. CLIs that accept an upfront
+   * session id embed it (claude/grok --session-id); CLIs that mint their own
+   * ignore it and report theirs through the parser instead (codex thread_id).
+   * UUIDs are alphanumeric + hyphens, safe to inline in command strings.
    */
   arena: {
-    buildCommand(promptRef: string): string;
+    buildCommand(promptRef: string, sessionRef: string): string;
+    /**
+     * Resume sessionRef with a follow-up prompt (arena reply rounds). Omit
+     * when the CLI has no headless resume — the column simply can't continue.
+     */
+    buildResumeCommand?(promptRef: string, sessionRef: string): string;
     createParser(): ArenaStreamParser;
   };
   /** Setup guidance surfaced in Settings → Providers when the CLI is missing (#97). */

@@ -44,6 +44,15 @@ export interface ArenaResponse {
   runId: string;
   /** Arena contestant id: a provider registry id or 'ollama'. */
   provider: string;
+  /** Conversation round: 0 = the run's initial prompt, 1+ = follow-ups. */
+  round: number;
+  /** The follow-up prompt this response answers (null on round 0 — see ArenaRun.prompt). */
+  prompt: string | null;
+  /**
+   * CLI session/thread id this response can be resumed from (null when the
+   * contestant has no resumable session, e.g. Ollama or an errored run).
+   */
+  sessionRef: string | null;
   status: ArenaResponseStatus;
   /** Accumulated response text (streamed). */
   text: string;

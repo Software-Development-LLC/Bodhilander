@@ -1247,6 +1247,15 @@ safeHandle('arena:start', async (prompt: string, contestants: string[], workingD
 safeHandle('arena:launch', async (runId: string) => {
   arenaEngine.launch(runId);
 });
+// Follow-up round: same two-phase contract — 'followUp' creates the new
+// round's rows (resuming each contestant's CLI session), 'launch' spawns.
+safeHandle('arena:followUp', async (runId: string, prompt: string) => {
+  const trimmed = prompt?.trim();
+  if (!runId || !trimmed) {
+    throw new Error('Arena follow-up needs a run id and a prompt');
+  }
+  return arenaEngine.prepareFollowUp(runId, trimmed);
+});
 safeHandle('arena:cancel', async (runId: string) => {
   arenaEngine.cancelRun(runId);
 });
