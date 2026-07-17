@@ -1,0 +1,57 @@
+name: Feature
+description: Propose new functionality
+title: "Feature: "
+type: Feature
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the change as a user goal. Acceptance criteria define when this is "done".
+  - type: textarea
+    id: story
+    attributes:
+      label: User story / problem
+      description: "As a <user>, I want <goal> so that <benefit>. Or: what problem does this solve?"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Optional — how you imagine it working.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Bullet the conditions that must be true for this to be complete.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      description: Maps to the Jira Major/Minor/New Feature distinction.
+      options:
+        - Major feature
+        - Minor feature
+        - New feature
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Highest
+        - High
+        - Medium
+        - Low
+        - Lowest
+    validations:
+      required: false

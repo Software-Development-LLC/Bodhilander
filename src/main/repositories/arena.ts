@@ -1,0 +1,151 @@
+import { getDatabase } from '../database';
+import { ArenaRun, ArenaResponse, ArenaResponseStatus } from '../../shared/types';
+
+interface ResponseRow {
+  id: string;
+  run_id: string;
+  provider: string;
+  round: number;
+  prompt: string | null;
+  session_ref: string | null;
+  status: string;
+  response_text: string;
+  ttft_ms: number | null;
+  total_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  error: string | null;
+}
+
+function rowToResponse(row: ResponseRow): ArenaResponse {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    provider: row.provider,
+    round: row.round,
+    prompt: row.prompt,
+    sessionRef: row.session_ref,
+    status: row.status as ArenaResponseStatus,
+    text: row.response_text,
+    ttftMs: row.ttft_ms,
+    totalMs: row.total_ms,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    costUsd: row.cost_usd,
+    error: row.error,
+  };
+}
+
+export function createRun(id: string, prompt: string, workingDir: string | null = null): void {
+  getDatabase()
+    .prepare('INSERT INTO arena_runs (id, prompt, working_dir) VALUES (?, ?, ?)')
+    .run(id, prompt, workingDir);
+}
+
+export function createResponse(
+  id: string,
+  runId: string,
+  provider: string,
+  round: number = 0,
+  prompt: string | null = null,
+): void {
+  getDatabase()
+    .prepare("INSERT INTO arena_responses (id, run_id, provider, round, prompt, status) VALUES (?, ?, ?, ?, ?, 'running')")
+    .run(id, runId, provider, round, prompt);
+}
+
+export interface FinalizeResponseInput {
+  status: ArenaResponseStatus;
+  text: string;
+  ttftMs: number | null;
+  totalMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  error: string | null;
+  /** CLI session/thread id for follow-up rounds (null = not resumable). */
+  sessionRef: string | null;
+}
+
+/**
+ * Streamed text is held in memory by the engine and written once here at
+ * completion — per-chunk DB writes would hammer sqlite for no benefit since
+ * the renderer receives live text via events, not the DB.
+ */
+export function finalizeResponse(id: string, final: FinalizeResponseInput): void {
+  getDatabase()
+    .prepare(`
+      UPDATE arena_responses
+      SET status = ?, response_text = ?, ttft_ms = ?, total_ms = ?,
+          input_tokens = ?, output_tokens = ?, cost_usd = ?, error = ?,
+          session_ref = ?
+      WHERE id = ?
+    `)
+    .run(
+      final.status,
+      final.text,
+      final.ttftMs,
+      final.totalMs,
+      final.inputTokens,
+      final.outputTokens,
+      final.costUsd,
+      final.error,
+      final.sessionRef,
+      id
+    );
+}
+
+/**
+ * Settle responses left 'running' by a previous app run. Contestant
+ * processes don't survive restarts (and finalize never fired for them), so
+ * without this sweep a quit mid-run leaves permanently spinning columns in
+ * history. Mirrors sessions' markAllSessionsStopped() on startup.
+ */
+export function settleInterruptedResponses(): number {
+  const result = getDatabase()
+    .prepare("UPDATE arena_responses SET status = 'error', error = 'Interrupted by app restart' WHERE status = 'running'")
+    .run();
+  return result.changes;
+}
+
+interface RunRow {
+  id: string;
+  prompt: string;
+  working_dir: string | null;
+  created_at: string;
+}
+
+export function getRun(id: string): ArenaRun | null {
+  const db = getDatabase();
+  const run = db
+    .prepare('SELECT id, prompt, working_dir, created_at FROM arena_runs WHERE id = ?')
+    .get(id) as RunRow | undefined;
+  if (!run) return null;
+  const rows = db
+    .prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY round, provider')
+    .all(id) as ResponseRow[];
+  return {
+    id: run.id,
+    prompt: run.prompt,
+    workingDir: run.working_dir,
+    createdAt: new Date(run.created_at),
+    responses: rows.map(rowToResponse),
+  };
+}
+
+/** Most-recent-first run summaries (responses included for the history list). */
+export function listRuns(limit: number = 50): ArenaRun[] {
+  const db = getDatabase();
+  const runs = db
+    .prepare('SELECT id, prompt, working_dir, created_at FROM arena_runs ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as RunRow[];
+  const responsesStmt = db.prepare('SELECT * FROM arena_responses WHERE run_id = ? ORDER BY round, provider');
+  return runs.map((run) => ({
+    id: run.id,
+    prompt: run.prompt,
+    workingDir: run.working_dir,
+    createdAt: new Date(run.created_at),
+    responses: (responsesStmt.all(run.id) as ResponseRow[]).map(rowToResponse),
+  }));
+}

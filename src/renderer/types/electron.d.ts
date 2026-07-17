@@ -29,7 +29,7 @@ interface StateChangeEvent {
 export interface ElectronAPI {
   platform: string;
   homedir: string;
-  createSession: (id: string, cwd: string, launchClaude?: boolean) => Promise<void>;
+  createSession: (id: string, cwd: string, launchClaude?: boolean, providerId?: string) => Promise<void>;
   writeToSession: (id: string, data: string) => void;
   resizeSession: (id: string, cols: number, rows: number) => void;
   killSession: (id: string) => void;

@@ -275,6 +275,23 @@ export class PairingManager {
 
     if (success) {
       log.info(`[PairingManager] Device unpaired: ${deviceId}`);
+      // BDHLNDR-68: also clear the device's Web Push subscriptions so we
+      // don't keep firing pushes at a now-unauthenticated endpoint. Lazy
+      // 410-driven cleanup in the dispatcher still works as a fallback, but
+      // hitting it on unpair avoids the dead-row window. Lazy-required to
+      // dodge an import cycle (pairing-manager ↔ push-subscriptions repo
+      // both touch the database singleton).
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { deleteSubscriptionsForDevice } = require('../../repositories/push-subscriptions');
+        const removed: number = deleteSubscriptionsForDevice(deviceId);
+        if (removed > 0) {
+          log.info(`[PairingManager] Cleaned ${removed} push subscription(s) for ${deviceId}`);
+        }
+      } catch (error) {
+        // Non-fatal — the dispatcher's 410-cleanup path catches any leftovers.
+        log.warn('[PairingManager] Push subscription cleanup failed:', error);
+      }
     }
 
     return success;

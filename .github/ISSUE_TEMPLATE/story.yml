@@ -1,0 +1,45 @@
+name: Story
+description: Functionality expressed as a user goal
+title: "Story: "
+type: Story
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A user-goal story. Keep it outcome-focused; acceptance criteria define "done".
+  - type: textarea
+    id: story
+    attributes:
+      label: User story
+      description: "As a <user>, I want <goal> so that <benefit>."
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details / context
+      description: Optional — background, constraints, links.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Highest
+        - High
+        - Medium
+        - Low
+        - Lowest
+    validations:
+      required: false

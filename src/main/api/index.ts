@@ -14,6 +14,7 @@ import { createHttpServer } from './http-server';
 import { createWsServer, WsServer } from './ws-server';
 import { MdnsAdvertiser } from './discovery/mdns-advertiser';
 import { PairingManager } from './pairing/pairing-manager';
+import type { ChatEvent } from './chat-parser';
 
 export interface ApiServerConfig {
   port: number;
@@ -78,11 +79,18 @@ class ApiServer extends EventEmitter {
     log.info('[ApiServer] Starting API server...');
 
     try {
-      // Create HTTP server with Express
+      // Create HTTP server with Express.
+      // BDHLNDR-67: onDeviceUnpaired forwards device-id to wsServer so any
+      // open WS owned by the deleted device closes cleanly. The wsServer
+      // doesn't exist at createHttpServer call time, so we read `this.wsServer`
+      // lazily inside the closure — by request-time it's been assigned below.
       const { server, port } = await createHttpServer({
         port: this.config.port,
         bindAddress: this.config.bindAddress,
         pairingManager: this.pairingManager,
+        onDeviceUnpaired: (deviceId) => {
+          this.wsServer?.closeConnectionsForDevice(deviceId);
+        },
       });
 
       this.httpServer = server;
@@ -215,6 +223,27 @@ class ApiServer extends EventEmitter {
     if (this.wsServer) {
       this.wsServer.broadcast({
         type: 'sessions:updated',
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  /**
+   * Broadcast a parsed chat event to all clients subscribed to the session
+   * (BDHLNDR-51). Companion channel to broadcastTerminalData — both fire on
+   * every PTY chunk: terminal:output carries the raw bytes for the xterm
+   * view, chat:event carries the structured classification for the PWA chat
+   * view (BDHLNDR-56) and snapshot REST endpoint (BDHLNDR-58).
+   *
+   * Wire shape (downstream contract — do not break without coordinating):
+   *   { type: 'chat:event', sessionId, payload: ChatEvent, timestamp }
+   */
+  broadcastChatEvent(sessionId: string, event: ChatEvent): void {
+    if (this.wsServer) {
+      this.wsServer.broadcastToSession(sessionId, {
+        type: 'chat:event',
+        sessionId,
+        payload: event,
         timestamp: Date.now(),
       });
     }

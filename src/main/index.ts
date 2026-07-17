@@ -1,12 +1,20 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
+import { resolveLaunchProviderId } from './providers';
+import { detectProviders } from './provider-detector';
+import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
+import * as arenaRepo from './repositories/arena';
+import { arenaEngine } from './arena/engine';
+import * as chatEventsRepo from './repositories/chat-events';
+import { ChatParser } from './api/chat-parser';
 import * as accountsRepo from './repositories/accounts';
 import * as accountAuth from './account-auth';
 import { exportSessions, ExportFormat } from './session-export';
@@ -25,6 +33,7 @@ import log from 'electron-log';
 import { getApiServer } from './api';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
+import { dispatchAttentionPush } from './api/web-push/dispatcher';
 
 // ---------------------------------------------------------------------------
 // Logging & crash reporting configuration
@@ -162,6 +171,13 @@ soundManager.setSessionStateLookup((sessionId: string) => {
 const recentlyLoggedStates: Map<string, { state: string; timestamp: number }> = new Map();
 
 /**
+ * Per-session ChatParser instances (BDHLNDR-51). Each session needs its own
+ * because the parser buffers incomplete lines across PTY chunks. Lazily
+ * created on first PTY data, freed when the PTY exits.
+ */
+const chatParsers: Map<string, ChatParser> = new Map();
+
+/**
  * Shared handler for session state change event logging (BDHLNDR-17).
  * Called from both stateMonitor and ptyManager handlers.
  * Deduplicates: if the same session+state was logged within the last 2 seconds, skips.
@@ -271,6 +287,22 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 
   // Update tray
   updateTrayWithWaitingSessions();
+
+  // BDHLNDR-49: Web Push fan-out to mobile companions when a session needs
+  // attention. The dispatcher is per-(session, state) debounced (30s) and
+  // prunes dead subscriptions on 404/410. Sent to *all* paired devices that
+  // have an active subscription — notification is purely informational, so
+  // canControl gating would only hide useful info from non-controlling
+  // observers. Fire-and-forget: errors are logged inside the dispatcher.
+  if (state === 'waiting' || state === 'error') {
+    void dispatchAttentionPush({
+      sessionId,
+      sessionName: name,
+      state,
+    }).catch((err) => {
+      log.error('[Main] Web Push dispatch failed:', err);
+    });
+  }
 }
 
 function createSplashWindow(): void {
@@ -361,6 +393,17 @@ function createWindow(): void {
 
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
+
+  // Settle arena responses orphaned mid-run by a quit/restart, so history
+  // never shows a column stuck on "running" (#100).
+  try {
+    const settled = arenaRepo.settleInterruptedResponses();
+    if (settled > 0) {
+      log.info(`[Arena] Settled ${settled} response(s) interrupted by a previous app run`);
+    }
+  } catch (error) {
+    log.error('[Arena] Failed to settle interrupted responses:', error);
+  }
 
   // Prune session events older than 90 days (BDHLNDR-17)
   try {
@@ -481,15 +524,69 @@ function createWindow(): void {
     mainWindow?.webContents.send('vector-search:error', data);
   });
 
+  // Arena streaming updates (#100)
+  arenaEngine.on('update', (update) => {
+    mainWindow?.webContents.send('arena:update', update);
+  });
+
   // PTY data forwarding
   ptyManager.on('data', ({ id, data }) => {
     mainWindow?.webContents.send('pty:data', id, data);
     // Broadcast to mobile clients
-    getApiServer().broadcastTerminalData(id, data);
+    const apiServer = getApiServer();
+    apiServer.broadcastTerminalData(id, data);
+
+    // BDHLNDR-72: chat-event extraction via a headless xterm Terminal per
+    // session. The parser harvests committed rows asynchronously (debounced
+    // by ~250ms after each chunk burst) and delivers events through the
+    // onEvents callback rather than synchronously from parse(). Persistence
+    // + WS broadcast happen inside that callback. The terminal:output
+    // stream above is untouched and remains the authoritative live view.
+    try {
+      let parser = chatParsers.get(id);
+      if (!parser) {
+        parser = new ChatParser((events) => {
+          for (const event of events) {
+            try {
+              chatEventsRepo.createEvent(id, event);
+            } catch (persistErr) {
+              log.error(`[chat-parser] persist failed for session ${id}:`, persistErr);
+            }
+            apiServer.broadcastChatEvent(id, event);
+          }
+        });
+        chatParsers.set(id, parser);
+      }
+      // Fire-and-forget — onEvents handles delivery on settle, not here.
+      void parser.parse(data).catch((parseErr) => {
+        log.error(`[chat-parser] parse failed for session ${id}:`, parseErr);
+      });
+    } catch (parseErr) {
+      // Parser construction error etc. — never crash the data pipeline.
+      log.error(`[chat-parser] setup failed for session ${id}:`, parseErr);
+    }
   });
 
   ptyManager.on('exit', ({ id, exitCode }) => {
     mainWindow?.webContents.send('pty:exit', id, exitCode);
+
+    // BDHLNDR-72: force-harvest the cursor row (which the settle loop skips),
+    // dispose the underlying Terminal, and free the parser so we don't leak
+    // a 800KB-ish virtual screen for every stopped session.
+    const parser = chatParsers.get(id);
+    if (parser) {
+      try {
+        parser.flush();
+      } catch (flushErr) {
+        log.error(`[chat-parser] flush failed for session ${id}:`, flushErr);
+      }
+      try {
+        parser.dispose();
+      } catch (disposeErr) {
+        log.error(`[chat-parser] dispose failed for session ${id}:`, disposeErr);
+      }
+      chatParsers.delete(id);
+    }
   });
 
   // PTY state detection forwarding
@@ -578,14 +675,18 @@ function safeOn(channel: string, handler: (...args: any[]) => void): void {
 }
 
 // IPC Handlers
-ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false) => {
+ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false, providerId?: string) => {
   try {
     // Look up the session to get its groupId for memory injection
     const sessions = sessionsRepo.getAllSessions();
     const session = sessions.find(s => s.id === id);
     const groupId = session?.groupId || null;
 
-    ptyManager.createSession(id, cwd, launchClaude, groupId);
+    // The persisted row is authoritative (#96); the explicit providerId (#98)
+    // only bridges first launches where the terminal mounted before the row
+    // was persisted. Unknown ids degrade to the default inside
+    // PtyManager.createSession (resolveProvider).
+    ptyManager.createSession(id, cwd, launchClaude, groupId, resolveLaunchProviderId(session?.provider, providerId));
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {
@@ -1092,6 +1193,77 @@ safeHandle('editor:open', async (filePath: string, line?: number, column?: numbe
 
 safeHandle('editor:detectAvailable', async () => {
   return detectAvailableEditors();
+});
+
+safeHandle('providers:detect', async () => {
+  return detectProviders();
+});
+
+// Provider API-key vault (#99). Keys go in and are tested; they are never
+// returned to the renderer. IPC is a trust boundary — validate argument
+// types at runtime rather than relying on the preload's TS types.
+function requireIpcString(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Invalid ${name}`);
+  }
+  return value;
+}
+safeHandle('vault:list', async () => {
+  return keyVault.listVaultStatuses();
+});
+safeHandle('vault:setKey', async (providerId: unknown, key: unknown) => {
+  keyVault.setKey(requireIpcString(providerId, 'providerId'), requireIpcString(key, 'key'));
+});
+safeHandle('vault:deleteKey', async (providerId: unknown) => {
+  keyVault.deleteKey(requireIpcString(providerId, 'providerId'));
+});
+safeHandle('vault:setUseKey', async (providerId: unknown, use: unknown) => {
+  if (typeof use !== 'boolean') {
+    throw new Error('Invalid use flag');
+  }
+  keyVault.setUseKey(requireIpcString(providerId, 'providerId'), use);
+});
+safeHandle('vault:testKey', async (providerId: unknown) => {
+  return keyVault.testKey(requireIpcString(providerId, 'providerId'));
+});
+
+// Arena mode (#100). Two-phase: 'start' only creates the run so the renderer
+// can subscribe with the run id; 'launch' then spawns the contestants.
+safeHandle('arena:start', async (prompt: string, contestants: string[], workingDir?: string | null) => {
+  if (!prompt?.trim() || !Array.isArray(contestants) || contestants.length === 0) {
+    throw new Error('Arena run needs a prompt and at least one contestant');
+  }
+  // Optional project scoping: contestants spawn inside this folder. Checked
+  // up front so a stale group dir fails the run before any rows are created.
+  let dir: string | null = null;
+  if (typeof workingDir === 'string' && workingDir.trim()) {
+    dir = workingDir.trim();
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+      throw new Error(`Arena working directory does not exist: ${dir}`);
+    }
+  }
+  return arenaEngine.prepare(prompt, Array.from(new Set(contestants)), dir);
+});
+safeHandle('arena:launch', async (runId: string) => {
+  arenaEngine.launch(runId);
+});
+// Follow-up round: same two-phase contract — 'followUp' creates the new
+// round's rows (resuming each contestant's CLI session), 'launch' spawns.
+safeHandle('arena:followUp', async (runId: string, prompt: string) => {
+  const trimmed = prompt?.trim();
+  if (!runId || !trimmed) {
+    throw new Error('Arena follow-up needs a run id and a prompt');
+  }
+  return arenaEngine.prepareFollowUp(runId, trimmed);
+});
+safeHandle('arena:cancel', async (runId: string) => {
+  arenaEngine.cancelRun(runId);
+});
+safeHandle('arena:listRuns', async () => {
+  return arenaRepo.listRuns();
+});
+safeHandle('arena:getRun', async (id: string) => {
+  return arenaRepo.getRun(id);
 });
 
 safeHandle('editor:getOptions', () => {

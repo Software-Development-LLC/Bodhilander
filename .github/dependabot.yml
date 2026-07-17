@@ -1,0 +1,20 @@
+# Keeps the SHA-pinned actions in .github/workflows current without manual
+# hash transcription: Dependabot updates the pin and its version comment
+# together, removing the typo/substitution risk of hand-edited SHAs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'
+    ignore:
+      # Private org repo hosting the reusable workflows (jira-key-prefix,
+      # pr-title). Dependabot has no access to it — without this ignore the
+      # whole github-actions job fails with git_dependencies_not_reachable.
+      # Versioning of those workflows is managed upstream in org-standards.
+      - dependency-name: Software-Development-LLC/org-standards
+

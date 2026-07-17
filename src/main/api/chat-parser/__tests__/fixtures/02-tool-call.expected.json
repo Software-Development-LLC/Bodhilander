@@ -1,0 +1,5 @@
+[
+  { "type": "tool_call", "payload": { "tool": "Read", "argsBrief": "src/main/index.ts" } },
+  { "type": "tool_call", "payload": { "tool": "Bash", "argsBrief": "npm test" } },
+  { "type": "tool_call", "payload": { "tool": "Edit", "argsBrief": "README.md" } }
+]

@@ -2,8 +2,18 @@ import * as pty from 'node-pty';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { EventEmitter } from 'events';
-import { getClaudeCommand, getSocketPath, generateClaudeSessionId, ClaudeSessionMode } from './claude-launcher';
+import {
+  resolveProvider,
+  getSocketPath,
+  generateAgentSessionId,
+  claudeProvider,
+  CLAUDE_CONFIG_DIR_ENV,
+  DEFAULT_PROVIDER_ID,
+  AgentSessionMode,
+  ProviderDefinition,
+} from './providers';
 import { detectShell, ShellInfo } from './shell-detector';
+import { getShellLaunch } from './shell-launch';
 import { getPreference } from './repositories/preferences';
 import {
   getClaudeSessionId as getStoredClaudeSessionId,
@@ -12,24 +22,17 @@ import {
 } from './repositories/sessions';
 import { resolveAccountForSession, touchAccount } from './repositories/accounts';
 import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
+import { vaultEnvFor } from './key-vault';
+import { redactEnv } from './redact-env';
 import log from 'electron-log';
-
-function redactEnv(env: Record<string, string> | undefined): Record<string, string> | undefined {
-  if (!env) return undefined;
-  return Object.fromEntries(
-    Object.entries(env).map(([k, v]) => [
-      k,
-      /key|secret|token|password|auth/i.test(k) ? '[REDACTED]' : v,
-    ])
-  );
-}
 
 interface PtySession {
   id: string;
   pty: pty.IPty;
   cwd: string;
   groupId: string | null;  // For memory injection
-  isClaudeSession: boolean;
+  /** Provider this session runs an agent under; null for plain shell sessions. */
+  provider: ProviderDefinition | null;
   shellInfo: ShellInfo;
   lastState: string;
   outputBuffer: string;
@@ -38,10 +41,8 @@ interface PtySession {
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
   lastOutputTime: number;
-  /** UUID passed to `claude --session-id` / `--resume` (BDHLNDR-9). Null for shell-only sessions. */
-  claudeSessionId: string | null;
-  /** Whether this spawn used `--resume`. Used to detect resume failure on early exit. */
-  claudeResumeAttempted: boolean;
+  /** Whether this spawn used the provider's resume flag. Used to detect resume failure on early exit. */
+  resumeAttempted: boolean;
   /** Wall-clock spawn time (ms) for early-exit detection. */
   spawnedAt: number;
   /** Last known column/row count — used to detect actual size changes. */
@@ -61,33 +62,32 @@ interface PtySession {
 }
 
 /**
- * If a Claude session launched with `--resume` exits non-zero within this
- * window, we treat it as a resume failure and transparently respawn with a
- * fresh `--session-id` (BDHLNDR-9).
+ * If an agent session launched with the provider's resume flag exits non-zero
+ * within this window, we treat it as a resume failure and transparently
+ * respawn with a fresh conversation UUID (BDHLNDR-9).
  */
 const RESUME_FAILURE_WINDOW_MS = 5000;
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
 const MAX_SCROLLBACK_SIZE = 100 * 1024;
 
-const WAITING_PATTERNS = [
+/**
+ * Provider-agnostic "waiting for user input" patterns — generic prompt shapes
+ * any terminal agent produces. Provider-specific TUI patterns (selection
+ * menus, permission dialogs) live on each ProviderDefinition and are merged
+ * in by detectAgentState.
+ */
+const GENERIC_WAITING_PATTERNS = [
   /\?\s*$/,                          // Ends with question mark
   /\(y\/n\)/i,                        // Yes/no prompt
   /\[Y\/n\]/i,                        // Yes/no prompt
   /Press Enter/i,                     // Press enter prompt
-  /Enter to confirm/i,               // Claude confirmation prompt
-  /Enter to select/i,                // Claude Code selection menu prompt
-  /Tab\/Arrow keys to navigate/i,    // Claude Code selection menu
-  /Esc to cancel/i,                  // Claude Code selection menu
   /Do you want to/i,                  // Permission prompts
   /Do you trust/i,                    // Trust folder prompt
   /Would you like/i,                  // Permission prompts
-  /Allow.*Deny/s,                     // Claude permission dialog
   /Yes,\s*proceed/i,                  // Yes/No options
   /\d+\.\s*Yes/i,                     // Numbered Yes option
-  /Type something/i,                  // Claude Code "Type something" option
-  />\s*\d+\./,                        // Selected numbered option (> 1.)
-  // Conversational questions from Claude asking for feedback/confirmation
+  // Conversational questions from the agent asking for feedback/confirmation
   /does this.{0,50}work for you\?/i,      // "Does this approach work for you?"
   /does this.{0,50}look right/i,          // "Does this look right?"
   /does that.{0,50}work/i,                // "Does that work for you?"
@@ -104,6 +104,25 @@ const WAITING_PATTERNS = [
   /want me to.{0,50}\?/i,                 // "Want me to continue?"
   /proceed with/i,                        // "Proceed with this approach?"
 ] as const;
+
+/**
+ * How to launch a command string under the user's shell: the executable to
+ * spawn, how to wrap the command into argv, and the shell's syntax for
+ * referencing an environment variable inside that command string. Single
+ * source of truth for both regular agent sessions and login ptys.
+ */
+/** Merged generic + provider waiting patterns, computed once per provider id. */
+const mergedWaitingPatterns = new Map<string, readonly RegExp[]>();
+
+function getWaitingPatterns(provider: ProviderDefinition | null): readonly RegExp[] {
+  if (!provider?.waitingPatterns?.length) return GENERIC_WAITING_PATTERNS;
+  let merged = mergedWaitingPatterns.get(provider.id);
+  if (!merged) {
+    merged = [...GENERIC_WAITING_PATTERNS, ...provider.waitingPatterns];
+    mergedWaitingPatterns.set(provider.id, merged);
+  }
+  return merged;
+}
 
 export class PtyManager extends EventEmitter {
   private sessions: Map<string, PtySession> = new Map();
@@ -131,7 +150,13 @@ export class PtyManager extends EventEmitter {
     return this.getShellInfo();
   }
 
-  createSession(id: string, cwd: string, launchClaude: boolean = false, groupId: string | null = null): void {
+  createSession(
+    id: string,
+    cwd: string,
+    launchClaude: boolean = false,
+    groupId: string | null = null,
+    providerId: string = DEFAULT_PROVIDER_ID
+  ): void {
     // Validate cwd exists
     if (!fs.existsSync(cwd)) {
       console.error(`Working directory does not exist: ${cwd}`);
@@ -152,97 +177,18 @@ export class PtyManager extends EventEmitter {
       throw new Error(errorMsg);
     }
 
-    // Track Claude resume state for early-exit fallback (BDHLNDR-9)
-    let claudeSessionId: string | null = null;
-    let claudeSessionMode: ClaudeSessionMode | null = null;
+    // Track agent resume state for early-exit fallback (BDHLNDR-9).
+    // resolveProvider degrades unknown ids (e.g. rows written by a newer app
+    // version) to the default provider instead of failing the launch (#96).
+    const provider = launchClaude ? resolveProvider(providerId, `session ${id}`) : null;
+    let resumeAttempted = false;
 
-    if (launchClaude) {
-      // Resolve the Claude session UUID + mode (BDHLNDR-9).
-      // If we have a stored ID, we're restarting and should resume. Otherwise
-      // generate a fresh UUID, pass it via --session-id, and persist it so the
-      // NEXT launch can resume.
-      const storedClaudeSessionId = getStoredClaudeSessionId(id);
-      if (storedClaudeSessionId) {
-        claudeSessionId = storedClaudeSessionId;
-        claudeSessionMode = 'resume';
-      } else {
-        claudeSessionId = generateClaudeSessionId();
-        claudeSessionMode = 'new';
-        storeClaudeSessionId(id, claudeSessionId);
-      }
-
-      // Resolve which Claude account this session should launch under (BDHLNDR-31).
-      // Returns null when no accounts are registered, preserving legacy ~/.claude behavior.
-      const account = resolveAccountForSession(id);
-      if (account) {
-        touchAccount(account.id);
-      }
-
-      const claudeConfig = getClaudeCommand({
-        sessionId: id,
-        projectDir: cwd,
-        socketPath: this.socketPath,
-        claudeSession: { id: claudeSessionId, mode: claudeSessionMode },
-        claudeConfigDir: account?.configDir,
-      });
-
-      // Suffix appended to every shell's claude command. UUIDs are alphanumeric
-      // + hyphens, so they are safe to inline without escaping.
-      // e.g. ' --resume 7a3f...' or ' --session-id 7a3f...'
-      const claudeSessionFlag = claudeConfig.args.length > 0
-        ? ' ' + claudeConfig.args.join(' ')
-        : '';
-
-      // Get memory content for system prompt injection
-      // Pass via environment variable to avoid shell escaping issues with newlines
-      let claudeCmd = `claude${claudeSessionFlag}`;
-      let processEnv = { ...env, ...claudeConfig.env } as { [key: string]: string };
-
-      if (groupId) {
-        const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
-        if (memoryContent) {
-          processEnv.BODHILANDER_SYSTEM_PROMPT = memoryContent;
-        }
-      }
-
-      if (shellInfo.isWSL) {
-        // Launch Claude inside WSL
-        shell = 'wsl.exe';
-        if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-          claudeCmd = `claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"${claudeSessionFlag}`;
-        }
-        args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
-        env = processEnv;
-      } else if (process.platform === 'win32') {
-        // On Windows without WSL, run Claude through the shell
-        shell = shellInfo.shell;
-        if (shellInfo.shell.toLowerCase().includes('powershell')) {
-          if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-            claudeCmd = `claude --append-system-prompt $env:BODHILANDER_SYSTEM_PROMPT${claudeSessionFlag}`;
-          }
-          args = ['-NoLogo', '-Command', claudeCmd];
-        } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
-          if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-            claudeCmd = `claude --append-system-prompt "%BODHILANDER_SYSTEM_PROMPT%"${claudeSessionFlag}`;
-          }
-          args = ['/c', claudeCmd];
-        } else {
-          // Assume bash-like shell (Git Bash, etc.)
-          if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-            claudeCmd = `claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"${claudeSessionFlag}`;
-          }
-          args = ['-c', claudeCmd];
-        }
-        env = processEnv;
-      } else {
-        // macOS/Linux: run Claude through interactive login shell
-        shell = shellInfo.shell;
-        if (processEnv.BODHILANDER_SYSTEM_PROMPT) {
-          claudeCmd = `claude --append-system-prompt "$BODHILANDER_SYSTEM_PROMPT"${claudeSessionFlag}`;
-        }
-        args = ['-l', '-i', '-c', claudeCmd];
-        env = processEnv;
-      }
+    if (provider) {
+      const agentSpawn = this.buildAgentSpawn(provider, id, cwd, groupId, shellInfo);
+      shell = agentSpawn.shell;
+      args = agentSpawn.args;
+      env = agentSpawn.env;
+      resumeAttempted = agentSpawn.resumeAttempted;
     } else {
       shell = shellInfo.shell;
       args = shellInfo.args;
@@ -291,29 +237,28 @@ export class PtyManager extends EventEmitter {
 
       this.emit('data', { id, data: filteredData });
 
-      if (launchClaude) {
-        this.detectClaudeState(id, data);
+      if (provider) {
+        this.detectAgentState(id, data);
       }
     });
 
     ptyProcess.onExit(({ exitCode }) => {
-      // Resume-failure fallback (BDHLNDR-9): if we launched Claude with --resume
-      // and it exited non-zero within the failure window, treat that as a dead
-      // session and transparently respawn with a fresh UUID. The renderer never
-      // sees an 'exit' event for this path — it just sees new output from the
-      // replacement pty.
+      // Resume-failure fallback (BDHLNDR-9): if we launched the agent with its
+      // resume flag and it exited non-zero within the failure window, treat
+      // that as a dead session and transparently respawn with a fresh UUID.
+      // The renderer never sees an 'exit' event for this path — it just sees
+      // new output from the replacement pty.
       const session = this.sessions.get(id);
-      const isResumeFailure = session
-        && session.isClaudeSession
-        && session.claudeResumeAttempted
+      if (
+        session?.provider
+        && session.resumeAttempted
         && exitCode !== 0
-        && (Date.now() - session.spawnedAt) < RESUME_FAILURE_WINDOW_MS;
-
-      if (isResumeFailure) {
+        && Date.now() - session.spawnedAt < RESUME_FAILURE_WINDOW_MS
+      ) {
         log.warn(
-          `[PTY] Claude resume failed for session ${id} (exitCode=${exitCode}, ` +
-          `age=${Date.now() - session!.spawnedAt}ms). Clearing stored session ID ` +
-          `and retrying with a fresh Claude session.`
+          `[PTY] ${session.provider.name} resume failed for session ${id} (exitCode=${exitCode}, ` +
+          `age=${Date.now() - session.spawnedAt}ms). Clearing stored session ID ` +
+          `and retrying with a fresh agent session.`
         );
         try {
           clearStoredClaudeSessionId(id);
@@ -323,7 +268,7 @@ export class PtyManager extends EventEmitter {
         // Remove the dead entry so createSession can re-insert a fresh one.
         this.sessions.delete(id);
         try {
-          this.createSession(id, cwd, true, groupId);
+          this.createSession(id, cwd, true, groupId, providerId);
           return; // Successful retry — suppress the exit emission.
         } catch (e) {
           log.error(`[PTY] Resume-failure retry spawn failed for ${id}:`, e);
@@ -335,8 +280,9 @@ export class PtyManager extends EventEmitter {
       this.sessions.delete(id);
     });
 
-    // Write memory file for Claude sessions (for reference)
-    if (launchClaude && groupId) {
+    // Write memory file for reference — only for providers that can actually
+    // consume it via system-prompt injection.
+    if (provider?.capabilities.systemPrompt && groupId) {
       writeMemoryFile(id, groupId, cwd);
     }
 
@@ -345,7 +291,7 @@ export class PtyManager extends EventEmitter {
       pty: ptyProcess,
       cwd,
       groupId,
-      isClaudeSession: launchClaude,
+      provider,
       shellInfo,
       lastState: 'idle',
       outputBuffer: '',
@@ -354,8 +300,7 @@ export class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
-      claudeSessionId,
-      claudeResumeAttempted: claudeSessionMode === 'resume',
+      resumeAttempted,
       spawnedAt: Date.now(),
       lastCols: 80,
       lastRows: 24,
@@ -365,6 +310,99 @@ export class PtyManager extends EventEmitter {
       deferEmission: false,
     });
 
+  }
+
+  /**
+   * Resolve everything needed to spawn an agent session under the user's
+   * shell: conversation UUID + resume mode (BDHLNDR-9), account config dir
+   * (BDHLNDR-31), the provider's command/env, optional system-prompt
+   * injection, and the shell-appropriate argv wrapping.
+   */
+  private buildAgentSpawn(
+    provider: ProviderDefinition,
+    id: string,
+    cwd: string,
+    groupId: string | null,
+    shellInfo: ShellInfo
+  ): { shell: string; args: string[]; env: { [key: string]: string }; resumeAttempted: boolean } {
+    let agentSessionId: string | null = null;
+    let agentSessionMode: AgentSessionMode | null = null;
+
+    if (provider.capabilities.resume) {
+      // Resolve the agent conversation UUID + mode (BDHLNDR-9).
+      // If we have a stored ID, we're restarting and should resume. Otherwise
+      // generate a fresh UUID, pass it via the provider's new-session flag,
+      // and persist it so the NEXT launch can resume.
+      const storedAgentSessionId = getStoredClaudeSessionId(id);
+      if (storedAgentSessionId) {
+        agentSessionId = storedAgentSessionId;
+        agentSessionMode = 'resume';
+      } else {
+        agentSessionId = generateAgentSessionId();
+        agentSessionMode = 'new';
+        storeClaudeSessionId(id, agentSessionId);
+      }
+    }
+
+    // Resolve which account this session should launch under (BDHLNDR-31).
+    // Returns null when no accounts are registered, preserving legacy ~/.claude behavior.
+    const account = provider.capabilities.accounts ? resolveAccountForSession(id) : null;
+    if (account) {
+      touchAccount(account.id);
+    }
+
+    const launch = provider.buildCommand({
+      sessionId: id,
+      projectDir: cwd,
+      socketPath: this.socketPath,
+      agentSession: agentSessionId && agentSessionMode
+        ? { id: agentSessionId, mode: agentSessionMode }
+        : undefined,
+      configDir: account?.configDir,
+    });
+
+    // Suffix appended to every shell's agent command. UUIDs are alphanumeric
+    // + hyphens, so they are safe to inline without escaping.
+    // e.g. ' --resume 7a3f...' or ' --session-id 7a3f...'
+    const sessionFlag = launch.args.length > 0
+      ? ' ' + launch.args.join(' ')
+      : '';
+
+    // Get memory content for system prompt injection
+    // Pass via environment variable to avoid shell escaping issues with newlines
+    let agentCmd = `${launch.command}${sessionFlag}`;
+    // vaultEnvFor is empty unless the user explicitly opted this provider
+    // into API-key auth (#99) — CLI login/subscription stays the default.
+    const vaultEnv = vaultEnvFor(provider.id);
+    if (Object.keys(vaultEnv).length > 0) {
+      // Visibility that key auth is active; values scrubbed via redactEnv.
+      log.info(`[PTY] API-key auth enabled for '${provider.id}':`, redactEnv(vaultEnv));
+    }
+    const processEnv = { ...process.env, ...launch.env, ...vaultEnv } as { [key: string]: string };
+
+    const supportsSystemPrompt = provider.capabilities.systemPrompt && !!provider.systemPromptFlag;
+    if (groupId && supportsSystemPrompt) {
+      const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
+      if (memoryContent) {
+        processEnv.BODHILANDER_SYSTEM_PROMPT = memoryContent;
+      }
+    }
+
+    // Rebuild the command with the system prompt flag reading from an env
+    // var, using the shell-appropriate variable reference syntax. Gated on
+    // capability so an inherited BODHILANDER_SYSTEM_PROMPT in the parent
+    // environment can't produce a bogus flag for providers without one.
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: true });
+    if (supportsSystemPrompt && processEnv.BODHILANDER_SYSTEM_PROMPT) {
+      agentCmd = `${launch.command} ${provider.systemPromptFlag} ${shellLaunch.envRef('BODHILANDER_SYSTEM_PROMPT')}${sessionFlag}`;
+    }
+
+    return {
+      shell: shellLaunch.shell,
+      args: shellLaunch.wrap(agentCmd),
+      env: processEnv,
+      resumeAttempted: agentSessionMode === 'resume',
+    };
   }
 
   /**
@@ -386,29 +424,15 @@ export class PtyManager extends EventEmitter {
     const cwd = require('os').homedir();
     const processEnv: { [key: string]: string } = {
       ...(process.env as { [key: string]: string }),
-      CLAUDE_CONFIG_DIR: configDir,
+      [CLAUDE_CONFIG_DIR_ENV]: configDir,
     };
-    const claudeCmd = 'claude';
+    const agentCmd = claudeProvider.command;
 
-    let shell: string;
-    let args: string[];
-
-    if (shellInfo.isWSL) {
-      shell = 'wsl.exe';
-      args = [...shellInfo.args, '--', 'bash', '-c', claudeCmd];
-    } else if (process.platform === 'win32') {
-      shell = shellInfo.shell;
-      if (shellInfo.shell.toLowerCase().includes('powershell')) {
-        args = ['-NoLogo', '-Command', claudeCmd];
-      } else if (shellInfo.shell.toLowerCase().includes('cmd')) {
-        args = ['/c', claudeCmd];
-      } else {
-        args = ['-c', claudeCmd];
-      }
-    } else {
-      shell = shellInfo.shell;
-      args = ['-l', '-i', '-c', claudeCmd];
-    }
+    // The login pty just runs `claude` — no env-ref interpolation — so it
+    // keeps the user's cmd.exe shell rather than rerouting to PowerShell (#106).
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
+    const shell = shellLaunch.shell;
+    const args = shellLaunch.wrap(agentCmd);
 
     log.info(`[PTY] Starting login pty ${id} with CLAUDE_CONFIG_DIR=${configDir}`);
 
@@ -463,7 +487,7 @@ export class PtyManager extends EventEmitter {
       pty: ptyProcess,
       cwd,
       groupId: null,
-      isClaudeSession: true,
+      provider: claudeProvider,
       shellInfo,
       lastState: 'idle',
       outputBuffer: '',
@@ -472,8 +496,7 @@ export class PtyManager extends EventEmitter {
       workingDebounce: null,
       recentOutputBytes: 0,
       lastOutputTime: 0,
-      claudeSessionId: null,
-      claudeResumeAttempted: false,
+      resumeAttempted: false,
       spawnedAt: Date.now(),
       lastCols: 80,
       lastRows: 24,
@@ -604,7 +627,71 @@ export class PtyManager extends EventEmitter {
     return session?.scrollbackBuffer || '';
   }
 
-  private detectClaudeState(id: string, data: string): void {
+  /**
+   * Arm the working→idle timeout for a session: after 2s without further
+   * substantial output the session is marked idle. No-op when a timeout is
+   * already armed or the session is gone.
+   */
+  private scheduleIdleTimeout(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session || session.idleTimeout) return;
+    session.idleTimeout = setTimeout(() => {
+      const sess = this.sessions.get(id);
+      if (sess && sess.lastState === 'working') {
+        sess.lastState = 'idle';
+        sess.recentOutputBytes = 0;
+        sess.idleTimeout = null;
+        this.emit('stateChange', {
+          sessionId: id,
+          state: 'idle',
+          event: 'idle_timeout',
+          timestamp: Math.floor(Date.now() / 1000),
+        });
+      }
+    }, 2000);
+  }
+
+  /** Immediately mark a session as waiting for user input. */
+  private transitionToWaiting(id: string, session: PtySession, now: number): void {
+    if (session.lastState === 'waiting') return;
+    if (session.workingDebounce) {
+      clearTimeout(session.workingDebounce);
+      session.workingDebounce = null;
+    }
+    session.lastState = 'waiting';
+    this.emit('stateChange', {
+      sessionId: id,
+      state: 'waiting',
+      event: 'prompt_detected',
+      timestamp: Math.floor(now / 1000),
+    });
+  }
+
+  /**
+   * Debounce a transition to working behind 300ms of sustained output
+   * (200+ bytes) to avoid flickering.
+   */
+  private scheduleWorkingTransition(id: string, session: PtySession): void {
+    if (session.lastState === 'working') return;
+    if (session.recentOutputBytes <= 200 || session.workingDebounce) return;
+    session.workingDebounce = setTimeout(() => {
+      const currentSession = this.sessions.get(id);
+      if (currentSession && currentSession.recentOutputBytes > 200) {
+        currentSession.lastState = 'working';
+        currentSession.workingDebounce = null;
+        this.emit('stateChange', {
+          sessionId: id,
+          state: 'working',
+          event: 'sustained_output',
+          timestamp: Math.floor(Date.now() / 1000),
+        });
+        // Set idle timeout immediately after transitioning to working
+        this.scheduleIdleTimeout(id);
+      }
+    }, 300); // Wait 300ms of sustained output
+  }
+
+  private detectAgentState(id: string, data: string): void {
     const session = this.sessions.get(id);
     if (!session) return;
 
@@ -612,21 +699,8 @@ export class PtyManager extends EventEmitter {
 
     // Safety: ensure working state always has an idle timeout
     // This catches cases where filtered events come in but timeout was never set
-    if (session.lastState === 'working' && !session.idleTimeout) {
-      session.idleTimeout = setTimeout(() => {
-        const sess = this.sessions.get(id);
-        if (sess && sess.lastState === 'working') {
-          sess.lastState = 'idle';
-          sess.recentOutputBytes = 0;
-          sess.idleTimeout = null;
-          this.emit('stateChange', {
-            sessionId: id,
-            state: 'idle',
-            event: 'idle_timeout',
-            timestamp: Math.floor(Date.now() / 1000),
-          });
-        }
-      }, 2000);
+    if (session.lastState === 'working') {
+      this.scheduleIdleTimeout(id);
     }
 
     // Ignore mouse events (xterm mouse reporting)
@@ -670,66 +744,16 @@ export class PtyManager extends EventEmitter {
     session.recentOutputBytes += printableContent.length;
     session.lastOutputTime = now;
 
-    // Detect waiting for user input patterns (check recent buffer)
+    // Detect waiting for user input patterns (check recent buffer).
+    // Generic prompt shapes plus whatever the session's provider knows about
+    // its own TUI (selection menus, permission dialogs).
     const recentBuffer = session.outputBuffer.slice(-500);
-    const waitingPatterns = WAITING_PATTERNS;
+    const waitingPatterns = getWaitingPatterns(session.provider);
 
-    let isWaiting = false;
-    for (const pattern of waitingPatterns) {
-      if (pattern.test(recentBuffer)) {
-        isWaiting = true;
-        break;
-      }
-    }
-
-    if (isWaiting && session.lastState !== 'waiting') {
-      // Immediately transition to waiting
-      if (session.workingDebounce) {
-        clearTimeout(session.workingDebounce);
-        session.workingDebounce = null;
-      }
-      session.lastState = 'waiting';
-      this.emit('stateChange', {
-        sessionId: id,
-        state: 'waiting',
-        event: 'prompt_detected',
-        timestamp: Math.floor(now / 1000),
-      });
-    } else if (!isWaiting && session.lastState !== 'working') {
-      // Only transition to working after sustained output (200+ bytes)
-      // Use debounce to avoid flickering
-      if (session.recentOutputBytes > 200 && !session.workingDebounce) {
-        session.workingDebounce = setTimeout(() => {
-          const currentSession = this.sessions.get(id);
-          if (currentSession && currentSession.recentOutputBytes > 200) {
-            currentSession.lastState = 'working';
-            currentSession.workingDebounce = null;
-            this.emit('stateChange', {
-              sessionId: id,
-              state: 'working',
-              event: 'sustained_output',
-              timestamp: Math.floor(Date.now() / 1000),
-            });
-            // Set idle timeout immediately after transitioning to working
-            if (!currentSession.idleTimeout) {
-              currentSession.idleTimeout = setTimeout(() => {
-                const sess = this.sessions.get(id);
-                if (sess && sess.lastState === 'working') {
-                  sess.lastState = 'idle';
-                  sess.recentOutputBytes = 0;
-                  sess.idleTimeout = null;
-                  this.emit('stateChange', {
-                    sessionId: id,
-                    state: 'idle',
-                    event: 'idle_timeout',
-                    timestamp: Math.floor(Date.now() / 1000),
-                  });
-                }
-              }, 2000);
-            }
-          }
-        }, 300); // Wait 300ms of sustained output
-      }
+    if (waitingPatterns.some((pattern) => pattern.test(recentBuffer))) {
+      this.transitionToWaiting(id, session, now);
+    } else {
+      this.scheduleWorkingTransition(id, session);
     }
 
     // Only reset idle timeout if there's substantial output (>10 printable chars)
@@ -744,21 +768,8 @@ export class PtyManager extends EventEmitter {
     }
 
     // Set idle timeout if in working state and no active timeout
-    if (session.lastState === 'working' && !session.idleTimeout) {
-      session.idleTimeout = setTimeout(() => {
-        const currentSession = this.sessions.get(id);
-        if (currentSession && currentSession.lastState === 'working') {
-          currentSession.lastState = 'idle';
-          currentSession.recentOutputBytes = 0;
-          currentSession.idleTimeout = null;
-          this.emit('stateChange', {
-            sessionId: id,
-            state: 'idle',
-            event: 'idle_timeout',
-            timestamp: Math.floor(Date.now() / 1000),
-          });
-        }
-      }, 2000);
+    if (session.lastState === 'working') {
+      this.scheduleIdleTimeout(id);
     }
   }
 }

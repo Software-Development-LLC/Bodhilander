@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   homedir,
 
   // PTY operations
-  createSession: (id: string, cwd: string, launchClaude: boolean = false) =>
-    ipcRenderer.invoke('pty:create', id, cwd, launchClaude),
+  createSession: (id: string, cwd: string, launchClaude: boolean = false, providerId?: string) =>
+    ipcRenderer.invoke('pty:create', id, cwd, launchClaude, providerId),
   writeToSession: (id: string, data: string) =>
     ipcRenderer.send('pty:write', id, data),
   resizeSession: (id: string, cols: number, rows: number) =>
@@ -184,6 +184,39 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  detectProviders: (): Promise<ProviderStatus[]> => ipcRenderer.invoke('providers:detect'),
+
+  // Provider API-key vault (#99) — keys go in, never come back out.
+  vaultList: (): Promise<KeyVaultStatus[]> => ipcRenderer.invoke('vault:list'),
+  vaultSetKey: (providerId: string, key: string): Promise<void> =>
+    ipcRenderer.invoke('vault:setKey', providerId, key),
+  vaultDeleteKey: (providerId: string): Promise<void> =>
+    ipcRenderer.invoke('vault:deleteKey', providerId),
+  vaultSetUseKey: (providerId: string, use: boolean): Promise<void> =>
+    ipcRenderer.invoke('vault:setUseKey', providerId, use),
+  vaultTestKey: (providerId: string): Promise<{ ok: boolean; status: number | null; error: string | null }> =>
+    ipcRenderer.invoke('vault:testKey', providerId),
+
+  // Arena mode (#100)
+  arenaStart: (prompt: string, contestants: string[], workingDir?: string | null): Promise<ArenaRun> =>
+    ipcRenderer.invoke('arena:start', prompt, contestants, workingDir ?? null),
+  arenaLaunch: (runId: string): Promise<void> =>
+    ipcRenderer.invoke('arena:launch', runId),
+  arenaFollowUp: (runId: string, prompt: string): Promise<ArenaRun> =>
+    ipcRenderer.invoke('arena:followUp', runId, prompt),
+  arenaCancel: (runId: string): Promise<void> =>
+    ipcRenderer.invoke('arena:cancel', runId),
+  arenaListRuns: (): Promise<ArenaRun[]> =>
+    ipcRenderer.invoke('arena:listRuns'),
+  arenaGetRun: (id: string): Promise<ArenaRun | null> =>
+    ipcRenderer.invoke('arena:getRun', id),
+  onArenaUpdate: (callback: (update: ArenaUpdate) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, update: ArenaUpdate) => callback(update);
+    ipcRenderer.on('arena:update', listener);
+    return () => {
+      ipcRenderer.removeListener('arena:update', listener);
+    };
+  },
 
   // Sound notifications
   testSound: (event: 'waiting' | 'error' | 'start' | 'complete') =>

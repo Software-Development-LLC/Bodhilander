@@ -1,11 +1,11 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
   homedir: string;
 
   // PTY operations
-  createSession: (id: string, cwd: string, launchClaude?: boolean) => Promise<void>;
+  createSession: (id: string, cwd: string, launchClaude?: boolean, providerId?: string) => Promise<void>;
   writeToSession: (id: string, data: string) => void;
   resizeSession: (id: string, cols: number, rows: number) => void;
   killSession: (id: string) => void;
@@ -83,6 +83,19 @@ interface ElectronAPI {
 
   // Shell
   openExternal: (url: string) => Promise<void>;
+  detectProviders: () => Promise<ProviderStatus[]>;
+  vaultList: () => Promise<KeyVaultStatus[]>;
+  vaultSetKey: (providerId: string, key: string) => Promise<void>;
+  vaultDeleteKey: (providerId: string) => Promise<void>;
+  vaultSetUseKey: (providerId: string, use: boolean) => Promise<void>;
+  vaultTestKey: (providerId: string) => Promise<{ ok: boolean; status: number | null; error: string | null }>;
+  arenaStart: (prompt: string, contestants: string[], workingDir?: string | null) => Promise<ArenaRun>;
+  arenaLaunch: (runId: string) => Promise<void>;
+  arenaFollowUp: (runId: string, prompt: string) => Promise<ArenaRun>;
+  arenaCancel: (runId: string) => Promise<void>;
+  arenaListRuns: () => Promise<ArenaRun[]>;
+  arenaGetRun: (id: string) => Promise<ArenaRun | null>;
+  onArenaUpdate: (callback: (update: ArenaUpdate) => void) => () => void;
 
   // Sound notifications
   testSound: (event: 'waiting' | 'error' | 'start' | 'complete') => Promise<void>;

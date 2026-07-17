@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import log from 'electron-log';
 import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
+import * as chatEventsRepo from '../../repositories/chat-events';
 import { ptyManager } from '../../pty-manager';
 import { requireControlPermission, requireModifyPermission } from '../middleware/auth';
 import {
@@ -15,9 +16,54 @@ import {
   validateCreateSession,
   validateUpdateSession,
   getStringParam,
+  getStringQuery,
 } from '../middleware/validation';
 import { isValidUUID } from '../../validation';
 import { Session } from '../../../shared/types';
+
+const CHAT_EVENTS_DEFAULT_LIMIT = 100;
+const CHAT_EVENTS_MAX_LIMIT = 500;
+
+/**
+ * Parse a `since` query value (BDHLNDR-58). Accepts either ms-epoch numeric
+ * strings or ISO 8601 timestamps. Returns the parsed ms-epoch, `undefined`
+ * when the caller omitted the parameter, or `null` when the value is present
+ * but unparseable (caller should respond 400).
+ */
+function parseSinceParam(raw: string | undefined): number | undefined | null {
+  if (raw === undefined || raw === '') {
+    return undefined;
+  }
+  // Try numeric (ms epoch) first — covers the common case of clients echoing
+  // back nextSince from a prior page.
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    return asNumber;
+  }
+  // Fall back to ISO 8601 (or anything Date can parse).
+  const asDate = new Date(raw).getTime();
+  if (Number.isFinite(asDate)) {
+    return asDate;
+  }
+  return null;
+}
+
+/**
+ * Clamp a caller-supplied `limit` to [1, CHAT_EVENTS_MAX_LIMIT]. Non-numeric
+ * or non-positive values fall back to the default. Returns `null` for values
+ * the caller explicitly supplied but that we reject (e.g. negative numbers,
+ * NaN strings) so the route can answer 400.
+ */
+function parseLimitParam(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') {
+    return CHAT_EVENTS_DEFAULT_LIMIT;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return null;
+  }
+  return Math.min(Math.floor(parsed), CHAT_EVENTS_MAX_LIMIT);
+}
 
 export function createSessionsRouter(): Router {
   const router = Router();
@@ -56,6 +102,71 @@ export function createSessionsRouter(): Router {
   });
 
   /**
+   * GET /sessions/:id/chat-events - Fetch persisted chat events for a session
+   *
+   * BDHLNDR-58: powers the PWA chat snapshot (BDHLNDR-56) and offline cache
+   * replay (BDHLNDR-59).
+   *
+   *   ?since  optional ms-epoch (numeric) or ISO 8601 timestamp; returns
+   *           events with timestamp strictly greater than `since`.
+   *   ?limit  optional, default 100, hard-capped at 500 server-side.
+   *
+   * Response:
+   *   { events: PersistedChatEvent[],   // ascending chronological order
+   *     nextSince: number | null,       // newest event ts, or null when no more pages
+   *     hasMore: boolean }
+   */
+  router.get('/:id/chat-events', validateIdParam, (req: Request, res: Response) => {
+    try {
+      const id = getStringParam(req.params.id);
+
+      const since = parseSinceParam(getStringQuery(req.query.since));
+      if (since === null) {
+        res.status(400).json({
+          error: 'Validation error',
+          field: 'since',
+          message: 'Invalid since value (expected ms epoch or ISO 8601 timestamp)',
+        });
+        return;
+      }
+
+      const limit = parseLimitParam(getStringQuery(req.query.limit));
+      if (limit === null) {
+        res.status(400).json({
+          error: 'Validation error',
+          field: 'limit',
+          message: `Invalid limit value (expected positive integer, max ${CHAT_EVENTS_MAX_LIMIT})`,
+        });
+        return;
+      }
+
+      // 404 on unknown session id so callers can't probe for events of an
+      // arbitrary UUID (and so they get a clear signal vs an empty array for a
+      // real session that just has no events yet).
+      const sessions = sessionsRepo.getAllSessions();
+      const session = sessions.find(s => s.id === id);
+      if (!session) {
+        res.status(404).json({ error: 'Session not found' });
+        return;
+      }
+
+      const events = chatEventsRepo.getEventsBySession(id, since, limit);
+
+      // nextSince is the newest timestamp in this page; clients pass it back
+      // as ?since= to fetch the next slice. When the page isn't full we know
+      // there's nothing newer to ask for, so null it out.
+      const hasMore = events.length === limit;
+      const nextSince =
+        hasMore && events.length > 0 ? events[events.length - 1].timestamp : null;
+
+      res.json({ events, nextSince, hasMore });
+    } catch (error) {
+      log.error('[SessionsAPI] Error fetching chat events:', error);
+      res.status(500).json({ error: 'Failed to fetch chat events' });
+    }
+  });
+
+  /**
    * POST /sessions - Create a new session
    */
   router.post(
@@ -84,6 +195,7 @@ export function createSessionsRouter(): Router {
           endedAt: null,
           durationSeconds: 0,
           claudeAccountId: null,
+          provider: 'claude',
         };
 
         sessionsRepo.createSession(session);
@@ -97,7 +209,7 @@ export function createSessionsRouter(): Router {
 
         // Start PTY if requested
         if (launchClaude) {
-          ptyManager.createSession(id, session.workingDir, true, groupId);
+          ptyManager.createSession(id, session.workingDir, true, groupId, session.provider);
         }
 
         log.info(`[SessionsAPI] Created session: ${id}`);
@@ -194,7 +306,7 @@ export function createSessionsRouter(): Router {
           return;
         }
 
-        ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.groupId);
+        ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.groupId, session.provider);
 
         log.info(`[SessionsAPI] Started session: ${id}`);
         res.json({ success: true });

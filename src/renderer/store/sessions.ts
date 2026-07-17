@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Session, SessionState } from '../../shared/types';
+import { Session, SessionState, DEFAULT_SESSION_PROVIDER } from '../../shared/types';
 
 export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -45,7 +45,8 @@ export function useSessions() {
     groupId: string,
     name: string,
     workingDir: string,
-    launchClaude: boolean = true
+    launchClaude: boolean = true,
+    provider: string = DEFAULT_SESSION_PROVIDER
   ): Promise<Session> => {
     return new Promise((resolve, reject) => {
       setSessions(prev => {
@@ -63,6 +64,7 @@ export function useSessions() {
           endedAt: null,
           durationSeconds: 0,
           claudeAccountId: null,
+          provider,
         };
 
         // Activate immediately so the Terminal mounts in a visible container.

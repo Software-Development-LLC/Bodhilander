@@ -9,6 +9,15 @@ on:
       - '**.md'
       - '.gitignore'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Exercise the full pipeline (build → artifacts → release job) but
+          publish to a DRAFT release with a -dryrun tag suffix. Drafts create
+          no git tag and are invisible to auto-updaters. For validating
+          workflow changes end-to-end; delete the draft afterwards.
+        type: boolean
+        default: false
 
 jobs:
   check-version:
@@ -18,7 +27,7 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
       is_prerelease: ${{ steps.check.outputs.is_prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -31,6 +40,7 @@ jobs:
         env:
           BRANCH: ${{ github.ref_name }}
           VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           # Beta versions carry a "-beta." pre-release segment (e.g. 3.3.0-beta.1).
           if [[ "$VERSION" == *"-beta."* ]]; then
@@ -39,6 +49,15 @@ jobs:
             IS_PRERELEASE=false
           fi
           echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+
+          # Dry run (manual dispatch only): exercise every job regardless of
+          # branch/tag gates. The release job publishes a DRAFT with a
+          # -dryrun tag suffix — no tag is created, updaters can't see it.
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry run: forcing should_release=true (draft release, -dryrun tag suffix)"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
           # Gate which channel each branch is allowed to cut.
           # - production → stable only (no -beta. suffix)
@@ -73,7 +92,14 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
-          - os: windows-latest
+          # Pinned to windows-2022 (VS 2022) deliberately (#109). GitHub moved
+          # the `windows-latest` label to windows-2025-vs2026 (Visual Studio
+          # 2026), which the project's node-gyp doesn't yet detect — the
+          # postinstall electron-rebuild fails with "Could not find any Visual
+          # Studio installation to use". Same build-reproducibility reasoning as
+          # the pinned macOS runners below. Revisit when node-gyp/node-pty gain
+          # VS 2026 support (or if windows-2022 is retired).
+          - os: windows-2022
             platform: win
           # BDHLNDR-38: build each Mac arch on its native runner so postinstall
           # (electron-rebuild) and sharp's optional-dep resolution produce
@@ -92,18 +118,21 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          # The app's build/toolchain Node — deliberately unchanged. The
+          # action-version bumps in this file only move the actions' own
+          # execution runtime to Node 24.
           node-version: '20'
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Setup Python (for native module builds)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
 
@@ -137,7 +166,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-${{ matrix.platform }}
           path: |
@@ -157,10 +186,10 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
 
@@ -195,11 +224,13 @@ jobs:
           done
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
-          tag_name: v${{ needs.check-version.outputs.version }}
-          name: ${{ needs.check-version.outputs.is_prerelease == 'true' && format('Bodhilander v{0} (beta)', needs.check-version.outputs.version) || format('Bodhilander v{0}', needs.check-version.outputs.version) }}
-          draft: false
+          # Dry runs publish a DRAFT under a -dryrun tag suffix: drafts never
+          # create the git tag and are invisible to auto-updaters.
+          tag_name: v${{ needs.check-version.outputs.version }}${{ inputs.dry_run == true && '-dryrun' || '' }}
+          name: ${{ inputs.dry_run == true && format('DRY RUN — Bodhilander v{0}', needs.check-version.outputs.version) || needs.check-version.outputs.is_prerelease == 'true' && format('Bodhilander v{0} (beta)', needs.check-version.outputs.version) || format('Bodhilander v{0}', needs.check-version.outputs.version) }}
+          draft: ${{ inputs.dry_run == true }}
           prerelease: ${{ needs.check-version.outputs.is_prerelease }}
           generate_release_notes: true
           files: |

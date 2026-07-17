@@ -5,6 +5,8 @@
  */
 
 import { createServer, Server } from 'http';
+import * as path from 'path';
+import * as fs from 'fs';
 import express, { Express, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -20,11 +22,18 @@ import { createTerminalRouter } from './routes/terminal';
 import { createMemoriesRouter } from './routes/memories';
 import { createHooksRouter } from './routes/hooks';
 import { createCodeSearchRouter } from './routes/code-search';
+import { createWebPushRouter } from './routes/web-push';
 
 export interface HttpServerConfig {
   port: number;
   bindAddress: string;
   pairingManager: PairingManager;
+  /**
+   * Called after a successful unpair (BDHLNDR-67) so the WS server can close
+   * any open connections owned by the deleted device. Wired after wsServer
+   * exists; safe to omit during early bootstrap.
+   */
+  onDeviceUnpaired?: (deviceId: string) => void;
 }
 
 export interface HttpServerResult {
@@ -96,13 +105,25 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
     crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow cross-origin for mobile app
   }));
 
-  // CORS - allow requests from any origin on local network
+  // CORS — accept any origin. The previous "reject anything with an Origin
+  // header" logic was based on a wrong assumption: browsers DO send Origin
+  // for same-origin requests when the resource is loaded with `crossorigin`
+  // (which vite emits on every <script type="module"> and the matching
+  // <link rel="stylesheet">). The PWA's own asset requests were getting
+  // 500 + application/json bodies from this middleware, which the browser
+  // refused to apply (MIME mismatch on CSS, broken JS) — hence white screen
+  // on every mobile load of /m/ (BDHLNDR-69 again, real fix).
+  //
+  // Threat model: the localNetworkOnly middleware above is the real access
+  // gate. CORS is a browser-enforced same-origin policy meant for public
+  // services; for a LAN-only API there's no cross-origin attacker scenario
+  // it can prevent that localNetworkOnly doesn't already block at the
+  // network layer. Reflect the requesting origin so credentials-bearing
+  // requests work (CORS spec disallows `*` with credentials).
   app.use(cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (same-origin, mobile apps, curl)
       if (!origin) return callback(null, true);
-      // Block cross-origin requests from browsers
-      callback(new Error('CORS not allowed'));
+      callback(null, origin);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -111,6 +132,55 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
 
   // Restrict to local network
   app.use(localNetworkOnly);
+
+  // BDHLNDR-52: Serve the mobile-companion PWA bundle from /m/*.
+  // The PWA is built into dist/pwa/ by the `build:pwa` script. This file
+  // compiles to dist/main/api/http-server.js, so the bundle lives two
+  // directories up at ../../pwa. The static handler covers concrete assets
+  // (/m/assets/*, /m/sw.js, /m/manifest.webmanifest, /m/index.html, etc.);
+  // the SPA fallback below serves dist/pwa/index.html for any unmatched
+  // /m/* path so client-side routing works on hard refresh. No auth is
+  // required here — auth happens inside the PWA after pairing, exactly
+  // like the /api/v1/pairing initiation endpoints.
+  //
+  // BDHLNDR-69 follow-up: in packaged builds dist/pwa is asarUnpacked (see
+  // electron-builder.yml), so the real files live under app.asar.unpacked/.
+  // Electron's fs wrapper auto-redirects asar paths for most calls, but the
+  // `send` package that express.static uses internally resolves paths in
+  // ways that don't always trigger the redirect — the result was 500s on
+  // asset requests that fell through to the SPA fallback. Substituting the
+  // unpacked path here means express.static gets a real on-disk path. In
+  // dev mode the substitution is a no-op (the path doesn't contain
+  // `app.asar`), so the same code works in both modes.
+  const pwaDistDir = path
+    .join(__dirname, '..', '..', 'pwa')
+    .replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+  const pwaIndexHtml = path.join(pwaDistDir, 'index.html');
+  app.use(
+    '/m',
+    express.static(pwaDistDir, {
+      // Let the SPA fallback handle the index so we don't double-serve and
+      // so unknown extensions cleanly fall through to the catch-all below.
+      index: false,
+      fallthrough: true,
+      // Aggressive caching for hashed assets; the index is served by the
+      // fallback handler with no-cache headers (see below).
+      maxAge: '1h',
+    }),
+  );
+  app.get(/^\/m(?:\/.*)?$/, (_req, res, next) => {
+    if (!fs.existsSync(pwaIndexHtml)) {
+      // Bundle missing in this build — surface a clear error rather than a
+      // generic 404 from the catch-all handler below.
+      log.warn(`[HttpServer] PWA index missing at ${pwaIndexHtml}`);
+      res.status(404).json({ error: 'PWA bundle not built' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(pwaIndexHtml, (err) => {
+      if (err) next(err);
+    });
+  });
 
   // Parse JSON bodies
   app.use(express.json({ limit: '1mb' }));
@@ -138,7 +208,7 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   });
 
   // Pairing routes (rate limited, no auth required for initiation)
-  app.use('/api/v1/pairing', pairingLimiter, createPairingRouter(config.pairingManager));
+  app.use('/api/v1/pairing', pairingLimiter, createPairingRouter(config.pairingManager, config.onDeviceUnpaired));
 
   // Memory routes for MCP server (localhost-only, no device auth needed)
   app.use('/api/v1/memories', generalLimiter, createMemoriesRouter());
@@ -148,6 +218,12 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
 
   // Code search routes for MCP server (localhost-only, no device auth needed)
   app.use('/api/v1/code', generalLimiter, createCodeSearchRouter());
+
+  // Web Push routes (BDHLNDR-49). Mounts BOTH the unauthenticated
+  // /public-key endpoint and the auth-required /subscribe endpoints. The
+  // router applies authenticateDevice per-route so we can't accidentally
+  // shield the public key behind a token the PWA doesn't have yet.
+  app.use('/api/v1/web-push', generalLimiter, createWebPushRouter(config.pairingManager));
 
   // Protected routes (require device authentication)
   const authMiddleware = authenticateDevice(config.pairingManager);

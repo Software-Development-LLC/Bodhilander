@@ -25,7 +25,121 @@ export interface Session {
    * to the global default account, then to the legacy ~/.claude config).
    */
   claudeAccountId: string | null;
+  /**
+   * Agent provider this session runs (providers registry id: 'claude',
+   * 'codex', 'grok') (#96). Only meaningful when shellType is
+   * 'claude'; plain shell sessions keep the default.
+   */
+  provider: string;
 }
+
+// ---------------------------------------------------------------------------
+// Arena mode (#100) — one prompt fanned out to multiple agents, compared.
+// ---------------------------------------------------------------------------
+
+export type ArenaResponseStatus = 'running' | 'done' | 'error';
+
+export interface ArenaResponse {
+  id: string;
+  runId: string;
+  /** Arena contestant id: a provider registry id or 'ollama'. */
+  provider: string;
+  /** Conversation round: 0 = the run's initial prompt, 1+ = follow-ups. */
+  round: number;
+  /** The follow-up prompt this response answers (null on round 0 — see ArenaRun.prompt). */
+  prompt: string | null;
+  /**
+   * CLI session/thread id this response can be resumed from (null when the
+   * contestant has no resumable session, e.g. Ollama or an errored run).
+   */
+  sessionRef: string | null;
+  status: ArenaResponseStatus;
+  /** Accumulated response text (streamed). */
+  text: string;
+  /** Milliseconds from spawn to first output. Null until first chunk. */
+  ttftMs: number | null;
+  /** Milliseconds from spawn to completion. Null while running. */
+  totalMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /**
+   * API-equivalent cost in USD when the CLI reports one (subscription-backed
+   * runs don't bill this; it's shown as "included in subscription"). Null
+   * when the CLI doesn't report cost.
+   */
+  costUsd: number | null;
+  /** Error detail when status === 'error'. */
+  error: string | null;
+}
+
+export interface ArenaRun {
+  id: string;
+  prompt: string;
+  /** Project folder the contestants ran in (null = no project context). */
+  workingDir: string | null;
+  createdAt: Date;
+  responses: ArenaResponse[];
+}
+
+/** Renderer-facing progress event for a streaming arena response. */
+export interface ArenaUpdate {
+  runId: string;
+  responseId: string;
+  provider: string;
+  /** New text appended since the last update (may be empty on status-only updates). */
+  chunk: string;
+  status: ArenaResponseStatus;
+  ttftMs: number | null;
+  totalMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
+  error: string | null;
+}
+
+/**
+ * Renderer-facing state of one provider's API-key vault entry (#99). The key
+ * itself is never returned to the renderer — only whether one is stored.
+ */
+export interface KeyVaultStatus {
+  providerId: string;
+  /** Whether OS-keychain-backed encryption is available on this platform. */
+  available: boolean;
+  hasKey: boolean;
+  /**
+   * Whether the stored key is injected into launches for this provider.
+   * Defaults to false — CLI login/subscription stays the default.
+   */
+  useKey: boolean;
+}
+
+/** Result of probing one provider CLI's availability (#97). */
+export interface ProviderStatus {
+  id: string;
+  name: string;
+  /** CLI binary probed for. */
+  command: string;
+  installed: boolean;
+  /** First version-looking line of `<command> --version`, when available. */
+  version: string | null;
+  installHint: string;
+  docsUrl: string;
+  loginHint: string;
+}
+
+/**
+ * Default provider for new sessions. Must match the main-process registry's
+ * DEFAULT_PROVIDER_ID (the registry lives main-side because provider
+ * definitions import electron; the renderer only needs the id).
+ */
+export const DEFAULT_SESSION_PROVIDER = 'claude';
+
+/** Display labels for session providers (registry ids → short names). */
+export const PROVIDER_LABELS: Record<string, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  grok: 'Grok',
+};
 
 export interface Group {
   id: string;

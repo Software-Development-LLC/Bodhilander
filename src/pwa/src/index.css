@@ -1,0 +1,3 @@
+/* Tailwind 4 — single-import API. The @tailwindcss/vite plugin handles the
+   rest (no @tailwind directives needed). */
+@import 'tailwindcss';

@@ -50,6 +50,7 @@ export function getDatabase(): Database.Database {
 
   initializeTables(db);
   initializeCodeSearchTables(db);
+  initializeArenaTables(db);
 
   return db;
 }
@@ -143,6 +144,13 @@ function initializeTables(database: Database.Database): void {
     database.exec("ALTER TABLE sessions ADD COLUMN claude_account_id TEXT DEFAULT NULL");
   }
 
+  // Migration: Add provider column to sessions (#96, epic #94).
+  // Which agent provider the session runs (providers registry id). Existing
+  // rows are Claude sessions by definition, so they default to 'claude'.
+  if (!sessionColsBdhlndr17.includes('provider')) {
+    database.exec("ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
+  }
+
   // Migration: Create session_events table (BDHLNDR-17)
   database.exec(`
     CREATE TABLE IF NOT EXISTS session_events (
@@ -167,6 +175,57 @@ function initializeTables(database: Database.Database): void {
         AND last_activity_at IS NOT NULL AND created_at IS NOT NULL
     `);
   }
+
+  // Migration: Create chat_events table (BDHLNDR-51).
+  // Stores parsed chat-shaped events extracted from the PTY data stream — the
+  // server-side foundation for the mobile-companion PWA chat view (BDHLNDR-56)
+  // and the chat-events REST snapshot (BDHLNDR-58). The terminal:output WS
+  // stream is unchanged; chat:event is an additive, parallel channel.
+  //
+  // Payload is JSON whose shape is determined by `type` (see chat-parser/types.ts):
+  //   assistant_text  → { text }
+  //   tool_call       → { tool, argsBrief }
+  //   error           → { text }
+  //   prompt_yes_no   → { question }
+  //   prompt_options  → { question, options: [{ key, label }] }
+  //   response        → { text }
+  //
+  // timestamp is ms since epoch (matches the WS message timestamp field).
+  // Per-session pruning to 1000 most-recent rows happens inside the repo on
+  // each insert — keeps storage bounded without a background sweep.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS chat_events (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      timestamp INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_events_session_ts ON chat_events(session_id, timestamp);
+  `);
+
+  // Migration: Create push_subscriptions table (BDHLNDR-49).
+  // Stores Web Push (VAPID) subscriptions registered by paired mobile
+  // companions so the desktop can dispatch attention notifications even
+  // when the PWA isn't open. `endpoint` is the browser-issued URL the push
+  // service listens on — it's globally unique per subscription, so we use
+  // it as the natural-key for upsert / dead-subscription cleanup. p256dh
+  // and auth are the subscription's encryption material (URL-base64). No FK
+  // to paired_devices because we want to ON-DELETE cascade these manually
+  // through the repo, and SQLite can't ALTER TABLE to add FKs after the
+  // fact; the deletion path in pairing-manager unpair() can call into the
+  // repo to clean up.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_subs_device ON push_subscriptions(device_id);
+  `);
 
   // Migration: Create memories table if it doesn't exist
   database.exec(`
@@ -377,6 +436,51 @@ function initializeCodeSearchTables(database: Database.Database): void {
     }
   } catch (e) {
     log.error('Vector table setup error:', e);
+  }
+
+}
+
+// Arena mode tables (#100, epic #94). One run = one prompt fanned out to N
+// contestants; responses persist final text + metrics.
+function initializeArenaTables(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS arena_runs (
+      id TEXT PRIMARY KEY,
+      prompt TEXT NOT NULL,
+      working_dir TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS arena_responses (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES arena_runs(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      response_text TEXT NOT NULL DEFAULT '',
+      ttft_ms INTEGER DEFAULT NULL,
+      total_ms INTEGER DEFAULT NULL,
+      input_tokens INTEGER DEFAULT NULL,
+      output_tokens INTEGER DEFAULT NULL,
+      cost_usd REAL DEFAULT NULL,
+      error TEXT DEFAULT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_arena_responses_run ON arena_responses(run_id);
+  `);
+
+  // Migration: scope a run to a project folder (group working dir) so
+  // contestant CLIs answer with that codebase as context. NULL = unscoped.
+  const runColumns = database.prepare('PRAGMA table_info(arena_runs)').all() as { name: string }[];
+  if (!runColumns.some((col) => col.name === 'working_dir')) {
+    database.exec('ALTER TABLE arena_runs ADD COLUMN working_dir TEXT DEFAULT NULL');
+  }
+
+  // Migration: follow-up rounds. round 0 = the run's initial prompt; later
+  // rounds carry their own prompt. session_ref stores the CLI session/thread
+  // id the response can be resumed from (NULL = column can't continue).
+  const responseColumns = database.prepare('PRAGMA table_info(arena_responses)').all() as { name: string }[];
+  if (!responseColumns.some((col) => col.name === 'round')) {
+    database.exec('ALTER TABLE arena_responses ADD COLUMN round INTEGER NOT NULL DEFAULT 0');
+    database.exec('ALTER TABLE arena_responses ADD COLUMN prompt TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE arena_responses ADD COLUMN session_ref TEXT DEFAULT NULL');
   }
 }
 

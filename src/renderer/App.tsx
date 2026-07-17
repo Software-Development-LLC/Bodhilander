@@ -7,10 +7,11 @@ import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
+import { ArenaPanel } from './components/ArenaPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { CodeSearchModal } from './components/CodeSearchModal';
 import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
-import { ClaudeAccount } from '../shared/types';
+import { ClaudeAccount, PROVIDER_LABELS } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -84,6 +85,9 @@ const App: React.FC = () => {
 
   // Analytics view state (BDHLNDR-18)
   const [analyticsViewOpen, setAnalyticsViewOpen] = useState(false);
+  const [arenaViewOpen, setArenaViewOpen] = useState(false);
+  // Group whose working dir the arena panel should scope to ("Ask Arena" menu).
+  const [arenaGroupId, setArenaGroupId] = useState<string | null>(null);
 
   // Code search modal state
   const [codeSearchOpen, setCodeSearchOpen] = useState(false);
@@ -211,10 +215,15 @@ const App: React.FC = () => {
   }, [getSessionsByGroup]);
 
   // Actually create the session after name is confirmed
-  const handleConfirmSession = useCallback(async (name: string) => {
+  const handleConfirmSession = useCallback(async (
+    name: string,
+    _path?: string,
+    _claudeAccountId?: string | null,
+    provider?: string,
+  ) => {
     if (!sessionPrompt) return;
     const cwd = getEffectiveWorkingDir(sessionPrompt.groupId) || homedir;
-    await createSession(sessionPrompt.groupId, name, cwd, true); // launchClaude = true
+    await createSession(sessionPrompt.groupId, name, cwd, true, provider); // launchClaude = true
     setSessionPrompt(null);
   }, [sessionPrompt, getEffectiveWorkingDir, createSession, homedir]);
 
@@ -351,6 +360,15 @@ const App: React.FC = () => {
       { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
       { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
       { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
+      {
+        label: 'Ask Arena About This Folder',
+        onClick: () => {
+          setArenaGroupId(groupId);
+          setArenaViewOpen(true);
+        },
+        // Arena scoping runs the CLIs inside the group's working dir.
+        disabled: !group?.workingDir,
+      },
     ];
 
     // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
@@ -899,6 +917,14 @@ const App: React.FC = () => {
               📊
             </button>
             <button
+              className={`icon-button ${arenaViewOpen ? 'active' : ''}`}
+              onClick={() => setArenaViewOpen(prev => !prev)}
+              title="Arena — compare agents"
+              aria-label="Arena"
+            >
+              ⚔️
+            </button>
+            <button
               className="icon-button"
               onClick={() => setCodeSearchOpen(true)}
               title="Code Search (Ctrl+Shift+F)"
@@ -1099,6 +1125,15 @@ const App: React.FC = () => {
                       )}
                       <SessionStatsBadge sessionId={session.id} />
                     </div>
+                    {session.shellType === 'claude' && session.provider !== 'claude' && (
+                      <span
+                        className="session-provider-badge"
+                        title={`Provider: ${PROVIDER_LABELS[session.provider] ?? session.provider}`}
+                        draggable={false}
+                      >
+                        {PROVIDER_LABELS[session.provider] ?? session.provider}
+                      </span>
+                    )}
                     <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
                     <button
                       className="session-close"
@@ -1310,7 +1345,14 @@ const App: React.FC = () => {
             activeSessionId={activeSessionId}
           />
         )}
-        <div className="terminal-area" style={{ display: analyticsViewOpen ? 'none' : undefined }}>
+        {arenaViewOpen && (
+          <ArenaPanel
+            onClose={() => setArenaViewOpen(false)}
+            groups={groups}
+            initialGroupId={arenaGroupId}
+          />
+        )}
+        <div className="terminal-area" style={{ display: analyticsViewOpen || arenaViewOpen ? 'none' : undefined }}>
           {sessions.map(session => (
             <div
               key={session.id}
@@ -1329,6 +1371,7 @@ const App: React.FC = () => {
                   sessionId={session.id}
                   cwd={session.workingDir}
                   launchClaude={session.shellType === 'claude'}
+                  provider={session.provider}
                   isStopped={session.state === 'stopped'}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
@@ -1405,6 +1448,7 @@ const App: React.FC = () => {
         defaultValue={sessionPrompt?.defaultName || ''}
         onConfirm={handleConfirmSession}
         onCancel={() => setSessionPrompt(null)}
+        providerPicker
       />
 
       <NamePromptModal

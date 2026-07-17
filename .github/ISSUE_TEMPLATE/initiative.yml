@@ -1,0 +1,50 @@
+name: Initiative
+description: A strategic objective spanning multiple epics
+title: "Initiative: "
+type: Initiative
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The highest planning level — link the epics that deliver this initiative.
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What strategic outcome does this initiative drive?
+    validations:
+      required: true
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Strategic rationale
+      description: Optional — why now, and how it ties to broader goals.
+    validations:
+      required: false
+  - type: textarea
+    id: results
+    attributes:
+      label: Key results / success metrics
+      description: How will we measure success?
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: epics
+    attributes:
+      label: Related epics
+      description: Epics that roll up to this initiative.
+      placeholder: |
+        - [ ] #...
+    validations:
+      required: false
+  - type: input
+    id: timeframe
+    attributes:
+      label: Target timeframe
+      placeholder: "e.g. Q3 2026"
+    validations:
+      required: false

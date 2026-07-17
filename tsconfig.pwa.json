@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/pwa",
+    "rootDir": "./src/pwa",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "types": ["vite/client", "vite-plugin-pwa/client"],
+    "allowImportingTsExtensions": false,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true
+  },
+  "include": ["src/pwa/**/*.ts", "src/pwa/**/*.tsx", "src/pwa/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "src/pwa/vite.config.ts"]
+}

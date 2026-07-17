@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ClaudeAccount } from '../../shared/types';
+import { ClaudeAccount, ProviderStatus, DEFAULT_SESSION_PROVIDER } from '../../shared/types';
+import { buildProviderOptions } from './providerPickerOptions';
 import './NamePromptModal.css';
 
 interface NamePromptModalProps {
@@ -7,7 +8,7 @@ interface NamePromptModalProps {
   title: string;
   placeholder: string;
   defaultValue: string;
-  onConfirm: (name: string, path?: string, claudeAccountId?: string | null) => void;
+  onConfirm: (name: string, path?: string, claudeAccountId?: string | null, provider?: string) => void;
   onCancel: () => void;
   /** Show an optional path selector for group creation */
   showPathSelector?: boolean;
@@ -23,6 +24,13 @@ interface NamePromptModalProps {
     /** Override the dropdown label. Default: "Claude account". */
     label?: string;
   };
+  /**
+   * Show the session provider dropdown (#98). Detected CLIs are selectable;
+   * missing ones are disabled with setup guidance pointing at Settings →
+   * Providers. The onConfirm callback receives the chosen provider id as the
+   * fourth argument (defaults to claude).
+   */
+  providerPicker?: boolean;
 }
 
 export const NamePromptModal: React.FC<NamePromptModalProps> = ({
@@ -35,12 +43,15 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
   showPathSelector = false,
   pathLabel = 'Working Directory (optional)',
   accountPicker,
+  providerPicker = false,
 }) => {
   const [value, setValue] = useState(defaultValue);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(
     accountPicker?.initialAccountId ?? null,
   );
+  const [providers, setProviders] = useState<ProviderStatus[] | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_SESSION_PROVIDER);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -48,20 +59,27 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
       setValue(defaultValue);
       setSelectedPath(null);
       setSelectedAccountId(accountPicker?.initialAccountId ?? null);
+      setSelectedProvider(DEFAULT_SESSION_PROVIDER);
+      if (providerPicker) {
+        window.electronAPI.detectProviders()
+          .then(setProviders)
+          .catch(() => setProviders([]));
+      }
       // Focus and select input after modal opens
       setTimeout(() => {
         inputRef.current?.focus();
         inputRef.current?.select();
       }, 50);
     }
-  }, [isOpen, defaultValue, accountPicker?.initialAccountId]);
+  }, [isOpen, defaultValue, accountPicker?.initialAccountId, providerPicker]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = value.trim();
     const finalName = trimmed || defaultValue;
     const finalAccountId = accountPicker ? selectedAccountId : undefined;
-    onConfirm(finalName, selectedPath || undefined, finalAccountId);
+    const finalProvider = providerPicker ? selectedProvider : undefined;
+    onConfirm(finalName, selectedPath ?? undefined, finalAccountId, finalProvider);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -142,6 +160,29 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
                   Browse...
                 </button>
               </div>
+            </div>
+          )}
+          {providerPicker && (
+            <div className="path-selector">
+              <label htmlFor="session-provider-select">Provider</label>
+              <select
+                id="session-provider-select"
+                value={selectedProvider}
+                onChange={e => setSelectedProvider(e.target.value)}
+                className="path-input"
+                style={{ width: '100%', padding: '10px 12px', cursor: 'pointer' }}
+              >
+                {buildProviderOptions(providers).map(opt => (
+                  <option key={opt.id} value={opt.id} disabled={opt.disabled}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              {providers?.some(p => !p.installed) && (
+                <span className="provider-picker-hint">
+                  Missing CLIs can be set up in Settings → Providers.
+                </span>
+              )}
             </div>
           )}
           {accountPicker && (

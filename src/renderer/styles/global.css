@@ -478,6 +478,102 @@ body {
   flex-shrink: 0;
 }
 
+/* Settings → Providers CLI detection (#97) */
+.provider-status-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #333;
+}
+
+.provider-status-row:last-child {
+  border-bottom: none;
+}
+
+.provider-status-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.provider-status-dot.installed {
+  background: #4caf50;
+}
+
+.provider-status-dot.missing {
+  background: #757575;
+}
+
+.provider-status-name {
+  font-weight: 500;
+}
+
+.provider-status-command {
+  font-size: 11px;
+  color: #999;
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.provider-status-version {
+  margin-left: auto;
+  font-size: 11px;
+  color: #4caf50;
+}
+
+.provider-status-missing {
+  margin-left: auto;
+  font-size: 11px;
+  color: #999;
+}
+
+.provider-status-setup {
+  margin: 8px 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #bbb;
+}
+
+.provider-status-setup code {
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 4px;
+  user-select: all;
+}
+
+.settings-link-button {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: #6ab0f3;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+}
+
+.settings-link-button:hover {
+  text-decoration: underline;
+}
+
+/* Provider label on non-Claude agent sessions (#96) */
+.session-provider-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: 500;
+  flex-shrink: 0;
+  background: #2d3a4d;
+  color: #9fc3f0;
+}
+
 .status-pill.idle {
   background: #3c3c3c;
   color: #888;
@@ -1384,4 +1480,280 @@ body {
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+
+/* Arena mode (#100) */
+.arena-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  z-index: 5;
+  padding: 16px;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.arena-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.arena-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.arena-subtitle {
+  color: #999;
+  font-size: 12px;
+  flex: 1;
+}
+
+.arena-history-select {
+  max-width: 320px;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.arena-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.arena-prompt {
+  width: 100%;
+  resize: vertical;
+  background: #252525;
+  color: #eee;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.arena-folder-select {
+  max-width: 320px;
+  background: #2a2a2a;
+  color: #ddd;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 4px 8px;
+  text-overflow: ellipsis;
+}
+
+.arena-run-scope {
+  color: #999;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.arena-contestants {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.arena-contestant {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.arena-contestant.unavailable {
+  color: #777;
+  cursor: default;
+}
+
+.arena-run-button {
+  margin-left: auto;
+  min-width: 90px;
+}
+
+.arena-results {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-x: auto;
+}
+
+.arena-column {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: #252525;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 10px;
+  gap: 6px;
+  min-height: 0;
+}
+
+.arena-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.arena-column-name {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.arena-column-metrics {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #9fc3f0;
+}
+
+.arena-column-error {
+  color: #f28b82;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+/* Rounds wrapper scrolls the whole conversation; individual round texts
+   flow at natural height so earlier rounds stay readable. */
+.arena-column-rounds {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.arena-round {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arena-round + .arena-round {
+  border-top: 1px solid #333;
+  padding-top: 8px;
+}
+
+.arena-round-prompt {
+  font-size: 12px;
+  color: #c5a4e8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.arena-column-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  margin: 0;
+  color: #ddd;
+}
+
+/* Follow-up reply bar (arena rounds) */
+.arena-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.arena-reply-bar {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.arena-reply-error {
+  color: #f28b82;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.arena-reply-input {
+  flex: 1;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #ddd;
+  padding: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.arena-empty {
+  color: #888;
+  margin: auto;
+  font-size: 14px;
+  max-width: 420px;
+  text-align: center;
+}
+
+/* Provider API-key vault (#99) */
+.vault-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vault-row:last-child {
+  border-bottom: none;
+}
+
+.vault-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vault-key-state {
+  font-size: 11px;
+  color: #999;
+}
+
+.vault-key-state.stored {
+  color: #4caf50;
+}
+
+.vault-row-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.vault-key-input {
+  flex: 1;
+}
+
+.vault-use-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #bbb;
+  cursor: pointer;
+}
+
+.vault-message {
+  font-size: 11px;
+  color: #9fc3f0;
 }
