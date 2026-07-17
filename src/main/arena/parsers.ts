@@ -121,6 +121,103 @@ export function codexParser(): ArenaStreamParser {
   };
 }
 
+/**
+ * opencode run --format json — newline-delimited events (verified live):
+ * `{type:"text",part:{type:"text",text}}` carries assistant text; tool calls
+ * (`type:"tool_use"`) and reasoning stay out; `sessionID` is on every event
+ * (ses_...); `type:"step_finish"` parts report tokens.{input,output} and cost.
+ * Tokens/cost sum across steps so tool-using runs report a true total.
+ */
+export function opencodeParser(): ArenaStreamParser {
+  let final: ArenaFinal = { ...EMPTY_FINAL };
+  const add = (a: number | null, b: number | null): number | null =>
+    b === null ? a : (a ?? 0) + b; // null stays null until a real value appears
+  return {
+    onLine(line) {
+      const event = tryParseJson(line);
+      if (!event) return '';
+      const sessionRef = asNonEmptyString(event.sessionID);
+      if (sessionRef) final = { ...final, sessionRef };
+      const part = event.part;
+      if (event.type === 'step_finish' && part) {
+        final = {
+          ...final,
+          inputTokens: add(final.inputTokens, asFiniteNumber(part.tokens?.input)),
+          outputTokens: add(final.outputTokens, asFiniteNumber(part.tokens?.output)),
+          costUsd: add(final.costUsd, asFiniteNumber(part.cost)),
+        };
+      }
+      if (event.type === 'text' && part?.type === 'text' && typeof part.text === 'string') {
+        return part.text;
+      }
+      return '';
+    },
+    finalize: () => final,
+  };
+}
+
+/**
+ * kimi -p --output-format stream-json — JSON lines (verified live). Only
+ * `{role:"assistant",content:<string>}` is display text; assistant tool-call
+ * lines carry no string content and role:"tool" results are skipped. The
+ * session id (session_...) arrives on a
+ * `{role:"meta",type:"session.resume_hint",session_id}` line. No token/cost
+ * reporting in stream-json.
+ */
+export function kimiParser(): ArenaStreamParser {
+  let final: ArenaFinal = { ...EMPTY_FINAL };
+  return {
+    onLine(line) {
+      const event = tryParseJson(line);
+      if (!event) return '';
+      if (event.role === 'meta' && event.type === 'session.resume_hint') {
+        const sessionRef = asNonEmptyString(event.session_id);
+        if (sessionRef) final = { ...final, sessionRef };
+        return '';
+      }
+      if (event.role === 'assistant' && typeof event.content === 'string') {
+        return event.content;
+      }
+      return '';
+    },
+    finalize: () => final,
+  };
+}
+
+/**
+ * cursor-agent -p --output-format stream-json — Claude-shaped events (verified
+ * live). `{type:"assistant",message:{content:[{type:"text",text}]}}` carries
+ * text; `type:"thinking"` deltas and `type:"user"` echoes stay out; every
+ * event carries `session_id` (a UUID); the final `type:"result"` reports
+ * `usage.inputTokens/outputTokens` (camelCase). No cost/ttft reported.
+ */
+export function cursorParser(): ArenaStreamParser {
+  let final: ArenaFinal = { ...EMPTY_FINAL };
+  return {
+    onLine(line) {
+      const event = tryParseJson(line);
+      if (!event) return '';
+      const sessionRef = asNonEmptyString(event.session_id);
+      if (sessionRef) final = { ...final, sessionRef };
+      if (event.type === 'result') {
+        final = {
+          ...final,
+          inputTokens: asFiniteNumber(event.usage?.inputTokens),
+          outputTokens: asFiniteNumber(event.usage?.outputTokens),
+        };
+      }
+      if (event.type === 'assistant') {
+        const parts: unknown[] = event.message?.content ?? [];
+        return parts
+          .map((p: any) => (p?.type === 'text' && typeof p.text === 'string' ? p.text : ''))
+          .join('');
+      }
+      return '';
+    },
+    finalize: () => final,
+  };
+}
+
 /** Plain-text CLIs (grok -p). */
 export function textParser(): ArenaStreamParser {
   return {

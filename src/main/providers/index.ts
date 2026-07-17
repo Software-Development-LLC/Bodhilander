@@ -7,6 +7,10 @@ import { ProviderDefinition } from './types';
 import { claudeProvider } from './claude';
 import { codexProvider } from './codex';
 import { grokProvider } from './grok';
+import { opencodeProvider } from './opencode';
+import { kimiProvider } from './kimi';
+import { cursorProvider } from './cursor';
+import { antigravityProvider } from './antigravity';
 
 export * from './types';
 export { claudeProvider, CLAUDE_CONFIG_DIR_ENV } from './claude';
@@ -18,7 +22,15 @@ export const DEFAULT_PROVIDER_ID = DEFAULT_SESSION_PROVIDER;
 // (June 2026), so out of the box it dead-ends at "client is no longer
 // supported". Persisted 'gemini' sessions degrade via resolveProvider().
 const REGISTRY: ReadonlyMap<string, ProviderDefinition> = new Map(
-  [claudeProvider, codexProvider, grokProvider].map((p) => [p.id, p])
+  [
+    claudeProvider,
+    codexProvider,
+    grokProvider,
+    opencodeProvider,
+    kimiProvider,
+    cursorProvider,
+    antigravityProvider,
+  ].map((p) => [p.id, p])
 );
 
 if (!REGISTRY.has(DEFAULT_PROVIDER_ID)) {

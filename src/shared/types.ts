@@ -139,6 +139,10 @@ export const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude',
   codex: 'Codex',
   grok: 'Grok',
+  opencode: 'opencode',
+  kimi: 'Kimi',
+  cursor: 'Cursor',
+  antigravity: 'Antigravity',
 };
 
 export interface Group {

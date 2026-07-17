@@ -15,17 +15,36 @@ mock.module('electron', () => ({
 const providers = await import('../index');
 
 describe('provider registry resolution', () => {
+  const ALL_IDS = ['claude', 'codex', 'grok', 'opencode', 'kimi', 'cursor', 'antigravity'];
+
   test('isKnownProvider reflects the registry', () => {
-    expect(providers.isKnownProvider('claude')).toBe(true);
-    expect(providers.isKnownProvider('codex')).toBe(true);
-    expect(providers.isKnownProvider('grok')).toBe(true);
+    for (const id of ALL_IDS) {
+      expect(providers.isKnownProvider(id)).toBe(true);
+    }
     expect(providers.isKnownProvider('nope')).toBe(false);
     expect(providers.isKnownProvider('')).toBe(false);
   });
 
   test('resolveProvider returns the matching definition for known ids', () => {
-    for (const id of ['claude', 'codex', 'grok']) {
+    for (const id of ALL_IDS) {
       expect(providers.resolveProvider(id).id).toBe(id);
+    }
+  });
+
+  test('every registered provider exposes an arena command + parser', () => {
+    for (const p of providers.listProviders()) {
+      expect(typeof p.arena.buildCommand).toBe('function');
+      expect(typeof p.arena.createParser).toBe('function');
+    }
+  });
+
+  test('follow-up resume is supported by every provider except antigravity', () => {
+    // antigravity has no machine-readable conversation id to resume, so it
+    // deliberately omits buildResumeCommand (the engine skips it in follow-up
+    // rounds). Every other provider supports resumable arena conversations.
+    for (const p of providers.listProviders()) {
+      const hasResume = typeof p.arena.buildResumeCommand === 'function';
+      expect(hasResume).toBe(p.id !== 'antigravity');
     }
   });
 
