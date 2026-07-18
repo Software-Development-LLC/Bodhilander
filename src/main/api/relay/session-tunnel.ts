@@ -16,6 +16,8 @@
 import log from 'electron-log';
 import { ptyManager } from '../../pty-manager';
 import { getAllSessions } from '../../repositories/sessions';
+import { getAllGroups } from '../../repositories/groups';
+import { createRemoteSession } from './remote-sessions';
 import { deriveSharedSecret, ensureIdentity, signWithIdentity } from './relay-identity';
 import { deriveSessionKey, sealJson, openJson, buildHandshakeProof, type SealedFrame } from './e2e';
 
@@ -80,7 +82,16 @@ export class SessionTunnel {
     const frame = payload as SealedFrame;
     if (typeof frame?.n !== 'number' || typeof frame?.ct !== 'string' || frame.n <= s.recvCounter) return;
 
-    let inner: { type?: string; sessionId?: string; data?: string; cols?: number; rows?: number };
+    let inner: {
+      type?: string;
+      sessionId?: string;
+      data?: string;
+      cols?: number;
+      rows?: number;
+      groupId?: string;
+      name?: string;
+      provider?: string;
+    };
     try {
       inner = openJson(s.key, frame);
     } catch {
@@ -90,6 +101,26 @@ export class SessionTunnel {
     s.recvCounter = frame.n;
 
     switch (inner.type) {
+      case 'groups:list':
+        this.sendGroups(clientId);
+        break;
+      case 'session:create': {
+        if (typeof inner.groupId !== 'string' || typeof inner.name !== 'string') break;
+        const provider = typeof inner.provider === 'string' ? inner.provider : 'claude';
+        const isShell = provider === 'shell';
+        try {
+          createRemoteSession({
+            groupId: inner.groupId,
+            name: inner.name.trim() || 'session',
+            provider: isShell ? 'claude' : provider,
+            launchClaude: !isShell,
+          });
+          this.sendSessions(clientId); // refresh the client's list with the new session
+        } catch (err) {
+          this.sealTo(clientId, { type: 'error', message: err instanceof Error ? err.message : 'could not create session' });
+        }
+        break;
+      }
       case 'terminal:subscribe':
         if (typeof inner.sessionId === 'string') {
           s.subs.add(inner.sessionId);
@@ -136,11 +167,23 @@ export class SessionTunnel {
         id: session.id,
         name: session.name,
         state: session.state,
+        groupId: session.groupId,
         workingDir: session.workingDir,
         provider: session.provider,
         shellType: session.shellType,
       }));
     this.sealTo(clientId, { type: 'sessions', sessions: list });
+  }
+
+  private sendGroups(clientId: string): void {
+    const groups = getAllGroups().map((g) => ({
+      id: g.id,
+      name: g.name,
+      color: g.color,
+      workingDir: g.workingDir,
+      parentId: g.parentId,
+    }));
+    this.sealTo(clientId, { type: 'groups', groups });
   }
 
   private sealTo(clientId: string, obj: unknown): void {
