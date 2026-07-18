@@ -1,0 +1,21 @@
+{
+  "name": "bodhilander-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-tenant cloud relay for Bodhilander remote hosting",
+  "module": "src/index.ts",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "typescript": "^5.9.3"
+  }
+}

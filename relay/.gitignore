@@ -1,0 +1,13 @@
+# Build output and dependencies
+node_modules/
+dist/
+
+# Runtime data (SQLite db, WAL/SHM sidecars)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Local env / logs
+.env
+*.log

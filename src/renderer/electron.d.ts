@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -97,13 +97,21 @@ interface ElectronAPI {
   arenaGetRun: (id: string) => Promise<ArenaRun | null>;
   onArenaUpdate: (callback: (update: ArenaUpdate) => void) => () => void;
 
+  // Remote Hosting (Relay)
+  relayGetStatus: () => Promise<RelayStatus>;
+  relayEnable: () => Promise<RelayStatus>;
+  relayDisable: () => Promise<RelayStatus>;
+  relaySetUrl: (url: string) => Promise<RelayStatus>;
+  relayGenerateLinkCode: (machineName: string) => Promise<{ code: string; expiresAt: number }>;
+  onRelayStatus: (callback: (status: RelayStatus) => void) => () => void;
+
   // Sound notifications
   testSound: (event: 'waiting' | 'error' | 'start' | 'complete') => Promise<void>;
   selectSoundFile: () => Promise<string | null>;
   onSoundPlay: (callback: (data: { path: string; volume: number }) => void) => () => void;
 
   // Mobile API Server
-  apiStart: (config?: { port?: number; enableMdns?: boolean }) => Promise<any>;
+  apiStart: (config?: { port?: number }) => Promise<any>;
   apiStop: () => Promise<any>;
   apiGetStatus: () => Promise<{ running: boolean; port?: number; address?: string }>;
   apiGeneratePairingCode: (options?: { canControl?: boolean; canModify?: boolean }) => Promise<{

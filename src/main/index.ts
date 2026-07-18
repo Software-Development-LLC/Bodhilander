@@ -31,6 +31,7 @@ import { teamsNotifier } from './teams/teams-notifier';
 import { registerMcpServer, registerHooks } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
+import { getRelayClient } from './api/relay';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
@@ -507,7 +508,19 @@ function createWindow(): void {
     }).catch((err) => {
       log.error('[Main] Failed to auto-start API server:', err);
     });
+
+    // Resume remote-hosting relay connection if the user enabled it.
+    try {
+      getRelayClient().startIfEnabled();
+    } catch (err) {
+      log.error('[Main] Failed to start relay client:', err);
+    }
   }, 1500); // Defer 1.5s to prioritize UI rendering
+
+  // Relay status forwarding
+  getRelayClient().on('status', (status) => {
+    mainWindow?.webContents.send('relay:status', status);
+  });
 
   // Vector search event forwarding
   const vsManager = getVectorSearchManager();
@@ -1133,6 +1146,31 @@ safeHandle('api:hasPairingCode', () => {
 });
 
 // ============================================================================
+// Remote Hosting (Relay) IPC Handlers
+// ============================================================================
+
+safeHandle('relay:getStatus', () => getRelayClient().getStatus());
+
+safeHandle('relay:enable', () => {
+  getRelayClient().enable();
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:disable', () => {
+  getRelayClient().disable();
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:setUrl', (url: string) => {
+  getRelayClient().setRelayUrl(url);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:generateLinkCode', async (machineName: string) => {
+  return getRelayClient().generateLinkCode(machineName);
+});
+
+// ============================================================================
 // Vector Search IPC Handlers
 // ============================================================================
 
@@ -1411,6 +1449,11 @@ app.on('before-quit', (event) => {
     disposeVectorSearchManager();
     trayManager.destroy();
     stateMonitor?.stop();
+    try {
+      getRelayClient().stop();
+    } catch (e) {
+      log.error('Error stopping relay client on quit:', e);
+    }
     closeDatabase();
 
     cleanupComplete = true;

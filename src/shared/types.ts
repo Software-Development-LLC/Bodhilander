@@ -113,6 +113,22 @@ export interface KeyVaultStatus {
   useKey: boolean;
 }
 
+/** Remote-hosting relay connection state, surfaced to the renderer. */
+export interface RelayStatus {
+  /** User has turned remote hosting on. */
+  enabled: boolean;
+  /** WebSocket is authenticated and the machine is online. */
+  connected: boolean;
+  /** Machine has been claimed by a user account on the relay. */
+  linked: boolean;
+  machineId: string | null;
+  machineName: string | null;
+  /** Relay origin, e.g. https://relay.example.com. */
+  relayUrl: string;
+  /** SSH-style identity fingerprint (SHA256:…) for out-of-band verification. */
+  fingerprint: string | null;
+}
+
 /** Result of probing one provider CLI's availability (#97). */
 export interface ProviderStatus {
   id: string;
@@ -220,7 +236,6 @@ export interface PairedDevice {
 
 export interface ApiServerConfig {
   port?: number;
-  enableMdns?: boolean;
 }
 
 export interface DevicePermissions {
