@@ -55,6 +55,8 @@ function renderPage(devMode: boolean): string {
   <h1>🛰️ Bodhilander Remote Hosting</h1>
   <p class="sub">Link a desktop to your account so you can reach it from anywhere.</p>
 
+  <div id="denied" class="banner err hidden">Sign-in is restricted to authorized members. Your GitHub account isn't permitted.</div>
+
   <div class="card" id="authCard">
     <h2>Account</h2>
     <div id="signedOut">
@@ -118,6 +120,7 @@ $('claim').onclick = async () => {
 $('logout').onclick = async () => { await fetch('/auth/logout', { ...opts, method: 'POST' }); refresh(); };
 const dev = $('devLogin');
 if (dev) dev.onclick = async () => { await fetch('/dev/login', { ...opts, method: 'POST' }); refresh(); };
+if (new URLSearchParams(location.search).get('denied') === 'org') $('denied').classList.remove('hidden');
 refresh();
 </script>
 </body>

@@ -205,19 +205,28 @@ describe('router: /link + /link/claim (end to end)', () => {
 
 // ---------------------------------------------------------------------------
 describe('router: GitHub OAuth', () => {
-  const mockFetch = (async (input: Request | string | URL) => {
-    const u = typeof input === 'string' ? input : input.toString();
-    if (u.includes('login/oauth/access_token')) {
-      return new Response(JSON.stringify({ access_token: 'gho_test' }), { headers: { 'content-type': 'application/json' } });
-    }
-    if (u.endsWith('/user')) {
-      return new Response(
-        JSON.stringify({ id: 777, login: 'octocat', name: 'The Octocat', avatar_url: 'https://a/b.png', email: 'octo@gh.com' }),
-        { headers: { 'content-type': 'application/json' } },
-      );
-    }
-    return new Response('[]', { headers: { 'content-type': 'application/json' } });
-  }) as typeof fetch;
+  // `membership`: 'active' → member, 'none' → 404 (not a member), undefined → org not checked.
+  function makeMockFetch(membership?: 'active' | 'none') {
+    return (async (input: Request | string | URL) => {
+      const u = typeof input === 'string' ? input : input.toString();
+      if (u.includes('login/oauth/access_token')) {
+        return new Response(JSON.stringify({ access_token: 'gho_test' }), { headers: { 'content-type': 'application/json' } });
+      }
+      if (u.endsWith('/user')) {
+        return new Response(
+          JSON.stringify({ id: 777, login: 'octocat', name: 'The Octocat', avatar_url: 'https://a/b.png', email: 'octo@gh.com' }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/user/memberships/orgs/')) {
+        return membership === 'active'
+          ? new Response(JSON.stringify({ state: 'active', role: 'member' }), { headers: { 'content-type': 'application/json' } })
+          : new Response('Not Found', { status: 404 });
+      }
+      return new Response('[]', { headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+  }
+  const mockFetch = makeMockFetch();
 
   test('login without OAuth config returns 503', async () => {
     const { config } = loadConfig({});
@@ -267,5 +276,37 @@ describe('router: GitHub OAuth', () => {
       }),
     );
     expect(res.status).toBe(400);
+  });
+
+  test('with an org gate, login requests the read:org scope', async () => {
+    const { config } = loadConfig({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret', ALLOWED_GITHUB_ORG: 'Acme' });
+    const route = createRouter({ config, logger, repos: freshRepos() });
+    const res = await route(new Request('http://relay.test/auth/github/login'));
+    expect(decodeURIComponent(res.headers.get('location') ?? '')).toContain('read:org');
+  });
+
+  test('org member is signed in', async () => {
+    const { config } = loadConfig({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret', ALLOWED_GITHUB_ORG: 'Acme' });
+    const repos = freshRepos();
+    const route = createRouter({ config, logger, repos, fetchImpl: makeMockFetch('active') });
+    const res = await route(
+      new Request('http://relay.test/auth/github/callback?code=abc&state=xyz', { headers: { cookie: 'bdl_oauth_state=xyz' } }),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.getSetCookie().some((c) => c.startsWith('bdl_session='))).toBe(true);
+  });
+
+  test('non-member is denied — no session, redirected with ?denied=org', async () => {
+    const { config } = loadConfig({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret', ALLOWED_GITHUB_ORG: 'Acme' });
+    const repos = freshRepos();
+    const route = createRouter({ config, logger, repos, fetchImpl: makeMockFetch('none') });
+    const res = await route(
+      new Request('http://relay.test/auth/github/callback?code=abc&state=xyz', { headers: { cookie: 'bdl_oauth_state=xyz' } }),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toContain('denied=org');
+    expect(res.headers.getSetCookie().some((c) => c.startsWith('bdl_session='))).toBe(false);
+    // And no user was created.
+    expect(repos.getUserBySessionToken('anything')).toBeNull();
   });
 });

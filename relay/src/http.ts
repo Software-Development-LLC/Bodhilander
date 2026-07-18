@@ -8,6 +8,7 @@ import {
   buildAuthorizeUrl,
   exchangeCodeForProfile,
   GithubOAuthError,
+  OrgMembershipError,
   type GithubOAuthConfig,
 } from './auth/github';
 import {
@@ -92,7 +93,7 @@ export function createRouter(ctx: RelayContext) {
         return new Response(null, {
           status: 302,
           headers: {
-            location: buildAuthorizeUrl(githubConfig, state),
+            location: buildAuthorizeUrl(githubConfig, state, !!config.allowedGithubOrg),
             'set-cookie': serializeCookie(OAUTH_STATE_COOKIE, state, { secure, maxAgeSeconds: 600 }),
           },
         });
@@ -155,8 +156,15 @@ export function createRouter(ctx: RelayContext) {
 
     let profile;
     try {
-      profile = await exchangeCodeForProfile(githubConfig, code, ctx.fetchImpl ?? fetch);
+      profile = await exchangeCodeForProfile(githubConfig, code, ctx.fetchImpl ?? fetch, config.allowedGithubOrg);
     } catch (err) {
+      if (err instanceof OrgMembershipError) {
+        // Valid GitHub user, but not in the required org — deny, don't sign in.
+        logger.info('sign-in denied: not an org member', { org: config.allowedGithubOrg });
+        const headers = new Headers({ location: `${config.publicUrl}/?denied=org` });
+        headers.append('set-cookie', clearCookie(OAUTH_STATE_COOKIE, secure));
+        return new Response(null, { status: 302, headers });
+      }
       if (err instanceof GithubOAuthError) {
         logger.warn('github oauth exchange failed', { err: err.message });
         return json({ error: 'oauth_exchange_failed' }, 502);

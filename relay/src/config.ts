@@ -21,6 +21,8 @@ export interface RelayConfig {
   /** GitHub OAuth app credentials — consumed in M2, optional for now. */
   githubClientId: string | null;
   githubClientSecret: string | null;
+  /** If set, only active members of this GitHub org may sign in (empty = open). */
+  allowedGithubOrg: string | null;
   vapidSubject: string;
   nodeEnv: string;
   isProduction: boolean;
@@ -125,6 +127,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       linkCodeTtlSeconds,
       githubClientId: env.GITHUB_CLIENT_ID || null,
       githubClientSecret: env.GITHUB_CLIENT_SECRET || null,
+      allowedGithubOrg: env.ALLOWED_GITHUB_ORG?.trim() || null,
       vapidSubject: env.VAPID_SUBJECT ?? 'mailto:admin@localhost',
       nodeEnv,
       isProduction,

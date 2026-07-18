@@ -10,7 +10,9 @@ const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize';
 const TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const USER_URL = 'https://api.github.com/user';
 const EMAILS_URL = 'https://api.github.com/user/emails';
-const SCOPE = 'read:user user:email';
+const BASE_SCOPE = 'read:user user:email';
+/** Needed to read the user's org memberships (including private) for gating. */
+const ORG_SCOPE = 'read:org';
 
 export interface GithubOAuthConfig {
   clientId: string;
@@ -19,20 +21,29 @@ export interface GithubOAuthConfig {
 }
 
 export class GithubOAuthError extends Error {}
+/** Sign-in was valid but the user isn't an active member of the required org. */
+export class OrgMembershipError extends GithubOAuthError {}
 
-export function buildAuthorizeUrl(config: GithubOAuthConfig, state: string): string {
+export function buildAuthorizeUrl(config: GithubOAuthConfig, state: string, includeOrgScope = false): string {
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('redirect_uri', config.redirectUri);
-  url.searchParams.set('scope', SCOPE);
+  url.searchParams.set('scope', includeOrgScope ? `${BASE_SCOPE} ${ORG_SCOPE}` : BASE_SCOPE);
   url.searchParams.set('state', state);
   return url.toString();
 }
 
+/**
+ * Exchange the OAuth code for the user's profile. When `requiredOrg` is set,
+ * the user must be an active member of that GitHub org or `OrgMembershipError`
+ * is thrown (needs the read:org scope, which buildAuthorizeUrl requests when
+ * gating is on).
+ */
 export async function exchangeCodeForProfile(
   config: GithubOAuthConfig,
   code: string,
   fetchImpl: typeof fetch = fetch,
+  requiredOrg: string | null = null,
 ): Promise<GithubProfile> {
   const tokenRes = await fetchImpl(TOKEN_URL, {
     method: 'POST',
@@ -81,10 +92,38 @@ export async function exchangeCodeForProfile(
     }
   }
 
+  if (requiredOrg) {
+    await assertOrgMembership(requiredOrg, authHeaders, fetchImpl, user.login);
+  }
+
   return {
     providerUserId: String(user.id),
     displayName: user.name?.trim() || user.login,
     email: email ?? null,
     avatarUrl: user.avatar_url,
   };
+}
+
+/**
+ * Throw OrgMembershipError unless the token's user is an active member of
+ * `org`. Uses the authenticated-user memberships endpoint, which reports the
+ * caller's own membership including private (with read:org).
+ */
+async function assertOrgMembership(
+  org: string,
+  authHeaders: Record<string, string>,
+  fetchImpl: typeof fetch,
+  login: string,
+): Promise<void> {
+  const res = await fetchImpl(`https://api.github.com/user/memberships/orgs/${encodeURIComponent(org)}`, {
+    headers: authHeaders,
+  });
+  if (res.ok) {
+    const body = (await res.json()) as { state?: string };
+    if (body.state === 'active') return;
+  } else if (res.status !== 404 && res.status !== 403) {
+    // 404/403 = not a member / not visible → deny. Anything else is unexpected.
+    throw new GithubOAuthError(`org membership check failed (${res.status})`);
+  }
+  throw new OrgMembershipError(`${login} is not an active member of ${org}`);
 }
