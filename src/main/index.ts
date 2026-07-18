@@ -32,6 +32,7 @@ import { registerMcpServer, registerHooks } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
+import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
@@ -530,6 +531,14 @@ function createWindow(): void {
   // Relay status forwarding
   getRelayClient().on('status', (status) => {
     mainWindow?.webContents.send('relay:status', status);
+  });
+
+  // A session created remotely (relay / mobile) → tell the renderer to refresh
+  // its list so the new session appears without a manual reload.
+  remoteSessionEvents.removeAllListeners('created');
+  remoteSessionEvents.on('created', () => {
+    mainWindow?.webContents.send('sessions:refresh');
+    getApiServer().broadcastSessionsUpdated();
   });
 
   // Vector search event forwarding

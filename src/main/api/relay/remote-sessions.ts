@@ -11,6 +11,7 @@
 
 import crypto from 'crypto';
 import os from 'os';
+import { EventEmitter } from 'events';
 import log from 'electron-log';
 import type { Session } from '../../../shared/types';
 import * as sessionsRepo from '../../repositories/sessions';
@@ -20,6 +21,10 @@ import { ptyManager } from '../../pty-manager';
 import { getApiServer } from '../index';
 import { soundManager } from '../../sound-manager';
 import { resolveLaunchProviderId } from '../../providers';
+
+/** Emits 'created' (with the Session) when a session is created remotely, so
+ *  the main process can tell the desktop renderer to refresh its list. */
+export const remoteSessionEvents = new EventEmitter();
 
 export interface CreateSessionOptions {
   groupId: string;
@@ -82,5 +87,6 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
   }
 
   log.info('[Relay] remote session created', { id, groupId: opts.groupId, provider: opts.provider, launchClaude: opts.launchClaude });
+  remoteSessionEvents.emit('created', session);
   return session;
 }

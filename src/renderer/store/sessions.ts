@@ -36,8 +36,13 @@ export function useSessions() {
       ));
     });
 
+    // Reload the list when a session is created remotely (relay / mobile) so the
+    // desktop UI stays in sync with sessions started from the web client.
+    const cleanupRefresh = window.electronAPI.onSessionsRefresh(() => { loadSessions(); });
+
     return () => {
       cleanupStateChange();
+      cleanupRefresh();
     };
   }, []);
 
