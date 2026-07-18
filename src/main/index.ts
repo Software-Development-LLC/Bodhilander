@@ -223,6 +223,16 @@ function updateTrayWithWaitingSessions(): void {
 }
 
 function handleStateChange(sessionId: string, state: string, sessionName?: string): void {
+  // Ignore phantom state changes for a session whose PTY is no longer alive
+  // (e.g. a resume-failed / ended session whose leftover agent process keeps
+  // pinging the state socket). This prevents dead sessions from flapping
+  // idle<->working every few seconds — spamming state events and firing the
+  // notification sound. Only the terminal 'stopped' transition is allowed
+  // through so a session can still finalize cleanly.
+  if (state !== 'stopped' && !ptyManager.getSession(sessionId)) {
+    return;
+  }
+
   // Look up session name from database if not provided
   let name = sessionName;
   let projectPath = '';

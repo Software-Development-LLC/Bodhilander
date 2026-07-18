@@ -235,6 +235,16 @@ function applyTermTheme() { if (term) term.options.theme = xtermTheme(); }
 function ensureTerm() {
   if (term) return;
   term = new Terminal({ fontFamily: 'var(--mono)', fontSize: 13, cursorBlink: true, scrollback: 5000, theme: xtermTheme(), allowProposedApi: true, screenReaderMode: true });
+  // This is a read-only VIEWER of the desktop's real terminal. Swallow terminal
+  // query sequences (Device Attributes, cursor-position / status reports) so we
+  // never echo an auto-response back into the shared PTY — the desktop is the
+  // authoritative responder; a second one creates a feedback loop that the
+  // state-monitor reads as activity (blip to "working" + sound + event churn).
+  const swallow = () => true;
+  term.parser.registerCsiHandler({ final: 'c' }, swallow); // primary Device Attributes
+  term.parser.registerCsiHandler({ prefix: '>', final: 'c' }, swallow); // secondary DA
+  term.parser.registerCsiHandler({ prefix: '?', final: 'c' }, swallow);
+  term.parser.registerCsiHandler({ final: 'n' }, swallow); // DSR / cursor-position report
   term.open($('#screen')!);
   term.onData((d) => app.conn?.command({ type: 'terminal:input', sessionId: app.activeId, data: d }));
   // The terminal matches the desktop's size (via terminal:size), so we don't
