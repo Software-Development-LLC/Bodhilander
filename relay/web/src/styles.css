@@ -180,4 +180,29 @@ input, textarea { font-family: inherit; }
 .g-dir { flex: 1; min-width: 0; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .g-check { color: var(--accent); font-size: 13px; opacity: 0; flex: none; }
 .gitem[aria-selected="true"] .g-check { opacity: 1; }
+
+/* --- new group: trigger, folder browser, swatches --- */
+.newgroup { display: block; width: 100%; margin-top: 8px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px; font-weight: 600; color: var(--accent); background: var(--accent-dim); border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent); }
+.newgroup:active { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.dirbrowser { border: 1px solid var(--hair); border-radius: 12px; background: var(--bg); overflow: hidden; }
+.crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; padding: 9px 11px; border-bottom: 1px solid var(--hair); font-family: var(--mono); font-size: 11.5px; }
+.crumb { color: var(--muted); padding: 2px 4px; border-radius: 6px; white-space: nowrap; }
+.crumb:active { background: var(--surface-2); }
+.crumb.last { color: var(--ink); font-weight: 600; }
+.crumb-sep { color: var(--faint); }
+.grow { flex: 1; }
+.crumb-edit { color: var(--faint); font-size: 11px; padding: 2px 6px; border-radius: 6px; white-space: nowrap; }
+.crumb-edit:active { background: var(--surface-2); }
+.path-input { display: none; flex-basis: 100%; margin-top: 8px; width: 100%; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--accent); color: var(--ink); font-family: var(--mono); font-size: 15px; }
+.crumbs.editing .path-input { display: block; }
+.dirlist { list-style: none; margin: 0; padding: 5px; max-height: 210px; overflow-y: auto; }
+.dir { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 9px 10px; border-radius: 8px; color: var(--ink); font-size: 14px; }
+.dir:active, .dir:hover { background: var(--surface-2); }
+.dir.empty { color: var(--faint); font-size: 12.5px; font-family: var(--mono); justify-content: center; padding: 14px 10px; }
+.f-ico { flex: none; font-size: 14px; opacity: .85; }
+.f-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.f-chev { flex: none; color: var(--faint); font-size: 16px; }
+.swatches { display: flex; gap: 9px; flex-wrap: wrap; }
+.sw { width: 30px; height: 30px; border-radius: 9px; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+.sw[aria-pressed="true"] { border-color: var(--ink); }
 .foot { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px 18px calc(14px + var(--safe-b)); border-top: 1px solid var(--hair); background: var(--surface); color: var(--faint); font-size: 11.5px; display: flex; align-items: center; gap: 8px; font-family: var(--mono); }

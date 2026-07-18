@@ -13,7 +13,7 @@ import crypto from 'crypto';
 import os from 'os';
 import { EventEmitter } from 'events';
 import log from 'electron-log';
-import type { Session } from '../../../shared/types';
+import type { Session, Group } from '../../../shared/types';
 import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as groupsRepo from '../../repositories/groups';
@@ -22,9 +22,37 @@ import { getApiServer } from '../index';
 import { soundManager } from '../../sound-manager';
 import { resolveLaunchProviderId } from '../../providers';
 
-/** Emits 'created' (with the Session) when a session is created remotely, so
- *  the main process can tell the desktop renderer to refresh its list. */
+/** Emits 'created' (Session) / 'groupsChanged' when sessions or groups are
+ *  created remotely, so the main process can refresh the desktop renderer. */
 export const remoteSessionEvents = new EventEmitter();
+
+export interface CreateGroupOptions {
+  name: string;
+  parentId: string | null;
+  workingDir: string;
+  color: string;
+}
+
+/** Create a group/subgroup on behalf of a remote web client. */
+export function createRemoteGroup(opts: CreateGroupOptions): Group {
+  const groups = groupsRepo.getAllGroups();
+  const siblings = groups.filter((g) => (g.parentId || null) === (opts.parentId || null));
+  const group: Group = {
+    id: crypto.randomUUID(),
+    name: opts.name.trim() || 'Group',
+    color: opts.color || '#35c2d1',
+    workingDir: opts.workingDir || '',
+    order: siblings.length,
+    createdAt: new Date(),
+    parentId: opts.parentId || null,
+    collapsed: false,
+    claudeAccountId: null,
+  };
+  groupsRepo.createGroup(group);
+  log.info('[Relay] remote group created', { id: group.id, name: group.name, parentId: group.parentId });
+  remoteSessionEvents.emit('groupsChanged');
+  return group;
+}
 
 export interface CreateSessionOptions {
   groupId: string;

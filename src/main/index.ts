@@ -540,6 +540,10 @@ function createWindow(): void {
     mainWindow?.webContents.send('sessions:refresh');
     getApiServer().broadcastSessionsUpdated();
   });
+  remoteSessionEvents.removeAllListeners('groupsChanged');
+  remoteSessionEvents.on('groupsChanged', () => {
+    mainWindow?.webContents.send('groups:refresh');
+  });
 
   // Vector search event forwarding
   const vsManager = getVectorSearchManager();

@@ -13,13 +13,23 @@
  * `to-client` message).
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import log from 'electron-log';
 import { ptyManager } from '../../pty-manager';
 import { getAllSessions } from '../../repositories/sessions';
 import { getAllGroups } from '../../repositories/groups';
-import { createRemoteSession } from './remote-sessions';
+import { createRemoteSession, createRemoteGroup } from './remote-sessions';
 import { deriveSharedSecret, ensureIdentity, signWithIdentity } from './relay-identity';
 import { deriveSessionKey, sealJson, openJson, buildHandshakeProof, type SealedFrame } from './e2e';
+
+/** Expand a leading `~` to the user's home directory. */
+function expandHome(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
 
 interface ClientSession {
   key: Buffer;
@@ -91,6 +101,10 @@ export class SessionTunnel {
       groupId?: string;
       name?: string;
       provider?: string;
+      path?: string;
+      parentId?: string | null;
+      workingDir?: string;
+      color?: string;
     };
     try {
       inner = openJson(s.key, frame);
@@ -146,6 +160,36 @@ export class SessionTunnel {
         break;
       case 'sessions:list':
         this.sendSessions(clientId);
+        break;
+      case 'dirs:list': {
+        // Browse the machine's folders (for creating a group's working dir).
+        const base = expandHome(typeof inner.path === 'string' && inner.path ? inner.path : os.homedir());
+        try {
+          const entries = fs
+            .readdirSync(base, { withFileTypes: true })
+            .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+            .map((e) => e.name)
+            .sort((a, b) => a.localeCompare(b));
+          this.sealTo(clientId, { type: 'dirs', path: base, entries });
+        } catch {
+          this.sealTo(clientId, { type: 'dirs', path: base, entries: [], error: "can't read this folder" });
+        }
+        break;
+      }
+      case 'group:create':
+        if (typeof inner.name === 'string' && inner.name.trim()) {
+          try {
+            createRemoteGroup({
+              name: inner.name,
+              parentId: typeof inner.parentId === 'string' ? inner.parentId : null,
+              workingDir: typeof inner.workingDir === 'string' ? expandHome(inner.workingDir) : '',
+              color: typeof inner.color === 'string' ? inner.color : '#35c2d1',
+            });
+            this.sendGroups(clientId);
+          } catch (err) {
+            this.sealTo(clientId, { type: 'error', message: err instanceof Error ? err.message : 'could not create group' });
+          }
+        }
         break;
     }
   }

@@ -16,6 +16,7 @@ interface ElectronAPI {
   onPtyExit: (callback: (id: string, exitCode: number) => void) => () => void;
   onStateChange: (callback: (event: { sessionId: string; state: string; event: string; timestamp: number }) => void) => () => void;
   onSessionsRefresh: (callback: () => void) => () => void;
+  onGroupsRefresh: (callback: () => void) => () => void;
 
   // Menu events
   onMenuNewSession: (callback: () => void) => () => void;

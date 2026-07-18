@@ -118,6 +118,7 @@ function renderApp(machines: Machine[]) {
     </section>
     <div class="sheet-scrim" id="fpSheet"></div>
     <div class="sheet-scrim" id="createSheet"></div>
+    <div class="sheet-scrim" id="newGroupSheet"></div>
   </div>`;
 
   $('#theme')!.onclick = toggleTheme;
@@ -166,7 +167,8 @@ function onConnState(s: ConnState, detail?: string) {
 }
 
 function onAgentMessage(m: Inner) {
-  if (m.type === 'groups') { app.groups = (m.groups as RGroup[]) || []; renderSessions(); return; }
+  if (m.type === 'groups') { app.groups = (m.groups as RGroup[]) || []; renderSessions(); if ($('#gtree')) buildCreateTree(); return; }
+  if (m.type === 'dirs') { onDirs?.({ path: String(m.path), entries: (m.entries as string[]) || [] }); return; }
   if (m.type === 'sessions') {
     const list = (m.sessions as RSession[]) || [];
     const j = JSON.stringify(list);
@@ -329,34 +331,31 @@ function openFp() {
 // ---------------------------------------------------------------------------
 // Create session (existing group)
 // ---------------------------------------------------------------------------
-let selGroupId = ''; let selProvider = 'claude';
+let selGroupId = ''; let selProvider = 'claude'; let pendingGroupName = '';
+let onDirs: ((d: { path: string; entries: string[] }) => void) | null = null;
 const PROVIDERS = ['claude', 'codex', 'grok', 'opencode', 'kimi', 'cursor', 'antigravity', 'shell'];
+const GROUP_COLORS = ['#35c2d1', '#f2b23d', '#48c98b', '#c98be0', '#58a6ff', '#f0625d'];
+
 function openCreate() {
   const sheet = $('#createSheet')!;
-  const tops = app.groups.filter((g) => !g.parentId);
   sheet.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="crh">
     <div class="sheet-head"><h3 id="crh">New session</h3><button class="iconbtn" id="crx" aria-label="Close">✕</button></div>
     <div class="fld-label">Group</div>
     <ul class="grouptree" id="gtree" role="listbox" aria-label="Choose a group"></ul>
+    <button class="newgroup" id="newGroupBtn">＋ New group…</button>
     <div class="fld-label">Agent</div>
     <div class="provider-row" id="prov">${PROVIDERS.map((p) => `<button class="pchip" data-p="${p}" aria-pressed="${p === 'claude'}">${p === 'shell' ? 'Shell' : p[0]!.toUpperCase() + p.slice(1)}</button>`).join('')}</div>
     <div class="fld-label">Name <span style="text-transform:none;color:var(--faint)">(optional)</span></div>
     <input class="txt" id="sname" placeholder="session" autocapitalize="off" spellcheck="false" />
-    <button class="btn" id="crGo" style="margin-top:18px" ${tops.length ? '' : 'disabled'}>Start session</button>
-    ${tops.length ? '' : '<div class="banner err">No groups on this machine yet — create one in the desktop app first.</div>'}
+    <button class="btn" id="crGo" style="margin-top:18px">Start session</button>
   </div>`;
   sheet.classList.add('open'); pushLayer(() => sheet.classList.remove('open'));
   sheet.onclick = (e) => { if (e.target === sheet) history.back(); };
   $('#crx')!.onclick = () => history.back();
-
-  // group tree
-  const tree = $('#gtree')!; selGroupId = '';
-  for (const g of tops) {
-    addGroupRow(tree, g, false); if (!selGroupId) selectGroup(tree.lastElementChild!.firstElementChild as HTMLElement, g.id);
-    for (const sub of app.groups.filter((x) => x.parentId === g.id)) addGroupRow(tree, sub, true, g);
-  }
+  selGroupId = ''; buildCreateTree();
   selProvider = 'claude';
   $('#prov')!.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('.pchip'); if (!b) return; selProvider = b.getAttribute('data-p')!; $('#prov')!.querySelectorAll('.pchip').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); });
+  $('#newGroupBtn')!.onclick = openNewGroup;
   $('#crGo')!.onclick = () => {
     if (!selGroupId) return;
     const name = ($<HTMLInputElement>('#sname')!.value || '').trim();
@@ -364,13 +363,95 @@ function openCreate() {
     history.back();
   };
 }
+
+function buildCreateTree() {
+  const tree = $('#gtree'); if (!tree) return;
+  tree.innerHTML = '';
+  for (const g of app.groups.filter((x) => !x.parentId)) {
+    addGroupRow(tree, g, false);
+    for (const sub of app.groups.filter((x) => x.parentId === g.id)) addGroupRow(tree, sub, true, g);
+  }
+  const rows = [...tree.querySelectorAll<HTMLElement>('.gitem')];
+  let pick: HTMLElement | null = null;
+  if (pendingGroupName) { pick = rows.find((r) => app.groups.find((g) => g.id === r.dataset.gid)?.name === pendingGroupName) || null; pendingGroupName = ''; }
+  if (!pick && selGroupId) pick = rows.find((r) => r.dataset.gid === selGroupId) || null;
+  if (!pick) pick = rows[0] || null;
+  if (pick) selectGroup(pick, pick.dataset.gid!); else { selGroupId = ''; const go = $<HTMLButtonElement>('#crGo'); if (go) go.disabled = true; }
+}
 function addGroupRow(tree: HTMLElement, g: RGroup, isSub: boolean, parent?: RGroup) {
   const color = (parent || g).color;
   const b = h('button', { class: 'gitem' + (isSub ? ' sub' : ''), role: 'option', 'aria-selected': 'false' },
     `<span class="g-dot" style="background:${color}"></span><span class="g-name ${isSub ? 'subname' : ''}">${esc(g.name)}</span><span class="g-dir">${esc(g.workingDir || '~')}</span><span class="g-check">✓</span>`);
+  b.dataset.gid = g.id;
   b.addEventListener('click', () => selectGroup(b, g.id));
   const li = document.createElement('li'); li.appendChild(b); tree.appendChild(li);
 }
-function selectGroup(el: HTMLElement, id: string) { selGroupId = id; el.closest('.grouptree')!.querySelectorAll('.gitem').forEach((x) => x.setAttribute('aria-selected', 'false')); el.setAttribute('aria-selected', 'true'); }
+function selectGroup(el: HTMLElement, id: string) { selGroupId = id; el.closest('.grouptree')!.querySelectorAll('.gitem').forEach((x) => x.setAttribute('aria-selected', 'false')); el.setAttribute('aria-selected', 'true'); const go = $<HTMLButtonElement>('#crGo'); if (go) go.disabled = false; }
+
+// --- new group ---
+let ngParent = '__top'; let ngPath = '~'; let ngColor = GROUP_COLORS[0];
+function openNewGroup() {
+  const sel = app.groups.find((x) => x.id === selGroupId);
+  ngParent = sel ? (sel.parentId || sel.id) : '__top';
+  ngColor = GROUP_COLORS[0];
+  const tops = app.groups.filter((g) => !g.parentId);
+  const sheet = $('#newGroupSheet')!;
+  sheet.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ngh">
+    <div class="sheet-head"><h3 id="ngh">New group</h3><button class="iconbtn" id="ngx" aria-label="Close">✕</button></div>
+    <div class="fld-label">Add to</div>
+    <div class="provider-row" id="ngPlace">
+      ${tops.map((g) => `<button class="pchip" data-parent="${g.id}" aria-pressed="${g.id === ngParent}"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${g.color};margin-right:6px;vertical-align:middle"></span>${esc(g.name)}</button>`).join('')}
+      <button class="pchip" data-parent="__top" aria-pressed="${ngParent === '__top'}">＋ New top-level</button>
+    </div>
+    <div class="fld-label">Name</div>
+    <input class="txt" id="ngName" placeholder="e.g. AI Engine" autocapitalize="off" spellcheck="false" />
+    <div class="fld-label">Working folder</div>
+    <div class="dirbrowser"><div class="crumbs" id="ngCrumbs"></div><ul class="dirlist" id="ngList"></ul></div>
+    <div id="ngColorField"><div class="fld-label">Color <span style="text-transform:none;color:var(--faint)">(top-level only)</span></div><div class="swatches" id="ngSw"></div></div>
+    <button class="btn" id="ngGo" style="margin-top:18px">Create group</button>
+  </div>`;
+  sheet.classList.add('open'); pushLayer(() => { sheet.classList.remove('open'); onDirs = null; });
+  sheet.onclick = (e) => { if (e.target === sheet) history.back(); };
+  $('#ngx')!.onclick = () => history.back();
+  const colorField = $('#ngColorField')!;
+  const syncColor = () => { colorField.style.display = ngParent === '__top' ? 'block' : 'none'; };
+  $('#ngPlace')!.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('.pchip'); if (!b) return; ngParent = b.getAttribute('data-parent')!; $('#ngPlace')!.querySelectorAll('.pchip').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); syncColor(); });
+  const sw = $('#ngSw')!;
+  GROUP_COLORS.forEach((c, i) => { const b = h('button', { class: 'sw', 'aria-pressed': String(i === 0), 'aria-label': 'color' }); b.style.background = c; b.onclick = () => { ngColor = c; sw.querySelectorAll('.sw').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); }; sw.appendChild(b); });
+  syncColor();
+  onDirs = renderDirs;
+  browseDir((sel ? (sel.parentId ? app.groups.find((g) => g.id === sel.parentId)?.workingDir : sel.workingDir) : '') || '~');
+  $('#ngGo')!.onclick = () => {
+    const name = ($<HTMLInputElement>('#ngName')!.value || '').trim() || 'Group';
+    pendingGroupName = name;
+    app.conn?.command({ type: 'group:create', name, parentId: ngParent === '__top' ? null : ngParent, workingDir: ngPath, color: ngColor });
+    history.back(); // groups refresh will rebuild the tree and select the new group
+  };
+}
+function browseDir(p: string) { ngPath = p; app.conn?.command({ type: 'dirs:list', path: p }); }
+function renderDirs(d: { path: string; entries: string[] }) {
+  ngPath = d.path;
+  const crumbs = $('#ngCrumbs'); const list = $('#ngList'); if (!crumbs || !list) return;
+  crumbs.innerHTML = '';
+  const parts = d.path === '/' ? [''] : d.path.replace(/\/$/, '').split('/');
+  let acc = '';
+  parts.forEach((seg, i) => {
+    acc = i === 0 ? (seg || '/') : (acc === '/' ? '' : acc) + '/' + seg;
+    const p = acc;
+    const b = h('button', { class: 'crumb' + (i === parts.length - 1 ? ' last' : '') }, esc(seg || '/'));
+    b.onclick = () => browseDir(p);
+    crumbs.appendChild(b);
+    if (i < parts.length - 1) crumbs.appendChild(h('span', { class: 'crumb-sep' }, ' / '));
+  });
+  crumbs.appendChild(h('span', { class: 'grow' }));
+  const edit = h('button', { class: 'crumb-edit', 'aria-label': 'Type a path' }, '✎ path'); crumbs.appendChild(edit);
+  const inp = document.createElement('input'); inp.className = 'path-input'; inp.value = d.path; inp.placeholder = '~/code/newproject'; inp.setAttribute('spellcheck', 'false'); crumbs.appendChild(inp);
+  edit.onclick = () => { crumbs.classList.add('editing'); inp.focus(); inp.select(); };
+  inp.onkeydown = (e) => { if (e.key === 'Enter') { crumbs.classList.remove('editing'); if (inp.value.trim()) browseDir(inp.value.trim()); } else if (e.key === 'Escape') crumbs.classList.remove('editing'); };
+  inp.onblur = () => crumbs.classList.remove('editing');
+  list.innerHTML = '';
+  if (!d.entries.length) list.appendChild(h('li', {}, '<div class="dir empty">No subfolders — use this folder</div>'));
+  for (const name of d.entries) { const b = h('button', { class: 'dir' }, `<span class="f-ico">📁</span><span class="f-name">${esc(name)}</span><span class="f-chev">›</span>`); b.onclick = () => browseDir(d.path.replace(/\/$/, '') + '/' + name); const li = document.createElement('li'); li.appendChild(b); list.appendChild(li); }
+}
 
 boot();

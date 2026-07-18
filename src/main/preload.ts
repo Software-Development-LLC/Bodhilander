@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('sessions:refresh', listener);
     return () => ipcRenderer.removeListener('sessions:refresh', listener);
   },
+  onGroupsRefresh: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('groups:refresh', listener);
+    return () => ipcRenderer.removeListener('groups:refresh', listener);
+  },
 
   // Menu events
   onMenuNewSession: (callback: () => void) => {
