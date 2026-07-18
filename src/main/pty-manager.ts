@@ -622,7 +622,7 @@ export class PtyManager extends EventEmitter {
   /** Current terminal dimensions of a session (for remote viewers to match). */
   getSize(id: string): { cols: number; rows: number } {
     const session = this.sessions.get(id);
-    return { cols: session?.lastCols || 80, rows: session?.lastRows || 24 };
+    return { cols: session?.lastCols ?? 80, rows: session?.lastRows ?? 24 };
   }
 
   /**
@@ -730,7 +730,7 @@ export class PtyManager extends EventEmitter {
     // attached to answer them. Those 4-char remnants accumulated past the
     // "sustained output" threshold and produced phantom idle→working blips.
     const cleanData = data
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // CSI sequences (SGR, mouse, DSR, private modes)
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // NOSONAR(S6324) ESC (0x1B) is required to strip CSI/DSR/SGR/mouse control sequences
       .replace(/\x1b\][^\x07]*\x07/g, '')      // OSC sequences
       .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, '') // DCS, SOS, PM, APC sequences
       .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); // Control chars (keep \n, \r, \t)

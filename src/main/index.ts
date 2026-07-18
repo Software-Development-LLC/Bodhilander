@@ -223,6 +223,42 @@ function updateTrayWithWaitingSessions(): void {
   trayManager.updateWaitingSessions(waitingSessions);
 }
 
+/** Resolve a session's display name and project path for notifications. */
+function resolveSessionMeta(sessionId: string, provided?: string): { name: string; projectPath: string } {
+  const existing = sessionStates.get(sessionId);
+  let name = provided;
+  if (!name && existing?.name && existing.name !== sessionId) name = existing.name;
+  let projectPath = '';
+  try {
+    const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
+    if (session) {
+      if (!name) name = session.name;
+      projectPath = session.workingDir ?? '';
+    }
+  } catch {
+    // DB unavailable — fall back to whatever name we already have.
+  }
+  if (!name) name = 'Session';
+  return { name, projectPath };
+}
+
+/** Fan a state transition out to Teams, mapping app state → notification kind. */
+function sendTeamsForState(
+  sessionId: string,
+  name: string,
+  projectPath: string,
+  state: string,
+  previousState?: string,
+): void {
+  if (state === 'waiting') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'waiting');
+  } else if (state === 'error') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'error');
+  } else if (state === 'idle' && previousState === 'working') {
+    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'complete');
+  }
+}
+
 function handleStateChange(sessionId: string, state: string, sessionName?: string): void {
   // Ignore phantom state changes for a session whose PTY is no longer alive
   // (e.g. a resume-failed / ended session whose leftover agent process keeps
@@ -234,68 +270,27 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
     return;
   }
 
-  // Look up session name from database if not provided
-  let name = sessionName;
-  let projectPath = '';
-  if (!name) {
-    const existing = sessionStates.get(sessionId);
-    if (existing?.name && existing.name !== sessionId) {
-      name = existing.name;
-    } else {
-      // Look up from database
-      try {
-        const sessions = sessionsRepo.getAllSessions();
-        const session = sessions.find(s => s.id === sessionId);
-        name = session?.name || `Session`;
-        projectPath = session?.workingDir || '';
-      } catch {
-        name = 'Session';
-      }
-    }
-  }
-
-  // Get previous state for sound manager
+  const { name, projectPath } = resolveSessionMeta(sessionId, sessionName);
   const previousState = sessionStates.get(sessionId)?.state;
 
   if (state === 'waiting') {
     sessionStates.set(sessionId, { name, state });
-
-    // Show notification
     notificationManager.showWaitingNotification({
       sessionId,
       sessionName: name,
       message: 'Waiting for input',
     });
   } else {
-    // Update state but keep name
+    // Update state but keep the existing name if we have one.
     const existing = sessionStates.get(sessionId);
-    if (existing) {
-      sessionStates.set(sessionId, { ...existing, state });
-    } else {
-      sessionStates.set(sessionId, { name, state });
-    }
+    sessionStates.set(sessionId, existing ? { ...existing, state } : { name, state });
   }
 
   // Play sound notification
   soundManager.handleStateChange(sessionId, state, previousState);
 
   // Teams notifications
-  if (!projectPath) {
-    try {
-      const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
-      projectPath = session?.workingDir || '';
-    } catch {
-      // Ignore - projectPath remains empty
-    }
-  }
-
-  if (state === 'waiting') {
-    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'waiting');
-  } else if (state === 'error') {
-    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'error');
-  } else if (state === 'idle' && previousState === 'working') {
-    notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'complete');
-  }
+  sendTeamsForState(sessionId, name, projectPath, state, previousState);
 
   // Update tray
   updateTrayWithWaitingSessions();

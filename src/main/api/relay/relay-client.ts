@@ -60,7 +60,9 @@ export class RelayClient extends EventEmitter {
 
   /** Origin of the relay, e.g. `https://relay.example.com`. */
   get relayUrl(): string {
-    return getPreference(PREF.url) || DEFAULT_RELAY_URL;
+    const stored = getPreference(PREF.url)?.trim();
+    if (stored) return stored;
+    return DEFAULT_RELAY_URL;
   }
 
   private get wsUrl(): string {
@@ -119,9 +121,7 @@ export class RelayClient extends EventEmitter {
 
   setRelayUrl(url: string): void {
     const trimmed = url.trim().replace(/\/+$/, '');
-    // Validate; throws on garbage.
-    // eslint-disable-next-line no-new
-    new URL(trimmed);
+    if (!URL.canParse(trimmed)) throw new Error('Invalid relay URL');
     setPreference(PREF.url, trimmed);
     this.emitStatus();
     if (this.enabled) this.reconnectNow();
@@ -180,7 +180,8 @@ export class RelayClient extends EventEmitter {
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      throw new Error(`relay rejected link request (${res.status})${detail ? `: ${detail}` : ''}`);
+      const suffix = detail ? `: ${detail}` : '';
+      throw new Error(`relay rejected link request (${res.status})${suffix}`);
     }
     const body = (await res.json()) as { code: string; expiresAt: number };
 
@@ -284,7 +285,6 @@ export class RelayClient extends EventEmitter {
       this.startPing();
       log.info('[Relay] online', { machineId: msg.machineId });
       this.emitStatus();
-      return;
     }
 
     // 'pong' and future M3 frames land here.

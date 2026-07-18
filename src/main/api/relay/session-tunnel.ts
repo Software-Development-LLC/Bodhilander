@@ -41,8 +41,24 @@ interface ClientSession {
   onExit: (e: { id: string; exitCode: number }) => void;
 }
 
+/** Decrypted command from a web client (union of every message's fields). */
+interface ClientFrame {
+  type?: string;
+  sessionId?: string;
+  data?: string;
+  cols?: number;
+  rows?: number;
+  groupId?: string;
+  name?: string;
+  provider?: string;
+  path?: string;
+  parentId?: string | null;
+  workingDir?: string;
+  color?: string;
+}
+
 export class SessionTunnel {
-  private sessions = new Map<string, ClientSession>();
+  private readonly sessions = new Map<string, ClientSession>();
 
   /** `route` sends an outbound payload to a client id via the relay. */
   constructor(private readonly route: (clientId: string, payload: unknown) => void) {}
@@ -60,11 +76,11 @@ export class SessionTunnel {
 
       const onData = (e: { id: string; data: string }) => {
         const s = this.sessions.get(clientId);
-        if (s && s.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:output', sessionId: e.id, data: e.data });
+        if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:output', sessionId: e.id, data: e.data });
       };
       const onExit = (e: { id: string; exitCode: number }) => {
         const s = this.sessions.get(clientId);
-        if (s && s.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:exit', sessionId: e.id, exitCode: e.exitCode });
+        if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:exit', sessionId: e.id, exitCode: e.exitCode });
       };
       ptyManager.on('data', onData);
       ptyManager.on('exit', onExit);
@@ -92,20 +108,7 @@ export class SessionTunnel {
     const frame = payload as SealedFrame;
     if (typeof frame?.n !== 'number' || typeof frame?.ct !== 'string' || frame.n <= s.recvCounter) return;
 
-    let inner: {
-      type?: string;
-      sessionId?: string;
-      data?: string;
-      cols?: number;
-      rows?: number;
-      groupId?: string;
-      name?: string;
-      provider?: string;
-      path?: string;
-      parentId?: string | null;
-      workingDir?: string;
-      color?: string;
-    };
+    let inner: ClientFrame;
     try {
       inner = openJson(s.key, frame);
     } catch {
@@ -113,38 +116,21 @@ export class SessionTunnel {
       return;
     }
     s.recvCounter = frame.n;
+    this.dispatch(clientId, s, inner);
+  }
 
+  /** Route one decrypted client command. Each case stays trivial; real work
+   *  lives in a dedicated handler so this method's complexity stays low. */
+  private dispatch(clientId: string, s: ClientSession, inner: ClientFrame): void {
     switch (inner.type) {
       case 'groups:list':
         this.sendGroups(clientId);
         break;
-      case 'session:create': {
-        if (typeof inner.groupId !== 'string' || typeof inner.name !== 'string') break;
-        const provider = typeof inner.provider === 'string' ? inner.provider : 'claude';
-        const isShell = provider === 'shell';
-        try {
-          createRemoteSession({
-            groupId: inner.groupId,
-            name: inner.name.trim() || 'session',
-            provider: isShell ? 'claude' : provider,
-            launchClaude: !isShell,
-          });
-          this.sendSessions(clientId); // refresh the client's list with the new session
-        } catch (err) {
-          this.sealTo(clientId, { type: 'error', message: err instanceof Error ? err.message : 'could not create session' });
-        }
+      case 'session:create':
+        this.handleSessionCreate(clientId, inner);
         break;
-      }
       case 'terminal:subscribe':
-        if (typeof inner.sessionId === 'string') {
-          s.subs.add(inner.sessionId);
-          // Tell the viewer the PTY's real size so it matches (renders TUIs
-          // correctly) instead of resizing the shared terminal.
-          const size = ptyManager.getSize(inner.sessionId);
-          this.sealTo(clientId, { type: 'terminal:size', sessionId: inner.sessionId, cols: size.cols, rows: size.rows });
-          // Replay scrollback so the browser shows history, then live output streams.
-          this.sealTo(clientId, { type: 'terminal:output', sessionId: inner.sessionId, data: ptyManager.getBuffer(inner.sessionId) });
-        }
+        this.handleSubscribe(clientId, s, inner);
         break;
       case 'terminal:unsubscribe':
         if (typeof inner.sessionId === 'string') s.subs.delete(inner.sessionId);
@@ -156,41 +142,75 @@ export class SessionTunnel {
       case 'terminal:resize':
         // Intentionally ignored — the desktop owns the terminal size, so a
         // mobile viewer never reflows the shared PTY. Viewers match the size
-        // reported by terminal:size above.
+        // reported by terminal:size.
         break;
       case 'sessions:list':
         this.sendSessions(clientId);
         break;
-      case 'dirs:list': {
-        // Browse the machine's folders (for creating a group's working dir).
-        const base = expandHome(typeof inner.path === 'string' && inner.path ? inner.path : os.homedir());
-        try {
-          const entries = fs
-            .readdirSync(base, { withFileTypes: true })
-            .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-            .map((e) => e.name)
-            .sort((a, b) => a.localeCompare(b));
-          this.sealTo(clientId, { type: 'dirs', path: base, entries });
-        } catch {
-          this.sealTo(clientId, { type: 'dirs', path: base, entries: [], error: "can't read this folder" });
-        }
+      case 'dirs:list':
+        this.handleDirsList(clientId, inner);
         break;
-      }
       case 'group:create':
-        if (typeof inner.name === 'string' && inner.name.trim()) {
-          try {
-            createRemoteGroup({
-              name: inner.name,
-              parentId: typeof inner.parentId === 'string' ? inner.parentId : null,
-              workingDir: typeof inner.workingDir === 'string' ? expandHome(inner.workingDir) : '',
-              color: typeof inner.color === 'string' ? inner.color : '#35c2d1',
-            });
-            this.sendGroups(clientId);
-          } catch (err) {
-            this.sealTo(clientId, { type: 'error', message: err instanceof Error ? err.message : 'could not create group' });
-          }
-        }
+        this.handleGroupCreate(clientId, inner);
         break;
+    }
+  }
+
+  private handleSessionCreate(clientId: string, inner: ClientFrame): void {
+    if (typeof inner.groupId !== 'string' || typeof inner.name !== 'string') return;
+    const provider = typeof inner.provider === 'string' ? inner.provider : 'claude';
+    const isShell = provider === 'shell';
+    try {
+      createRemoteSession({
+        groupId: inner.groupId,
+        name: inner.name.trim() || 'session',
+        provider: isShell ? 'claude' : provider,
+        launchClaude: !isShell,
+      });
+      this.sendSessions(clientId); // refresh the client's list with the new session
+    } catch (err) {
+      this.sealTo(clientId, { type: 'error', message: err instanceof Error ? err.message : 'could not create session' });
+    }
+  }
+
+  private handleSubscribe(clientId: string, s: ClientSession, inner: ClientFrame): void {
+    if (typeof inner.sessionId !== 'string') return;
+    s.subs.add(inner.sessionId);
+    // Tell the viewer the PTY's real size so it matches (renders TUIs correctly)
+    // instead of resizing the shared terminal.
+    const size = ptyManager.getSize(inner.sessionId);
+    this.sealTo(clientId, { type: 'terminal:size', sessionId: inner.sessionId, cols: size.cols, rows: size.rows });
+    // Replay scrollback so the browser shows history, then live output streams.
+    this.sealTo(clientId, { type: 'terminal:output', sessionId: inner.sessionId, data: ptyManager.getBuffer(inner.sessionId) });
+  }
+
+  private handleDirsList(clientId: string, inner: ClientFrame): void {
+    // Browse the machine's folders (for creating a group's working dir).
+    const base = expandHome(typeof inner.path === 'string' && inner.path ? inner.path : os.homedir());
+    try {
+      const entries = fs
+        .readdirSync(base, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map((e) => e.name)
+        .sort((a, b) => a.localeCompare(b));
+      this.sealTo(clientId, { type: 'dirs', path: base, entries });
+    } catch {
+      this.sealTo(clientId, { type: 'dirs', path: base, entries: [], error: "can't read this folder" });
+    }
+  }
+
+  private handleGroupCreate(clientId: string, inner: ClientFrame): void {
+    if (typeof inner.name !== 'string' || !inner.name.trim()) return;
+    try {
+      createRemoteGroup({
+        name: inner.name,
+        parentId: typeof inner.parentId === 'string' ? inner.parentId : null,
+        workingDir: typeof inner.workingDir === 'string' ? expandHome(inner.workingDir) : '',
+        color: typeof inner.color === 'string' ? inner.color : '#35c2d1',
+      });
+      this.sendGroups(clientId);
+    } catch (err) {
+      this.sealTo(clientId, { type: 'error', message: err instanceof Error ? err.message : 'could not create group' });
     }
   }
 

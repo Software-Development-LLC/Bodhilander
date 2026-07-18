@@ -36,7 +36,7 @@ export interface CreateGroupOptions {
 /** Create a group/subgroup on behalf of a remote web client. */
 export function createRemoteGroup(opts: CreateGroupOptions): Group {
   const groups = groupsRepo.getAllGroups();
-  const siblings = groups.filter((g) => (g.parentId || null) === (opts.parentId || null));
+  const siblings = groups.filter((g) => (g.parentId ?? null) === (opts.parentId ?? null));
   const group: Group = {
     id: crypto.randomUUID(),
     name: opts.name.trim() || 'Group',
@@ -44,7 +44,7 @@ export function createRemoteGroup(opts: CreateGroupOptions): Group {
     workingDir: opts.workingDir || '',
     order: siblings.length,
     createdAt: new Date(),
-    parentId: opts.parentId || null,
+    parentId: opts.parentId ?? null,
     collapsed: false,
     claudeAccountId: null,
   };
@@ -67,8 +67,14 @@ export interface CreateSessionOptions {
 function resolveCwd(groupId: string): string {
   const groups = groupsRepo.getAllGroups();
   const group = groups.find((g) => g.id === groupId);
-  const parentDir = group?.parentId ? groups.find((g) => g.id === group.parentId)?.workingDir : '';
-  return group?.workingDir || parentDir || os.homedir();
+  // An empty workingDir is the "inherit" sentinel, so fall through on falsy
+  // (not just nullish) — own dir, then parent's, then home.
+  if (group?.workingDir) return group.workingDir;
+  if (group?.parentId) {
+    const parent = groups.find((g) => g.id === group.parentId);
+    if (parent?.workingDir) return parent.workingDir;
+  }
+  return os.homedir();
 }
 
 export function createRemoteSession(opts: CreateSessionOptions): Session {

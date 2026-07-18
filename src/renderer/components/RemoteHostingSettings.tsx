@@ -7,6 +7,13 @@ import type { RelayStatus } from '../../shared/types';
  * this machine to their account by generating a code they claim in the relay's
  * web UI. Live connection status arrives via the `relay:status` push channel.
  */
+function relayConnLabel(status: RelayStatus): string {
+  if (!status.enabled) return 'Off';
+  if (status.connected) return 'Online';
+  if (status.linked) return 'Connecting…';
+  return 'Waiting to be linked';
+}
+
 export function RemoteHostingSettings() {
   const [status, setStatus] = useState<RelayStatus | null>(null);
   const [urlInput, setUrlInput] = useState('');
@@ -49,13 +56,8 @@ export function RemoteHostingSettings() {
   }
 
   const connState = status.connected ? 'running' : 'stopped';
-  const connLabel = !status.enabled
-    ? 'Off'
-    : status.connected
-      ? 'Online'
-      : status.linked
-        ? 'Connecting…'
-        : 'Waiting to be linked';
+  const connLabel = relayConnLabel(status);
+  const fingerprint = status.fingerprint;
 
   return (
     <div className="settings-section">
@@ -74,7 +76,7 @@ export function RemoteHostingSettings() {
               disabled={busy}
               onChange={() => run(() => (status.enabled ? window.electronAPI.relayDisable() : window.electronAPI.relayEnable()))}
             />
-            Enable remote hosting
+            <span>Enable remote hosting</span>
           </label>
           <span className={`api-status ${connState}`}>{connLabel}</span>
         </div>
@@ -87,12 +89,12 @@ export function RemoteHostingSettings() {
               disabled={busy}
               onChange={(e) => run(() => window.electronAPI.relaySetKeepAwake(e.target.checked))}
             />
-            Keep this machine awake while remote hosting is on
+            <span>Keep this machine awake while remote hosting is on</span>
           </label>
         </div>
         <p className="settings-hint">
-          Prevents the machine from sleeping so it stays reachable (the display can still sleep). On a MacBook, a
-          <em> closed lid on battery</em> will still sleep — keep it plugged in to stay reachable.
+          Prevents the machine from sleeping so it stays reachable (the display can still sleep). On a MacBook, a{' '}
+          <em>closed lid on battery</em> will still sleep — keep it plugged in to stay reachable.
         </p>
       </div>
 
@@ -109,7 +111,7 @@ export function RemoteHostingSettings() {
           />
           <button
             className="btn btn-secondary btn-small"
-            disabled={busy || urlInput.trim() === status.relayUrl}
+            disabled={[busy, urlInput.trim() === status.relayUrl].some(Boolean)}
             onClick={() => run(() => window.electronAPI.relaySetUrl(urlInput))}
           >
             Save
@@ -140,7 +142,7 @@ export function RemoteHostingSettings() {
           />
           <button
             className="btn btn-primary btn-small"
-            disabled={busy || machineName.trim().length === 0}
+            disabled={[busy, machineName.trim().length === 0].some(Boolean)}
             onClick={() => run(async () => {
               const result = await window.electronAPI.relayGenerateLinkCode(machineName);
               setLinkCode(result);
@@ -161,7 +163,7 @@ export function RemoteHostingSettings() {
         )}
       </div>
 
-      {status.fingerprint && (
+      {fingerprint && (
         <div className="settings-group">
           <h4>Machine fingerprint</h4>
           <p className="settings-hint">
@@ -169,8 +171,8 @@ export function RemoteHostingSettings() {
             not an impostor.
           </p>
           <div className="settings-row">
-            <code style={{ userSelect: 'all' }}>{status.fingerprint}</code>
-            <button className="btn btn-secondary btn-small" onClick={() => copy('fp', status.fingerprint!)}>
+            <code style={{ userSelect: 'all' }}>{fingerprint}</code>
+            <button className="btn btn-secondary btn-small" onClick={() => copy('fp', fingerprint)}>
               {copied === 'fp' ? 'Copied' : 'Copy'}
             </button>
           </div>
