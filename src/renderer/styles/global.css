@@ -1115,37 +1115,6 @@ body {
   color: #ef4444;
 }
 
-/* Tailscale Funnel guidance panel */
-.tailscale-steps {
-  margin: 8px 0 12px;
-  padding-left: 20px;
-  color: #d4d4d4;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.tailscale-steps li {
-  margin-bottom: 10px;
-}
-
-.tailscale-cmd-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.tailscale-cmd {
-  flex: 1;
-  font-family: 'Consolas', 'Monaco', monospace;
-  background: rgba(0, 0, 0, 0.3);
-  padding: 6px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  user-select: all;
-  color: #e4e4e4;
-}
-
 /* Button styles */
 .btn {
   padding: 8px 16px;

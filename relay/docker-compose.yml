@@ -1,0 +1,30 @@
+# Bodhilander relay — container deployment.
+#
+#   docker compose up --build -d     # relay on http://localhost:${PORT:-8080}
+#
+# TLS is intentionally NOT handled here. Terminate TLS at whatever already
+# fronts the host (cloud load balancer, existing nginx/Cloudflare, etc.) and
+# proxy to this container's published port. When behind such a proxy, set
+# TRUST_PROXY=true in .env.
+#
+# Configuration comes from an optional .env next to this file (see .env.example).
+# The image runs with NODE_ENV=production, so SESSION_SECRET must be set.
+
+services:
+  relay:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # The container always listens on 8080; PORT in .env only controls the
+      # host-published port above.
+      PORT: "8080"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - relay-data:/data
+    restart: unless-stopped
+
+volumes:
+  relay-data:

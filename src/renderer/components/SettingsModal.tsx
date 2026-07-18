@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
+import { RemoteHostingSettings } from './RemoteHostingSettings';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -8,7 +9,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'providers' | 'mobile' | 'updates';
+  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'providers' | 'mobile' | 'remoteHosting' | 'updates';
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const navClass = (tab: SettingsTab) =>
     `settings-nav-item ${activeTab === tab ? 'active' : ''}`;
@@ -23,9 +24,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [pairedDevices, setPairedDevices] = useState<PairedDevice[]>([]);
   const [pairingCode, setPairingCode] = useState<PairingCode | null>(null);
   const [port, setPort] = useState(8443);
-  const [enableMdns, setEnableMdns] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
 
   // Sound settings state
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -161,7 +160,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const handleStartServer = useCallback(async () => {
     setLoading(true);
     try {
-      await window.electronAPI.apiStart({ port, enableMdns });
+      await window.electronAPI.apiStart({ port });
       const status = await window.electronAPI.apiGetStatus();
       setApiStatus(status);
     } catch (err) {
@@ -169,7 +168,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       setError('Failed to start API server.');
     }
     setLoading(false);
-  }, [port, enableMdns]);
+  }, [port]);
 
   const handleStopServer = useCallback(async () => {
     setLoading(true);
@@ -218,16 +217,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     }
   }, []);
 
-  const handleCopyCommand = useCallback(async (cmd: string) => {
-    try {
-      await navigator.clipboard.writeText(cmd);
-      setCopiedCommand(cmd);
-      setTimeout(() => setCopiedCommand(prev => (prev === cmd ? null : prev)), 1500);
-    } catch (err) {
-      console.error('Failed to copy command:', err);
-      setError('Failed to copy to clipboard.');
-    }
-  }, []);
 
   const handleUnpairDevice = useCallback(async (deviceId: string) => {
     try {
@@ -412,6 +401,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               onClick={() => setActiveTab('mobile')}
             >
               Mobile App
+            </button>
+            <button
+              className={navClass('remoteHosting')}
+              onClick={() => setActiveTab('remoteHosting')}
+            >
+              Remote Hosting
             </button>
             <button
               className={navClass('sound')}
@@ -769,6 +764,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
             {activeTab === 'providers' && <ProviderSettings />}
 
+            {activeTab === 'remoteHosting' && <RemoteHostingSettings />}
+
             {activeTab === 'mobile' && (
               <div className="settings-section">
                 <h3>Mobile Companion App</h3>
@@ -798,16 +795,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                           min={1024}
                           max={65535}
                         />
-                      </div>
-                      <div className="settings-row">
-                        <label htmlFor="api-mdns">Network Discovery:</label>
-                        <input
-                          id="api-mdns"
-                          type="checkbox"
-                          checked={enableMdns}
-                          onChange={e => setEnableMdns(e.target.checked)}
-                        />
-                        <span className="settings-hint">Allow mobile app to find this computer automatically</span>
                       </div>
                     </>
                   )}
@@ -917,65 +904,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   )}
                 </div>
 
-                <div className="settings-group">
-                  <h4>Remote Access via Tailscale Funnel</h4>
-                  <p className="settings-description">
-                    Bodhilander has no built-in remote-access service. To reach the
-                    desktop from outside your LAN, expose the local API port through
-                    Tailscale Funnel — free for personal use, no Bodhilander-hosted
-                    infrastructure required.
-                  </p>
-
-                  <ol className="tailscale-steps">
-                    <li>
-                      Install Tailscale and sign in:
-                      <div className="tailscale-cmd-row">
-                        <code className="tailscale-cmd">tailscale up</code>
-                        <button
-                          className="btn btn-secondary btn-small"
-                          onClick={() => handleCopyCommand('tailscale up')}
-                        >
-                          {copiedCommand === 'tailscale up' ? 'Copied' : 'Copy'}
-                        </button>
-                      </div>
-                    </li>
-                    <li>
-                      Expose port 8443 to the public internet via Tailscale's edge:
-                      <div className="tailscale-cmd-row">
-                        <code className="tailscale-cmd">tailscale funnel 8443</code>
-                        <button
-                          className="btn btn-secondary btn-small"
-                          onClick={() => handleCopyCommand('tailscale funnel 8443')}
-                        >
-                          {copiedCommand === 'tailscale funnel 8443' ? 'Copied' : 'Copy'}
-                        </button>
-                      </div>
-                    </li>
-                    <li>
-                      Pair your mobile device using the Funnel URL Tailscale prints
-                      (looks like <code>https://&lt;machine&gt;.&lt;tailnet&gt;.ts.net</code>).
-                    </li>
-                  </ol>
-
-                  <p className="settings-hint">
-                    Tailscale Funnel only accepts ports 443, 8443, and 10000 — keep
-                    the API server on 8443 (the default) or it won't work.
-                  </p>
-
-                  <div className="settings-actions">
-                    <button
-                      className="btn btn-secondary"
-                      onClick={() => window.electronAPI.openExternal('https://tailscale.com/kb/1223/funnel')}
-                    >
-                      Open Tailscale Funnel docs
-                    </button>
-                  </div>
-
-                  <p className="settings-hint" style={{ marginTop: '0.75rem' }}>
-                    Prefer Cloudflare Tunnel or ngrok? Either also works — point the
-                    tunnel at <code>localhost:8443</code>.
-                  </p>
-                </div>
+                <p className="settings-hint">
+                  Looking for access from outside your network? See{' '}
+                  <strong>Settings → Remote Hosting</strong>.
+                </p>
               </div>
             )}
 

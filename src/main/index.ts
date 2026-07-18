@@ -31,6 +31,8 @@ import { teamsNotifier } from './teams/teams-notifier';
 import { registerMcpServer, registerHooks } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
+import { getRelayClient } from './api/relay';
+import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
@@ -221,62 +223,32 @@ function updateTrayWithWaitingSessions(): void {
   trayManager.updateWaitingSessions(waitingSessions);
 }
 
-function handleStateChange(sessionId: string, state: string, sessionName?: string): void {
-  // Look up session name from database if not provided
-  let name = sessionName;
+/** Resolve a session's display name and project path for notifications. */
+function resolveSessionMeta(sessionId: string, provided?: string): { name: string; projectPath: string } {
+  const existing = sessionStates.get(sessionId);
+  let name = provided;
+  if (!name && existing?.name && existing.name !== sessionId) name = existing.name;
   let projectPath = '';
-  if (!name) {
-    const existing = sessionStates.get(sessionId);
-    if (existing?.name && existing.name !== sessionId) {
-      name = existing.name;
-    } else {
-      // Look up from database
-      try {
-        const sessions = sessionsRepo.getAllSessions();
-        const session = sessions.find(s => s.id === sessionId);
-        name = session?.name || `Session`;
-        projectPath = session?.workingDir || '';
-      } catch {
-        name = 'Session';
-      }
+  try {
+    const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
+    if (session) {
+      if (!name && session.name) name = session.name;
+      projectPath = session.workingDir ?? '';
     }
+  } catch {
+    // DB unavailable — fall back to whatever name we already have.
   }
+  return { name: name?.length ? name : 'Session', projectPath };
+}
 
-  // Get previous state for sound manager
-  const previousState = sessionStates.get(sessionId)?.state;
-
-  if (state === 'waiting') {
-    sessionStates.set(sessionId, { name, state });
-
-    // Show notification
-    notificationManager.showWaitingNotification({
-      sessionId,
-      sessionName: name,
-      message: 'Waiting for input',
-    });
-  } else {
-    // Update state but keep name
-    const existing = sessionStates.get(sessionId);
-    if (existing) {
-      sessionStates.set(sessionId, { ...existing, state });
-    } else {
-      sessionStates.set(sessionId, { name, state });
-    }
-  }
-
-  // Play sound notification
-  soundManager.handleStateChange(sessionId, state, previousState);
-
-  // Teams notifications
-  if (!projectPath) {
-    try {
-      const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
-      projectPath = session?.workingDir || '';
-    } catch {
-      // Ignore - projectPath remains empty
-    }
-  }
-
+/** Fan a state transition out to Teams, mapping app state → notification kind. */
+function sendTeamsForState(
+  sessionId: string,
+  name: string,
+  projectPath: string,
+  state: string,
+  previousState?: string,
+): void {
   if (state === 'waiting') {
     notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'waiting');
   } else if (state === 'error') {
@@ -284,6 +256,40 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
   } else if (state === 'idle' && previousState === 'working') {
     notificationManager.sendTeamsNotification(sessionId, name, projectPath, 'complete');
   }
+}
+
+function handleStateChange(sessionId: string, state: string, sessionName?: string): void {
+  // Ignore phantom state changes for a session whose PTY is no longer alive
+  // (e.g. a resume-failed / ended session whose leftover agent process keeps
+  // pinging the state socket). This prevents dead sessions from flapping
+  // idle<->working every few seconds — spamming state events and firing the
+  // notification sound. Only the terminal 'stopped' transition is allowed
+  // through so a session can still finalize cleanly.
+  if (state !== 'stopped' && !ptyManager.getSession(sessionId)) {
+    return;
+  }
+
+  const { name, projectPath } = resolveSessionMeta(sessionId, sessionName);
+  const previousState = sessionStates.get(sessionId)?.state;
+
+  if (state === 'waiting') {
+    sessionStates.set(sessionId, { name, state });
+    notificationManager.showWaitingNotification({
+      sessionId,
+      sessionName: name,
+      message: 'Waiting for input',
+    });
+  } else {
+    // Update state but keep the existing name if we have one.
+    const existing = sessionStates.get(sessionId);
+    sessionStates.set(sessionId, existing ? { ...existing, state } : { name, state });
+  }
+
+  // Play sound notification
+  soundManager.handleStateChange(sessionId, state, previousState);
+
+  // Teams notifications
+  sendTeamsForState(sessionId, name, projectPath, state, previousState);
 
   // Update tray
   updateTrayWithWaitingSessions();
@@ -507,7 +513,31 @@ function createWindow(): void {
     }).catch((err) => {
       log.error('[Main] Failed to auto-start API server:', err);
     });
+
+    // Resume remote-hosting relay connection if the user enabled it.
+    try {
+      getRelayClient().startIfEnabled();
+    } catch (err) {
+      log.error('[Main] Failed to start relay client:', err);
+    }
   }, 1500); // Defer 1.5s to prioritize UI rendering
+
+  // Relay status forwarding
+  getRelayClient().on('status', (status) => {
+    mainWindow?.webContents.send('relay:status', status);
+  });
+
+  // A session created remotely (relay / mobile) → tell the renderer to refresh
+  // its list so the new session appears without a manual reload.
+  remoteSessionEvents.removeAllListeners('created');
+  remoteSessionEvents.on('created', () => {
+    mainWindow?.webContents.send('sessions:refresh');
+    getApiServer().broadcastSessionsUpdated();
+  });
+  remoteSessionEvents.removeAllListeners('groupsChanged');
+  remoteSessionEvents.on('groupsChanged', () => {
+    mainWindow?.webContents.send('groups:refresh');
+  });
 
   // Vector search event forwarding
   const vsManager = getVectorSearchManager();
@@ -1133,6 +1163,36 @@ safeHandle('api:hasPairingCode', () => {
 });
 
 // ============================================================================
+// Remote Hosting (Relay) IPC Handlers
+// ============================================================================
+
+safeHandle('relay:getStatus', () => getRelayClient().getStatus());
+
+safeHandle('relay:enable', () => {
+  getRelayClient().enable();
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:disable', () => {
+  getRelayClient().disable();
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:setUrl', (url: string) => {
+  getRelayClient().setRelayUrl(url);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:generateLinkCode', async (machineName: string) => {
+  return getRelayClient().generateLinkCode(machineName);
+});
+
+safeHandle('relay:setKeepAwake', (on: boolean) => {
+  getRelayClient().setKeepAwake(on);
+  return getRelayClient().getStatus();
+});
+
+// ============================================================================
 // Vector Search IPC Handlers
 // ============================================================================
 
@@ -1411,6 +1471,11 @@ app.on('before-quit', (event) => {
     disposeVectorSearchManager();
     trayManager.destroy();
     stateMonitor?.stop();
+    try {
+      getRelayClient().stop();
+    } catch (e) {
+      log.error('Error stopping relay client on quit:', e);
+    }
     closeDatabase();
 
     cleanupComplete = true;

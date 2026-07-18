@@ -2,8 +2,8 @@
  * API Server Module
  *
  * Exposes Bodhilander functionality over HTTP/WebSocket for mobile companion app access.
- * LAN-direct only — mobile devices reach the desktop on the same network or via a
- * user-managed tunnel (Tailscale Funnel recommended).
+ * LAN-direct only — mobile devices reach the desktop on the same network. For access
+ * from outside the LAN, see the Remote Hosting relay (src/main/api/relay).
  */
 
 import { EventEmitter } from 'events';
@@ -12,14 +12,12 @@ import { networkInterfaces } from 'os';
 import log from 'electron-log';
 import { createHttpServer } from './http-server';
 import { createWsServer, WsServer } from './ws-server';
-import { MdnsAdvertiser } from './discovery/mdns-advertiser';
 import { PairingManager } from './pairing/pairing-manager';
 import type { ChatEvent } from './chat-parser';
 
 export interface ApiServerConfig {
   port: number;
   bindAddress: string;
-  enableMdns: boolean;
 }
 
 export interface ApiServerStatus {
@@ -36,13 +34,11 @@ export interface ApiServerStatus {
 const DEFAULT_CONFIG: ApiServerConfig = {
   port: 8443,
   bindAddress: '0.0.0.0',
-  enableMdns: true,
 };
 
 class ApiServer extends EventEmitter {
   private httpServer: HttpServer | null = null;
   private wsServer: WsServer | null = null;
-  private mdnsAdvertiser: MdnsAdvertiser | null = null;
   private config: ApiServerConfig;
   private _isRunning = false;
   private _port: number | null = null;
@@ -99,12 +95,6 @@ class ApiServer extends EventEmitter {
       // Create WebSocket server attached to HTTP server
       this.wsServer = createWsServer(this.httpServer, this.pairingManager);
 
-      // Start mDNS advertisement
-      if (this.config.enableMdns) {
-        this.mdnsAdvertiser = new MdnsAdvertiser();
-        await this.mdnsAdvertiser.advertise(port);
-      }
-
       this._isRunning = true;
       const addresses = this.getLocalAddresses();
 
@@ -135,12 +125,6 @@ class ApiServer extends EventEmitter {
   }
 
   private async cleanup(): Promise<void> {
-    // Stop mDNS advertisement
-    if (this.mdnsAdvertiser) {
-      await this.mdnsAdvertiser.stop();
-      this.mdnsAdvertiser = null;
-    }
-
     // Close WebSocket server
     if (this.wsServer) {
       this.wsServer.close();
