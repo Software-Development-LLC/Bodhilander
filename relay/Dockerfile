@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
-# Single-stage Bun image. Bun runs the TypeScript directly (no build step) and
-# ships a built-in SQLite (`bun:sqlite`), so there is no native module to
-# compile and no toolchain to install.
+# Single-stage Bun image. Bun runs the server TypeScript directly (no build
+# step) and ships a built-in SQLite (`bun:sqlite`); the web client is bundled
+# from web/ into web/dist during the build.
 
 FROM oven/bun:1-alpine AS runtime
 ENV NODE_ENV=production \
@@ -13,11 +13,13 @@ WORKDIR /app
 RUN mkdir -p /data && chown bun:bun /data
 
 # Install production deps against the committed lockfile for reproducibility.
-# (M1 has no runtime deps, but this keeps the layer correct as they're added.)
 COPY --chown=bun:bun package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 COPY --chown=bun:bun tsconfig.json ./
+# Bundle the web client (xterm.js + the SPA) into web/dist.
+COPY --chown=bun:bun web ./web
+RUN bun run build:web
 COPY --chown=bun:bun src ./src
 
 USER bun
