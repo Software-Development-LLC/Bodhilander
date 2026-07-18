@@ -55,6 +55,7 @@ export interface Repositories {
   claimLinkCode(code: string, userId: string): ClaimResult;
 
   listMachines(userId: string): Machine[];
+  getMachine(id: string): Machine | null;
   findMachineByEd25519(ed25519: Uint8Array): Machine | null;
   touchMachine(id: string): void;
 }
@@ -189,6 +190,10 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
       return db
         .query('SELECT * FROM machines WHERE user_id = ? ORDER BY created_at DESC')
         .all(userId) as Machine[];
+    },
+
+    getMachine(id) {
+      return (db.query('SELECT * FROM machines WHERE id = ?').get(id) as Machine | null) ?? null;
     },
 
     findMachineByEd25519(ed25519) {

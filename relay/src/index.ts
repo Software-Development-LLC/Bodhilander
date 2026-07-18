@@ -3,7 +3,8 @@ import { openDb } from './db';
 import { createRouter } from './http';
 import { createLogger } from './logger';
 import { createRepositories } from './repositories';
-import { createAgentGateway, newAgentSocketData } from './ws';
+import { createGateway, newAgentSocketData, newClientSocketData } from './ws';
+import { parseCookies, SESSION_COOKIE } from './auth/cookies';
 
 function main(): void {
   const { config, warnings } = loadConfig();
@@ -17,21 +18,29 @@ function main(): void {
 
   const repos = createRepositories(db);
   const route = createRouter({ config, logger, repos });
-  const agentGateway = createAgentGateway({ repos, logger });
+  const gateway = createGateway({ repos, logger });
 
   const server = Bun.serve({
     port: config.port,
     fetch(req, srv) {
       const url = new URL(req.url);
-      // Agents connect here and authenticate with an Ed25519-signed nonce (see
-      // src/ws.ts). Every non-/ws path is served by the HTTP router.
+      // Agents connect at /ws and authenticate with an Ed25519-signed nonce.
       if (url.pathname === '/ws') {
         if (srv.upgrade(req, { data: newAgentSocketData() })) return undefined;
         return new Response('expected a websocket upgrade', { status: 426 });
       }
+      // Web clients connect at /ws/client and are authenticated by session
+      // cookie at upgrade time — no cookie, no socket.
+      if (url.pathname === '/ws/client') {
+        const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
+        const user = token ? repos.getUserBySessionToken(token) : null;
+        if (!user) return new Response('unauthorized', { status: 401 });
+        if (srv.upgrade(req, { data: newClientSocketData(user.id) })) return undefined;
+        return new Response('expected a websocket upgrade', { status: 426 });
+      }
       return route(req);
     },
-    websocket: agentGateway,
+    websocket: gateway,
   });
 
   logger.info('relay listening', {
