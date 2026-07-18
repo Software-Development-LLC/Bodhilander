@@ -232,14 +232,13 @@ function resolveSessionMeta(sessionId: string, provided?: string): { name: strin
   try {
     const session = sessionsRepo.getAllSessions().find(s => s.id === sessionId);
     if (session) {
-      if (!name) name = session.name;
+      if (!name && session.name) name = session.name;
       projectPath = session.workingDir ?? '';
     }
   } catch {
     // DB unavailable — fall back to whatever name we already have.
   }
-  if (!name) name = 'Session';
-  return { name, projectPath };
+  return { name: name?.length ? name : 'Session', projectPath };
 }
 
 /** Fan a state transition out to Teams, mapping app state → notification kind. */
