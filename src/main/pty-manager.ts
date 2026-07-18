@@ -619,6 +619,12 @@ export class PtyManager extends EventEmitter {
     return this.sessions.get(id);
   }
 
+  /** Current terminal dimensions of a session (for remote viewers to match). */
+  getSize(id: string): { cols: number; rows: number } {
+    const session = this.sessions.get(id);
+    return { cols: session?.lastCols ?? 80, rows: session?.lastRows ?? 24 };
+  }
+
   /**
    * Get the scrollback buffer for a session
    */
@@ -713,10 +719,18 @@ export class PtyManager extends EventEmitter {
       return;
     }
 
-    // Strip ANSI codes and control characters for analysis
+    // Strip ANSI codes and control characters for analysis.
+    //
+    // The CSI matcher follows the ECMA-48 grammar: ESC [ · parameter bytes
+    // (0x30–0x3F, which INCLUDE the private-mode markers ? < = >) · intermediate
+    // bytes (0x20–0x2F) · final byte (0x40–0x7E). The previous pattern only
+    // allowed [0-9;] params, so private-mode sequences leaked their tail into
+    // "printable" content — most notably DSR cursor-position queries (ESC[?6n)
+    // that some agent TUIs emit several times a second when no viewer is
+    // attached to answer them. Those 4-char remnants accumulated past the
+    // "sustained output" threshold and produced phantom idle→working blips.
     const cleanData = data
-      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')  // ANSI escape codes
-      .replace(/\x1b\[[0-9;]*[mM]/g, '')      // SGR sequences
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // NOSONAR(S6324) ESC (0x1B) is required to strip CSI/DSR/SGR/mouse control sequences
       .replace(/\x1b\][^\x07]*\x07/g, '')      // OSC sequences
       .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, '') // DCS, SOS, PM, APC sequences
       .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ''); // Control chars (keep \n, \r, \t)

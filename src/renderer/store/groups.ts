@@ -31,6 +31,9 @@ export function useGroups() {
       }
     };
     loadGroups();
+    // Reload when a group is created remotely (relay / mobile).
+    const cleanupRefresh = window.electronAPI.onGroupsRefresh(() => { loadGroups(); });
+    return () => cleanupRefresh();
   }, []);
 
   const createGroup = useCallback(async (name: string, parentId?: string): Promise<Group> => {

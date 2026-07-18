@@ -261,7 +261,7 @@ function toErrorStatus(err: unknown): Status {
     return {
       kind: 'error',
       message:
-        "Could not reach desktop — make sure you're on the same Wi-Fi or Tailscale tailnet.",
+        "Could not reach desktop — make sure you're on the same Wi-Fi or network.",
       raw: err.message,
     };
   }

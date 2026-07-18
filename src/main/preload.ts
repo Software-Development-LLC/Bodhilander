@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -41,6 +41,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeListener('state:change', listener);
     };
+  },
+  onSessionsRefresh: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('sessions:refresh', listener);
+    return () => ipcRenderer.removeListener('sessions:refresh', listener);
+  },
+  onGroupsRefresh: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('groups:refresh', listener);
+    return () => ipcRenderer.removeListener('groups:refresh', listener);
   },
 
   // Menu events
@@ -229,8 +239,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('sound:play', listener);
   },
 
+  // Remote Hosting (Relay)
+  relayGetStatus: (): Promise<RelayStatus> => ipcRenderer.invoke('relay:getStatus'),
+  relayEnable: (): Promise<RelayStatus> => ipcRenderer.invoke('relay:enable'),
+  relayDisable: (): Promise<RelayStatus> => ipcRenderer.invoke('relay:disable'),
+  relaySetUrl: (url: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:setUrl', url),
+  relayGenerateLinkCode: (machineName: string): Promise<{ code: string; expiresAt: number }> =>
+    ipcRenderer.invoke('relay:generateLinkCode', machineName),
+  relaySetKeepAwake: (on: boolean): Promise<RelayStatus> => ipcRenderer.invoke('relay:setKeepAwake', on),
+  onRelayStatus: (callback: (status: RelayStatus) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, status: RelayStatus) => callback(status);
+    ipcRenderer.on('relay:status', listener);
+    return () => ipcRenderer.removeListener('relay:status', listener);
+  },
+
   // Mobile API Server
-  apiStart: (config?: { port?: number; enableMdns?: boolean }) =>
+  apiStart: (config?: { port?: number }) =>
     ipcRenderer.invoke('api:start', config),
   apiStop: () => ipcRenderer.invoke('api:stop'),
   apiGetStatus: (): Promise<{ running: boolean; port?: number; address?: string }> =>
