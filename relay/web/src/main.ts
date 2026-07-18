@@ -1,7 +1,6 @@
 import './styles.css';
 import '@xterm/xterm/css/xterm.css';
 import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
 import { RelayConnection, type ConnState, type Inner } from './connection';
 
 // ---------------------------------------------------------------------------
@@ -142,27 +141,43 @@ function connect() {
   conn.connect();
 }
 
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let lastSessionsJson = '';
+function startPolling() { stopPolling(); pollTimer = setInterval(() => app.conn?.command({ type: 'sessions:list' }), 2500); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
 function onConnState(s: ConnState, detail?: string) {
   const dot = $('#mdot'); const list = $('#sessions');
   if (s === 'ready') {
     dot?.classList.remove('off');
     app.conn!.command({ type: 'groups:list' });
     app.conn!.command({ type: 'sessions:list' });
+    startPolling(); // keep the list live (new/removed sessions + state changes)
   } else if (s === 'offline') {
-    dot?.classList.add('off');
+    stopPolling(); dot?.classList.add('off');
     if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">🌙</div><p>This machine is offline. It'll appear here when it reconnects.</p></li>`;
   } else if (s === 'error') {
-    dot?.classList.add('off');
+    stopPolling(); dot?.classList.add('off');
     if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">⚠️</div><p>${esc(detail || 'Connection problem.')}</p></li>`;
   } else if (s === 'closed') {
-    dot?.classList.add('off');
+    stopPolling(); dot?.classList.add('off');
     setTimeout(() => { if (app.conn) connect(); }, 3000); // simple reconnect
   }
 }
 
 function onAgentMessage(m: Inner) {
-  if (m.type === 'groups') { app.groups = (m.groups as RGroup[]) || []; return; }
-  if (m.type === 'sessions') { app.sessions = (m.sessions as RSession[]) || []; renderSessions(); return; }
+  if (m.type === 'groups') { app.groups = (m.groups as RGroup[]) || []; renderSessions(); return; }
+  if (m.type === 'sessions') {
+    const list = (m.sessions as RSession[]) || [];
+    const j = JSON.stringify(list);
+    if (j === lastSessionsJson) return; // unchanged — skip re-render (avoid flicker)
+    lastSessionsJson = j;
+    app.sessions = list;
+    renderSessions();
+    updateTermHeader(); // keep the open terminal's state chip / attention banner live
+    return;
+  }
+  if (m.type === 'terminal:size') { if (m.sessionId === app.activeId && term) term.resize(Math.max(2, Number(m.cols) || 80), Math.max(2, Number(m.rows) || 24)); return; }
   if (m.type === 'terminal:output') { if (m.sessionId === app.activeId && term) term.write(String(m.data)); return; }
   if (m.type === 'terminal:exit') { if (m.sessionId === app.activeId && term) term.write('\r\n\x1b[90m[session exited]\x1b[0m\r\n'); return; }
   if (m.type === 'error') { /* surface transient errors */ console.warn('agent error:', m.message); }
@@ -210,7 +225,6 @@ function renderSessions() {
 // Terminal (xterm)
 // ---------------------------------------------------------------------------
 let term: Terminal | null = null;
-let fit: FitAddon | null = null;
 function xtermTheme() {
   const dark = isDark();
   return dark
@@ -221,14 +235,23 @@ function applyTermTheme() { if (term) term.options.theme = xtermTheme(); }
 function ensureTerm() {
   if (term) return;
   term = new Terminal({ fontFamily: 'var(--mono)', fontSize: 13, cursorBlink: true, scrollback: 5000, theme: xtermTheme(), allowProposedApi: true, screenReaderMode: true });
-  fit = new FitAddon(); term.loadAddon(fit);
   term.open($('#screen')!);
   term.onData((d) => app.conn?.command({ type: 'terminal:input', sessionId: app.activeId, data: d }));
-  const doFit = () => { if (!fit || !term || !app.activeId) return; try { fit.fit(); app.conn?.command({ type: 'terminal:resize', sessionId: app.activeId, cols: term.cols, rows: term.rows }); } catch { /* not visible */ } };
-  window.addEventListener('resize', doFit);
+  // The terminal matches the desktop's size (via terminal:size), so we don't
+  // fit/resize the PTY. We only keep the pane sized to the visible viewport so
+  // the on-screen keyboard doesn't hide it (and can't be over-scrolled past).
   const vv = window.visualViewport;
-  if (vv) vv.addEventListener('resize', () => { const tp = $('.term-pane'); if (tp && matchMedia('(max-width:859px)').matches) tp.style.height = vv.height + 'px'; doFit(); });
-  (term as unknown as { _doFit: () => void })._doFit = doFit;
+  if (vv) vv.addEventListener('resize', () => { const tp = $('.term-pane'); if (tp && matchMedia('(max-width:859px)').matches) tp.style.height = vv.height + 'px'; });
+}
+
+function updateTermHeader() {
+  if (!app.activeId) return;
+  const s = app.sessions.find((x) => x.id === app.activeId);
+  const meta = $('#tMeta'); const banner = $('#attnBanner');
+  if (!s || !meta) return;
+  const gp = groupPath(s.groupId);
+  meta.innerHTML = `<span>${s.state === 'waiting' ? '● waiting for you' : esc(s.state)}</span> · ${esc(gp.label)}`;
+  banner?.classList.toggle('hidden', s.state !== 'waiting');
 }
 
 function openTerminal(s: RSession) {
@@ -241,7 +264,7 @@ function openTerminal(s: RSession) {
   $('#attnBanner')!.classList.toggle('hidden', s.state !== 'waiting');
   document.body.setAttribute('data-view', 'term');
   pushLayer(() => { document.body.removeAttribute('data-view'); if (app.activeId) app.conn?.command({ type: 'terminal:unsubscribe', sessionId: app.activeId }); app.activeId = null; });
-  requestAnimationFrame(() => { (term as unknown as { _doFit: () => void })._doFit(); term!.focus(); });
+  requestAnimationFrame(() => { term!.focus(); });
   app.conn?.command({ type: 'terminal:subscribe', sessionId: s.id });
 }
 
@@ -264,7 +287,15 @@ function setupCompose() {
   const ta = $<HTMLTextAreaElement>('#ta')!; const send = $<HTMLButtonElement>('#send')!;
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; send.disabled = !ta.value.trim(); };
   ta.addEventListener('input', grow);
-  const doSend = () => { const v = ta.value; if (!v.trim() || !app.activeId) return; app.conn?.command({ type: 'terminal:input', sessionId: app.activeId, data: v + '\r' }); ta.value = ''; grow(); };
+  const doSend = () => {
+    const v = ta.value; const id = app.activeId;
+    if (!v.trim() || !id) return;
+    // Send the text, then Enter as a SEPARATE keystroke — otherwise a TUI (e.g.
+    // Claude Code) treats "text\r" as a paste and inserts it instead of submitting.
+    app.conn?.command({ type: 'terminal:input', sessionId: id, data: v });
+    setTimeout(() => app.conn?.command({ type: 'terminal:input', sessionId: id, data: '\r' }), 25);
+    ta.value = ''; grow();
+  };
   send.onclick = doSend;
   ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); } });
 }

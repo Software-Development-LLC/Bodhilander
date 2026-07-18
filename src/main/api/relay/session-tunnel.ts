@@ -124,6 +124,10 @@ export class SessionTunnel {
       case 'terminal:subscribe':
         if (typeof inner.sessionId === 'string') {
           s.subs.add(inner.sessionId);
+          // Tell the viewer the PTY's real size so it matches (renders TUIs
+          // correctly) instead of resizing the shared terminal.
+          const size = ptyManager.getSize(inner.sessionId);
+          this.sealTo(clientId, { type: 'terminal:size', sessionId: inner.sessionId, cols: size.cols, rows: size.rows });
           // Replay scrollback so the browser shows history, then live output streams.
           this.sealTo(clientId, { type: 'terminal:output', sessionId: inner.sessionId, data: ptyManager.getBuffer(inner.sessionId) });
         }
@@ -136,9 +140,9 @@ export class SessionTunnel {
         if (typeof inner.sessionId === 'string' && typeof inner.data === 'string') ptyManager.write(inner.sessionId, inner.data);
         break;
       case 'terminal:resize':
-        if (typeof inner.sessionId === 'string') {
-          ptyManager.resize(inner.sessionId, Number(inner.cols) || 80, Number(inner.rows) || 24);
-        }
+        // Intentionally ignored — the desktop owns the terminal size, so a
+        // mobile viewer never reflows the shared PTY. Viewers match the size
+        // reported by terminal:size above.
         break;
       case 'sessions:list':
         this.sendSessions(clientId);

@@ -619,6 +619,12 @@ export class PtyManager extends EventEmitter {
     return this.sessions.get(id);
   }
 
+  /** Current terminal dimensions of a session (for remote viewers to match). */
+  getSize(id: string): { cols: number; rows: number } {
+    const session = this.sessions.get(id);
+    return { cols: session?.lastCols || 80, rows: session?.lastRows || 24 };
+  }
+
   /**
    * Get the scrollback buffer for a session
    */

@@ -45,7 +45,7 @@
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 38%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
 html, body { height: 100%; }
-body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.45; -webkit-font-smoothing: antialiased; overflow: hidden; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.45; -webkit-font-smoothing: antialiased; overflow: hidden; overscroll-behavior: none; }
 button { font-family: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
 input, textarea { font-family: inherit; }
 .mono { font-family: var(--mono); }
@@ -115,8 +115,9 @@ input, textarea { font-family: inherit; }
 .term-title { min-width: 0; }
 .term-title .t-name { font-family: var(--mono); font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .term-title .t-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.screen { flex: 1; min-height: 0; overflow: hidden; padding: 8px 6px 4px; background: var(--bg); }
+.screen { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain; padding: 8px 6px 4px; background: var(--bg); }
 .screen .xterm { height: 100%; padding: 0 6px; }
+.xterm-viewport { overscroll-behavior: contain; }
 .xterm-viewport::-webkit-scrollbar { width: 8px; }
 .compose { border-top: 1px solid var(--hair); background: var(--surface); }
 .keys { display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; scrollbar-width: none; }
