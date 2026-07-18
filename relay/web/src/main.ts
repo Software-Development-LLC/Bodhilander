@@ -260,7 +260,20 @@ function ensureTerm() {
   // fit/resize the PTY. We only keep the pane sized to the visible viewport so
   // the on-screen keyboard doesn't hide it (and can't be over-scrolled past).
   const vv = window.visualViewport;
-  if (vv) vv.addEventListener('resize', () => { const tp = $('.term-pane'); if (tp && matchMedia('(max-width:859px)').matches) tp.style.height = vv.height + 'px'; });
+  if (vv) {
+    // Pin the terminal pane to the visual viewport. On iOS the on-screen
+    // keyboard both shrinks (vv.height) AND vertically offsets (vv.offsetTop)
+    // the visual viewport; without matching the offset the fixed pane's top
+    // stays at 0 and the bottom (compose bar) gets pushed under the keyboard.
+    const syncViewport = () => {
+      const tp = $('.term-pane');
+      if (!tp || !matchMedia('(max-width:859px)').matches) return;
+      tp.style.height = vv.height + 'px';
+      tp.style.top = vv.offsetTop + 'px';
+    };
+    vv.addEventListener('resize', syncViewport);
+    vv.addEventListener('scroll', syncViewport);
+  }
 }
 
 function updateTermHeader() {

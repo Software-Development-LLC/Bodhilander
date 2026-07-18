@@ -117,7 +117,7 @@ input, textarea { font-family: inherit; }
 .term-title .t-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .screen { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior: contain; padding: 8px 6px 4px; background: var(--bg); }
 .screen .xterm { height: 100%; padding: 0 6px; }
-.xterm-viewport { overscroll-behavior: contain; }
+.xterm-viewport { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
 .xterm-viewport::-webkit-scrollbar { width: 8px; }
 .compose { border-top: 1px solid var(--hair); background: var(--surface); }
 .keys { display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; scrollbar-width: none; }
