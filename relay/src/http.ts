@@ -18,6 +18,7 @@ import {
   serializeCookie,
 } from './auth/cookies';
 import { createDevRoutes } from './dev';
+import { createWebClient } from './web';
 
 /**
  * HTTP surface of the relay (M2), as a `fetch`-style handler for `Bun.serve`.
@@ -48,7 +49,9 @@ export function createRouter(ctx: RelayContext) {
   const version = pkg.version ?? '0.0.0';
   const secure = config.isProduction || config.trustProxy;
 
-  // Dev-only harness (fake sign-in + claim page). Never mounted in production.
+  // Web client (sign-in + link-code claim), served at `/`.
+  const webRoute = createWebClient(config);
+  // Dev-only fake sign-in (/dev/login). Never mounted in production.
   const devRoute = config.isProduction ? null : createDevRoutes(config, repos);
 
   const githubConfig: GithubOAuthConfig | null =
@@ -71,6 +74,9 @@ export function createRouter(ctx: RelayContext) {
     const method = req.method;
 
     try {
+      const webResponse = webRoute(req);
+      if (webResponse) return webResponse;
+
       if (devRoute) {
         const devResponse = await devRoute(req);
         if (devResponse) return devResponse;
