@@ -127,6 +127,8 @@ export interface RelayStatus {
   relayUrl: string;
   /** SSH-style identity fingerprint (SHA256:…) for out-of-band verification. */
   fingerprint: string | null;
+  /** Keep this machine awake while remote hosting is on (so it stays reachable). */
+  keepAwake: boolean;
 }
 
 /** Result of probing one provider CLI's availability (#97). */

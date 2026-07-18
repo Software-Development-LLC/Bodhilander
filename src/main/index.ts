@@ -1170,6 +1170,11 @@ safeHandle('relay:generateLinkCode', async (machineName: string) => {
   return getRelayClient().generateLinkCode(machineName);
 });
 
+safeHandle('relay:setKeepAwake', (on: boolean) => {
+  getRelayClient().setKeepAwake(on);
+  return getRelayClient().getStatus();
+});
+
 // ============================================================================
 // Vector Search IPC Handlers
 // ============================================================================

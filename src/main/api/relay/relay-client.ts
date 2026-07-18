@@ -13,11 +13,13 @@
  */
 
 import { EventEmitter } from 'events';
+import { powerSaveBlocker } from 'electron';
 import { WebSocket } from 'ws';
 import log from 'electron-log';
 import { getPreference, setPreference, deletePreference } from '../../repositories/preferences';
 import type { RelayStatus } from '../../../shared/types';
 import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-identity';
+import { SessionTunnel } from './session-tunnel';
 
 export type { RelayStatus } from '../../../shared/types';
 
@@ -28,6 +30,7 @@ const PREF = {
   url: 'relay.url',
   machineId: 'relay.machineId',
   machineName: 'relay.machineName',
+  keepAwake: 'relay.keepAwake',
 } as const;
 
 const PING_INTERVAL_MS = 30_000;
@@ -50,6 +53,10 @@ export class RelayClient extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
+  /** OS "stay awake" assertion id while remote hosting is on (null = released). */
+  private powerSaveBlockerId: number | null = null;
+  /** Routes E2E terminal frames to/from web clients (M3). */
+  private readonly tunnel = new SessionTunnel((clientId, payload) => this.send({ type: 'to-client', clientId, payload }));
 
   /** Origin of the relay, e.g. `https://relay.example.com`. */
   get relayUrl(): string {
@@ -65,6 +72,11 @@ export class RelayClient extends EventEmitter {
     return getPreference(PREF.enabled) === 'true';
   }
 
+  /** Whether to keep the machine awake while remote hosting is on (default true). */
+  get keepAwake(): boolean {
+    return getPreference(PREF.keepAwake) !== 'false';
+  }
+
   getStatus(): RelayStatus {
     return {
       enabled: this.enabled,
@@ -74,7 +86,35 @@ export class RelayClient extends EventEmitter {
       machineName: getPreference(PREF.machineName),
       relayUrl: this.relayUrl,
       fingerprint: identityFingerprint(),
+      keepAwake: this.keepAwake,
     };
+  }
+
+  /** Toggle the keep-awake behavior; applies immediately if remote hosting is on. */
+  setKeepAwake(on: boolean): void {
+    setPreference(PREF.keepAwake, on ? 'true' : 'false');
+    if (this.enabled && on) this.startKeepAwake();
+    else this.stopKeepAwake();
+    this.emitStatus();
+  }
+
+  /**
+   * Hold an OS power assertion so the machine stays reachable — otherwise it
+   * idle-sleeps, the agent socket dies, and no one can connect until it's woken
+   * locally. `prevent-app-suspension` keeps the system awake but lets the
+   * display sleep. (Note: does not override closed-lid sleep on macOS battery.)
+   */
+  private startKeepAwake(): void {
+    if (!this.keepAwake || this.powerSaveBlockerId !== null) return;
+    this.powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+    log.info('[Relay] keep-awake engaged (prevent-app-suspension)');
+  }
+
+  private stopKeepAwake(): void {
+    if (this.powerSaveBlockerId === null) return;
+    if (powerSaveBlocker.isStarted(this.powerSaveBlockerId)) powerSaveBlocker.stop(this.powerSaveBlockerId);
+    this.powerSaveBlockerId = null;
+    log.info('[Relay] keep-awake released');
   }
 
   setRelayUrl(url: string): void {
@@ -91,6 +131,7 @@ export class RelayClient extends EventEmitter {
   enable(): void {
     setPreference(PREF.enabled, 'true');
     ensureIdentity();
+    this.startKeepAwake();
     this.emitStatus();
     this.connect();
   }
@@ -98,13 +139,17 @@ export class RelayClient extends EventEmitter {
   /** Turn remote hosting off and disconnect. */
   disable(): void {
     setPreference(PREF.enabled, 'false');
+    this.stopKeepAwake();
     this.teardown();
     this.emitStatus();
   }
 
   /** Resume on app launch if the user previously enabled it. */
   startIfEnabled(): void {
-    if (this.enabled) this.connect();
+    if (this.enabled) {
+      this.startKeepAwake();
+      this.connect();
+    }
   }
 
   /**
@@ -204,10 +249,18 @@ export class RelayClient extends EventEmitter {
   }
 
   private async handleMessage(raw: string): Promise<void> {
-    let msg: { type?: string; nonce?: string; machineId?: string };
+    let msg: { type?: string; nonce?: string; machineId?: string; clientId?: string; payload?: unknown };
     try {
       msg = JSON.parse(raw);
     } catch {
+      return;
+    }
+
+    // M3 brokering: the relay routes web-client frames to us by client id.
+    if (msg.clientId) {
+      if (msg.type === 'client:open') this.tunnel.open(msg.clientId, msg.payload);
+      else if (msg.type === 'from-client') this.tunnel.frame(msg.clientId, msg.payload);
+      else if (msg.type === 'client:closed') this.tunnel.closeClient(msg.clientId);
       return;
     }
 
@@ -274,6 +327,9 @@ export class RelayClient extends EventEmitter {
       this.reconnectTimer = null;
     }
     this.stopPing();
+    // The relay brokers client sessions over this socket; if it drops, they're
+    // all gone (and their PTY listeners must be released).
+    this.tunnel.closeAll();
     this.connecting = false;
     this.connected = false;
     if (this.ws) {
@@ -289,6 +345,7 @@ export class RelayClient extends EventEmitter {
 
   /** Full shutdown for app quit. */
   stop(): void {
+    this.stopKeepAwake();
     this.teardown();
   }
 

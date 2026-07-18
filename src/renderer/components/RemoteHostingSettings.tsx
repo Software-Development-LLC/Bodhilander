@@ -78,6 +78,22 @@ export function RemoteHostingSettings() {
           </label>
           <span className={`api-status ${connState}`}>{connLabel}</span>
         </div>
+
+        <div className="settings-row">
+          <label>
+            <input
+              type="checkbox"
+              checked={status.keepAwake}
+              disabled={busy}
+              onChange={(e) => run(() => window.electronAPI.relaySetKeepAwake(e.target.checked))}
+            />
+            Keep this machine awake while remote hosting is on
+          </label>
+        </div>
+        <p className="settings-hint">
+          Prevents the machine from sleeping so it stays reachable (the display can still sleep). On a MacBook, a
+          <em> closed lid on battery</em> will still sleep — keep it plugged in to stay reachable.
+        </p>
       </div>
 
       <div className="settings-group">

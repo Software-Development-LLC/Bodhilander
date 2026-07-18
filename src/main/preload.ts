@@ -236,6 +236,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   relaySetUrl: (url: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:setUrl', url),
   relayGenerateLinkCode: (machineName: string): Promise<{ code: string; expiresAt: number }> =>
     ipcRenderer.invoke('relay:generateLinkCode', machineName),
+  relaySetKeepAwake: (on: boolean): Promise<RelayStatus> => ipcRenderer.invoke('relay:setKeepAwake', on),
   onRelayStatus: (callback: (status: RelayStatus) => void) => {
     const listener = (_: Electron.IpcRendererEvent, status: RelayStatus) => callback(status);
     ipcRenderer.on('relay:status', listener);

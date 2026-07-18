@@ -103,6 +103,7 @@ interface ElectronAPI {
   relayDisable: () => Promise<RelayStatus>;
   relaySetUrl: (url: string) => Promise<RelayStatus>;
   relayGenerateLinkCode: (machineName: string) => Promise<{ code: string; expiresAt: number }>;
+  relaySetKeepAwake: (on: boolean) => Promise<RelayStatus>;
   onRelayStatus: (callback: (status: RelayStatus) => void) => () => void;
 
   // Sound notifications
