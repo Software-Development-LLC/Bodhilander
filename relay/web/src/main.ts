@@ -488,7 +488,10 @@ function openMachineMenu() {
     };
     const li = document.createElement('li'); li.appendChild(b); list.appendChild(li);
   }
-  $('#mmLink')!.onclick = () => { history.back(); openLinkMachine(); };
+  // Stack the link sheet on top of the menu (like the create → new-group
+  // flow). Do NOT history.back() first: popstate is async and would fire
+  // after openLinkMachine() pushed its layer, tearing the link sheet down.
+  $('#mmLink')!.onclick = () => openLinkMachine();
 }
 
 function openLinkMachine() {
