@@ -187,7 +187,16 @@ function onAgentMessage(m: Inner) {
     return;
   }
   if (m.type === 'terminal:size') { if (m.sessionId === app.activeId && term) term.resize(Math.max(2, Number(m.cols) || 80), Math.max(2, Number(m.rows) || 24)); return; }
-  if (m.type === 'terminal:output') { if (m.sessionId === app.activeId && term) term.write(String(m.data)); return; }
+  if (m.type === 'terminal:output') {
+    if (m.sessionId === app.activeId && term) {
+      // .screen owns the scroll now, so keep it pinned to the latest output
+      // (tail) unless the user has scrolled up to read history.
+      const screen = $('#screen');
+      const atBottom = !screen || screen.scrollHeight - screen.scrollTop - screen.clientHeight < 40;
+      term.write(String(m.data), () => { if (atBottom && screen) screen.scrollTop = screen.scrollHeight; });
+    }
+    return;
+  }
   if (m.type === 'terminal:exit') { if (m.sessionId === app.activeId && term) term.write('\r\n\x1b[90m[session exited]\x1b[0m\r\n'); return; }
   if (m.type === 'error') { /* surface transient errors */ console.warn('agent error:', m.message); }
 }
