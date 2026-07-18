@@ -57,7 +57,7 @@ input, textarea { font-family: inherit; }
 .pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
 .list-pane { border-right: 1px solid var(--hair); position: relative; }
 @media (max-width: 859px) {
-  .term-pane { position: fixed; inset: 0; transform: translateX(100%); transition: transform .28s cubic-bezier(.4,0,.2,1); z-index: 20; }
+  .term-pane { position: fixed; top: 0; left: 0; right: 0; height: 100dvh; transform: translateX(100%); transition: transform .28s cubic-bezier(.4,0,.2,1); z-index: 20; }
   body[data-view="term"] .term-pane { transform: translateX(0); }
 }
 @media (prefers-reduced-motion: reduce) { .term-pane { transition: none !important; } }

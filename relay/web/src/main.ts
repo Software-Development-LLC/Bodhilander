@@ -261,19 +261,23 @@ function ensureTerm() {
   // the on-screen keyboard doesn't hide it (and can't be over-scrolled past).
   const vv = window.visualViewport;
   if (vv) {
-    // Pin the terminal pane to the visual viewport. On iOS the on-screen
-    // keyboard both shrinks (vv.height) AND vertically offsets (vv.offsetTop)
-    // the visual viewport; without matching the offset the fixed pane's top
-    // stays at 0 and the bottom (compose bar) gets pushed under the keyboard.
-    const syncViewport = () => {
-      const tp = $('.term-pane');
-      if (!tp || !matchMedia('(max-width:859px)').matches) return;
-      tp.style.height = vv.height + 'px';
-      tp.style.top = vv.offsetTop + 'px';
-    };
-    vv.addEventListener('resize', syncViewport);
-    vv.addEventListener('scroll', syncViewport);
+    vv.addEventListener('resize', syncTermPane);
+    vv.addEventListener('scroll', syncTermPane);
   }
+}
+
+// Pin the terminal pane to the *visual* viewport. The layout viewport (what a
+// `position: fixed; inset: 0` pane fills) is taller than the visible area on
+// mobile — browser chrome and the on-screen keyboard live outside it — so the
+// compose bar and the terminal's bottom rows end up below the fold with no way
+// to reach them. Matching vv.height keeps everything visible; matching
+// vv.offsetTop corrects the iOS keyboard, which offsets the viewport too.
+function syncTermPane() {
+  const vv = window.visualViewport;
+  const tp = $('.term-pane');
+  if (!vv || !tp || !matchMedia('(max-width:859px)').matches) return;
+  tp.style.height = vv.height + 'px';
+  tp.style.top = vv.offsetTop + 'px';
 }
 
 function updateTermHeader() {
@@ -295,6 +299,8 @@ function openTerminal(s: RSession) {
   $('#tMeta')!.innerHTML = `<span class="${s.state === 'waiting' ? '' : ''}">${s.state === 'waiting' ? '● waiting for you' : s.state}</span> · ${esc(gp.label)}`;
   $('#attnBanner')!.classList.toggle('hidden', s.state !== 'waiting');
   document.body.setAttribute('data-view', 'term');
+  syncTermPane();
+  requestAnimationFrame(syncTermPane);
   pushLayer(() => { document.body.removeAttribute('data-view'); if (app.activeId) app.conn?.command({ type: 'terminal:unsubscribe', sessionId: app.activeId }); app.activeId = null; });
   requestAnimationFrame(() => { term!.focus(); });
   app.conn?.command({ type: 'terminal:subscribe', sessionId: s.id });
