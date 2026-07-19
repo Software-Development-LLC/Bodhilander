@@ -61,6 +61,17 @@ export class VectorSearchManager extends EventEmitter {
   private cancelledIndexes: Set<string> = new Set();
   private workerTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
+  // BDHLNDR-126: onnxruntime-node is driven from indexing worker threads, one
+  // InferenceSession per index. Two workers running inference at once corrupt
+  // the native allocator and SIGTRAP the whole process (confirmed crash: two
+  // concurrent InferenceSession::Run stacks + byte-write translation faults).
+  // Serialize globally: at most ONE indexing worker runs at a time; the rest
+  // queue here and drain as workers end.
+  private activeIndexId: string | null = null;
+  private indexQueue: string[] = []; // directoryPaths waiting for the gate
+  private queuedDirectories: Set<string> = new Set(); // dedupe indexQueue
+  private completedIndexes: Set<string> = new Set(); // clean terminate, not a crash
+
   constructor() {
     super();
   }
@@ -202,6 +213,22 @@ export class VectorSearchManager extends EventEmitter {
       return;
     }
 
+    // BDHLNDR-126: global serialization gate. If another index is actively
+    // indexing, queue this directory instead of spawning a second worker —
+    // two concurrent onnxruntime InferenceSessions crash the process. The
+    // queue is drained (startNextQueued) whenever the active worker ends.
+    if (this.activeIndexId !== null && this.activeIndexId !== index.id) {
+      if (!this.queuedDirectories.has(directoryPath)) {
+        this.queuedDirectories.add(directoryPath);
+        this.indexQueue.push(directoryPath);
+        log.info(
+          `[VectorSearch] Queued indexing for ${directoryPath} ` +
+            `(worker busy with index ${this.activeIndexId})`
+        );
+      }
+      return;
+    }
+
     // BDHLNDR-46: if this index's stored vectors were generated with a
     // different embedding version (e.g. fp32 from <= v3.3.1, now embedding at
     // q8), they are not comparable to new query vectors. Wipe and rebuild from
@@ -246,6 +273,8 @@ export class VectorSearchManager extends EventEmitter {
           error: errorMsg,
           directoryPath: index.directoryPath,
         });
+        // BDHLNDR-126: we never took the gate; let any queued directory run.
+        this.startNextQueued();
         return; // do NOT spawn the worker — breaks the crash-relaunch loop
       }
       log.warn(
@@ -256,6 +285,11 @@ export class VectorSearchManager extends EventEmitter {
 
     // Clear the cancelled flag since we're starting fresh
     this.cancelledIndexes.delete(index.id);
+    this.completedIndexes.delete(index.id);
+
+    // BDHLNDR-126: take the global gate. Only this index may run inference
+    // until its worker ends (releaseAndDrain in the exit handler frees it).
+    this.activeIndexId = index.id;
 
     // Update status
     codeSearchRepo.updateIndexStatus(index.id, 'indexing');
@@ -334,7 +368,14 @@ export class VectorSearchManager extends EventEmitter {
 
     worker.on('exit', (code) => {
       this.workers.delete(index.id);
-      if (code !== 0 && !this.cancelledIndexes.has(index.id)) {
+      // BDHLNDR-126: a clean completion terminates the worker on purpose (see
+      // handleIndexingComplete), which surfaces here as a non-zero exit code —
+      // don't misreport that as a crash.
+      if (
+        code !== 0 &&
+        !this.cancelledIndexes.has(index.id) &&
+        !this.completedIndexes.has(index.id)
+      ) {
         const errorMsg = `Worker exited with code ${code}`;
         log.error('[VectorSearch]', errorMsg);
         codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
@@ -344,6 +385,11 @@ export class VectorSearchManager extends EventEmitter {
           directoryPath: index.directoryPath,
         });
       }
+      this.completedIndexes.delete(index.id);
+      // BDHLNDR-126: release the global gate and start the next queued index.
+      // 'exit' is the universal terminal event (fires after 'error', after
+      // terminate(), and on normal stop), so this is the single choke point.
+      this.releaseAndDrain(index.id);
     });
 
     // Set a timeout for worker initialization (model download can take a while)
@@ -380,6 +426,30 @@ export class VectorSearchManager extends EventEmitter {
       clearTimeout(timeout);
       this.workerTimeouts.delete(indexId);
     }
+  }
+
+  // BDHLNDR-126: release the global indexing gate held by `indexId` (if it
+  // holds it) and hand off to the next queued directory. Called from the
+  // worker exit handler and the circuit-breaker early-return path.
+  private releaseAndDrain(indexId: string): void {
+    if (this.activeIndexId === indexId) {
+      this.activeIndexId = null;
+    }
+    this.startNextQueued();
+  }
+
+  // BDHLNDR-126: if no worker is active, start indexing the next queued
+  // directory. Fire-and-forget; startIndexing owns all error handling.
+  private startNextQueued(): void {
+    if (this.activeIndexId !== null) return;
+    const next = this.indexQueue.shift();
+    if (!next) return;
+    this.queuedDirectories.delete(next);
+    void this.startIndexing(next).catch((err) => {
+      log.error('[VectorSearch] Failed to start queued index:', err);
+      // Don't strand the rest of the queue behind a failed dequeue.
+      this.startNextQueued();
+    });
   }
 
   async cancelIndexing(indexId: string): Promise<void> {
@@ -543,6 +613,23 @@ export class VectorSearchManager extends EventEmitter {
     codeSearchRepo.setEmbeddingVersion(indexId, EMBEDDING_VERSION);
     this.emit('indexing-complete', { indexId, directoryPath: index?.directoryPath });
 
+    // BDHLNDR-126: tear the finished worker down instead of leaving it alive.
+    // A lingering worker holds an idle onnxruntime InferenceSession and parked
+    // native threads; these accumulate across directories and long uptimes and
+    // feed the native-memory pressure behind the crash. Terminating fires
+    // worker.on('exit'), which releases the global gate and drains the queue;
+    // completedIndexes marks this as a clean exit so the exit handler doesn't
+    // report the terminate as a crash.
+    this.completedIndexes.add(indexId);
+    const finishedWorker = this.workers.get(indexId);
+    if (finishedWorker) {
+      void finishedWorker.terminate();
+    } else {
+      // No worker to terminate (shouldn't happen); free the gate directly.
+      this.completedIndexes.delete(indexId);
+      this.releaseAndDrain(indexId);
+    }
+
     // Start file watcher
     if (index) {
       this.startWatching(index.directoryPath, indexId);
@@ -683,6 +770,12 @@ export class VectorSearchManager extends EventEmitter {
     this.workerTimeouts.clear();
 
     this.cancelledIndexes.clear();
+    // BDHLNDR-126: drop the serialization queue so worker exit handlers firing
+    // after dispose (from the terminate() calls above) don't re-spawn workers.
+    this.activeIndexId = null;
+    this.indexQueue = [];
+    this.queuedDirectories.clear();
+    this.completedIndexes.clear();
     // Note: We don't dispose the embedding provider here because it may still be needed
     // for search queries. Each worker has its own instance that gets cleaned up when terminated.
   }
