@@ -6,7 +6,9 @@ import { EventEmitter } from 'events';
 import { app } from 'electron';
 import log from 'electron-log';
 import * as codeSearchRepo from '../repositories/code-search';
-import { getEmbeddingProvider, EMBEDDING_VERSION } from './embedding-provider';
+import { EMBEDDING_VERSION } from './embedding-provider';
+import { getEmbeddingService, disposeEmbeddingService } from './embedding-service';
+import { resolveVectorSearchWorker } from './worker-path';
 import { ParsedSymbol } from './parser';
 import type { CodeIndex, IndexProgress, CodeSearchResult, SymbolSearchResult, SymbolType, IndexStatus, IndexPhase } from '../../shared/types';
 
@@ -40,6 +42,15 @@ interface WorkerResult {
     symbols: ParsedSymbol[];
   };
   error?: string;
+}
+
+// BDHLNDR-126: an indexing worker requests embeddings from the main process,
+// which brokers them to the single embedding worker and replies with an
+// 'embed-response' (or 'embed-error') carrying the same requestId.
+interface EmbedRequestMessage {
+  type: 'embed-request';
+  requestId: string;
+  texts: string[];
 }
 
 // Timeout for model initialization (downloading 110MB model + loading ONNX runtime)
@@ -82,27 +93,7 @@ export class VectorSearchManager extends EventEmitter {
    * builds we resolve to the app.asar.unpacked directory.
    */
   private getWorkerPath(): string {
-    if (!app.isPackaged) {
-      return path.join(__dirname, 'indexing-worker.js');
-    }
-
-    // In production, use the unpacked path
-    const unpackedPath = path.join(
-      process.resourcesPath,
-      'app.asar.unpacked',
-      'dist',
-      'main',
-      'vector-search',
-      'indexing-worker.js'
-    );
-
-    if (fs.existsSync(unpackedPath)) {
-      return unpackedPath;
-    }
-
-    // Fallback to __dirname (will likely fail in asar, but log will show the issue)
-    console.warn('[VectorSearch] Unpacked worker not found at:', unpackedPath);
-    return path.join(__dirname, 'indexing-worker.js');
+    return resolveVectorSearchWorker('indexing-worker.js');
   }
 
   // ============ Index Management ============
@@ -349,8 +340,14 @@ export class VectorSearchManager extends EventEmitter {
       });
     }
 
-    worker.on('message', (result: WorkerResult) => {
-      this.handleWorkerMessage(index.id, result);
+    worker.on('message', (result: WorkerResult | EmbedRequestMessage) => {
+      // BDHLNDR-126: the indexing worker no longer runs onnxruntime itself; it
+      // asks the single embedding worker (via this broker) to embed each batch.
+      if ((result as EmbedRequestMessage).type === 'embed-request') {
+        this.handleEmbedRequest(worker, result as EmbedRequestMessage);
+        return;
+      }
+      this.handleWorkerMessage(index.id, result as WorkerResult);
     });
 
     worker.on('error', (err: Error) => {
@@ -491,6 +488,27 @@ export class VectorSearchManager extends EventEmitter {
 
     // Restart indexing
     await this.startIndexing(directoryPath);
+  }
+
+  // BDHLNDR-126: forward an indexing worker's embed request to the single
+  // embedding worker and reply on the same worker with the result. All
+  // embedding in the process is serialized through the one embedding worker,
+  // so no two InferenceSession::Run ever overlap.
+  private handleEmbedRequest(worker: Worker, msg: EmbedRequestMessage): void {
+    getEmbeddingService()
+      .embed(msg.texts)
+      .then(
+        (embeddings) => {
+          worker.postMessage({ type: 'embed-response', requestId: msg.requestId, embeddings });
+        },
+        (err: unknown) => {
+          worker.postMessage({
+            type: 'embed-error',
+            requestId: msg.requestId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      );
   }
 
   private handleWorkerMessage(indexId: string, result: WorkerResult): void {
@@ -706,9 +724,9 @@ export class VectorSearchManager extends EventEmitter {
       return [];
     }
 
-    // Generate query embedding using query-specific method for better retrieval
-    const provider = getEmbeddingProvider();
-    const queryEmbedding = await provider.embedQuery(query);
+    // Generate query embedding via the single embedding worker (BDHLNDR-126) —
+    // never a main-process ONNX session, which could race an active index.
+    const queryEmbedding = await getEmbeddingService().embedQuery(query);
 
     return codeSearchRepo.searchChunksByVector(index.id, queryEmbedding, limit);
   }
@@ -776,8 +794,11 @@ export class VectorSearchManager extends EventEmitter {
     this.indexQueue = [];
     this.queuedDirectories.clear();
     this.completedIndexes.clear();
-    // Note: We don't dispose the embedding provider here because it may still be needed
-    // for search queries. Each worker has its own instance that gets cleaned up when terminated.
+
+    // BDHLNDR-126: tear down the single embedding worker (and its ONNX session)
+    // on app teardown. It's spawned lazily and re-created on the next search or
+    // index, so this is safe even if the manager is disposed while the app runs.
+    disposeEmbeddingService();
   }
 }
 
