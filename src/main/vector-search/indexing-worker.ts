@@ -180,6 +180,11 @@ async function runIndexing(
 
     const totalFiles = files.length;
     let filesIndexed = 0;
+    // BDHLNDR-126: track embedding success so a run where EVERY batch failed
+    // (e.g. the embedding worker is persistently down) is reported as an error
+    // instead of being silently marked 'ready' with all-null vectors.
+    let embedAttempted = 0;
+    let embedSucceeded = 0;
 
     // Process each file - parse AND generate embeddings in worker
     for (const file of files) {
@@ -214,12 +219,15 @@ async function runIndexing(
           for (let i = 0; i < textsToEmbed.length; i += BATCH_SIZE) {
             if (cancelled) return;
             const batch = textsToEmbed.slice(i, i + BATCH_SIZE);
+            embedAttempted += batch.length;
             try {
               const embeddings = await requestEmbeddings(batch);
               for (let j = 0; j < batch.length; j++) {
+                const embedding = embeddings[j] ?? null;
+                if (embedding) embedSucceeded++;
                 chunksWithEmbeddings.push({
                   ...chunks[i + j],
-                  embedding: embeddings[j] ?? null,
+                  embedding,
                 });
               }
             } catch (embErr) {
@@ -247,6 +255,14 @@ async function runIndexing(
       // flush. Without this, long runs silently pin the worker thread for
       // minutes and the user has no way to stop them.
       await new Promise(resolve => setImmediate(resolve));
+    }
+
+    // BDHLNDR-126: if there was content to embed but not a single embedding
+    // succeeded, the embedding pipeline is down — don't mark the index 'ready'
+    // (which would look complete yet return nothing and suppress a re-index).
+    if (embedAttempted > 0 && embedSucceeded === 0) {
+      sendError(indexId, 'Embedding failed for all content (embedding service unavailable)');
+      return;
     }
 
     sendComplete(indexId);

@@ -48,7 +48,16 @@ export class EmbeddingService {
       workerOptions.env = { ...process.env, NODE_PATH: newNodePath };
     }
 
-    const worker = new Worker(workerPath, workerOptions);
+    let worker: Worker;
+    try {
+      worker = new Worker(workerPath, workerOptions);
+    } catch (err) {
+      // Symmetry with the indexing-worker spawn guard: surface a clear error
+      // (callers — searchCode / handleEmbedRequest — degrade gracefully).
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error('[EmbeddingService] Failed to spawn embedding worker:', msg);
+      throw new Error(`Embedding worker failed to start: ${msg}`);
+    }
 
     if (worker.stdout) {
       worker.stdout.on('data', (d: Buffer) => log.info('[EmbeddingWorker]', d.toString().trim()));

@@ -53,8 +53,13 @@ interface EmbedRequestMessage {
   texts: string[];
 }
 
-// Timeout for model initialization (downloading 110MB model + loading ONNX runtime)
-const WORKER_INIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+// BDHLNDR-126: rolling inactivity watchdog for an indexing worker. Reset on
+// every message from the worker; if it goes silent this long it is treated as
+// hung and cancelled — otherwise a post-init hang (a bad file read, a
+// pathological parse) would hold the global serialization gate forever and
+// freeze ALL indexing. Generous enough to cover the initial model download and
+// a single embed batch (itself bounded by the embedding worker's 5-min timeout).
+const WORKER_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 // BDHLNDR-40: a native crash in the indexing worker_thread kills the whole
 // process silently — no exit/error handler runs, so status stays 'indexing'
@@ -362,6 +367,11 @@ export class VectorSearchManager extends EventEmitter {
     }
 
     worker.on('message', (result: WorkerResult | EmbedRequestMessage) => {
+      // Any message means the worker is alive — reset its inactivity watchdog.
+      // Guard by identity so a superseded worker can't extend the current one's.
+      if (this.workers.get(index.id) === worker) {
+        this.armWorkerWatchdog(index);
+      }
       // BDHLNDR-126: the indexing worker no longer runs onnxruntime itself; it
       // asks the single embedding worker (via this broker) to embed each batch.
       if ((result as EmbedRequestMessage).type === 'embed-request') {
@@ -397,6 +407,7 @@ export class VectorSearchManager extends EventEmitter {
 
       if (ownsSlot) {
         this.workers.delete(index.id);
+        this.clearWorkerTimeout(index.id);
       }
 
       // A clean completion terminates the worker on purpose (non-zero code but
@@ -431,23 +442,10 @@ export class VectorSearchManager extends EventEmitter {
       }
     });
 
-    // Set a timeout for worker initialization (model download can take a while)
-    const timeout = setTimeout(() => {
-      if (this.workers.has(index.id)) {
-        const errorMsg = 'Worker timed out during initialization (model download may have failed)';
-        log.error('[VectorSearch]', errorMsg);
-        // Fire-and-forget — the timeout handler isn't async. Termination
-        // races are bounded here since we just update DB/emit after.
-        void this.cancelIndexing(index.id);
-        codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
-        this.emit('indexing-error', {
-          indexId: index.id,
-          error: errorMsg,
-          directoryPath: index.directoryPath,
-        });
-      }
-    }, WORKER_INIT_TIMEOUT_MS);
-    this.workerTimeouts.set(index.id, timeout);
+    // BDHLNDR-126: arm the rolling inactivity watchdog. It covers the initial
+    // model download and any later hang, is reset on every worker message, and
+    // is cleared on exit/complete/error.
+    this.armWorkerWatchdog(index);
 
     // Pass cache directory so the worker can configure model caching
     const cacheDir = path.join(app.getPath('userData'), 'huggingface');
@@ -465,6 +463,28 @@ export class VectorSearchManager extends EventEmitter {
       clearTimeout(timeout);
       this.workerTimeouts.delete(indexId);
     }
+  }
+
+  // BDHLNDR-126: (re)arm the inactivity watchdog for an indexing worker. If the
+  // worker sends no message within the window it is treated as hung and
+  // cancelled — which terminates it, releasing the global gate and draining the
+  // queue. Without this a post-init hang would freeze all indexing behind the gate.
+  private armWorkerWatchdog(index: CodeIndex): void {
+    this.clearWorkerTimeout(index.id);
+    const timeout = setTimeout(() => {
+      if (!this.workers.has(index.id)) return;
+      const errorMsg = 'Indexing worker timed out (no progress)';
+      log.error('[VectorSearch]', errorMsg);
+      // cancelIndexing terminates the worker → its 'exit' releases the gate.
+      void this.cancelIndexing(index.id);
+      codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
+      this.emit('indexing-error', {
+        indexId: index.id,
+        error: errorMsg,
+        directoryPath: index.directoryPath,
+      });
+    }, WORKER_INACTIVITY_TIMEOUT_MS);
+    this.workerTimeouts.set(index.id, timeout);
   }
 
   // BDHLNDR-126: release the global indexing gate held by `indexId` (if it
@@ -505,6 +525,14 @@ export class VectorSearchManager extends EventEmitter {
     // Mark as cancelled so worker knows to stop
     this.cancelledIndexes.add(indexId);
     this.clearWorkerTimeout(indexId);
+
+    // BDHLNDR-126: if this index is only queued (not yet started), remove it
+    // from the queue so the gate draining later doesn't auto-start it —
+    // otherwise cancelling a queued index is silently undone.
+    const queuedIndex = codeSearchRepo.getIndexById(indexId);
+    if (queuedIndex) {
+      this.dequeueDirectory(queuedIndex.directoryPath);
+    }
 
     const worker = this.workers.get(indexId);
     if (worker) {
@@ -587,8 +615,9 @@ export class VectorSearchManager extends EventEmitter {
         break;
 
       case 'file-parsed':
-        // First file-parsed means initialization succeeded - clear the timeout
-        this.clearWorkerTimeout(indexId);
+        // BDHLNDR-126: liveness is now handled by the rolling inactivity
+        // watchdog (reset on every message), so don't clear the timeout here —
+        // that would disable the watchdog for the rest of the run.
         // File comes with embeddings already generated in worker
         // Just insert into DB (fast operation, won't block main thread)
         if (result.fileData) {
@@ -790,18 +819,21 @@ export class VectorSearchManager extends EventEmitter {
       return [];
     }
 
+    // Generate query embedding via the single embedding worker (BDHLNDR-126) —
+    // never a main-process ONNX session, which could race an active index. Only
+    // the embedding is guarded here; a DB/search failure (corruption, dimension
+    // mismatch) should surface, not be masked as an empty result.
+    let queryEmbedding: number[];
     try {
-      // Generate query embedding via the single embedding worker (BDHLNDR-126)
-      // — never a main-process ONNX session, which could race an active index.
-      const queryEmbedding = await getEmbeddingService().embedQuery(query);
-      if (queryEmbedding.length === 0) {
-        return [];
-      }
-      return codeSearchRepo.searchChunksByVector(index.id, queryEmbedding, limit);
+      queryEmbedding = await getEmbeddingService().embedQuery(query);
     } catch (err) {
       log.error('[VectorSearch] searchCode embedding failed:', err);
       return [];
     }
+    if (queryEmbedding.length === 0) {
+      return [];
+    }
+    return codeSearchRepo.searchChunksByVector(index.id, queryEmbedding, limit);
   }
 
   searchSymbols(
