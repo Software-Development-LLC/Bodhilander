@@ -25,6 +25,11 @@ export class EmbeddingService {
   private pending = new Map<string, PendingRequest>();
   private seq = 0;
 
+  // A stalled native inference emits no 'error'/'exit', so bound every request.
+  // Generous enough to cover a cold model download on the first call (matches
+  // the indexing init timeout); only a genuine hang trips it.
+  private static readonly REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
 
@@ -69,6 +74,11 @@ export class EmbeddingService {
     });
 
     const failAll = (err: Error) => {
+      // Only the current worker's terminal event may fail requests. 'error' and
+      // 'exit' both fire for a dying worker, and by the time the late one
+      // arrives a replacement worker may already own `this.worker`/`pending` —
+      // failing those would orphan a live worker and can leave two running.
+      if (this.worker !== worker) return;
       for (const [, p] of this.pending) p.reject(err);
       this.pending.clear();
       // Drop the reference so the next request respawns a fresh worker.
@@ -111,7 +121,27 @@ export class EmbeddingService {
     const worker = this.ensureWorker();
     const requestId = `${++this.seq}`;
     return new Promise<number[][]>((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (!this.pending.has(requestId)) return; // already settled
+        log.error(
+          `[EmbeddingService] Embed request ${requestId} exceeded ` +
+            `${EmbeddingService.REQUEST_TIMEOUT_MS}ms; restarting embedding worker`
+        );
+        // A hung worker won't recover on its own. Terminating fires 'exit' →
+        // failAll, which rejects every pending request for this worker and
+        // clears this.worker so the next request respawns a fresh one.
+        void worker.terminate();
+      }, EmbeddingService.REQUEST_TIMEOUT_MS);
+      this.pending.set(requestId, {
+        resolve: (embeddings) => {
+          clearTimeout(timer);
+          resolve(embeddings);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
       worker.postMessage({ type: 'embed', requestId, texts, isQuery });
     });
   }

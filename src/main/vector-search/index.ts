@@ -79,6 +79,7 @@ export class VectorSearchManager extends EventEmitter {
   // Serialize globally: at most ONE indexing worker runs at a time; the rest
   // queue here and drain as workers end.
   private activeIndexId: string | null = null;
+  private activeWorker: Worker | null = null; // the worker instance that holds the gate
   private indexQueue: string[] = []; // directoryPaths waiting for the gate
   private queuedDirectories: Set<string> = new Set(); // dedupe indexQueue
   private completedIndexes: Set<string> = new Set(); // clean terminate, not a crash
@@ -323,9 +324,29 @@ export class VectorSearchManager extends EventEmitter {
     workerOptions.stdout = true;
     workerOptions.stderr = true;
 
-    const worker = new Worker(workerPath, workerOptions);
+    // BDHLNDR-126: the gate is already taken; if the worker fails to construct
+    // synchronously there is no 'exit' handler yet to release it, and a
+    // stranded gate would kill indexing for the rest of the session.
+    let worker: Worker;
+    try {
+      worker = new Worker(workerPath, workerOptions);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      log.error('[VectorSearch] Failed to spawn indexing worker:', errorMsg);
+      codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
+      this.emit('indexing-error', {
+        indexId: index.id,
+        error: errorMsg,
+        directoryPath: index.directoryPath,
+      });
+      this.activeIndexId = null;
+      this.activeWorker = null;
+      this.startNextQueued();
+      return;
+    }
 
     this.workers.set(index.id, worker);
+    this.activeWorker = worker;
 
     // Forward worker stdout/stderr to electron-log so they land in the log file
     if (worker.stdout) {
@@ -353,6 +374,9 @@ export class VectorSearchManager extends EventEmitter {
     worker.on('error', (err: Error) => {
       log.error('[VectorSearch] Worker error:', err);
       log.error('[VectorSearch] Worker error stack:', err.stack);
+      // BDHLNDR-126: ignore an error from a worker that has already been
+      // superseded for this index (cancel + same-index restart).
+      if (this.workers.get(index.id) !== worker) return;
       const errorMsg = err.message || 'Worker thread error';
       codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
       this.workers.delete(index.id);
@@ -364,11 +388,23 @@ export class VectorSearchManager extends EventEmitter {
     });
 
     worker.on('exit', (code) => {
-      this.workers.delete(index.id);
-      // BDHLNDR-126: a clean completion terminates the worker on purpose (see
-      // handleIndexingComplete), which surfaces here as a non-zero exit code —
-      // don't misreport that as a crash.
+      // BDHLNDR-126: only the worker that still owns this index's slot / the
+      // gate may mutate shared state. A superseded worker (cancel + same-index
+      // restart during the terminate-await window) must not delete the new
+      // worker, report a false error, or release the new worker's gate.
+      const ownsSlot = this.workers.get(index.id) === worker;
+      const ownsGate = this.activeWorker === worker;
+
+      if (ownsSlot) {
+        this.workers.delete(index.id);
+      }
+
+      // A clean completion terminates the worker on purpose (non-zero code but
+      // not a crash). A real crash was already reported by the 'error' handler
+      // above, which deletes the slot — so ownsSlot is false here for crashes,
+      // which also prevents double-reporting the same failure.
       if (
+        ownsSlot &&
         code !== 0 &&
         !this.cancelledIndexes.has(index.id) &&
         !this.completedIndexes.has(index.id)
@@ -382,11 +418,17 @@ export class VectorSearchManager extends EventEmitter {
           directoryPath: index.directoryPath,
         });
       }
-      this.completedIndexes.delete(index.id);
-      // BDHLNDR-126: release the global gate and start the next queued index.
-      // 'exit' is the universal terminal event (fires after 'error', after
-      // terminate(), and on normal stop), so this is the single choke point.
-      this.releaseAndDrain(index.id);
+
+      if (ownsSlot) {
+        this.completedIndexes.delete(index.id);
+      }
+
+      // Release the global gate and start the next queued index.
+      if (ownsGate) {
+        this.activeIndexId = null;
+        this.activeWorker = null;
+        this.startNextQueued();
+      }
     });
 
     // Set a timeout for worker initialization (model download can take a while)
@@ -431,8 +473,18 @@ export class VectorSearchManager extends EventEmitter {
   private releaseAndDrain(indexId: string): void {
     if (this.activeIndexId === indexId) {
       this.activeIndexId = null;
+      this.activeWorker = null;
     }
     this.startNextQueued();
+  }
+
+  // BDHLNDR-126: remove a directory from the pending indexing queue so a
+  // delete/cancel can't be resurrected when the gate later drains.
+  private dequeueDirectory(directoryPath: string): void {
+    if (this.queuedDirectories.delete(directoryPath)) {
+      const i = this.indexQueue.indexOf(directoryPath);
+      if (i !== -1) this.indexQueue.splice(i, 1);
+    }
   }
 
   // BDHLNDR-126: if no worker is active, start indexing the next queued
@@ -495,19 +547,33 @@ export class VectorSearchManager extends EventEmitter {
   // embedding in the process is serialized through the one embedding worker,
   // so no two InferenceSession::Run ever overlap.
   private handleEmbedRequest(worker: Worker, msg: EmbedRequestMessage): void {
+    // The requesting worker may be terminated (cancel/dispose) before the
+    // embedding resolves; posting to a dead worker is pointless and can throw
+    // inside this .then, surfacing as an unhandledRejection.
+    const stillRunning = (): boolean => {
+      for (const w of this.workers.values()) {
+        if (w === worker) return true;
+      }
+      return false;
+    };
+    const reply = (payload: Record<string, unknown>): void => {
+      if (!stillRunning()) return;
+      try {
+        worker.postMessage(payload);
+      } catch (err) {
+        log.warn('[VectorSearch] Failed to deliver embedding to worker:', err);
+      }
+    };
     getEmbeddingService()
       .embed(msg.texts)
       .then(
-        (embeddings) => {
-          worker.postMessage({ type: 'embed-response', requestId: msg.requestId, embeddings });
-        },
-        (err: unknown) => {
-          worker.postMessage({
+        (embeddings) => reply({ type: 'embed-response', requestId: msg.requestId, embeddings }),
+        (err: unknown) =>
+          reply({
             type: 'embed-error',
             requestId: msg.requestId,
             error: err instanceof Error ? err.message : String(err),
-          });
-        }
+          })
       );
   }
 
@@ -724,11 +790,18 @@ export class VectorSearchManager extends EventEmitter {
       return [];
     }
 
-    // Generate query embedding via the single embedding worker (BDHLNDR-126) —
-    // never a main-process ONNX session, which could race an active index.
-    const queryEmbedding = await getEmbeddingService().embedQuery(query);
-
-    return codeSearchRepo.searchChunksByVector(index.id, queryEmbedding, limit);
+    try {
+      // Generate query embedding via the single embedding worker (BDHLNDR-126)
+      // — never a main-process ONNX session, which could race an active index.
+      const queryEmbedding = await getEmbeddingService().embedQuery(query);
+      if (queryEmbedding.length === 0) {
+        return [];
+      }
+      return codeSearchRepo.searchChunksByVector(index.id, queryEmbedding, limit);
+    } catch (err) {
+      log.error('[VectorSearch] searchCode embedding failed:', err);
+      return [];
+    }
   }
 
   searchSymbols(
@@ -756,6 +829,9 @@ export class VectorSearchManager extends EventEmitter {
   async deleteIndex(directoryPath: string): Promise<void> {
     const index = codeSearchRepo.getIndexByDirectory(directoryPath);
     if (index) {
+      // BDHLNDR-126: drop any queued entry so a later gate drain doesn't
+      // recreate and re-index the directory we're about to delete.
+      this.dequeueDirectory(directoryPath);
       this.stopWatching(index.id);
       // Await termination before deleting the DB row so any in-flight
       // writes from the dying worker don't resurrect a deleted index.
@@ -791,6 +867,7 @@ export class VectorSearchManager extends EventEmitter {
     // BDHLNDR-126: drop the serialization queue so worker exit handlers firing
     // after dispose (from the terminate() calls above) don't re-spawn workers.
     this.activeIndexId = null;
+    this.activeWorker = null;
     this.indexQueue = [];
     this.queuedDirectories.clear();
     this.completedIndexes.clear();
