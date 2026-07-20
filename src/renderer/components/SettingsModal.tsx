@@ -784,19 +784,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   </div>
 
                   {!apiStatus.running && (
-                    <>
-                      <div className="settings-row">
-                        <label htmlFor="api-port">Port:</label>
-                        <input
-                          id="api-port"
-                          type="number"
-                          value={port}
-                          onChange={e => setPort(parseInt(e.target.value) || 8443)}
-                          min={1024}
-                          max={65535}
-                        />
-                      </div>
-                    </>
+                    <div className="settings-row">
+                      <label htmlFor="api-port">Port:</label>
+                      <input
+                        id="api-port"
+                        type="number"
+                        value={port}
+                        onChange={e => setPort(parseInt(e.target.value) || 8443)}
+                        min={1024}
+                        max={65535}
+                      />
+                    </div>
                   )}
 
                   <div className="settings-actions">
