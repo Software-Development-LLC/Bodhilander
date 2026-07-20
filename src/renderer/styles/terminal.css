@@ -177,3 +177,78 @@
   color: #888;
   margin-left: 24px;
 }
+
+/* Provider launch-failure banner — overlays the top of the terminal inside
+   the .terminal-wrapper positioning context; static flow in the stopped view. */
+.provider-install-banner {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: #3a2e1e;
+  border: 1px solid #6a542e;
+  border-radius: 6px;
+  color: #f0e0b8;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.terminal-stopped .provider-install-banner {
+  position: static;
+  margin-bottom: 12px;
+  max-width: 560px;
+}
+
+.provider-install-banner code {
+  color: #ffd890;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.provider-install-banner-text {
+  flex: 1;
+  min-width: 240px;
+}
+
+.provider-install-banner-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.provider-install-banner-actions button {
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border: none;
+  background: #4a3c26;
+  color: #f0e0b8;
+}
+
+.provider-install-banner-actions button:hover {
+  background: #5a4a30;
+}
+
+.provider-install-banner-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.provider-install-banner-actions .primary {
+  background: linear-gradient(135deg, #5a7aff 0%, #69ADFF 100%);
+  color: #fff;
+  font-weight: 500;
+}
+
+.provider-install-banner-actions .primary:hover {
+  opacity: 0.9;
+}

@@ -13,6 +13,8 @@ import {
   ProviderDefinition,
 } from './providers';
 import { detectShell, ShellInfo } from './shell-detector';
+import { classifySpawnFailure } from './spawn-failure';
+import { ProviderInstallHint } from '../shared/types';
 import { getShellLaunch } from './shell-launch';
 import { getPreference } from './repositories/preferences';
 import {
@@ -51,6 +53,11 @@ interface PtySession {
   /** Set to true when kill() is in progress — guards against use-after-free on native PTY handle. */
   killing: boolean;
   /**
+   * Set once a launch-failure hint has been emitted for this session, so the
+   * renderer sees at most one banner per spawn.
+   */
+  spawnFailureNotified: boolean;
+  /**
    * When true, incoming pty output is accumulated in scrollbackBuffer but NOT
    * emitted as 'data' events (BDHLNDR-33). Used by the interactive-login pty
    * to avoid losing startup output in the window between pty spawn and the
@@ -70,6 +77,14 @@ const RESUME_FAILURE_WINDOW_MS = 5000;
 
 // Max scrollback buffer size (100KB should be plenty for recent terminal history)
 const MAX_SCROLLBACK_SIZE = 100 * 1024;
+
+/**
+ * Only classify launch failures in this window after spawn. The 'broken'
+ * patterns (`spawn ... ENOENT`) aren't tied to the provider's command name,
+ * so a running agent that later prints such an error from executing user
+ * code must not retrigger the banner.
+ */
+const SPAWN_FAILURE_WINDOW_MS = 15_000;
 
 /**
  * Provider-agnostic "waiting for user input" patterns — generic prompt shapes
@@ -238,6 +253,7 @@ export class PtyManager extends EventEmitter {
       this.emit('data', { id, data: filteredData });
 
       if (provider) {
+        this.checkSpawnFailure(id);
         this.detectAgentState(id, data);
       }
     });
@@ -305,6 +321,7 @@ export class PtyManager extends EventEmitter {
       lastCols: 80,
       lastRows: 24,
       killing: false,
+      spawnFailureNotified: false,
       // Regular sessions spawn only after the renderer explicitly called
       // pty:create, so listeners are already attached — no deferral needed.
       deferEmission: false,
@@ -406,6 +423,126 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Classify early session output as a CLI launch failure (missing from
+   * PATH, or installed-but-broken like codex's `spawn ... ENOENT`) and emit
+   * a one-shot 'providerHint' event so the renderer can show a friendly
+   * install banner. Checks the accumulated scrollback rather than the chunk,
+   * so an error split across pty reads still matches.
+   */
+  private checkSpawnFailure(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session?.provider || session.spawnFailureNotified) return;
+    if (Date.now() - session.spawnedAt > SPAWN_FAILURE_WINDOW_MS) return;
+
+    const kind = classifySpawnFailure(session.provider.command, session.scrollbackBuffer);
+    if (!kind) return;
+
+    session.spawnFailureNotified = true;
+    const { setup } = session.provider;
+    log.warn(`[PTY] ${session.provider.name} launch failure (${kind}) detected for session ${id}`);
+    const hint: ProviderInstallHint = {
+      sessionId: id,
+      providerId: session.provider.id,
+      providerName: session.provider.name,
+      command: session.provider.command,
+      kind,
+      installHint: setup.installHint,
+      installCommand: setup.installCommand ?? null,
+      docsUrl: setup.docsUrl,
+    };
+    this.emit('providerHint', hint);
+  }
+
+  /**
+   * Spawn a pty running a provider's install command so the user can watch it
+   * instead of copy-pasting into their own terminal (follow-up to #97's
+   * install hints). Runs through the user's shell like sessions do, defers
+   * emission until the renderer primes it (BDHLNDR-33), and exits when the
+   * install command does — the pty's exit code is the install's.
+   */
+  createInstallSession(id: string, installCommand: string): void {
+    const shellInfo = this.getShellInfo();
+    if (!shellInfo.shell || !fs.existsSync(shellInfo.shell)) {
+      throw new Error(`Shell not found: ${shellInfo.shell || '(empty)'}`);
+    }
+
+    const cwd = require('os').homedir();
+    // Static registry string (never user input) with no env interpolation.
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
+
+    log.info(`[PTY] Starting install pty ${id}: ${installCommand}`);
+
+    const ptyProcess = pty.spawn(shellLaunch.shell, shellLaunch.wrap(installCommand), {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: shellInfo.isWSL ? undefined : cwd,
+      env: process.env as { [key: string]: string },
+      ...(process.platform === 'win32' ? {
+        useConptyDll: true,
+        conptyInheritCursor: false,
+      } : {}),
+    });
+
+    ptyProcess.onData((data) => {
+      const session = this.sessions.get(id);
+      if (!session || session.killing) return;
+
+      let filteredData = data;
+      if (process.platform === 'win32') {
+        filteredData = filteredData.replace(/windows pid \d+, Win32 error \d+/gi, '');
+        if (filteredData.trim() === '') return;
+      }
+
+      session.scrollbackBuffer += filteredData;
+      if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
+        session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
+      }
+
+      if (session.deferEmission) return;
+
+      this.emit('data', { id, data: filteredData });
+    });
+
+    ptyProcess.onExit(({ exitCode }) => {
+      // Flush pre-prime output so a fast failure isn't a blank box.
+      const session = this.sessions.get(id);
+      if (session?.deferEmission && session.scrollbackBuffer) {
+        this.emit('data', { id, data: session.scrollbackBuffer });
+        session.deferEmission = false;
+      }
+      this.emit('exit', { id, exitCode });
+      this.sessions.delete(id);
+    });
+
+    this.sessions.set(id, {
+      id,
+      pty: ptyProcess,
+      cwd,
+      groupId: null,
+      // No provider: install ptys need no agent state detection or hints.
+      provider: null,
+      shellInfo,
+      lastState: 'idle',
+      outputBuffer: '',
+      scrollbackBuffer: '',
+      idleTimeout: null,
+      workingDebounce: null,
+      recentOutputBytes: 0,
+      lastOutputTime: 0,
+      resumeAttempted: false,
+      spawnedAt: Date.now(),
+      lastCols: 80,
+      lastRows: 24,
+      killing: false,
+      spawnFailureNotified: false,
+      // Spawned before the renderer's Terminal mounts — same race as the
+      // login pty (BDHLNDR-33).
+      deferEmission: true,
+    });
+  }
+
+  /**
    * Spawn a pty running `claude` under an isolated CLAUDE_CONFIG_DIR for the
    * interactive add-account login flow (BDHLNDR-31). Keyed by an arbitrary pty
    * id that's not tied to a DB session — reuses the standard pty events so the
@@ -501,6 +638,7 @@ export class PtyManager extends EventEmitter {
       lastCols: 80,
       lastRows: 24,
       killing: false,
+      spawnFailureNotified: false,
       // Login ptys defer event emission until the renderer attaches its
       // listener and calls primePty — avoids losing claude's startup banner
       // in the IPC-round-trip + React-render gap (BDHLNDR-33).

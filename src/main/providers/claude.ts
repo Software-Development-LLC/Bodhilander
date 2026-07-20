@@ -59,6 +59,9 @@ export const claudeProvider: ProviderDefinition = {
   },
   setup: {
     installHint: 'npm install -g @anthropic-ai/claude-code',
+    // --force so re-running repairs broken installs (missing platform
+    // optionalDependencies after an interrupted install or Rosetta npm).
+    installCommand: 'npm install -g --force @anthropic-ai/claude-code',
     docsUrl: 'https://docs.anthropic.com/en/docs/claude-code/setup',
     loginHint: 'Run `claude` and complete /login in the browser',
   },

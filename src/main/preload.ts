@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -195,6 +195,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   detectProviders: (): Promise<ProviderStatus[]> => ipcRenderer.invoke('providers:detect'),
+  runProviderInstall: (providerId: string): Promise<{ ptyId: string; command: string }> =>
+    ipcRenderer.invoke('providers:run-install', providerId),
+  cancelProviderInstall: (ptyId: string): Promise<void> =>
+    ipcRenderer.invoke('providers:cancel-install', ptyId),
+  onProviderInstallHint: (callback: (hint: ProviderInstallHint) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, hint: ProviderInstallHint) => callback(hint);
+    ipcRenderer.on('provider:install-hint', listener);
+    return () => {
+      ipcRenderer.removeListener('provider:install-hint', listener);
+    };
+  },
 
   // Provider API-key vault (#99) — keys go in, never come back out.
   vaultList: (): Promise<KeyVaultStatus[]> => ipcRenderer.invoke('vault:list'),

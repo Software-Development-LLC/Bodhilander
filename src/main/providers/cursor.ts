@@ -27,6 +27,7 @@ export const cursorProvider = passthroughProvider({
   },
   setup: {
     installHint: 'curl https://cursor.com/install -fsS | bash',
+    installCommand: 'curl https://cursor.com/install -fsS | bash',
     docsUrl: 'https://cursor.com/docs/cli/overview',
     loginHint: 'Run `cursor-agent login` (or set CURSOR_API_KEY)',
   },

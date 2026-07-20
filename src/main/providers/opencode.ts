@@ -25,6 +25,7 @@ export const opencodeProvider = passthroughProvider({
   },
   setup: {
     installHint: 'curl -fsSL https://opencode.ai/install | bash',
+    installCommand: 'curl -fsSL https://opencode.ai/install | bash',
     docsUrl: 'https://opencode.ai/docs',
     loginHint: 'Run `opencode auth login` and add a provider (or set that provider’s API key)',
   },
