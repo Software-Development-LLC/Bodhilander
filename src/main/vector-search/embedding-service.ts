@@ -25,6 +25,16 @@ export class EmbeddingService {
   private readonly pending = new Map<string, PendingRequest>();
   private seq = 0;
 
+  // A worker that timed out and was told to terminate, but whose 'exit' has
+  // not fired yet. terminate() reliably interrupts JS execution and
+  // Atomics.wait, but it CANNOT preempt a synchronous native call — a wedged
+  // InferenceSession::Run only lets the thread die when it returns. Until the
+  // exit is observed we must not spawn a replacement: two live ONNX sessions
+  // is the exact crash this service exists to prevent (BDHLNDR-126). While
+  // set, requests fail fast with a clear error instead of queueing behind a
+  // dead worker.
+  private blocked: Worker | null = null;
+
   // A stalled native inference emits no 'error'/'exit', so bound every request.
   // Generous enough to cover a cold model download on the first call (matches
   // the indexing init timeout); only a genuine hang trips it.
@@ -32,6 +42,15 @@ export class EmbeddingService {
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
+
+    if (this.blocked) {
+      // A hung worker is still shutting down (or wedged in a native call that
+      // terminate() cannot interrupt). Fail fast — callers surface this to the
+      // UI — and recover automatically the moment its 'exit' finally fires.
+      throw new Error(
+        'Embedding worker is unresponsive and still shutting down; embedding is temporarily unavailable'
+      );
+    }
 
     const workerPath = resolveVectorSearchWorker('embedding-worker.js');
     const workerOptions: any = { stdout: true, stderr: true };
@@ -103,6 +122,8 @@ export class EmbeddingService {
       if (code !== 0) {
         log.error(`[EmbeddingService] Worker exited with code ${code}`);
       }
+      // A timed-out worker has finally died — lift the respawn block.
+      if (this.blocked === worker) this.blocked = null;
       failAll(new Error(`Embedding worker exited (code ${code})`));
     });
 
@@ -136,12 +157,7 @@ export class EmbeddingService {
           `[EmbeddingService] Embed request ${requestId} exceeded ` +
             `${EmbeddingService.REQUEST_TIMEOUT_MS}ms; restarting embedding worker`
         );
-        // A hung worker won't recover on its own. Terminating fires 'exit' →
-        // failAll, which rejects every pending request for this worker and
-        // clears this.worker so the next request respawns a fresh one.
-        worker.terminate().catch((err) => {
-          log.warn('[EmbeddingService] Error terminating hung worker:', err);
-        });
+        this.failHungWorker(worker);
       }, EmbeddingService.REQUEST_TIMEOUT_MS);
       this.pending.set(requestId, {
         resolve: (embeddings) => {
@@ -157,6 +173,30 @@ export class EmbeddingService {
     });
   }
 
+  /**
+   * A request timed out — the worker is hung. Reject every pending request
+   * NOW rather than waiting for terminate() → 'exit': if the worker is wedged
+   * inside a synchronous native call (a stuck InferenceSession::Run),
+   * terminate() cannot interrupt it and 'exit' may not fire until the call
+   * returns — possibly never. Callers get an immediate, descriptive error
+   * (surfaced by searchCode / the indexing pipeline) instead of stacking more
+   * timeouts behind a dead worker. The worker is parked in `blocked` until its
+   * exit is actually observed, so we never overlap two ONNX sessions.
+   */
+  private failHungWorker(worker: Worker): void {
+    if (this.worker !== worker) return; // superseded; a newer worker owns state
+    const err = new Error(
+      `Embedding request timed out after ${EmbeddingService.REQUEST_TIMEOUT_MS}ms (embedding worker unresponsive)`
+    );
+    for (const [, p] of this.pending) p.reject(err);
+    this.pending.clear();
+    this.worker = null;
+    this.blocked = worker;
+    worker.terminate().catch((terminateErr) => {
+      log.warn('[EmbeddingService] Error terminating hung worker:', terminateErr);
+    });
+  }
+
   dispose(): void {
     for (const [, p] of this.pending) {
       p.reject(new Error('Embedding service disposed'));
@@ -168,6 +208,7 @@ export class EmbeddingService {
       });
       this.worker = null;
     }
+    this.blocked = null;
   }
 }
 

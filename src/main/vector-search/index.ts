@@ -263,6 +263,18 @@ export class VectorSearchManager extends EventEmitter {
     // indexing, queue this directory instead of spawning a second worker —
     // two concurrent onnxruntime InferenceSessions crash the process. The
     // queue is drained (startNextQueued) whenever the active worker ends.
+    //
+    // Same-index bypass invariant: `activeIndexId === index.id` here only
+    // happens during a cancel + immediate restart of the SAME index —
+    // cancelIndexing removes the worker from `workers` synchronously (so the
+    // `workers.has` guard above passes) but the gate stays held until the
+    // dying worker's 'exit' fires. The restart re-enters the gate it already
+    // owns and installs a new worker/activeWorker; the superseded worker's
+    // exit and error handlers are identity-guarded (ownsSlot/ownsGate below)
+    // so the late exit can neither kill the new worker nor release the new
+    // worker's gate. Changing any of these three pieces (sync workers.delete
+    // in cancelIndexing, this bypass, the identity guards) requires
+    // re-checking the other two.
     if (this.activeIndexId !== null && this.activeIndexId !== index.id) {
       if (!this.queuedDirectories.has(directoryPath)) {
         this.queuedDirectories.add(directoryPath);
@@ -822,15 +834,18 @@ export class VectorSearchManager extends EventEmitter {
     }
 
     // Generate query embedding via the single embedding worker (BDHLNDR-126) —
-    // never a main-process ONNX session, which could race an active index. Only
-    // the embedding is guarded here; a DB/search failure (corruption, dimension
-    // mismatch) should surface, not be masked as an empty result.
+    // never a main-process ONNX session, which could race an active index.
     let queryEmbedding: number[];
     try {
       queryEmbedding = await getEmbeddingService().embedQuery(query);
     } catch (err) {
       log.error('[VectorSearch] searchCode embedding failed:', err);
-      return [];
+      // Rethrow rather than returning [] — an empty array here is
+      // indistinguishable from "no matches" in the UI. The IPC handler
+      // propagates the rejection to useCodeSearch (which renders
+      // searchError) and the HTTP route maps it to a 500.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Semantic search is unavailable: ${msg}`);
     }
     if (queryEmbedding.length === 0) {
       return [];
