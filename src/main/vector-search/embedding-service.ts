@@ -22,7 +22,7 @@ interface PendingRequest {
  */
 export class EmbeddingService {
   private worker: Worker | null = null;
-  private pending = new Map<string, PendingRequest>();
+  private readonly pending = new Map<string, PendingRequest>();
   private seq = 0;
 
   // A stalled native inference emits no 'error'/'exit', so bound every request.
@@ -42,7 +42,7 @@ export class EmbeddingService {
       // node_modules for regular deps. Mirrors the indexing worker.
       const unpackedModules = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules');
       const asarModules = path.join(process.resourcesPath, 'app.asar', 'node_modules');
-      const existingNodePath = process.env.NODE_PATH || '';
+      const existingNodePath = process.env.NODE_PATH ?? '';
       const pathSep = process.platform === 'win32' ? ';' : ':';
       const newNodePath = [unpackedModules, asarModules, existingNodePath].filter(Boolean).join(pathSep);
       workerOptions.env = { ...process.env, NODE_PATH: newNodePath };
@@ -77,7 +77,7 @@ export class EmbeddingService {
         const p = this.pending.get(msg.requestId);
         if (p) {
           this.pending.delete(msg.requestId);
-          p.reject(new Error(msg.error || 'Embedding failed'));
+          p.reject(new Error(msg.error ?? 'Embedding failed'));
         }
       }
     });
@@ -139,7 +139,9 @@ export class EmbeddingService {
         // A hung worker won't recover on its own. Terminating fires 'exit' →
         // failAll, which rejects every pending request for this worker and
         // clears this.worker so the next request respawns a fresh one.
-        void worker.terminate();
+        worker.terminate().catch((err) => {
+          log.warn('[EmbeddingService] Error terminating hung worker:', err);
+        });
       }, EmbeddingService.REQUEST_TIMEOUT_MS);
       this.pending.set(requestId, {
         resolve: (embeddings) => {
@@ -161,7 +163,9 @@ export class EmbeddingService {
     }
     this.pending.clear();
     if (this.worker) {
-      void this.worker.terminate();
+      this.worker.terminate().catch((err) => {
+        log.warn('[EmbeddingService] Error terminating worker on dispose:', err);
+      });
       this.worker = null;
     }
   }
@@ -171,9 +175,7 @@ export class EmbeddingService {
 let service: EmbeddingService | null = null;
 
 export function getEmbeddingService(): EmbeddingService {
-  if (!service) {
-    service = new EmbeddingService();
-  }
+  service ??= new EmbeddingService();
   return service;
 }
 

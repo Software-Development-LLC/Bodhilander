@@ -86,8 +86,8 @@ export class VectorSearchManager extends EventEmitter {
   private activeIndexId: string | null = null;
   private activeWorker: Worker | null = null; // the worker instance that holds the gate
   private indexQueue: string[] = []; // directoryPaths waiting for the gate
-  private queuedDirectories: Set<string> = new Set(); // dedupe indexQueue
-  private completedIndexes: Set<string> = new Set(); // clean terminate, not a crash
+  private readonly queuedDirectories: Set<string> = new Set(); // dedupe indexQueue
+  private readonly completedIndexes: Set<string> = new Set(); // clean terminate, not a crash
 
   constructor() {
     super();
@@ -98,6 +98,55 @@ export class VectorSearchManager extends EventEmitter {
    * Worker threads cannot load from inside asar archives, so in packaged
    * builds we resolve to the app.asar.unpacked directory.
    */
+  /**
+   * BDHLNDR-46: if this index's stored vectors were generated with a different
+   * embedding version (e.g. fp32 from <= v3.3.1, now embedding at q8), they are
+   * not comparable to new query vectors. Wipe and rebuild from scratch rather
+   * than mixing incompatible vectors. Must run before the crash circuit breaker:
+   * clearIndexData resets status to 'pending', so a stale 'indexing' from an old
+   * crash can't be miscounted as a fresh crash.
+   */
+  private reconcileEmbeddingVersion(index: CodeIndex, directoryPath: string): void {
+    const persistedEmbeddingVersion = codeSearchRepo.getEmbeddingVersion(index.id);
+    if (persistedEmbeddingVersion === EMBEDDING_VERSION) return;
+
+    if ((index.chunkCount ?? 0) > 0) {
+      log.warn(
+        `[VectorSearch] Embedding version changed ` +
+          `(${persistedEmbeddingVersion} → ${EMBEDDING_VERSION}) for ${directoryPath}; ` +
+          `clearing stale vectors and re-indexing from scratch`
+      );
+      codeSearchRepo.clearIndexData(index.id, EMBEDDING_VERSION);
+    } else {
+      // Nothing indexed yet — just stamp the current embedding version.
+      codeSearchRepo.setEmbeddingVersion(index.id, EMBEDDING_VERSION);
+    }
+  }
+
+  /**
+   * Worker options for an indexing worker. In packaged apps the worker's
+   * require() resolves from inside the asar by default, but native modules live
+   * in app.asar.unpacked — so PREPEND that to NODE_PATH, preserving the existing
+   * value so non-native modules still resolve from the archive.
+   */
+  private buildIndexingWorkerOptions(): Record<string, unknown> {
+    // Capture worker stdout/stderr for debugging
+    const workerOptions: Record<string, unknown> = { stdout: true, stderr: true };
+
+    if (app.isPackaged) {
+      const unpackedModules = path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules');
+      const asarModules = path.join(process.resourcesPath, 'app.asar', 'node_modules');
+      const existingNodePath = process.env.NODE_PATH ?? '';
+      const pathSep = process.platform === 'win32' ? ';' : ':';
+      const newNodePath = [unpackedModules, asarModules, existingNodePath]
+        .filter(Boolean)
+        .join(pathSep);
+      workerOptions.env = { ...process.env, NODE_PATH: newNodePath };
+    }
+
+    return workerOptions;
+  }
+
   private getWorkerPath(): string {
     return resolveVectorSearchWorker('indexing-worker.js');
   }
@@ -226,26 +275,7 @@ export class VectorSearchManager extends EventEmitter {
       return;
     }
 
-    // BDHLNDR-46: if this index's stored vectors were generated with a
-    // different embedding version (e.g. fp32 from <= v3.3.1, now embedding at
-    // q8), they are not comparable to new query vectors. Wipe and rebuild from
-    // scratch rather than mixing incompatible vectors. Runs before the circuit
-    // breaker below: clearIndexData resets status to 'pending', so a stale
-    // 'indexing' from an old crash can't be miscounted as a fresh crash here.
-    const persistedEmbeddingVersion = codeSearchRepo.getEmbeddingVersion(index.id);
-    if (persistedEmbeddingVersion !== EMBEDDING_VERSION) {
-      if ((index.chunkCount ?? 0) > 0) {
-        log.warn(
-          `[VectorSearch] Embedding version changed ` +
-            `(${persistedEmbeddingVersion} → ${EMBEDDING_VERSION}) for ${directoryPath}; ` +
-            `clearing stale vectors and re-indexing from scratch`
-        );
-        codeSearchRepo.clearIndexData(index.id, EMBEDDING_VERSION);
-      } else {
-        // Nothing indexed yet — just stamp the current embedding version.
-        codeSearchRepo.setEmbeddingVersion(index.id, EMBEDDING_VERSION);
-      }
-    }
+    this.reconcileEmbeddingVersion(index, directoryPath);
 
     // BDHLNDR-40 circuit breaker: a fresh status of 'indexing' here means a
     // previous attempt started but the process never reached a terminal state
@@ -295,39 +325,7 @@ export class VectorSearchManager extends EventEmitter {
     // In packaged apps, worker_threads cannot load from inside asar archives,
     // so we must use the unpacked path for both the script and module resolution
     const workerPath = this.getWorkerPath();
-    const workerOptions: any = {};
-
-    if (app.isPackaged) {
-      // Worker's require() resolves modules from inside the asar by default.
-      // Native modules (onnxruntime-node, etc.) are in app.asar.unpacked,
-      // so we PREPEND the unpacked node_modules to NODE_PATH.
-      // We must preserve existing NODE_PATH so the worker can still access
-      // non-native modules from inside the asar archive.
-      const unpackedModules = path.join(
-        process.resourcesPath,
-        'app.asar.unpacked',
-        'node_modules'
-      );
-      const asarModules = path.join(
-        process.resourcesPath,
-        'app.asar',
-        'node_modules'
-      );
-      const existingNodePath = process.env.NODE_PATH || '';
-      const pathSep = process.platform === 'win32' ? ';' : ':';
-      // Prepend unpacked (for native), then asar (for regular modules)
-      const newNodePath = [unpackedModules, asarModules, existingNodePath]
-        .filter(Boolean)
-        .join(pathSep);
-      workerOptions.env = {
-        ...process.env,
-        NODE_PATH: newNodePath,
-      };
-    }
-
-    // Capture worker stdout/stderr for debugging
-    workerOptions.stdout = true;
-    workerOptions.stderr = true;
+    const workerOptions = this.buildIndexingWorkerOptions();
 
     // BDHLNDR-126: the gate is already taken; if the worker fails to construct
     // synchronously there is no 'exit' handler yet to release it, and a
@@ -476,7 +474,9 @@ export class VectorSearchManager extends EventEmitter {
       const errorMsg = 'Indexing worker timed out (no progress)';
       log.error('[VectorSearch]', errorMsg);
       // cancelIndexing terminates the worker → its 'exit' releases the gate.
-      void this.cancelIndexing(index.id);
+      this.cancelIndexing(index.id).catch((err) => {
+        log.error('[VectorSearch] Error cancelling hung worker:', err);
+      });
       codeSearchRepo.updateIndexStatus(index.id, 'error', errorMsg);
       this.emit('indexing-error', {
         indexId: index.id,
@@ -514,7 +514,7 @@ export class VectorSearchManager extends EventEmitter {
     const next = this.indexQueue.shift();
     if (!next) return;
     this.queuedDirectories.delete(next);
-    void this.startIndexing(next).catch((err) => {
+    this.startIndexing(next).catch((err) => {
       log.error('[VectorSearch] Failed to start queued index:', err);
       // Don't strand the rest of the queue behind a failed dequeue.
       this.startNextQueued();
@@ -736,7 +736,9 @@ export class VectorSearchManager extends EventEmitter {
     this.completedIndexes.add(indexId);
     const finishedWorker = this.workers.get(indexId);
     if (finishedWorker) {
-      void finishedWorker.terminate();
+      finishedWorker.terminate().catch((err) => {
+        log.warn('[VectorSearch] Error terminating finished worker:', err);
+      });
     } else {
       // No worker to terminate (shouldn't happen); free the gate directly.
       this.completedIndexes.delete(indexId);

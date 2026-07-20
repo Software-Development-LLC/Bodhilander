@@ -110,7 +110,7 @@ parentPort?.on(
       const p = pendingEmbeds.get(message.requestId);
       if (p) {
         pendingEmbeds.delete(message.requestId);
-        p.reject(new Error(message.error || 'Embedding failed'));
+        p.reject(new Error(message.error ?? 'Embedding failed'));
       }
     }
   }
@@ -165,6 +165,91 @@ parentPort?.on('message', async (message: WorkerMessage) => {
   }
 });
 
+// Generate embeddings in batches for better throughput.
+// BDHLNDR-40: peak ONNX tensor ≈ BATCH_SIZE × longest-seq-in-batch. 32 was a key
+// contributor to the arena-exhaustion crash; 16 halves peak memory. Per-text
+// embeddings are independent of batch size (no cross-sequence attention), so
+// this is numerically identical — no re-index needed.
+const BATCH_SIZE = 16;
+
+type DiscoveredFile = Awaited<ReturnType<typeof discoverFiles>>[number];
+
+interface EmbedStats {
+  attempted: number;
+  succeeded: number;
+}
+
+/**
+ * Embed chunk texts in bounded batches via the shared embedding worker. A failed
+ * batch yields nulls for its chunks and the run continues.
+ */
+async function embedChunkTexts(
+  texts: string[],
+  filePath: string
+): Promise<{ embeddings: (number[] | null)[]; stats: EmbedStats }> {
+  const embeddings: (number[] | null)[] = [];
+  const stats: EmbedStats = { attempted: 0, succeeded: 0 };
+
+  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+    if (cancelled) break;
+    const batch = texts.slice(i, i + BATCH_SIZE);
+    stats.attempted += batch.length;
+    try {
+      const batchEmbeddings = await requestEmbeddings(batch);
+      for (const embedding of batch.map((_, j) => batchEmbeddings[j] ?? null)) {
+        if (embedding) stats.succeeded++;
+        embeddings.push(embedding);
+      }
+    } catch (embErr) {
+      console.warn(`[IndexingWorker] Batch embedding failed for ${filePath}:`, embErr);
+      for (const _ of batch) embeddings.push(null);
+    }
+  }
+
+  return { embeddings, stats };
+}
+
+/**
+ * Parse one file, embed its chunks, and ship the result to the main process.
+ * Returns embedding stats, or null if the file could not be processed.
+ */
+async function processFile(indexId: string, file: DiscoveredFile): Promise<EmbedStats | null> {
+  try {
+    const content = await fs.promises.readFile(file.path, 'utf-8');
+    const ext = path.extname(file.path).toLowerCase();
+    const language = getLanguageFromExtension(ext);
+
+    const { chunks, symbols } = language
+      ? parseCode(content, language)
+      : { chunks: [], symbols: [] };
+
+    let chunksWithEmbeddings: ChunkWithEmbedding[] = [];
+    let stats: EmbedStats = { attempted: 0, succeeded: 0 };
+
+    if (chunks.length > 0) {
+      const textsToEmbed = chunks.map(chunk => {
+        const contextPrefix =
+          `File: ${file.relativePath} | Type: ${chunk.chunkType ?? 'code'} | Code:\n`;
+        return contextPrefix + chunk.content;
+      });
+      const result = await embedChunkTexts(textsToEmbed, file.path);
+      stats = result.stats;
+      chunksWithEmbeddings = chunks.map((chunk, i) => ({
+        ...chunk,
+        embedding: result.embeddings[i] ?? null,
+      }));
+    }
+
+    // Send complete file data (with embeddings) to main process
+    sendFileParsed(indexId, file.path, file.relativePath, file.mtime, chunksWithEmbeddings, symbols);
+    return stats;
+  } catch (err) {
+    // Log error but continue with other files
+    console.error(`[IndexingWorker] Error processing file ${file.path}:`, err);
+    return null;
+  }
+}
+
 async function runIndexing(
   indexId: string,
   directoryPath: string
@@ -186,67 +271,16 @@ async function runIndexing(
     let embedAttempted = 0;
     let embedSucceeded = 0;
 
-    // Process each file - parse AND generate embeddings in worker
+    // Process each file - parse in this worker, embed via the shared worker
     for (const file of files) {
       if (cancelled) return;
 
       sendProgress(indexId, directoryPath, totalFiles, filesIndexed, 'embedding', file.relativePath);
 
-      try {
-        const content = await fs.promises.readFile(file.path, 'utf-8');
-        const ext = path.extname(file.path).toLowerCase();
-        const language = getLanguageFromExtension(ext);
-
-        const { chunks, symbols } = language
-          ? parseCode(content, language)
-          : { chunks: [], symbols: [] };
-
-        // Generate embeddings in batches for better throughput.
-        // BDHLNDR-40: peak ONNX tensor ≈ BATCH_SIZE × longest-seq-in-batch.
-        // 32 was a key contributor to the arena-exhaustion crash; 16 halves
-        // peak memory. Per-text embeddings are independent of batch size
-        // (no cross-sequence attention), so this is numerically identical —
-        // no re-index needed.
-        const BATCH_SIZE = 16;
-        const chunksWithEmbeddings: ChunkWithEmbedding[] = [];
-        if (chunks.length > 0) {
-          const textsToEmbed = chunks.map(chunk => {
-            const contextPrefix = `File: ${file.relativePath} | Type: ${chunk.chunkType || 'code'} | Code:
-`;
-            return contextPrefix + chunk.content;
-          });
-
-          for (let i = 0; i < textsToEmbed.length; i += BATCH_SIZE) {
-            if (cancelled) return;
-            const batch = textsToEmbed.slice(i, i + BATCH_SIZE);
-            embedAttempted += batch.length;
-            try {
-              const embeddings = await requestEmbeddings(batch);
-              for (let j = 0; j < batch.length; j++) {
-                const embedding = embeddings[j] ?? null;
-                if (embedding) embedSucceeded++;
-                chunksWithEmbeddings.push({
-                  ...chunks[i + j],
-                  embedding,
-                });
-              }
-            } catch (embErr) {
-              console.warn(`[IndexingWorker] Batch embedding failed for ${file.path}:`, embErr);
-              for (let j = 0; j < batch.length; j++) {
-                chunksWithEmbeddings.push({
-                  ...chunks[i + j],
-                  embedding: null,
-                });
-              }
-            }
-          }
-        }
-        // Send complete file data (with embeddings) to main process
-        sendFileParsed(indexId, file.path, file.relativePath, file.mtime, chunksWithEmbeddings, symbols);
-
-      } catch (err) {
-        // Log error but continue with other files
-        console.error(`[IndexingWorker] Error processing file ${file.path}:`, err);
+      const stats = await processFile(indexId, file);
+      if (stats) {
+        embedAttempted += stats.attempted;
+        embedSucceeded += stats.succeeded;
       }
 
       filesIndexed++;

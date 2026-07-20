@@ -65,9 +65,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 function getProvider(): HuggingFaceEmbeddingProviderType {
-  if (!provider) {
-    provider = new HuggingFaceEmbeddingProviderClass();
-  }
+  provider ??= new HuggingFaceEmbeddingProviderClass();
   return provider;
 }
 
