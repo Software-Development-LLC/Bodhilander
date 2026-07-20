@@ -81,7 +81,17 @@ export class HuggingFaceEmbeddingProvider implements EmbeddingProvider {
     }
 
     this.initPromise = this.doInitialize();
-    await this.initPromise;
+    try {
+      await this.initPromise;
+    } catch (err) {
+      // BDHLNDR-126: a failed init must not poison the provider. Since all
+      // embedding now shares ONE long-lived provider in ONE worker, leaving a
+      // rejected initPromise would make every future embed/search re-throw the
+      // stale error process-wide until app restart. Null it so a later call
+      // retries doInitialize (which has its own bounded retries).
+      this.initPromise = null;
+      throw err;
+    }
   }
 
   private async doInitialize(): Promise<void> {
