@@ -20,7 +20,8 @@ import { EventEmitter } from 'events';
 mock.module('electron', () => ({
   app: {
     isPackaged: false,
-    getPath: () => '/tmp/bodhilander-test-userdata',
+    // A fake, never-written path — the fs layer is fully mocked in these tests.
+    getPath: () => '/bodhilander-test-fixtures/userdata',
   },
 }));
 
@@ -49,7 +50,7 @@ mock.module('../embedding-provider', () => ({ EMBEDDING_VERSION: 2 }));
  * cannot preempt — it never settles and never exits.
  */
 class FakeWorker extends EventEmitter {
-  static instances: FakeWorker[] = [];
+  static readonly instances: FakeWorker[] = [];
   posted: any[] = [];
   terminated = false;
   hung = false;
@@ -183,11 +184,19 @@ mock.module('../embedding-service', () => ({
 const { VectorSearchManager } = await import('../index');
 
 const tick = () => new Promise<void>((r) => setImmediate(r));
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 const lastWorker = () => FakeWorker.instances[FakeWorker.instances.length - 1];
 const DEFAULT_TIMEOUT_MS = (RealEmbeddingService as any).REQUEST_TIMEOUT_MS;
 
 afterEach(() => {
-  FakeWorker.instances = [];
+  FakeWorker.instances.length = 0;
   indexes.clear();
   indexSeq = 0;
   vectorSearchCalls.length = 0;
@@ -429,15 +438,12 @@ describe('VectorSearchManager indexing gate', () => {
     const idxA = repo.getIndexByDirectory('/proj/a');
     const w = lastWorker();
 
-    let release!: () => void;
-    embedImpl = () =>
-      new Promise((resolve) => {
-        release = () => resolve([[0.5]]);
-      });
+    const pending = deferred<number[][]>();
+    embedImpl = () => pending.promise;
     w.msg({ type: 'embed-request', requestId: 'r1', texts: ['chunk'] });
     await m.cancelIndexing(idxA.id);
     const postedBefore = w.posted.length;
-    release();
+    pending.resolve([[0.5]]);
     await tick();
     expect(w.posted.length).toBe(postedBefore); // no reply to a dead worker
     m.dispose();
