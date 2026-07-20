@@ -58,6 +58,11 @@ describe('detectProviders', () => {
       expect(s.name.length).toBeGreaterThan(0);
       expect(s.command.length).toBeGreaterThan(0);
       expect(s.installHint.length).toBeGreaterThan(0);
+      // Runnable install command is optional (null for GUI-install providers)
+      // but must be a non-empty string when present.
+      if (s.installCommand !== null) {
+        expect(s.installCommand.length).toBeGreaterThan(0);
+      }
       expect(s.docsUrl.startsWith('https://')).toBe(true);
       expect(s.loginHint.length).toBeGreaterThan(0);
       if (!s.installed) {

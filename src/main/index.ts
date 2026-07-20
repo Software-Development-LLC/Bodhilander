@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { resolveLaunchProviderId } from './providers';
+import { startProviderInstall, cancelProviderInstall } from './provider-install';
 import { detectProviders } from './provider-detector';
 import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
@@ -639,6 +640,11 @@ function createWindow(): void {
     getApiServer().broadcastSessionState(event.sessionId, event.state, event.event);
   });
 
+  // Provider CLI launch-failure hints (missing/broken install banner)
+  ptyManager.on('providerHint', (hint) => {
+    mainWindow?.webContents.send('provider:install-hint', hint);
+  });
+
   // Save window bounds on resize/move
   const saveWindowBounds = () => {
     if (!mainWindow) return;
@@ -1258,6 +1264,15 @@ safeHandle('editor:detectAvailable', async () => {
 safeHandle('providers:detect', async () => {
   return detectProviders();
 });
+
+// Run a provider's install command in a visible pty the renderer attaches a
+// Terminal to (Settings → Providers "Install" button / launch-failure
+// banner). Validation + orchestration live in provider-install.ts.
+safeHandle('providers:run-install', (providerId: unknown) =>
+  startProviderInstall(ptyManager, providerId));
+
+safeHandle('providers:cancel-install', (ptyId: unknown) =>
+  cancelProviderInstall(ptyManager, ptyId));
 
 // Provider API-key vault (#99). Keys go in and are tested; they are never
 // returned to the renderer. IPC is a trust boundary — validate argument

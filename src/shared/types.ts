@@ -141,8 +141,28 @@ export interface ProviderStatus {
   /** First version-looking line of `<command> --version`, when available. */
   version: string | null;
   installHint: string;
+  /** Runnable install command Bodhilander can execute for the user, when one exists. */
+  installCommand: string | null;
   docsUrl: string;
   loginHint: string;
+}
+
+/**
+ * Emitted when a provider session's CLI failed to launch (missing from PATH,
+ * or installed-but-broken — e.g. codex's native binary absent). The renderer
+ * shows a friendly banner with the install guidance instead of leaving the
+ * user to decode a raw `spawn ... ENOENT`.
+ */
+export interface ProviderInstallHint {
+  sessionId: string;
+  providerId: string;
+  providerName: string;
+  /** CLI binary name (e.g. 'codex'). */
+  command: string;
+  kind: 'missing' | 'broken';
+  installHint: string;
+  installCommand: string | null;
+  docsUrl: string;
 }
 
 /**

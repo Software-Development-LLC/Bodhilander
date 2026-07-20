@@ -8,14 +8,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // Import types for TypeScript (compile-time only)
-import type { HuggingFaceEmbeddingProvider as HuggingFaceEmbeddingProviderType } from './embedding-provider';
 import type { ParsedSymbol } from './parser';
 
 // Wrap imports that depend on native modules in try/catch to log failures
 let discoverFiles: typeof import('./file-discovery').discoverFiles;
 let getLanguageFromExtension: typeof import('./file-discovery').getLanguageFromExtension;
 let parseCode: typeof import('./parser').parseCode;
-let HuggingFaceEmbeddingProviderClass: typeof import('./embedding-provider').HuggingFaceEmbeddingProvider;
 
 try {
   console.log('[IndexingWorker] Loading file-discovery module...');
@@ -38,15 +36,9 @@ try {
   throw e;
 }
 
-try {
-  console.log('[IndexingWorker] Loading embedding-provider module...');
-  const embeddingModule = require('./embedding-provider');
-  HuggingFaceEmbeddingProviderClass = embeddingModule.HuggingFaceEmbeddingProvider;
-  console.log('[IndexingWorker] embedding-provider loaded successfully');
-} catch (e) {
-  console.error('[IndexingWorker] Failed to load embedding-provider:', e);
-  throw e;
-}
+// BDHLNDR-126: this worker no longer loads onnxruntime/@huggingface/transformers.
+// Embeddings are produced by the single shared embedding worker so only one
+// InferenceSession exists in the whole process.
 
 interface WorkerMessage {
   type: 'start' | 'cancel';
@@ -86,8 +78,43 @@ interface WorkerResult {
   error?: string;
 }
 
-// Embedding provider instance for this worker
-let embeddingProvider: HuggingFaceEmbeddingProviderType | null = null;
+// BDHLNDR-126: embeddings come from the single embedding worker via the main
+// process. This worker parses files and asks main to embed each batch
+// (embed-request → embed-response/embed-error), correlated by requestId, so
+// only one onnxruntime InferenceSession exists across the whole process.
+interface PendingEmbed {
+  resolve: (embeddings: number[][]) => void;
+  reject: (err: Error) => void;
+}
+const pendingEmbeds = new Map<string, PendingEmbed>();
+let embedSeq = 0;
+
+function requestEmbeddings(texts: string[]): Promise<number[][]> {
+  const requestId = `${++embedSeq}`;
+  return new Promise<number[][]>((resolve, reject) => {
+    pendingEmbeds.set(requestId, { resolve, reject });
+    parentPort?.postMessage({ type: 'embed-request', requestId, texts });
+  });
+}
+
+parentPort?.on(
+  'message',
+  (message: { type?: string; requestId?: string; embeddings?: number[][]; error?: string }) => {
+    if (message?.type === 'embed-response' && message.requestId) {
+      const p = pendingEmbeds.get(message.requestId);
+      if (p) {
+        pendingEmbeds.delete(message.requestId);
+        p.resolve(message.embeddings ?? []);
+      }
+    } else if (message?.type === 'embed-error' && message.requestId) {
+      const p = pendingEmbeds.get(message.requestId);
+      if (p) {
+        pendingEmbeds.delete(message.requestId);
+        p.reject(new Error(message.error ?? 'Embedding failed'));
+      }
+    }
+  }
+);
 
 let cancelled = false;
 
@@ -138,21 +165,98 @@ parentPort?.on('message', async (message: WorkerMessage) => {
   }
 });
 
+// Generate embeddings in batches for better throughput.
+// BDHLNDR-40: peak ONNX tensor ≈ BATCH_SIZE × longest-seq-in-batch. 32 was a key
+// contributor to the arena-exhaustion crash; 16 halves peak memory. Per-text
+// embeddings are independent of batch size (no cross-sequence attention), so
+// this is numerically identical — no re-index needed.
+const BATCH_SIZE = 16;
+
+type DiscoveredFile = Awaited<ReturnType<typeof discoverFiles>>[number];
+
+interface EmbedStats {
+  attempted: number;
+  succeeded: number;
+}
+
+/**
+ * Embed chunk texts in bounded batches via the shared embedding worker. A failed
+ * batch yields nulls for its chunks and the run continues.
+ */
+async function embedChunkTexts(
+  texts: string[],
+  filePath: string
+): Promise<{ embeddings: (number[] | null)[]; stats: EmbedStats }> {
+  const embeddings: (number[] | null)[] = [];
+  const stats: EmbedStats = { attempted: 0, succeeded: 0 };
+
+  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+    if (cancelled) break;
+    const batch = texts.slice(i, i + BATCH_SIZE);
+    stats.attempted += batch.length;
+    try {
+      const batchEmbeddings = await requestEmbeddings(batch);
+      for (const embedding of batch.map((_, j) => batchEmbeddings[j] ?? null)) {
+        if (embedding) stats.succeeded++;
+        embeddings.push(embedding);
+      }
+    } catch (embErr) {
+      console.warn(`[IndexingWorker] Batch embedding failed for ${filePath}:`, embErr);
+      for (const _ of batch) embeddings.push(null);
+    }
+  }
+
+  return { embeddings, stats };
+}
+
+/**
+ * Parse one file, embed its chunks, and ship the result to the main process.
+ * Returns embedding stats, or null if the file could not be processed.
+ */
+async function processFile(indexId: string, file: DiscoveredFile): Promise<EmbedStats | null> {
+  try {
+    const content = await fs.promises.readFile(file.path, 'utf-8');
+    const ext = path.extname(file.path).toLowerCase();
+    const language = getLanguageFromExtension(ext);
+
+    const { chunks, symbols } = language
+      ? parseCode(content, language)
+      : { chunks: [], symbols: [] };
+
+    let chunksWithEmbeddings: ChunkWithEmbedding[] = [];
+    let stats: EmbedStats = { attempted: 0, succeeded: 0 };
+
+    if (chunks.length > 0) {
+      const textsToEmbed = chunks.map(chunk => {
+        const contextPrefix =
+          `File: ${file.relativePath} | Type: ${chunk.chunkType ?? 'code'} | Code:\n`;
+        return contextPrefix + chunk.content;
+      });
+      const result = await embedChunkTexts(textsToEmbed, file.path);
+      stats = result.stats;
+      chunksWithEmbeddings = chunks.map((chunk, i) => ({
+        ...chunk,
+        embedding: result.embeddings[i] ?? null,
+      }));
+    }
+
+    // Send complete file data (with embeddings) to main process
+    sendFileParsed(indexId, file.path, file.relativePath, file.mtime, chunksWithEmbeddings, symbols);
+    return stats;
+  } catch (err) {
+    // Log error but continue with other files
+    console.error(`[IndexingWorker] Error processing file ${file.path}:`, err);
+    return null;
+  }
+}
+
 async function runIndexing(
   indexId: string,
   directoryPath: string
 ): Promise<void> {
   try {
-    // Initialize embedding provider if not already done
-    if (!embeddingProvider) {
-      sendProgress(indexId, directoryPath, 0, 0, 'parsing', 'Loading embedding model...');
-      console.log('[IndexingWorker] Initializing embedding provider...');
-      embeddingProvider = new HuggingFaceEmbeddingProviderClass();
-      await embeddingProvider.initialize();
-      console.log('[IndexingWorker] Embedding provider initialized successfully');
-    }
-
-    // Discover files
+    // Discover files. Embeddings are generated by the single embedding worker
+    // (BDHLNDR-126); this worker only parses and requests embeddings over RPC.
     sendProgress(indexId, directoryPath, 0, 0, 'parsing', 'Discovering files...');
     const files = await discoverFiles(directoryPath);
     console.log(`[IndexingWorker] Discovered ${files.length} files in ${directoryPath}`);
@@ -161,65 +265,22 @@ async function runIndexing(
 
     const totalFiles = files.length;
     let filesIndexed = 0;
+    // BDHLNDR-126: track embedding success so a run where EVERY batch failed
+    // (e.g. the embedding worker is persistently down) is reported as an error
+    // instead of being silently marked 'ready' with all-null vectors.
+    let embedAttempted = 0;
+    let embedSucceeded = 0;
 
-    // Process each file - parse AND generate embeddings in worker
+    // Process each file - parse in this worker, embed via the shared worker
     for (const file of files) {
       if (cancelled) return;
 
       sendProgress(indexId, directoryPath, totalFiles, filesIndexed, 'embedding', file.relativePath);
 
-      try {
-        const content = await fs.promises.readFile(file.path, 'utf-8');
-        const ext = path.extname(file.path).toLowerCase();
-        const language = getLanguageFromExtension(ext);
-
-        const { chunks, symbols } = language
-          ? parseCode(content, language)
-          : { chunks: [], symbols: [] };
-
-        // Generate embeddings in batches for better throughput.
-        // BDHLNDR-40: peak ONNX tensor ≈ BATCH_SIZE × longest-seq-in-batch.
-        // 32 was a key contributor to the arena-exhaustion crash; 16 halves
-        // peak memory. Per-text embeddings are independent of batch size
-        // (no cross-sequence attention), so this is numerically identical —
-        // no re-index needed.
-        const BATCH_SIZE = 16;
-        const chunksWithEmbeddings: ChunkWithEmbedding[] = [];
-        if (chunks.length > 0) {
-          const textsToEmbed = chunks.map(chunk => {
-            const contextPrefix = `File: ${file.relativePath} | Type: ${chunk.chunkType || 'code'} | Code:
-`;
-            return contextPrefix + chunk.content;
-          });
-
-          for (let i = 0; i < textsToEmbed.length; i += BATCH_SIZE) {
-            if (cancelled) return;
-            const batch = textsToEmbed.slice(i, i + BATCH_SIZE);
-            try {
-              const embeddings = await embeddingProvider!.embed(batch);
-              for (let j = 0; j < batch.length; j++) {
-                chunksWithEmbeddings.push({
-                  ...chunks[i + j],
-                  embedding: embeddings[j] ?? null,
-                });
-              }
-            } catch (embErr) {
-              console.warn(`[IndexingWorker] Batch embedding failed for ${file.path}:`, embErr);
-              for (let j = 0; j < batch.length; j++) {
-                chunksWithEmbeddings.push({
-                  ...chunks[i + j],
-                  embedding: null,
-                });
-              }
-            }
-          }
-        }
-        // Send complete file data (with embeddings) to main process
-        sendFileParsed(indexId, file.path, file.relativePath, file.mtime, chunksWithEmbeddings, symbols);
-
-      } catch (err) {
-        // Log error but continue with other files
-        console.error(`[IndexingWorker] Error processing file ${file.path}:`, err);
+      const stats = await processFile(indexId, file);
+      if (stats) {
+        embedAttempted += stats.attempted;
+        embedSucceeded += stats.succeeded;
       }
 
       filesIndexed++;
@@ -228,6 +289,14 @@ async function runIndexing(
       // flush. Without this, long runs silently pin the worker thread for
       // minutes and the user has no way to stop them.
       await new Promise(resolve => setImmediate(resolve));
+    }
+
+    // BDHLNDR-126: if there was content to embed but not a single embedding
+    // succeeded, the embedding pipeline is down — don't mark the index 'ready'
+    // (which would look complete yet return nothing and suppress a re-index).
+    if (embedAttempted > 0 && embedSucceeded === 0) {
+      sendError(indexId, 'Embedding failed for all content (embedding service unavailable)');
+      return;
     }
 
     sendComplete(indexId);

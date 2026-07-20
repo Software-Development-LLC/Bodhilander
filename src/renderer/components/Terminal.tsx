@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebglAddon } from 'xterm-addon-webgl';
+import { ProviderInstallHint } from '../../shared/types';
+import { ProviderInstallModal } from './ProviderInstallModal';
 import 'xterm/css/xterm.css';
 import '../styles/terminal.css';
 
@@ -59,6 +61,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const [isRunning, setIsRunning] = useState(!isStopped);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
+  // Launch-failure hint from main (provider CLI missing or broken): shown as
+  // a dismissible banner over the terminal, with a one-click (re)install.
+  const [installHint, setInstallHint] = useState<ProviderInstallHint | null>(null);
+  const [installFlow, setInstallFlow] = useState<{ ptyId: string; command: string } | null>(null);
+  const [installSucceeded, setInstallSucceeded] = useState(false);
 
   // Track isActive in a ref so handleResize (set up in the main effect which
   // does NOT depend on isActive) can skip hidden terminals. Without this,
@@ -99,6 +106,31 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       console.warn('[Terminal] resize during teardown (non-fatal):', e);
     }
   }, [sessionId]);
+
+  // Surface provider launch failures (spawn ENOENT / command not found)
+  // detected by main for this session's pty.
+  useEffect(() => {
+    if (externalPty) return; // login/install ptys never produce hints
+    return window.electronAPI.onProviderInstallHint((hint) => {
+      if (hint.sessionId === sessionId) {
+        setInstallHint(hint);
+        setInstallSucceeded(false);
+      }
+    });
+  }, [sessionId, externalPty]);
+
+  const handleRunInstall = useCallback(async () => {
+    if (!installHint?.installCommand) return;
+    // Install commands run remote scripts / global npm installs — show the
+    // exact command before executing anything.
+    if (!window.confirm(`This will run in your shell:\n\n${installHint.installCommand}\n\nContinue?`)) return;
+    try {
+      const flow = await window.electronAPI.runProviderInstall(installHint.providerId);
+      setInstallFlow(flow);
+    } catch (err) {
+      console.error('Failed to start provider install:', err);
+    }
+  }, [installHint]);
 
   // Sync isStopped prop changes to isRunning state (fixes stop button)
   useEffect(() => {
@@ -542,12 +574,16 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
 
   const handleStart = () => {
     setError(null);
+    setInstallHint(null);
+    setInstallSucceeded(false);
     setIsRunning(true);
     onStart?.();
   };
 
   const handleRetry = () => {
     setError(null);
+    setInstallHint(null);
+    setInstallSucceeded(false);
     setIsRunning(false);
     // Small delay then restart
     setTimeout(() => {
@@ -555,6 +591,68 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       onStart?.();
     }, 100);
   };
+
+  // Launch-failure banner + install modal, shared by the running and stopped
+  // views (a 'missing' CLI usually exits the shell, flipping this component
+  // into its stopped state — the hint must survive that).
+  const renderBannerText = (hint: ProviderInstallHint): React.ReactNode => {
+    if (installSucceeded) {
+      return <>Install finished — restart the session to try again.</>;
+    }
+    if (hint.kind === 'missing') {
+      return (
+        <>
+          The {hint.providerName} CLI (<code>{hint.command}</code>) wasn't found on your
+          PATH. Install it with <code>{hint.installHint}</code>, or let Bodhilander do it.
+        </>
+      );
+    }
+    return (
+      <>
+        The <code>{hint.command}</code> CLI is installed but failed to start — its install
+        looks broken (often a missing native binary after an interrupted or
+        wrong-architecture install). Reinstalling usually fixes it.
+      </>
+    );
+  };
+
+  const renderBannerAction = (hint: ProviderInstallHint): React.ReactNode => {
+    if (installSucceeded) {
+      return <button className="primary" onClick={handleRetry}>Restart session</button>;
+    }
+    if (hint.installCommand) {
+      return (
+        <button className="primary" disabled={!!installFlow} onClick={handleRunInstall}>
+          {hint.kind === 'missing' ? 'Install for me' : 'Reinstall for me'}
+        </button>
+      );
+    }
+    return null;
+  };
+
+  const installHintUi = installHint && (
+    <>
+      <div className="provider-install-banner">
+        <div className="provider-install-banner-text">{renderBannerText(installHint)}</div>
+        <div className="provider-install-banner-actions">
+          {renderBannerAction(installHint)}
+          <button onClick={() => window.electronAPI.openExternal(installHint.docsUrl)}>Docs ↗</button>
+          <button onClick={() => setInstallHint(null)}>Dismiss</button>
+        </div>
+      </div>
+      {installFlow && (
+        <ProviderInstallModal
+          providerName={installHint.providerName}
+          command={installFlow.command}
+          ptyId={installFlow.ptyId}
+          onClose={(succeeded) => {
+            setInstallFlow(null);
+            if (succeeded) setInstallSucceeded(true);
+          }}
+        />
+      )}
+    </>
+  );
 
   if (error) {
     return (
@@ -572,6 +670,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   if (!isRunning) {
     return (
       <div className="terminal-stopped">
+        {installHintUi}
         <p>Session stopped</p>
         <button onClick={handleStart}>Start Session</button>
       </div>
@@ -585,6 +684,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         className="terminal-container"
         onContextMenu={handleContextMenu}
       />
+      {installHintUi}
       {contextMenu.visible && (
         <div
           className="terminal-context-menu"

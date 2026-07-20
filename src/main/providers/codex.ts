@@ -32,6 +32,10 @@ export const codexProvider = passthroughProvider({
   },
   setup: {
     installHint: 'npm install -g @openai/codex',
+    // --force so re-running repairs broken installs — the classic failure is
+    // npm dropping @openai/codex-<platform>'s vendored native binary, which
+    // then dies with `spawn ... ENOENT` (user report, 2026-07).
+    installCommand: 'npm install -g --force @openai/codex',
     docsUrl: 'https://developers.openai.com/codex/cli',
     loginHint: 'Run `codex login` (ChatGPT account) or set OPENAI_API_KEY',
   },
