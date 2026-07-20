@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'elect
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
-import { resolveLaunchProviderId, listProviders } from './providers';
+import { resolveLaunchProviderId } from './providers';
+import { startProviderInstall, cancelProviderInstall } from './provider-install';
 import { detectProviders } from './provider-detector';
 import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
@@ -1266,29 +1267,12 @@ safeHandle('providers:detect', async () => {
 
 // Run a provider's install command in a visible pty the renderer attaches a
 // Terminal to (Settings → Providers "Install" button / launch-failure
-// banner). Commands come from the static provider registry only — the
-// renderer sends just the provider id.
-safeHandle('providers:run-install', async (providerId: unknown) => {
-  const id = requireIpcString(providerId, 'providerId');
-  const provider = listProviders().find((p) => p.id === id);
-  const command = provider?.setup.installCommand;
-  if (!provider || !command) {
-    throw new Error(`Provider '${id}' has no runnable install command`);
-  }
-  const ptyId = `__install-${id}`;
-  // A previous run's pty may still be around (user reopened the modal).
-  await ptyManager.kill(ptyId);
-  ptyManager.createInstallSession(ptyId, command);
-  return { ptyId, command };
-});
+// banner). Validation + orchestration live in provider-install.ts.
+safeHandle('providers:run-install', (providerId: unknown) =>
+  startProviderInstall(ptyManager, providerId));
 
-safeHandle('providers:cancel-install', async (ptyId: unknown) => {
-  const id = requireIpcString(ptyId, 'ptyId');
-  if (!id.startsWith('__install-')) {
-    throw new Error('Not an install pty');
-  }
-  await ptyManager.kill(id);
-});
+safeHandle('providers:cancel-install', (ptyId: unknown) =>
+  cancelProviderInstall(ptyManager, ptyId));
 
 // Provider API-key vault (#99). Keys go in and are tested; they are never
 // returned to the renderer. IPC is a trust boundary — validate argument

@@ -1,5 +1,6 @@
 import * as pty from 'node-pty';
 import * as fs from 'fs';
+import * as os from 'os';
 import { execFile } from 'child_process';
 import { EventEmitter } from 'events';
 import {
@@ -58,6 +59,14 @@ interface PtySession {
    */
   spawnFailureNotified: boolean;
   /**
+   * Output retained for launch-failure classification. Separate from
+   * scrollbackBuffer, whose tail-keeping 100KB trim could evict an early
+   * failure line behind a chatty startup. This buffer keeps output from the
+   * HEAD (capped at LAUNCH_OUTPUT_CAP) and is emptied once the failure
+   * window passes or a hint fires, so it never outlives spawn diagnosis.
+   */
+  launchOutput: string;
+  /**
    * When true, incoming pty output is accumulated in scrollbackBuffer but NOT
    * emitted as 'data' events (BDHLNDR-33). Used by the interactive-login pty
    * to avoid losing startup output in the window between pty spawn and the
@@ -85,6 +94,14 @@ const MAX_SCROLLBACK_SIZE = 100 * 1024;
  * code must not retrigger the banner.
  */
 const SPAWN_FAILURE_WINDOW_MS = 15_000;
+
+/**
+ * Cap on the per-session launch-output buffer. A genuinely failing launch
+ * produces far less than this inside the failure window, so the signature is
+ * always retained; the cap only bounds memory if a healthy chatty session
+ * floods the first seconds.
+ */
+const LAUNCH_OUTPUT_CAP = 256 * 1024;
 
 /**
  * Provider-agnostic "waiting for user input" patterns — generic prompt shapes
@@ -253,6 +270,7 @@ export class PtyManager extends EventEmitter {
       this.emit('data', { id, data: filteredData });
 
       if (provider) {
+        this.recordLaunchOutput(session, filteredData);
         this.checkSpawnFailure(id);
         this.detectAgentState(id, data);
       }
@@ -322,6 +340,7 @@ export class PtyManager extends EventEmitter {
       lastRows: 24,
       killing: false,
       spawnFailureNotified: false,
+      launchOutput: '',
       // Regular sessions spawn only after the renderer explicitly called
       // pty:create, so listeners are already attached — no deferral needed.
       deferEmission: false,
@@ -423,21 +442,38 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Accumulate output into the launch-failure buffer while it can still
+   * matter; free it the moment it can't (hint already fired, or the failure
+   * window has passed).
+   */
+  private recordLaunchOutput(session: PtySession, data: string): void {
+    if (session.spawnFailureNotified) return;
+    if (Date.now() - session.spawnedAt > SPAWN_FAILURE_WINDOW_MS) {
+      session.launchOutput = '';
+      return;
+    }
+    if (session.launchOutput.length < LAUNCH_OUTPUT_CAP) {
+      session.launchOutput = (session.launchOutput + data).slice(0, LAUNCH_OUTPUT_CAP);
+    }
+  }
+
+  /**
    * Classify early session output as a CLI launch failure (missing from
    * PATH, or installed-but-broken like codex's `spawn ... ENOENT`) and emit
    * a one-shot 'providerHint' event so the renderer can show a friendly
-   * install banner. Checks the accumulated scrollback rather than the chunk,
-   * so an error split across pty reads still matches.
+   * install banner. Checks the accumulated launch buffer rather than the
+   * chunk, so an error split across pty reads still matches.
    */
   private checkSpawnFailure(id: string): void {
     const session = this.sessions.get(id);
     if (!session?.provider || session.spawnFailureNotified) return;
     if (Date.now() - session.spawnedAt > SPAWN_FAILURE_WINDOW_MS) return;
 
-    const kind = classifySpawnFailure(session.provider.command, session.scrollbackBuffer);
+    const kind = classifySpawnFailure(session.provider.command, session.launchOutput);
     if (!kind) return;
 
     session.spawnFailureNotified = true;
+    session.launchOutput = '';
     const { setup } = session.provider;
     log.warn(`[PTY] ${session.provider.name} launch failure (${kind}) detected for session ${id}`);
     const hint: ProviderInstallHint = {
@@ -466,7 +502,7 @@ export class PtyManager extends EventEmitter {
       throw new Error(`Shell not found: ${shellInfo.shell || '(empty)'}`);
     }
 
-    const cwd = require('os').homedir();
+    const cwd = os.homedir();
     // Static registry string (never user input) with no env interpolation.
     const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
 
@@ -536,6 +572,7 @@ export class PtyManager extends EventEmitter {
       lastRows: 24,
       killing: false,
       spawnFailureNotified: false,
+      launchOutput: '',
       // Spawned before the renderer's Terminal mounts — same race as the
       // login pty (BDHLNDR-33).
       deferEmission: true,
@@ -558,7 +595,7 @@ export class PtyManager extends EventEmitter {
       throw new Error(`Shell not found: ${shellInfo.shell || '(empty)'}`);
     }
 
-    const cwd = require('os').homedir();
+    const cwd = os.homedir();
     const processEnv: { [key: string]: string } = {
       ...(process.env as { [key: string]: string }),
       [CLAUDE_CONFIG_DIR_ENV]: configDir,
@@ -639,6 +676,7 @@ export class PtyManager extends EventEmitter {
       lastRows: 24,
       killing: false,
       spawnFailureNotified: false,
+      launchOutput: '',
       // Login ptys defer event emission until the renderer attaches its
       // listener and calls primePty — avoids losing claude's startup banner
       // in the IPC-round-trip + React-render gap (BDHLNDR-33).

@@ -30,6 +30,9 @@ export const ProviderSettings: React.FC = () => {
   }, [refresh]);
 
   const handleInstall = useCallback(async (p: ProviderStatus) => {
+    // Install commands run remote scripts / global npm installs — show the
+    // exact command before executing anything.
+    if (!window.confirm(`This will run in your shell:\n\n${p.installCommand}\n\nContinue?`)) return;
     try {
       const { ptyId, command } = await window.electronAPI.runProviderInstall(p.id);
       setInstallFlow({ name: p.name, ptyId, command });
