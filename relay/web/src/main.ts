@@ -36,7 +36,7 @@ function toggleTheme() { const d = !isDark(); root.setAttribute('data-theme', d 
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
-const app = { conn: null as RelayConnection | null, machine: null as Machine | null, sessions: [] as RSession[], groups: [] as RGroup[], activeId: null as string | null, fp: '', fpVerified: false, devLogin: false };
+const app = { conn: null as RelayConnection | null, machine: null as Machine | null, machines: [] as Machine[], sessions: [] as RSession[], groups: [] as RGroup[], activeId: null as string | null, fp: '', fpVerified: false, devLogin: false };
 const rootEl = document.getElementById('root')!;
 
 // history-layer nav so Back works within the app
@@ -77,15 +77,21 @@ function renderSignIn() {
 // Main app shell
 // ---------------------------------------------------------------------------
 function renderApp(machines: Machine[]) {
+  app.machines = machines;
   if (!machines.length) {
     rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
       <div class="logo">🖥️</div><h1>No machines linked</h1>
-      <p>In the desktop app, open <b>Settings → Remote Hosting → Generate link code</b>, then link it here.</p>
-      <button class="btn ghost" onclick="location.reload()">Refresh</button>
+      <p>In the desktop app, open <b>Settings → Remote Hosting → Generate link code</b>, then enter the code here to link it.</p>
+      <button class="btn" id="linkBtn">Link a machine</button>
+      <button class="btn ghost" style="margin-top:10px" onclick="location.reload()">Refresh</button>
     </div></div>`;
+    $('#linkBtn')!.onclick = openLinkMachine;
     return;
   }
-  app.machine = machines[0]!; // TODO: machine switcher when >1
+  // Pick the last machine the user chose here, else the first. A machine
+  // switcher (the pill) lets them change it or link another.
+  const preferredId = localStorage.getItem('bodhi.machineId');
+  app.machine = machines.find((m) => m.id === preferredId) ?? machines[0]!;
 
   rootEl.innerHTML = `
   <div class="app">
@@ -124,6 +130,7 @@ function renderApp(machines: Machine[]) {
   $('#theme')!.onclick = toggleTheme;
   $('#fab')!.onclick = openCreate;
   $('#fpBtn')!.onclick = openFp; $('#fpBtn2')!.onclick = openFp;
+  $('#machineBtn')!.onclick = openMachineMenu;
   $('#back')!.onclick = () => history.back();
   buildKeys();
   setupCompose();
@@ -180,7 +187,16 @@ function onAgentMessage(m: Inner) {
     return;
   }
   if (m.type === 'terminal:size') { if (m.sessionId === app.activeId && term) term.resize(Math.max(2, Number(m.cols) || 80), Math.max(2, Number(m.rows) || 24)); return; }
-  if (m.type === 'terminal:output') { if (m.sessionId === app.activeId && term) term.write(String(m.data)); return; }
+  if (m.type === 'terminal:output') {
+    if (m.sessionId === app.activeId && term) {
+      // .screen owns the scroll now, so keep it pinned to the latest output
+      // (tail) unless the user has scrolled up to read history.
+      const screen = $('#screen');
+      const atBottom = !screen || screen.scrollHeight - screen.scrollTop - screen.clientHeight < 40;
+      term.write(String(m.data), () => { if (atBottom && screen) screen.scrollTop = screen.scrollHeight; });
+    }
+    return;
+  }
   if (m.type === 'terminal:exit') { if (m.sessionId === app.activeId && term) term.write('\r\n\x1b[90m[session exited]\x1b[0m\r\n'); return; }
   if (m.type === 'error') { /* surface transient errors */ console.warn('agent error:', m.message); }
 }
@@ -253,7 +269,24 @@ function ensureTerm() {
   // fit/resize the PTY. We only keep the pane sized to the visible viewport so
   // the on-screen keyboard doesn't hide it (and can't be over-scrolled past).
   const vv = window.visualViewport;
-  if (vv) vv.addEventListener('resize', () => { const tp = $('.term-pane'); if (tp && matchMedia('(max-width:859px)').matches) tp.style.height = vv.height + 'px'; });
+  if (vv) {
+    vv.addEventListener('resize', syncTermPane);
+    vv.addEventListener('scroll', syncTermPane);
+  }
+}
+
+// Pin the terminal pane to the *visual* viewport. The layout viewport (what a
+// `position: fixed; inset: 0` pane fills) is taller than the visible area on
+// mobile — browser chrome and the on-screen keyboard live outside it — so the
+// compose bar and the terminal's bottom rows end up below the fold with no way
+// to reach them. Matching vv.height keeps everything visible; matching
+// vv.offsetTop corrects the iOS keyboard, which offsets the viewport too.
+function syncTermPane() {
+  const vv = window.visualViewport;
+  const tp = $('.term-pane');
+  if (!vv || !tp || !matchMedia('(max-width:859px)').matches) return;
+  tp.style.height = vv.height + 'px';
+  tp.style.top = vv.offsetTop + 'px';
 }
 
 function updateTermHeader() {
@@ -275,6 +308,8 @@ function openTerminal(s: RSession) {
   $('#tMeta')!.innerHTML = `<span class="${s.state === 'waiting' ? '' : ''}">${s.state === 'waiting' ? '● waiting for you' : s.state}</span> · ${esc(gp.label)}`;
   $('#attnBanner')!.classList.toggle('hidden', s.state !== 'waiting');
   document.body.setAttribute('data-view', 'term');
+  syncTermPane();
+  requestAnimationFrame(syncTermPane);
   pushLayer(() => { document.body.removeAttribute('data-view'); if (app.activeId) app.conn?.command({ type: 'terminal:unsubscribe', sessionId: app.activeId }); app.activeId = null; });
   requestAnimationFrame(() => { term!.focus(); });
   app.conn?.command({ type: 'terminal:subscribe', sessionId: s.id });
@@ -452,6 +487,95 @@ function renderDirs(d: { path: string; entries: string[] }) {
   list.innerHTML = '';
   if (!d.entries.length) list.appendChild(h('li', {}, '<div class="dir empty">No subfolders — use this folder</div>'));
   for (const name of d.entries) { const b = h('button', { class: 'dir' }, `<span class="f-ico">📁</span><span class="f-name">${esc(name)}</span><span class="f-chev">›</span>`); b.onclick = () => browseDir(d.path.replace(/\/$/, '') + '/' + name); const li = document.createElement('li'); li.appendChild(b); list.appendChild(li); }
+}
+
+// ---------------------------------------------------------------------------
+// Machine switching + linking
+// ---------------------------------------------------------------------------
+function openMachineMenu() {
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim open';
+  scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="mmh">
+    <div class="sheet-head"><h3 id="mmh">Machines</h3><button class="iconbtn" id="mmx" aria-label="Close">✕</button></div>
+    <ul class="grouptree" id="mmList" role="listbox" aria-label="Choose a machine"></ul>
+    <button class="newgroup" id="mmLink">＋ Link another machine</button>
+  </div>`;
+  document.body.appendChild(scrim);
+  pushLayer(() => scrim.remove());
+  scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
+  $('#mmx')!.onclick = () => history.back();
+  const list = $('#mmList')!;
+  for (const m of app.machines) {
+    const sel = m.id === app.machine?.id;
+    const b = h('button', { class: 'gitem', role: 'option', 'aria-selected': String(sel) },
+      `<span class="g-dot" style="background:${sel ? 'var(--idle)' : 'var(--stop)'}"></span><span class="g-name">${esc(m.name)}</span><span class="g-check">✓</span>`);
+    b.onclick = () => {
+      if (sel) { history.back(); return; }
+      localStorage.setItem('bodhi.machineId', m.id);
+      location.reload();
+    };
+    const li = document.createElement('li'); li.appendChild(b); list.appendChild(li);
+  }
+  // Stack the link sheet on top of the menu (like the create → new-group
+  // flow). Do NOT history.back() first: popstate is async and would fire
+  // after openLinkMachine() pushed its layer, tearing the link sheet down.
+  $('#mmLink')!.onclick = () => openLinkMachine();
+}
+
+function openLinkMachine() {
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim open';
+  scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="lkh">
+    <div class="sheet-head"><h3 id="lkh">Link a machine</h3><button class="iconbtn" id="lkx" aria-label="Close">✕</button></div>
+    <p>In the desktop app open <b>Settings → Remote Hosting → Generate link code</b>, then enter the code here.</p>
+    <div class="fld-label">Link code</div>
+    <input class="txt" id="lkCode" placeholder="XXXX-XXXX" autocapitalize="characters" autocomplete="off" spellcheck="false" />
+    <div class="banner err hidden" id="lkErr" role="alert"></div>
+    <button class="btn" id="lkGo" style="margin-top:16px">Link machine</button>
+  </div>`;
+  document.body.appendChild(scrim);
+  pushLayer(() => scrim.remove());
+  scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
+  $('#lkx')!.onclick = () => history.back();
+  const codeInput = $<HTMLInputElement>('#lkCode')!;
+  const err = $('#lkErr')!;
+  const go = $<HTMLButtonElement>('#lkGo')!;
+  setTimeout(() => codeInput.focus(), 50);
+  codeInput.addEventListener('input', () => { codeInput.value = codeInput.value.toUpperCase(); });
+  const submit = async () => {
+    const code = codeInput.value.trim();
+    if (!code) return;
+    go.disabled = true; err.classList.add('hidden');
+    try {
+      const res = await api('/link/claim', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) });
+      if (res.ok) {
+        const { machine } = (await res.json()) as { machine: Machine };
+        localStorage.setItem('bodhi.machineId', machine.id);
+        location.reload();
+        return;
+      }
+      const data = (await res.json().catch(() => ({ error: 'link_failed' }))) as { error?: string };
+      err.textContent = linkErrorText(data.error);
+      err.classList.remove('hidden');
+      go.disabled = false;
+    } catch {
+      err.textContent = "Couldn't reach the relay. Check your connection and try again.";
+      err.classList.remove('hidden');
+      go.disabled = false;
+    }
+  };
+  go.onclick = submit;
+  codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+}
+
+function linkErrorText(error?: string): string {
+  switch (error) {
+    case 'link_not_found': return "That code wasn't found — double-check it and try again.";
+    case 'link_expired': return 'That code expired. Generate a fresh one in the desktop app.';
+    case 'link_already_used': return 'That code was already used. Generate a new one.';
+    case 'invalid_request': return 'Enter a valid link code.';
+    default: return "Couldn't link that code. Please try again.";
+  }
 }
 
 boot();
