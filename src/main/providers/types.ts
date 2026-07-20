@@ -119,6 +119,14 @@ export interface ProviderDefinition {
   setup: {
     /** Install command or instruction, shown as copyable text. */
     installHint: string;
+    /**
+     * Directly runnable install command Bodhilander can execute for the user
+     * in a visible pty (Settings → Providers "Install" button and the
+     * launch-failure banner). Must be non-interactive and safe to re-run over
+     * an existing install — it doubles as the repair path for broken installs.
+     * Omit when installation needs manual steps (e.g. a GUI download).
+     */
+    installCommand?: string;
     /** Official installation/authentication documentation URL. */
     docsUrl: string;
     /** How to authenticate after installing. */

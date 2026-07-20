@@ -102,6 +102,7 @@ export function detectProviders(): Promise<ProviderStatus[]> {
         installed,
         version,
         installHint: p.setup.installHint,
+        installCommand: p.setup.installCommand ?? null,
         docsUrl: p.setup.docsUrl,
         loginHint: p.setup.loginHint,
       };

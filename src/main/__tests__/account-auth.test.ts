@@ -42,6 +42,10 @@ mock.module('../repositories/accounts', () => ({
     if (i >= 0) accounts.splice(i, 1);
   },
   getAccount: (id: string) => accounts.find((a) => a.id === id) ?? null,
+  // Unused here, but pty-manager imports these names from the same module —
+  // bun's mock.module patches globally, so keep the surface a superset.
+  resolveAccountForSession: () => null,
+  touchAccount: () => undefined,
 }));
 
 mock.module('../mcp-config', () => ({
