@@ -61,7 +61,7 @@ const BROKEN_PATTERNS: readonly RegExp[] = [
 function stripAnsi(text: string): string {
   return text
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // NOSONAR(S6324) ESC required to strip CSI sequences
-    .replace(/\x1b\][^\x07]*\x07/g, '');
+    .replace(/\x1b\][^\x07]*\x07/g, ''); // NOSONAR(S6324) ESC/BEL delimit OSC sequences
 }
 
 /**

@@ -592,34 +592,47 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // Launch-failure banner + install modal, shared by the running and stopped
   // views (a 'missing' CLI usually exits the shell, flipping this component
   // into its stopped state — the hint must survive that).
+  const renderBannerText = (hint: ProviderInstallHint): React.ReactNode => {
+    if (installSucceeded) {
+      return <>Install finished — restart the session to try again.</>;
+    }
+    if (hint.kind === 'missing') {
+      return (
+        <>
+          The {hint.providerName} CLI (<code>{hint.command}</code>) wasn't found on your
+          PATH. Install it with <code>{hint.installHint}</code>, or let Bodhilander do it.
+        </>
+      );
+    }
+    return (
+      <>
+        The <code>{hint.command}</code> CLI is installed but failed to start — its install
+        looks broken (often a missing native binary after an interrupted or
+        wrong-architecture install). Reinstalling usually fixes it.
+      </>
+    );
+  };
+
+  const renderBannerAction = (hint: ProviderInstallHint): React.ReactNode => {
+    if (installSucceeded) {
+      return <button className="primary" onClick={handleRetry}>Restart session</button>;
+    }
+    if (hint.installCommand) {
+      return (
+        <button className="primary" disabled={!!installFlow} onClick={handleRunInstall}>
+          {hint.kind === 'missing' ? 'Install for me' : 'Reinstall for me'}
+        </button>
+      );
+    }
+    return null;
+  };
+
   const installHintUi = installHint && (
     <>
       <div className="provider-install-banner">
-        <div className="provider-install-banner-text">
-          {installSucceeded ? (
-            <>Install finished — restart the session to try again.</>
-          ) : installHint.kind === 'missing' ? (
-            <>
-              The {installHint.providerName} CLI (<code>{installHint.command}</code>) wasn't
-              found on your PATH. Install it with <code>{installHint.installHint}</code>, or
-              let Bodhilander do it.
-            </>
-          ) : (
-            <>
-              The <code>{installHint.command}</code> CLI is installed but failed to start —
-              its install looks broken (often a missing native binary after an interrupted
-              or wrong-architecture install). Reinstalling usually fixes it.
-            </>
-          )}
-        </div>
+        <div className="provider-install-banner-text">{renderBannerText(installHint)}</div>
         <div className="provider-install-banner-actions">
-          {installSucceeded ? (
-            <button className="primary" onClick={handleRetry}>Restart session</button>
-          ) : installHint.installCommand ? (
-            <button className="primary" disabled={!!installFlow} onClick={handleRunInstall}>
-              {installHint.kind === 'missing' ? 'Install for me' : 'Reinstall for me'}
-            </button>
-          ) : null}
+          {renderBannerAction(installHint)}
           <button onClick={() => window.electronAPI.openExternal(installHint.docsUrl)}>Docs ↗</button>
           <button onClick={() => setInstallHint(null)}>Dismiss</button>
         </div>

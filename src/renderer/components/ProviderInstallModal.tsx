@@ -47,11 +47,10 @@ export const ProviderInstallModal: React.FC<ProviderInstallModalProps> = ({
   }, [exitCode, onClose, providerName, ptyId]);
 
   return (
-    <div className="modal-overlay" onClick={(e) => e.stopPropagation()}>
-      <div
+    <div className="modal-overlay">
+      <dialog
+        open
         className="provider-install-modal"
-        role="dialog"
-        aria-modal="true"
         aria-labelledby="provider-install-title"
       >
         <h3 id="provider-install-title">Installing {providerName}</h3>
@@ -86,7 +85,7 @@ export const ProviderInstallModal: React.FC<ProviderInstallModalProps> = ({
             {exitCode === null ? 'Cancel install' : 'Close'}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 };

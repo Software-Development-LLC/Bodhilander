@@ -1,6 +1,10 @@
 /* Provider install modal — reuses the global .modal-overlay */
 
 .provider-install-modal {
+  /* Native <dialog> UA-style resets so it behaves as a plain flex child of
+     the centered .modal-overlay. */
+  position: static;
+  margin: 0;
   background: #252526;
   border: 1px solid #3c3c3c;
   border-radius: 8px;
