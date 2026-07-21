@@ -154,9 +154,25 @@ let lastSessionsJson = '';
 function startPolling() { stopPolling(); pollTimer = setInterval(() => app.conn?.command({ type: 'sessions:list' }), 2500); }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+// Re-open the channel after a delay. Used both when the socket drops (`closed`)
+// and when the agent is `offline` — in the offline case the relay keeps our
+// socket open but won't route until the desktop connects, so without this the
+// view stays stuck on "offline" until a manual refresh even after the machine
+// comes online. Retrying makes it recover on its own within a few seconds.
+function scheduleReconnect(delayMs: number) {
+  if (reconnectTimer) return; // one attempt already in flight
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    app.conn?.close();
+    connect();
+  }, delayMs);
+}
+
 function onConnState(s: ConnState, detail?: string) {
   const dot = $('#mdot'); const list = $('#sessions');
   if (s === 'ready') {
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     dot?.classList.remove('off');
     app.conn!.command({ type: 'groups:list' });
     app.conn!.command({ type: 'sessions:list' });
@@ -164,12 +180,13 @@ function onConnState(s: ConnState, detail?: string) {
   } else if (s === 'offline') {
     stopPolling(); dot?.classList.add('off');
     if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">🌙</div><p>This machine is offline. It'll appear here when it reconnects.</p></li>`;
+    scheduleReconnect(3000); // agent not connected yet — keep polling until it appears
   } else if (s === 'error') {
     stopPolling(); dot?.classList.add('off');
     if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">⚠️</div><p>${esc(detail || 'Connection problem.')}</p></li>`;
   } else if (s === 'closed') {
     stopPolling(); dot?.classList.add('off');
-    setTimeout(() => { if (app.conn) connect(); }, 3000); // simple reconnect
+    scheduleReconnect(3000); // socket dropped — reconnect
   }
 }
 
