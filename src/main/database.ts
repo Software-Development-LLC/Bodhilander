@@ -17,7 +17,134 @@ export function getDatabase(): Database.Database {
   initializeTables(db);
   initializeArenaTables(db);
 
+  // Reclaim for the removed code-indexing feature. dropLegacyCodeSearchTables
+  // records a completion marker, so this branch — including the synchronous
+  // VACUUM — runs at most ONCE per database (on the first launch after
+  // upgrading), never on subsequent startups.
+  if (dropLegacyCodeSearchTables(db)) {
+    try {
+      db.exec('VACUUM');
+      log.info('[DB] VACUUM complete — reclaimed code-index disk space');
+    } catch (e) {
+      // Space stays allocated until a later VACUUM; the data is already gone.
+      log.warn('[DB] VACUUM after code-index cleanup failed:', (e as Error).message);
+    }
+  }
+
   return db;
+}
+
+/** Tables created by the removed code-indexing feature. */
+const LEGACY_CODE_SEARCH_TABLES = ['code_chunks', 'symbols', 'indexed_files', 'code_indexes'] as const;
+
+/**
+ * Marker recording that the one-time cleanup has run.
+ *
+ * This must NOT be re-derived from the schema. `code_chunks_vec` is a vec0
+ * VIRTUAL table whose module is no longer bundled, so its sqlite_master row can
+ * never be dropped — deriving "is there work left?" from the schema would report
+ * work forever and re-run a full VACUUM on every single launch.
+ */
+const CODE_SEARCH_CLEANUP_PREF = 'legacyCodeSearchCleanupDone';
+
+function codeSearchCleanupAlreadyRan(database: Database.Database): boolean {
+  try {
+    const row = database
+      .prepare('SELECT value FROM preferences WHERE key = ?')
+      .get(CODE_SEARCH_CLEANUP_PREF) as { value?: string } | undefined;
+    return row?.value === 'true';
+  } catch {
+    return false; // preferences unavailable — treat as not-yet-run
+  }
+}
+
+function markCodeSearchCleanupRan(database: Database.Database): void {
+  try {
+    database
+      .prepare('INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)')
+      .run(CODE_SEARCH_CLEANUP_PREF, 'true');
+  } catch (e) {
+    log.warn('[DB] could not record code-search cleanup marker:', (e as Error).message);
+  }
+}
+
+/**
+ * Drop the leftover tables from the removed code-indexing / semantic-search
+ * feature. Nothing reads them anymore and they can be very large (chunk source
+ * text plus 768-dimension embeddings), so we reclaim the space on first launch
+ * after upgrading.
+ *
+ * Runs at most ONCE per database (guarded by CODE_SEARCH_CLEANUP_PREF), so the
+ * caller's VACUUM is a one-time startup cost rather than something that repeats
+ * on every launch.
+ *
+ * Deliberately best-effort and non-fatal: this runs against the database holding
+ * the user's real data (sessions, groups, memories), so every step is guarded and
+ * a failure only logs rather than aborting startup or leaving things half-done.
+ *
+ * @returns true if it actually dropped something (so the caller can VACUUM).
+ */
+export function dropLegacyCodeSearchTables(database: Database.Database): boolean {
+  // Converge: once we've run, never do this work (or the VACUUM) again.
+  if (codeSearchCleanupAlreadyRan(database)) return false;
+
+  let present: string[];
+  try {
+    present = (
+      database
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'table'
+              AND (name IN ('code_chunks','symbols','indexed_files','code_indexes')
+                   OR name LIKE 'code_chunks_vec%')`,
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+  } catch (e) {
+    log.warn('[DB] could not check for legacy code-search tables:', (e as Error).message);
+    return false;
+  }
+  if (present.length === 0) {
+    markCodeSearchCleanupRan(database); // fresh install — nothing to do, ever
+    return false;
+  }
+
+  log.info('[DB] Removing legacy code-search tables:', present.join(', '));
+
+  // Plain tables first — dropping them also drops their indexes. Child tables
+  // before code_indexes so the FK references go away cleanly.
+  for (const table of LEGACY_CODE_SEARCH_TABLES) {
+    try {
+      database.exec(`DROP TABLE IF EXISTS ${table}`);
+    } catch (e) {
+      log.warn(`[DB] could not drop ${table}:`, (e as Error).message);
+    }
+  }
+
+  // code_chunks_vec is a vec0 VIRTUAL table. sqlite-vec is no longer bundled, so
+  // a normal DROP raises "no such module: vec0". Fall back to dropping its shadow
+  // tables directly — that's where the embedding data actually lives, so this is
+  // what reclaims the space. Any leftover schema entry is inert (nothing queries
+  // it), and we do NOT edit sqlite_master: not worth risking real user data.
+  if (present.includes('code_chunks_vec')) {
+    try {
+      database.exec('DROP TABLE IF EXISTS code_chunks_vec');
+    } catch {
+      for (const shadow of present.filter((n) => n.startsWith('code_chunks_vec_'))) {
+        try {
+          database.exec(`DROP TABLE IF EXISTS "${shadow}"`);
+        } catch (e) {
+          log.warn(`[DB] could not drop shadow table ${shadow}:`, (e as Error).message);
+        }
+      }
+      // The code_chunks_vec sqlite_master row itself stays (no vec0 module to
+      // drop it, and editing sqlite_master isn't worth the risk to real user
+      // data). It's inert — the marker below is what stops us retrying forever.
+    }
+  }
+
+  markCodeSearchCleanupRan(database);
+  return true;
 }
 
 function initializeTables(database: Database.Database): void {
