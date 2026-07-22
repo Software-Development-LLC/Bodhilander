@@ -599,6 +599,12 @@ function createWindow(): void {
     }
   });
 
+  // Dynamic sizing: forward PTY resizes to the renderer so a session that was
+  // shrunk by a mobile viewer can show a "resized for mobile" banner + Resume.
+  ptyManager.on('resize', ({ id, cols, rows }) => {
+    mainWindow?.webContents.send('pty:resized', id, cols, rows);
+  });
+
   ptyManager.on('exit', ({ id, exitCode }) => {
     mainWindow?.webContents.send('pty:exit', id, exitCode);
 

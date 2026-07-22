@@ -236,3 +236,57 @@ describe('createInstallSession', () => {
     expect(manager.getSession('__install-codex')).toBeUndefined();
   });
 });
+
+describe('resize (dynamic sizing)', () => {
+  test('drives the pty and fans out a resize event; skips no-op resizes', () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    const calls: Array<[number, number]> = [];
+    ptyProc.resize = (c: number, r: number) => calls.push([c, r]);
+    const events: Array<{ id: string; cols: number; rows: number }> = [];
+    manager.on('resize', (e: { id: string; cols: number; rows: number }) => events.push(e));
+
+    manager.resize('session-1', 100, 40);
+    expect(calls).toEqual([[100, 40]]);
+    expect(events).toEqual([{ id: 'session-1', cols: 100, rows: 40 }]);
+
+    // A no-op resize (same dimensions) must not churn the pty or re-emit — other
+    // viewers shouldn't get a redundant terminal:size.
+    manager.resize('session-1', 100, 40);
+    expect(calls.length).toBe(1);
+    expect(events.length).toBe(1);
+
+    manager.resize('session-1', 80, 24);
+    expect(events.length).toBe(2);
+    expect(events[1]).toEqual({ id: 'session-1', cols: 80, rows: 24 });
+  });
+
+  test('resizing an unknown session is a no-op (no throw, no event)', () => {
+    const manager = new PtyManager();
+    const events: unknown[] = [];
+    manager.on('resize', (e) => events.push(e));
+    manager.resize('does-not-exist', 100, 40);
+    expect(events).toEqual([]);
+  });
+});
+
+describe('getSerializedBuffer (rendered-text history)', () => {
+  test('returns resolved text of the scrollback, keeping content that scrolled off', async () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('\x1b[32mhello\x1b[0m world\r\n');
+    for (let i = 0; i < 40; i++) ptyProc.dataCb!(`line ${i}\r\n`);
+
+    const text = await manager.getSerializedBuffer('session-1');
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain('hello');
+    // "line 5" scrolled off the 24-row screen — it must survive in the serialized
+    // scrollback (this is the history a phone reads).
+    expect(text).toContain('line 5');
+  });
+
+  test('returns empty string for an unknown session', async () => {
+    const manager = new PtyManager();
+    expect(await manager.getSerializedBuffer('nope')).toBe('');
+  });
+});

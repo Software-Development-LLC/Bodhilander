@@ -23,6 +23,7 @@ import { getAllGroups } from '../../repositories/groups';
 import { createRemoteSession, createRemoteGroup } from './remote-sessions';
 import { deriveSharedSecret, ensureIdentity, signWithIdentity } from './relay-identity';
 import { deriveSessionKey, sealJson, openJson, buildHandshakeProof, type SealedFrame } from './e2e';
+import { sanitizeSize } from './terminal-size';
 
 /** Expand a leading `~` to the user's home directory. */
 function expandHome(p: string): string {
@@ -30,6 +31,7 @@ function expandHome(p: string): string {
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
   return p;
 }
+
 
 interface ClientSession {
   key: Buffer;
@@ -39,6 +41,7 @@ interface ClientSession {
   subs: Set<string>;
   onData: (e: { id: string; data: string }) => void;
   onExit: (e: { id: string; exitCode: number }) => void;
+  onResize: (e: { id: string; cols: number; rows: number }) => void;
 }
 
 /** Decrypted command from a web client (union of every message's fields). */
@@ -82,9 +85,16 @@ export class SessionTunnel {
         const s = this.sessions.get(clientId);
         if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:exit', sessionId: e.id, exitCode: e.exitCode });
       };
+      // Dynamic sizing: when the PTY is resized (by this or any other viewer),
+      // tell subscribed clients the new size so they re-render at it.
+      const onResize = (e: { id: string; cols: number; rows: number }) => {
+        const s = this.sessions.get(clientId);
+        if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:size', sessionId: e.id, cols: e.cols, rows: e.rows });
+      };
       ptyManager.on('data', onData);
       ptyManager.on('exit', onExit);
-      this.sessions.set(clientId, { key, sendCounter: 0, recvCounter: -1, subs: new Set(), onData, onExit });
+      ptyManager.on('resize', onResize);
+      this.sessions.set(clientId, { key, sendCounter: 0, recvCounter: -1, subs: new Set(), onData, onExit, onResize });
 
       // Unsealed handshake reply: client verifies `signature` against the
       // machine's known Ed25519 pubkey, then derives the same session key.
@@ -130,20 +140,29 @@ export class SessionTunnel {
         this.handleSessionCreate(clientId, inner);
         break;
       case 'terminal:subscribe':
-        this.handleSubscribe(clientId, s, inner);
+        void this.handleSubscribe(clientId, s, inner);
         break;
       case 'terminal:unsubscribe':
         if (typeof inner.sessionId === 'string') s.subs.delete(inner.sessionId);
         break;
       case 'terminal:input':
-        // The client is authenticated as the machine owner → full control.
-        if (typeof inner.sessionId === 'string' && typeof inner.data === 'string') ptyManager.write(inner.sessionId, inner.data);
+        // The client is authenticated as the machine owner (E2E handshake), but
+        // scope input to sessions it's actually subscribed to as defense-in-depth.
+        if (typeof inner.sessionId === 'string' && typeof inner.data === 'string' && s.subs.has(inner.sessionId)) {
+          ptyManager.write(inner.sessionId, inner.data);
+        }
         break;
-      case 'terminal:resize':
-        // Intentionally ignored — the desktop owns the terminal size, so a
-        // mobile viewer never reflows the shared PTY. Viewers match the size
-        // reported by terminal:size.
+      case 'terminal:resize': {
+        // Dynamic sizing: the active viewer drives the shared PTY size so a phone
+        // can reflow Claude to fit. Now that this is live network-triggered input
+        // into a native PTY resize, clamp/validate the size and scope it to a
+        // subscribed session.
+        const size = sanitizeSize(inner.cols, inner.rows);
+        if (typeof inner.sessionId === 'string' && size && s.subs.has(inner.sessionId)) {
+          ptyManager.resize(inner.sessionId, size.cols, size.rows);
+        }
         break;
+      }
       case 'sessions:list':
         this.sendSessions(clientId);
         break;
@@ -173,15 +192,19 @@ export class SessionTunnel {
     }
   }
 
-  private handleSubscribe(clientId: string, s: ClientSession, inner: ClientFrame): void {
+  private async handleSubscribe(clientId: string, s: ClientSession, inner: ClientFrame): Promise<void> {
     if (typeof inner.sessionId !== 'string') return;
-    s.subs.add(inner.sessionId);
-    // Tell the viewer the PTY's real size so it matches (renders TUIs correctly)
-    // instead of resizing the shared terminal.
-    const size = ptyManager.getSize(inner.sessionId);
-    this.sealTo(clientId, { type: 'terminal:size', sessionId: inner.sessionId, cols: size.cols, rows: size.rows });
-    // Replay scrollback so the browser shows history, then live output streams.
-    this.sealTo(clientId, { type: 'terminal:output', sessionId: inner.sessionId, data: ptyManager.getBuffer(inner.sessionId) });
+    const sessionId = inner.sessionId;
+    s.subs.add(sessionId);
+    // Tell the viewer the PTY's current size so it renders TUIs correctly.
+    const size = ptyManager.getSize(sessionId);
+    this.sealTo(clientId, { type: 'terminal:size', sessionId, cols: size.cols, rows: size.rows });
+    // Replay history as RENDERED TEXT (reflow-safe) so a phone can resize the
+    // shared terminal without the scrollback garbling. Then live output streams.
+    const history = await ptyManager.getSerializedBuffer(sessionId);
+    if (s.subs.has(sessionId)) {
+      this.sealTo(clientId, { type: 'terminal:output', sessionId, data: history });
+    }
   }
 
   private handleDirsList(clientId: string, inner: ClientFrame): void {
@@ -220,6 +243,7 @@ export class SessionTunnel {
     if (!s) return;
     ptyManager.off('data', s.onData);
     ptyManager.off('exit', s.onExit);
+    ptyManager.off('resize', s.onResize);
     this.sessions.delete(clientId);
   }
 

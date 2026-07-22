@@ -35,6 +35,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('pty:exit', listener);
     };
   },
+  // Dynamic sizing: the PTY was resized (possibly by a remote/mobile viewer).
+  onPtyResize: (callback: (id: string, cols: number, rows: number) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, cols: number, rows: number) => callback(id, cols, rows);
+    ipcRenderer.on('pty:resized', listener);
+    return () => {
+      ipcRenderer.removeListener('pty:resized', listener);
+    };
+  },
   onStateChange: (callback: (event: { sessionId: string; state: string; event: string; timestamp: number }) => void) => {
     const listener = (_: Electron.IpcRendererEvent, event: any) => callback(event);
     ipcRenderer.on('state:change', listener);

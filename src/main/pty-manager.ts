@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { EventEmitter } from 'events';
+import { Terminal as HeadlessTerminal } from '@xterm/headless';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import {
   resolveProvider,
   getSocketPath,
@@ -84,8 +86,25 @@ interface PtySession {
  */
 const RESUME_FAILURE_WINDOW_MS = 5000;
 
-// Max scrollback buffer size (100KB should be plenty for recent terminal history)
-const MAX_SCROLLBACK_SIZE = 100 * 1024;
+// Max scrollback buffer replayed to remote viewers (web/phone) on attach. This
+// is the ONLY history a remote viewer can see — it has no live stream from before
+// it connected — so it needs to be generous. 100KB is barely one screen on a
+// wide terminal (e.g. 184 cols), which left the phone with nothing to scroll. 2MB
+// holds thousands of lines even on a wide terminal.
+const MAX_SCROLLBACK_SIZE = 2 * 1024 * 1024;
+
+/**
+ * Append PTY output to a session's replay buffer, trimming to the cap. The trim
+ * is amortized: we only slice once the buffer grows 25% past the cap (then cut
+ * back to the cap), so a chatty PTY doesn't pay an O(cap) string copy on every
+ * single chunk once it's full.
+ */
+function appendScrollback(session: PtySession, data: string): void {
+  session.scrollbackBuffer += data;
+  if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE * 1.25) {
+    session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
+  }
+}
 
 /**
  * Only classify launch failures in this window after spawn. The 'broken'
@@ -258,14 +277,8 @@ export class PtyManager extends EventEmitter {
         }
       }
 
-      // Append to scrollback buffer
-      if (session) {
-        session.scrollbackBuffer += filteredData;
-        // Trim if too large (keep last MAX_SCROLLBACK_SIZE bytes)
-        if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
-          session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
-        }
-      }
+      // Append to scrollback buffer (replayed to remote viewers on attach).
+      if (session) appendScrollback(session, filteredData);
 
       this.emit('data', { id, data: filteredData });
 
@@ -530,10 +543,7 @@ export class PtyManager extends EventEmitter {
         if (filteredData.trim() === '') return;
       }
 
-      session.scrollbackBuffer += filteredData;
-      if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
-        session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
-      }
+      appendScrollback(session, filteredData);
 
       if (session.deferEmission) return;
 
@@ -632,10 +642,7 @@ export class PtyManager extends EventEmitter {
         if (filteredData.trim() === '') return;
       }
 
-      session.scrollbackBuffer += filteredData;
-      if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
-        session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
-      }
+      appendScrollback(session, filteredData);
 
       // Hold emission until the renderer primes this pty (BDHLNDR-33). The
       // scrollback is accumulated above regardless, so nothing is lost.
@@ -715,6 +722,11 @@ export class PtyManager extends EventEmitter {
     session.lastCols = cols;
     session.lastRows = rows;
     session.pty.resize(cols, rows);
+    // Notify listeners (e.g. the relay agent, which forwards the new size to
+    // remote viewers so they re-render at the current PTY dimensions). Dynamic
+    // sizing: whichever viewer is active drives the size, and everyone else
+    // follows via this event.
+    this.emit('resize', { id, cols, rows });
   }
 
   kill(id: string): Promise<void> {
@@ -807,6 +819,37 @@ export class PtyManager extends EventEmitter {
   getBuffer(id: string): string {
     const session = this.sessions.get(id);
     return session?.scrollbackBuffer || '';
+  }
+
+  /**
+   * Rendered-text history for remote viewers. Replays the raw scrollback through
+   * a headless terminal at the session's CURRENT width and serializes the result
+   * to resolved text (colors kept, but no cursor-addressing). Unlike the raw
+   * bytes, this can be reflowed to a different width (e.g. a phone) WITHOUT
+   * garbling — Claude's absolute cursor moves have already been applied here.
+   * Falls back to the raw buffer if serialization isn't available.
+   */
+  async getSerializedBuffer(id: string): Promise<string> {
+    const session = this.sessions.get(id);
+    const raw = session?.scrollbackBuffer;
+    if (!session || !raw) return '';
+    try {
+      const term = new HeadlessTerminal({
+        cols: session.lastCols || 80,
+        rows: session.lastRows || 24,
+        scrollback: 20000,
+        allowProposedApi: true,
+      });
+      const serializer = new SerializeAddon();
+      term.loadAddon(serializer);
+      await new Promise<void>((resolve) => term.write(raw, () => resolve()));
+      const text = serializer.serialize({ scrollback: 20000 });
+      term.dispose();
+      return text;
+    } catch (err) {
+      console.warn('[PtyManager] getSerializedBuffer failed, falling back to raw:', err);
+      return raw;
+    }
   }
 
   /**
