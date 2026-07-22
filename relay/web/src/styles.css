@@ -115,16 +115,13 @@ input, textarea { font-family: inherit; }
 .term-title { min-width: 0; }
 .term-title .t-name { font-family: var(--mono); font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .term-title .t-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* The viewer matches the desktop's terminal size, which is often wider/taller
-   than the phone. Vertical scrolling — including through scrollback HISTORY —
-   is xterm's OWN viewport: xterm keeps scrollback off-DOM and only reveals it
-   when its viewport scrolls. On desktop that happens via wheel events (works
-   regardless of CSS overflow); on TOUCH devices the viewport must be natively
-   scrollable, so it needs overflow-y:auto + touch-action:pan-y. Neutralizing it
-   (overflow:hidden) is exactly what left mobile unable to reach history.
-   We bound .xterm/.viewport to the pane height so the viewport becomes a real
-   scroll window over the taller content; .screen handles horizontal panning. */
-.screen { flex: 1; min-height: 0; overflow: hidden; padding: 4px 0; background: var(--bg); }
+/* On desktop the viewer mirrors the desktop's terminal size, which can be wider
+   or taller than the browser window — so .screen scrolls (both axes) as the
+   escape hatch. On mobile (<860px) we instead use dynamic sizing (Claude reflows
+   to the phone) + a scale fallback + touch→scrollLines, so .screen is clipped and
+   the scroll is handled by those; see the max-width:859px override below. */
+.screen { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; background: var(--bg); }
+@media (max-width: 859px) { .screen { overflow: hidden; } }
 /* xterm's own viewport is the vertical scroller (scrollback lives here). It must
    stay natively scrollable so TOUCH works — the desktop path uses wheel events,
    but mobile needs a real scroll container. */

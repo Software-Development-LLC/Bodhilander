@@ -250,7 +250,6 @@ function renderSessions() {
 // ---------------------------------------------------------------------------
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
-let webglOk = false;
 let termScale = 1;
 const isMobileView = () => matchMedia('(max-width:859px)').matches;
 
@@ -325,7 +324,6 @@ function ensureTerm() {
     const webgl = new WebglAddon();
     webgl.onContextLoss(() => webgl.dispose());
     term.loadAddon(webgl);
-    webglOk = true;
   } catch { /* no WebGL — keep the DOM renderer */ }
   term.onData((d) => app.conn?.command({ type: 'terminal:input', sessionId: app.activeId, data: d }));
   // Mobile touch scroll: xterm's own viewport doesn't reliably scroll from touch,
@@ -679,34 +677,4 @@ function linkErrorText(error?: string): string {
   }
 }
 
-// TEMP diagnostic: open the site with #debug to see live terminal-scroll metrics.
-function startScrollDebug() {
-  if (!location.hash.includes('debug')) return;
-  const box = document.createElement('div');
-  box.style.cssText = 'position:fixed;bottom:120px;left:6px;z-index:9999;background:rgba(0,0,0,.85);color:#4ade80;font:10px/1.3 ui-monospace,monospace;padding:5px 7px;border-radius:6px;white-space:pre;pointer-events:none;max-width:80vw';
-  document.body.appendChild(box);
-  const num = (n: number | undefined) => Math.round(n || 0);
-  setInterval(() => {
-    const sc = $<HTMLElement>('#screen');
-    const xt = $<HTMLElement>('.xterm');
-    const vp = $<HTMLElement>('.xterm-viewport');
-    const xs = $<HTMLElement>('.xterm-screen');
-    const buf = term?.buffer.active;
-    // Dump the buffer line the viewport top is showing, plus its wrap flag — this
-    // shows what xterm's BUFFER holds (vs what's painted), isolating write/wrap
-    // bugs from render bugs.
-    const topY = buf ? buf.viewportY : 0;
-    const l0 = buf?.getLine(topY);
-    const l1 = buf?.getLine(topY + 1);
-    const s0 = (l0?.translateToString(false) ?? '').slice(0, 30);
-    box.textContent =
-      `cols${term?.cols ?? '-'} rows${term?.rows ?? '-'} wgl${webglOk ? 1 : 0}\n` +
-      `xt oH${num(xt?.offsetHeight)} vp cH${num(vp?.clientHeight)} sH${num(vp?.scrollHeight)}\n` +
-      `xs oH${num(xs?.offsetHeight)} sc cH${num(sc?.clientHeight)}\n` +
-      `buf len${buf?.length ?? '-'} base${buf?.baseY ?? '-'} vY${buf?.viewportY ?? '-'}\n` +
-      `L0[w${l1?.isWrapped ? 1 : 0}]|${s0}|`;
-  }, 400);
-}
-
 boot();
-startScrollDebug();

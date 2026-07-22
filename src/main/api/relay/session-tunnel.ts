@@ -23,6 +23,7 @@ import { getAllGroups } from '../../repositories/groups';
 import { createRemoteSession, createRemoteGroup } from './remote-sessions';
 import { deriveSharedSecret, ensureIdentity, signWithIdentity } from './relay-identity';
 import { deriveSessionKey, sealJson, openJson, buildHandshakeProof, type SealedFrame } from './e2e';
+import { sanitizeSize } from './terminal-size';
 
 /** Expand a leading `~` to the user's home directory. */
 function expandHome(p: string): string {
@@ -30,6 +31,7 @@ function expandHome(p: string): string {
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
   return p;
 }
+
 
 interface ClientSession {
   key: Buffer;
@@ -144,18 +146,23 @@ export class SessionTunnel {
         if (typeof inner.sessionId === 'string') s.subs.delete(inner.sessionId);
         break;
       case 'terminal:input':
-        // The client is authenticated as the machine owner → full control.
-        if (typeof inner.sessionId === 'string' && typeof inner.data === 'string') ptyManager.write(inner.sessionId, inner.data);
-        break;
-      case 'terminal:resize':
-        // Dynamic sizing: the active viewer drives the shared PTY size, so a
-        // phone can reflow Claude to fit its screen. The desktop re-asserts its
-        // own size when it regains focus. The client is authenticated as the
-        // machine owner, so it's allowed to resize.
-        if (typeof inner.sessionId === 'string' && typeof inner.cols === 'number' && typeof inner.rows === 'number') {
-          ptyManager.resize(inner.sessionId, Math.max(2, Math.floor(inner.cols)), Math.max(2, Math.floor(inner.rows)));
+        // The client is authenticated as the machine owner (E2E handshake), but
+        // scope input to sessions it's actually subscribed to as defense-in-depth.
+        if (typeof inner.sessionId === 'string' && typeof inner.data === 'string' && s.subs.has(inner.sessionId)) {
+          ptyManager.write(inner.sessionId, inner.data);
         }
         break;
+      case 'terminal:resize': {
+        // Dynamic sizing: the active viewer drives the shared PTY size so a phone
+        // can reflow Claude to fit. Now that this is live network-triggered input
+        // into a native PTY resize, clamp/validate the size and scope it to a
+        // subscribed session.
+        const size = sanitizeSize(inner.cols, inner.rows);
+        if (typeof inner.sessionId === 'string' && size && s.subs.has(inner.sessionId)) {
+          ptyManager.resize(inner.sessionId, size.cols, size.rows);
+        }
+        break;
+      }
       case 'sessions:list':
         this.sendSessions(clientId);
         break;
