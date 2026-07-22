@@ -240,7 +240,13 @@ function groupPath(groupId: string): { label: string; color: string } {
 
 function renderSessions() {
   const ul = $('#sessions')!;
-  const sorted = [...app.sessions].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || a.name.localeCompare(b.name));
+  // Sort by attention state, then name, then id. The id tiebreak matters: two
+  // sessions can share a name (same name in different folders), and without a
+  // total order the comparator returns 0, leaving them in whatever order the
+  // agent happened to send — which used to shuffle and make them swap places.
+  const sorted = [...app.sessions].sort(
+    (a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+  );
   const waiting = sorted.filter((s) => s.state === 'waiting').length;
   const attn = $('#attn')!;
   if (waiting) { attn.textContent = `${waiting} needs you`; attn.classList.remove('hidden'); } else attn.classList.add('hidden');

@@ -3,7 +3,7 @@ import { Group } from '../../shared/types';
 
 export function getAllGroups(): Group[] {
   const db = getDatabase();
-  const rows = db.prepare('SELECT * FROM groups ORDER BY "order"').all() as any[];
+  const rows = db.prepare('SELECT * FROM groups ORDER BY "order", created_at, id').all() as any[];
 
   return rows.map(row => ({
     id: row.id,
