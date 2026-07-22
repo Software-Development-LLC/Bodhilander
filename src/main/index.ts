@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'elect
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
+import { runGuardedShutdown } from './shutdown';
 import { resolveLaunchProviderId } from './providers';
 import { startProviderInstall, cancelProviderInstall } from './provider-install';
 import { detectProviders } from './provider-detector';
@@ -1470,30 +1471,45 @@ app.on('activate', () => {
 
 let cleanupComplete = false;
 
+// Squirrel.Mac's ShipIt cancels an in-progress update with "App Still Running
+// Error" (Code=-9) if this process is still alive shortly after quitAndInstall,
+// so macOS auto-updates downloaded but never installed (issue #133). The
+// teardown below can hang on a wedged native worker, so it MUST NOT gate the
+// process exit — runGuardedShutdown force-exits within the budget regardless.
+// Comfortably inside ShipIt's tolerance; better-sqlite3 WAL is crash-safe.
+const QUIT_CLEANUP_BUDGET_MS = 2000;
+
 app.on('before-quit', (event) => {
   if (cleanupComplete) return;
 
   event.preventDefault();
   isQuitting = true;
 
-  (async () => {
-    try {
-      await ptyManager.killAll();
-    } catch (e) {
-      log.error('Error killing PTYs on quit:', e);
-    }
+  runGuardedShutdown({
+    budgetMs: QUIT_CLEANUP_BUDGET_MS,
+    log: (msg) => log.info(msg),
+    forceExit: () => {
+      cleanupComplete = true;
+      // Hard exit guarantees the PID is gone for ShipIt; ShipIt handles the
+      // post-install relaunch itself, so app.quit() vs app.exit() is moot here.
+      app.exit(0);
+    },
+    cleanup: async () => {
+      try {
+        await ptyManager.killAll();
+      } catch (e) {
+        log.error('Error killing PTYs on quit:', e);
+      }
 
-    disposeVectorSearchManager();
-    trayManager.destroy();
-    stateMonitor?.stop();
-    try {
-      getRelayClient().stop();
-    } catch (e) {
-      log.error('Error stopping relay client on quit:', e);
-    }
-    closeDatabase();
-
-    cleanupComplete = true;
-    app.quit();
-  })();
+      disposeVectorSearchManager();
+      trayManager.destroy();
+      stateMonitor?.stop();
+      try {
+        getRelayClient().stop();
+      } catch (e) {
+        log.error('Error stopping relay client on quit:', e);
+      }
+      closeDatabase();
+    },
+  });
 });
