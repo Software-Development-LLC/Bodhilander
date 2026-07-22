@@ -106,8 +106,14 @@ export class RelayConnection {
   }
 
   close(): void {
-    this.ws?.close();
+    const ws = this.ws;
     this.ws = null;
     this.key = null;
+    if (ws) {
+      // Detach handlers first so this deliberate close doesn't surface as a
+      // 'closed' state event (which the caller uses to schedule a reconnect).
+      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+      ws.close();
+    }
   }
 }
