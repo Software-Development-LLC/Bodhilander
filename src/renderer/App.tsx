@@ -9,7 +9,6 @@ import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
-import { CodeSearchModal } from './components/CodeSearchModal';
 import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
 import { ClaudeAccount, PROVIDER_LABELS } from '../shared/types';
 import { useSessions } from './store/sessions';
@@ -90,7 +89,6 @@ const App: React.FC = () => {
   const [arenaGroupId, setArenaGroupId] = useState<string | null>(null);
 
   // Code search modal state
-  const [codeSearchOpen, setCodeSearchOpen] = useState(false);
 
   // Destructive action confirmation state
   const [confirmAction, setConfirmAction] = useState<{
@@ -777,9 +775,6 @@ const App: React.FC = () => {
     }
   }, [focusedItemType, focusedItemId, groups, handleCreateSubGroup]);
 
-  const handleCodeSearch = useCallback(() => {
-    setCodeSearchOpen(true);
-  }, []);
 
   const shortcutHandlers = useMemo(() => ({
     onNewSession: handleKeyboardNewSession,
@@ -795,9 +790,8 @@ const App: React.FC = () => {
     onCollapse: handleCollapse,
     onExpand: handleExpand,
     onSelect: handleSelect,
-    onCodeSearch: handleCodeSearch,
     onToggleAnalytics: () => setAnalyticsViewOpen(prev => !prev),
-  }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect, handleCodeSearch]);
+  }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect]);
 
   useKeyboardShortcuts(shortcutHandlers);
 
@@ -923,14 +917,6 @@ const App: React.FC = () => {
               aria-label="Arena"
             >
               ⚔️
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setCodeSearchOpen(true)}
-              title="Code Search (Ctrl+Shift+F)"
-              aria-label="Code Search"
-            >
-              🔍
             </button>
             <button
               className="icon-button"
@@ -1508,13 +1494,6 @@ const App: React.FC = () => {
       <ClaudeAccountsModal
         isOpen={claudeAccountsOpen}
         onClose={() => setClaudeAccountsOpen(false)}
-      />
-
-      {/* Code Search modal */}
-      <CodeSearchModal
-        isOpen={codeSearchOpen}
-        directoryPath={activeSession?.workingDir || null}
-        onClose={() => setCodeSearchOpen(false)}
       />
 
       {/* Destructive action confirmation dialog */}

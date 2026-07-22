@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -302,48 +302,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('api:updateDevicePermissions', deviceId, permissions),
   apiHasPairingCode: (): Promise<{ active: boolean }> => ipcRenderer.invoke('api:hasPairingCode'),
 
-  // Vector Search
-  getIndexStatus: (directoryPath: string): Promise<CodeIndex | null> =>
-    ipcRenderer.invoke('vector-search:get-index-status', directoryPath),
-
-  getAllIndexes: (): Promise<CodeIndex[]> =>
-    ipcRenderer.invoke('vector-search:get-all-indexes'),
-
-  startIndexing: (directoryPath: string): Promise<{ success: boolean }> =>
-    ipcRenderer.invoke('vector-search:start-indexing', directoryPath),
-
-  searchCode: (directoryPath: string, query: string, limit?: number): Promise<CodeSearchResult[]> =>
-    ipcRenderer.invoke('vector-search:search-code', directoryPath, query, limit),
-
-  searchSymbols: (directoryPath: string, name: string, symbolType?: SymbolType, limit?: number): Promise<SymbolSearchResult[]> =>
-    ipcRenderer.invoke('vector-search:search-symbols', directoryPath, name, symbolType, limit),
-
-  cancelIndexing: (indexId: string): Promise<{ success: boolean }> =>
-    ipcRenderer.invoke('vector-search:cancel-indexing', indexId),
-
-  deleteCodeIndex: (directoryPath: string): Promise<{ success: boolean }> =>
-    ipcRenderer.invoke('vector-search:delete-index', directoryPath),
-
-  retryIndexing: (directoryPath: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('vector-search:retry-indexing', directoryPath),
-
-  onIndexingProgress: (callback: (progress: IndexProgress) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, progress: IndexProgress) => callback(progress);
-    ipcRenderer.on('vector-search:progress', listener);
-    return () => ipcRenderer.removeListener('vector-search:progress', listener);
-  },
-
-  onIndexingComplete: (callback: (data: { indexId: string }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { indexId: string }) => callback(data);
-    ipcRenderer.on('vector-search:complete', listener);
-    return () => ipcRenderer.removeListener('vector-search:complete', listener);
-  },
-
-  onIndexingError: (callback: (data: { indexId: string; error: string }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { indexId: string; error: string }) => callback(data);
-    ipcRenderer.on('vector-search:error', listener);
-    return () => ipcRenderer.removeListener('vector-search:error', listener);
-  },
 
   // Editor Integration
   openInEditor: (filePath: string, line?: number, column?: number): Promise<{ success: boolean; error?: string }> =>

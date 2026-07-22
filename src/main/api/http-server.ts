@@ -21,7 +21,6 @@ import { createPairingRouter } from './routes/pairing';
 import { createTerminalRouter } from './routes/terminal';
 import { createMemoriesRouter } from './routes/memories';
 import { createHooksRouter } from './routes/hooks';
-import { createCodeSearchRouter } from './routes/code-search';
 import { createWebPushRouter } from './routes/web-push';
 
 export interface HttpServerConfig {
@@ -217,7 +216,6 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   app.use('/api/v1/hooks', generalLimiter, createHooksRouter());
 
   // Code search routes for MCP server (localhost-only, no device auth needed)
-  app.use('/api/v1/code', generalLimiter, createCodeSearchRouter());
 
   // Web Push routes (BDHLNDR-49). Mounts BOTH the unauthenticated
   // /public-key endpoint and the auth-required /subscribe endpoints. The

@@ -9,11 +9,6 @@ import {
   Memory,
   MemoryCreateInput,
   MemoryUpdateInput,
-  CodeIndex,
-  CodeSearchResult,
-  SymbolSearchResult,
-  IndexProgress,
-  SymbolType,
   SessionEvent,
   SessionStats,
   GlobalStats,
@@ -126,17 +121,6 @@ export interface ElectronAPI {
   apiHasPairingCode: () => Promise<{ active: boolean }>;
 
   // Vector Search
-  getIndexStatus: (directoryPath: string) => Promise<CodeIndex | null>;
-  getAllIndexes: () => Promise<CodeIndex[]>;
-  startIndexing: (directoryPath: string) => Promise<{ success: boolean; error?: string }>;
-  searchCode: (directoryPath: string, query: string, limit?: number) => Promise<CodeSearchResult[]>;
-  searchSymbols: (directoryPath: string, name: string, symbolType?: SymbolType, limit?: number) => Promise<SymbolSearchResult[]>;
-  cancelIndexing: (indexId: string) => Promise<{ success: boolean }>;
-  deleteCodeIndex: (directoryPath: string) => Promise<{ success: boolean }>;
-  retryIndexing: (directoryPath: string) => Promise<{ success: boolean; error?: string }>;
-  onIndexingProgress: (callback: (progress: IndexProgress) => void) => () => void;
-  onIndexingComplete: (callback: (data: { indexId: string; directoryPath?: string }) => void) => () => void;
-  onIndexingError: (callback: (data: { indexId: string; error: string; directoryPath?: string }) => void) => () => void;
 
   // Editor Integration
   openInEditor: (filePath: string, line?: number, column?: number) => Promise<{ success: boolean; error?: string }>;
