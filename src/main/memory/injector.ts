@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Memory, MemoryType, GLOBAL_CONTEXT_GROUP_ID } from '../../shared/types';
 import { getMemoriesForInjection } from '../repositories/memories';
-import * as codeSearchRepo from '../repositories/code-search';
 
 const MEMORY_FILENAME = '.bodhilander-memory.md';
 const MAX_FILE_SIZE = 8 * 1024; // 8KB limit
@@ -173,23 +172,6 @@ export function getMemoryInjectionContent(
     projectItems.push(`- ${memory.content}`);
   }
 
-  // Check if code search index is available
-  let codeSearchHint = '';
-  if (workingDir) {
-    try {
-      const index = codeSearchRepo.getIndexByDirectory(workingDir);
-      if (index && index.status === 'ready') {
-        codeSearchHint = `\n\n<code-search-available>
-This codebase has been indexed for semantic search (${index.fileCount} files, ${index.chunkCount} chunks).
-You can use the search_code MCP tool to find relevant code using natural language queries.
-You can use the find_symbol MCP tool to locate function, class, or method definitions.
-</code-search-available>`;
-      }
-    } catch {
-      // Ignore errors - code search is optional
-    }
-  }
-
   const sections: string[] = [];
 
   // Add global context section if present
@@ -210,7 +192,7 @@ ${projectItems.join('\n')}`);
 No saved context for this session yet.
 To save new context, use the MCP tool with group_id: ${groupId}
 For global context (all projects), use group_id: ${GLOBAL_CONTEXT_GROUP_ID}
-</session-memories>${codeSearchHint}`;
+</session-memories>`;
   }
 
   // Format as multi-line system prompt content
@@ -221,5 +203,5 @@ ${sections.join('\n\n')}
 
 To save new context, use the MCP tool with group_id: ${groupId}
 For global context (all projects), use group_id: ${GLOBAL_CONTEXT_GROUP_ID}
-</session-memories>${codeSearchHint}`;
+</session-memories>`;
 }

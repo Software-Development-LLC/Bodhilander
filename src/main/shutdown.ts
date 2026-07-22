@@ -6,7 +6,7 @@
 // install with `SQRLInstallerErrorDomain Code=-9 "App Still Running Error"` —
 // the update downloads but never installs, and the app relaunches on the old
 // version. Our `before-quit` handler runs async teardown (killing PTYs,
-// disposing the vector-search worker, closing the DB) which can outlast ShipIt's
+// closing the DB) which can outlast ShipIt's
 // tolerance, or hang outright on a wedged native worker.
 //
 // `runGuardedShutdown` runs that teardown but GUARANTEES the process is

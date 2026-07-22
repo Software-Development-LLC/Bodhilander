@@ -35,7 +35,6 @@ import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
 import { remoteSessionEvents } from './api/relay/remote-sessions';
-import { getVectorSearchManager, disposeVectorSearchManager } from './vector-search';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
 
@@ -97,7 +96,6 @@ if (process.platform === 'win32') {
 }
 
 let mainWindow: BrowserWindow | null = null;
-let splashWindow: BrowserWindow | null = null;
 let stateMonitor: StateMonitor | null = null;
 let isQuitting = false;
 
@@ -215,7 +213,6 @@ function logSessionStateEvent(sessionId: string, newState: SessionState): void {
   }
 }
 
-const SPLASH_DURATION = 2500; // 2.5 seconds
 
 function updateTrayWithWaitingSessions(): void {
   const waitingSessions = Array.from(sessionStates.entries())
@@ -311,37 +308,6 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
       log.error('[Main] Web Push dispatch failed:', err);
     });
   }
-}
-
-function createSplashWindow(): void {
-  // BDHLNDR-44: a BrowserWindow must never be constructed before app 'ready'
-  // (the "Cannot create BrowserWindow before app is ready" uncaught exception
-  // seen under rapid relaunch). Defer instead of throwing so the error is
-  // impossible regardless of caller/timing.
-  if (!app.isReady()) {
-    app.whenReady().then(() => createSplashWindow());
-    return;
-  }
-  splashWindow = new BrowserWindow({
-    icon: path.join(__dirname, '../../build/icon.png'),
-    width: 500,
-    height: 450,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    resizable: false,
-    center: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-    },
-  });
-
-  splashWindow.loadFile(path.join(__dirname, '../renderer/splash.html'));
-
-  splashWindow.on('closed', () => {
-    splashWindow = null;
-  });
 }
 
 /**
@@ -450,7 +416,7 @@ function createWindow(): void {
     icon: path.join(__dirname, '../../build/icon.png'),
     width: savedBounds?.width || 1200,
     height: savedBounds?.height || 800,
-    show: false, // Don't show until splash is done
+    show: false, // shown on 'ready-to-show' to avoid a blank-window flash
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -472,14 +438,8 @@ function createWindow(): void {
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
-  // Show main window and close splash after duration
   mainWindow.once('ready-to-show', () => {
-    setTimeout(() => {
-      if (splashWindow) {
-        splashWindow.close();
-      }
-      mainWindow?.show();
-    }, SPLASH_DURATION);
+    mainWindow?.show();
   });
 
   // Create custom application menu
@@ -539,21 +499,6 @@ function createWindow(): void {
   remoteSessionEvents.removeAllListeners('groupsChanged');
   remoteSessionEvents.on('groupsChanged', () => {
     mainWindow?.webContents.send('groups:refresh');
-  });
-
-  // Vector search event forwarding
-  const vsManager = getVectorSearchManager();
-
-  vsManager.on('indexing-progress', (progress) => {
-    mainWindow?.webContents.send('vector-search:progress', progress);
-  });
-
-  vsManager.on('indexing-complete', (data) => {
-    mainWindow?.webContents.send('vector-search:complete', data);
-  });
-
-  vsManager.on('indexing-error', (data) => {
-    mainWindow?.webContents.send('vector-search:error', data);
   });
 
   // Arena streaming updates (#100)
@@ -936,8 +881,6 @@ safeHandle('prefs:getAll', () => {
   const settings = {
     autoLaunchClaude: prefsRepo.getPreference('autoLaunchClaude') ?? 'true',
     customShellPath: prefsRepo.getPreference('customShellPath') ?? '',
-    showSplash: prefsRepo.getPreference('showSplash') ?? 'true',
-    splashDuration: prefsRepo.getPreference('splashDuration') ?? '2.5',
     enableNotifications: prefsRepo.getPreference('enableNotifications') ?? 'true',
     notificationSound: prefsRepo.getPreference('notificationSound') ?? 'true',
     closeToTray: prefsRepo.getPreference('closeToTray') ?? 'true',
@@ -1206,56 +1149,6 @@ safeHandle('relay:setKeepAwake', (on: boolean) => {
 });
 
 // ============================================================================
-// Vector Search IPC Handlers
-// ============================================================================
-
-safeHandle('vector-search:get-index-status', (directoryPath: string) => {
-  return getVectorSearchManager().getIndexStatus(directoryPath);
-});
-
-safeHandle('vector-search:get-all-indexes', () => {
-  return getVectorSearchManager().getAllIndexes();
-});
-
-ipcMain.handle('vector-search:start-indexing', async (_, directoryPath: string) => {
-  try {
-    log.info('[VectorSearch] Starting indexing for:', directoryPath);
-    await getVectorSearchManager().startIndexing(directoryPath);
-    return { success: true };
-  } catch (error) {
-    log.error('[VectorSearch] Failed to start indexing:', error);
-    return { success: false, error: (error as Error).message };
-  }
-});
-
-safeHandle('vector-search:search-code', async (directoryPath: string, query: string, limit?: number) => {
-  return getVectorSearchManager().searchCode(directoryPath, query, limit);
-});
-
-safeHandle('vector-search:search-symbols', (directoryPath: string, name: string, symbolType?: string, limit?: number) => {
-  return getVectorSearchManager().searchSymbols(directoryPath, name, symbolType as any, limit);
-});
-
-safeHandle('vector-search:cancel-indexing', async (indexId: string) => {
-  await getVectorSearchManager().cancelIndexing(indexId);
-  return { success: true };
-});
-
-safeHandle('vector-search:delete-index', async (directoryPath: string) => {
-  await getVectorSearchManager().deleteIndex(directoryPath);
-  return { success: true };
-});
-
-ipcMain.handle('vector-search:retry-indexing', async (_, directoryPath: string) => {
-  try {
-    await getVectorSearchManager().retryIndexing(directoryPath);
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: (error as Error).message };
-  }
-});
-
-// ============================================================================
 // Editor Integration IPC Handlers
 // ============================================================================
 
@@ -1379,7 +1272,6 @@ function getLocalAddresses(): string[] {
 }
 
 app.whenReady().then(() => {
-  createSplashWindow();
   createWindow();
 }).catch((error) => {
   log.error('[Main] Failed to initialize app:', error);
@@ -1513,7 +1405,6 @@ app.on('before-quit', (event) => {
         log.error('Error killing PTYs on quit:', e);
       }
 
-      disposeVectorSearchManager();
       trayManager.destroy();
       stateMonitor?.stop();
       try {

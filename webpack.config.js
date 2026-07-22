@@ -33,7 +33,6 @@ module.exports = {
     }),
     new CopyWebpackPlugin({
       patterns: [
-        { from: 'src/renderer/splash.html', to: 'splash.html' },
         { from: 'src/renderer/about.html', to: 'about.html' },
         { from: 'src/renderer/assets', to: 'assets' },
       ],
