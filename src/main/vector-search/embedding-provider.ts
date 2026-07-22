@@ -5,7 +5,7 @@ import os from 'os';
 // Import types for TypeScript, runtime value loaded dynamically
 import type { FeatureExtractionPipeline as FeatureExtractionPipelineType } from '@huggingface/transformers';
 
-import { applyModelCacheDir, TransformersEnvLike } from './model-cache';
+import { applyModelCacheDir, type TransformersEnvLike } from './model-cache';
 
 let pipeline: typeof import('@huggingface/transformers').pipeline;
 
