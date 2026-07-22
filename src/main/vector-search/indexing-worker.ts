@@ -149,16 +149,11 @@ parentPort?.on('message', async (message: WorkerMessage) => {
     cancelled = false;
     currentIndexId = message.indexId!;
 
-    // Configure HuggingFace cache directory if provided
-    if (message.cacheDir) {
-      try {
-        // Set environment variable for @huggingface/transformers cache
-        process.env.HF_HOME = message.cacheDir;
-        process.env.TRANSFORMERS_CACHE = path.join(message.cacheDir, 'models');
-      } catch (e) {
-        console.warn('[IndexingWorker] Failed to set cache dir:', e);
-      }
-    }
+    // No model cache setup here (issue #133): per BDHLNDR-126 this worker never
+    // loads the embedding model — it parses files and RPCs embed requests to the
+    // single embedding worker, which owns the one InferenceSession and configures
+    // the model cache dir. The old HF_HOME / TRANSFORMERS_CACHE writes here were
+    // both dead and ignored by transformers.js.
 
     await runIndexing(message.indexId!, message.directoryPath!);
     currentIndexId = null;
