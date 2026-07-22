@@ -35,6 +35,7 @@ export interface ElectronAPI {
   killSession: (id: string) => void;
   onPtyData: (callback: (id: string, data: string) => void) => () => void;
   onPtyExit: (callback: (id: string, exitCode: number) => void) => () => void;
+  onPtyResize: (callback: (id: string, cols: number, rows: number) => void) => () => void;
   onStateChange: (callback: (event: StateChangeEvent) => void) => () => void;
 
   // Menu events

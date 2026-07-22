@@ -14,6 +14,7 @@ interface ElectronAPI {
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => () => void;
   onPtyExit: (callback: (id: string, exitCode: number) => void) => () => void;
+  onPtyResize: (callback: (id: string, cols: number, rows: number) => void) => () => void;
   onStateChange: (callback: (event: { sessionId: string; state: string; event: string; timestamp: number }) => void) => () => void;
   onSessionsRefresh: (callback: () => void) => () => void;
   onGroupsRefresh: (callback: () => void) => () => void;

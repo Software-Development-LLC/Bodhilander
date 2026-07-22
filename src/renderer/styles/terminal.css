@@ -206,6 +206,41 @@
   max-width: 560px;
 }
 
+/* Dynamic sizing: shown when a mobile viewer has shrunk this session's terminal. */
+.mobile-resize-banner {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: #1e2f3a;
+  border: 1px solid #2e546a;
+  border-radius: 6px;
+  color: #b8dcf0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.mobile-resize-banner-btn {
+  flex: none;
+  padding: 4px 12px;
+  background: #35c2d1;
+  color: #06222a;
+  border: none;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mobile-resize-banner-btn:hover {
+  background: #4dd3e1;
+}
+
 .provider-install-banner code {
   color: #ffd890;
   background: rgba(0, 0, 0, 0.25);

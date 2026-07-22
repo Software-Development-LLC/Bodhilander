@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { EventEmitter } from 'events';
+import { Terminal as HeadlessTerminal } from '@xterm/headless';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import {
   resolveProvider,
   getSocketPath,
@@ -817,6 +819,37 @@ export class PtyManager extends EventEmitter {
   getBuffer(id: string): string {
     const session = this.sessions.get(id);
     return session?.scrollbackBuffer || '';
+  }
+
+  /**
+   * Rendered-text history for remote viewers. Replays the raw scrollback through
+   * a headless terminal at the session's CURRENT width and serializes the result
+   * to resolved text (colors kept, but no cursor-addressing). Unlike the raw
+   * bytes, this can be reflowed to a different width (e.g. a phone) WITHOUT
+   * garbling — Claude's absolute cursor moves have already been applied here.
+   * Falls back to the raw buffer if serialization isn't available.
+   */
+  async getSerializedBuffer(id: string): Promise<string> {
+    const session = this.sessions.get(id);
+    const raw = session?.scrollbackBuffer;
+    if (!session || !raw) return '';
+    try {
+      const term = new HeadlessTerminal({
+        cols: session.lastCols || 80,
+        rows: session.lastRows || 24,
+        scrollback: 20000,
+        allowProposedApi: true,
+      });
+      const serializer = new SerializeAddon();
+      term.loadAddon(serializer);
+      await new Promise<void>((resolve) => term.write(raw, () => resolve()));
+      const text = serializer.serialize({ scrollback: 20000 });
+      term.dispose();
+      return text;
+    } catch (err) {
+      console.warn('[PtyManager] getSerializedBuffer failed, falling back to raw:', err);
+      return raw;
+    }
   }
 
   /**

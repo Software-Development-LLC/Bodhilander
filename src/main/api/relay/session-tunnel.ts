@@ -138,7 +138,7 @@ export class SessionTunnel {
         this.handleSessionCreate(clientId, inner);
         break;
       case 'terminal:subscribe':
-        this.handleSubscribe(clientId, s, inner);
+        void this.handleSubscribe(clientId, s, inner);
         break;
       case 'terminal:unsubscribe':
         if (typeof inner.sessionId === 'string') s.subs.delete(inner.sessionId);
@@ -185,15 +185,19 @@ export class SessionTunnel {
     }
   }
 
-  private handleSubscribe(clientId: string, s: ClientSession, inner: ClientFrame): void {
+  private async handleSubscribe(clientId: string, s: ClientSession, inner: ClientFrame): Promise<void> {
     if (typeof inner.sessionId !== 'string') return;
-    s.subs.add(inner.sessionId);
-    // Tell the viewer the PTY's real size so it matches (renders TUIs correctly)
-    // instead of resizing the shared terminal.
-    const size = ptyManager.getSize(inner.sessionId);
-    this.sealTo(clientId, { type: 'terminal:size', sessionId: inner.sessionId, cols: size.cols, rows: size.rows });
-    // Replay scrollback so the browser shows history, then live output streams.
-    this.sealTo(clientId, { type: 'terminal:output', sessionId: inner.sessionId, data: ptyManager.getBuffer(inner.sessionId) });
+    const sessionId = inner.sessionId;
+    s.subs.add(sessionId);
+    // Tell the viewer the PTY's current size so it renders TUIs correctly.
+    const size = ptyManager.getSize(sessionId);
+    this.sealTo(clientId, { type: 'terminal:size', sessionId, cols: size.cols, rows: size.rows });
+    // Replay history as RENDERED TEXT (reflow-safe) so a phone can resize the
+    // shared terminal without the scrollback garbling. Then live output streams.
+    const history = await ptyManager.getSerializedBuffer(sessionId);
+    if (s.subs.has(sessionId)) {
+      this.sealTo(clientId, { type: 'terminal:output', sessionId, data: history });
+    }
   }
 
   private handleDirsList(clientId: string, inner: ClientFrame): void {

@@ -66,6 +66,12 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const [installHint, setInstallHint] = useState<ProviderInstallHint | null>(null);
   const [installFlow, setInstallFlow] = useState<{ ptyId: string; command: string } | null>(null);
   const [installSucceeded, setInstallSucceeded] = useState(false);
+  // Dynamic sizing: when a remote/mobile viewer shrinks the shared PTY below this
+  // desktop's size, we show a banner + a Resume button. `desktopSizeRef` tracks
+  // the size THIS window last asked for, so we can tell a mobile resize (smaller,
+  // unrequested) from our own.
+  const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const [mobileSize, setMobileSize] = useState<{ cols: number; rows: number } | null>(null);
 
   // Track isActive in a ref so handleResize (set up in the main effect which
   // does NOT depend on isActive) can skip hidden terminals. Without this,
@@ -100,11 +106,39 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       const { cols, rows } = xtermRef.current;
       // Guard: don't propagate bogus dimensions from an unsized container.
       if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+        desktopSizeRef.current = { cols, rows };
+        setMobileSize(null); // we're (re)asserting the desktop's own size
         window.electronAPI.resizeSession(sessionId, cols, rows);
       }
     } catch (e) {
       console.warn('[Terminal] resize during teardown (non-fatal):', e);
     }
+  }, [sessionId]);
+
+  // Resume the desktop's own size (undo a mobile viewer's shrink).
+  const resumeDesktopSize = useCallback(() => {
+    setMobileSize(null);
+    handleResize();
+  }, [handleResize]);
+
+  // Dynamic sizing: react to PTY resizes driven by another viewer. If the shared
+  // terminal was shrunk (by a phone) below this window's size, follow it locally
+  // (so nothing renders stale/garbled) and show the banner. When it matches our
+  // own size again, clear the banner.
+  useEffect(() => {
+    return window.electronAPI.onPtyResize((id, cols, rows) => {
+      if (id !== sessionId) return;
+      const desk = desktopSizeRef.current;
+      if (!desk) return; // haven't fit yet — nothing to compare against
+      if (cols === desk.cols && rows === desk.rows) {
+        setMobileSize(null);
+        return;
+      }
+      if (cols < desk.cols || rows < desk.rows) {
+        setMobileSize({ cols, rows });
+        try { xtermRef.current?.resize(cols, rows); } catch { /* disposed */ }
+      }
+    });
   }, [sessionId]);
 
   // Surface provider launch failures (spawn ENOENT / command not found)
@@ -689,6 +723,16 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         className="terminal-container"
         onContextMenu={handleContextMenu}
       />
+      {mobileSize && (
+        <div className="mobile-resize-banner">
+          <span className="mobile-resize-banner-text">
+            📱 Resized to fit a mobile viewer ({mobileSize.cols}×{mobileSize.rows}).
+          </span>
+          <button className="mobile-resize-banner-btn" onClick={resumeDesktopSize}>
+            Resume desktop size
+          </button>
+        </div>
+      )}
       {installHintUi}
       {contextMenu.visible && (
         <div
