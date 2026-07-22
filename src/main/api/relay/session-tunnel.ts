@@ -39,6 +39,7 @@ interface ClientSession {
   subs: Set<string>;
   onData: (e: { id: string; data: string }) => void;
   onExit: (e: { id: string; exitCode: number }) => void;
+  onResize: (e: { id: string; cols: number; rows: number }) => void;
 }
 
 /** Decrypted command from a web client (union of every message's fields). */
@@ -82,9 +83,16 @@ export class SessionTunnel {
         const s = this.sessions.get(clientId);
         if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:exit', sessionId: e.id, exitCode: e.exitCode });
       };
+      // Dynamic sizing: when the PTY is resized (by this or any other viewer),
+      // tell subscribed clients the new size so they re-render at it.
+      const onResize = (e: { id: string; cols: number; rows: number }) => {
+        const s = this.sessions.get(clientId);
+        if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:size', sessionId: e.id, cols: e.cols, rows: e.rows });
+      };
       ptyManager.on('data', onData);
       ptyManager.on('exit', onExit);
-      this.sessions.set(clientId, { key, sendCounter: 0, recvCounter: -1, subs: new Set(), onData, onExit });
+      ptyManager.on('resize', onResize);
+      this.sessions.set(clientId, { key, sendCounter: 0, recvCounter: -1, subs: new Set(), onData, onExit, onResize });
 
       // Unsealed handshake reply: client verifies `signature` against the
       // machine's known Ed25519 pubkey, then derives the same session key.
@@ -140,9 +148,13 @@ export class SessionTunnel {
         if (typeof inner.sessionId === 'string' && typeof inner.data === 'string') ptyManager.write(inner.sessionId, inner.data);
         break;
       case 'terminal:resize':
-        // Intentionally ignored — the desktop owns the terminal size, so a
-        // mobile viewer never reflows the shared PTY. Viewers match the size
-        // reported by terminal:size.
+        // Dynamic sizing: the active viewer drives the shared PTY size, so a
+        // phone can reflow Claude to fit its screen. The desktop re-asserts its
+        // own size when it regains focus. The client is authenticated as the
+        // machine owner, so it's allowed to resize.
+        if (typeof inner.sessionId === 'string' && typeof inner.cols === 'number' && typeof inner.rows === 'number') {
+          ptyManager.resize(inner.sessionId, Math.max(2, Math.floor(inner.cols)), Math.max(2, Math.floor(inner.rows)));
+        }
         break;
       case 'sessions:list':
         this.sendSessions(clientId);
@@ -220,6 +232,7 @@ export class SessionTunnel {
     if (!s) return;
     ptyManager.off('data', s.onData);
     ptyManager.off('exit', s.onExit);
+    ptyManager.off('resize', s.onResize);
     this.sessions.delete(clientId);
   }
 

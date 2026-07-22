@@ -526,6 +526,10 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     }
 
     window.addEventListener('resize', handleResize);
+    // Dynamic sizing: a remote viewer (phone) can shrink the shared PTY to fit
+    // its screen while the user is away. When the desktop window regains focus,
+    // re-assert its own fit size so the terminal snaps back to full width.
+    window.addEventListener('focus', handleResize);
 
     // Initial fit after layout settles
     requestAnimationFrame(() => {
@@ -539,6 +543,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       // fire handleResize into the disposed terminal after this cleanup.
       if (resizeRafId) cancelAnimationFrame(resizeRafId);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('focus', handleResize);
       resizeObserver.disconnect();
       cleanupPtyData();
       window.electronAPI.killSession(sessionId);

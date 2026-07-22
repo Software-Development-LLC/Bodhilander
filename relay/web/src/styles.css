@@ -115,15 +115,20 @@ input, textarea { font-family: inherit; }
 .term-title { min-width: 0; }
 .term-title .t-name { font-family: var(--mono); font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .term-title .t-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* The viewer matches the desktop's terminal size, which is often bigger than
-   the phone. Rather than clamp xterm to the container (clipping the bottom
-   rows) and rely on xterm's internal viewport for vertical scroll (which
-   doesn't respond to touch), let .screen scroll BOTH axes over the terminal
-   at its natural height — the same mechanism that already made horizontal
-   scroll work. xterm's own viewport is neutralized so it doesn't intercept. */
-.screen { flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 6px 4px; background: var(--bg); }
-.screen .xterm { padding: 0 6px; }
-.xterm-viewport { overflow: hidden; overscroll-behavior: contain; }
+/* The viewer matches the desktop's terminal size, which is often wider/taller
+   than the phone. Vertical scrolling — including through scrollback HISTORY —
+   is xterm's OWN viewport: xterm keeps scrollback off-DOM and only reveals it
+   when its viewport scrolls. On desktop that happens via wheel events (works
+   regardless of CSS overflow); on TOUCH devices the viewport must be natively
+   scrollable, so it needs overflow-y:auto + touch-action:pan-y. Neutralizing it
+   (overflow:hidden) is exactly what left mobile unable to reach history.
+   We bound .xterm/.viewport to the pane height so the viewport becomes a real
+   scroll window over the taller content; .screen handles horizontal panning. */
+.screen { flex: 1; min-height: 0; overflow: hidden; padding: 4px 0; background: var(--bg); }
+/* xterm's own viewport is the vertical scroller (scrollback lives here). It must
+   stay natively scrollable so TOUCH works — the desktop path uses wheel events,
+   but mobile needs a real scroll container. */
+.xterm-viewport { overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
 .xterm-viewport::-webkit-scrollbar { width: 8px; }
 .compose { border-top: 1px solid var(--hair); background: var(--surface); }
 .keys { display: flex; gap: 6px; padding: 8px 10px; overflow-x: auto; scrollbar-width: none; }
