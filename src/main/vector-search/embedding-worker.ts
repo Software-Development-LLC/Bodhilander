@@ -13,18 +13,19 @@ console.log('[EmbeddingWorker] NODE_PATH:', process.env.NODE_PATH);
 console.log('[EmbeddingWorker] __dirname:', __dirname);
 
 import { parentPort } from 'worker_threads';
-import * as path from 'path';
 
 import type { HuggingFaceEmbeddingProvider as HuggingFaceEmbeddingProviderType } from './embedding-provider';
 
 // Native-dependent module loaded via require so a load failure is logged with
 // context (mirrors indexing-worker.ts, which is proven in production).
 let HuggingFaceEmbeddingProviderClass: typeof import('./embedding-provider').HuggingFaceEmbeddingProvider;
+let setModelCacheDir: typeof import('./embedding-provider').setModelCacheDir;
 
 try {
   console.log('[EmbeddingWorker] Loading embedding-provider module...');
   const embeddingModule = require('./embedding-provider');
   HuggingFaceEmbeddingProviderClass = embeddingModule.HuggingFaceEmbeddingProvider;
+  setModelCacheDir = embeddingModule.setModelCacheDir;
   console.log('[EmbeddingWorker] embedding-provider loaded successfully');
 } catch (e) {
   console.error('[EmbeddingWorker] Failed to load embedding-provider:', e);
@@ -73,9 +74,11 @@ parentPort?.on('message', (message: IncomingMessage) => {
   if (message.type === 'init') {
     if (message.cacheDir) {
       try {
-        // @huggingface/transformers reads these to locate the model cache.
-        process.env.HF_HOME = message.cacheDir;
-        process.env.TRANSFORMERS_CACHE = path.join(message.cacheDir, 'models');
+        // transformers.js caches to env.cacheDir (NOT HF_HOME /
+        // TRANSFORMERS_CACHE — those are Python-only and are ignored, which
+        // let the model download into the signed .app bundle, issue #133).
+        // Runs before the first embed → before the pipeline loads.
+        setModelCacheDir(message.cacheDir);
       } catch (e) {
         console.warn('[EmbeddingWorker] Failed to set cache dir:', e);
       }

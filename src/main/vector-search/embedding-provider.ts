@@ -5,7 +5,13 @@ import os from 'os';
 // Import types for TypeScript, runtime value loaded dynamically
 import type { FeatureExtractionPipeline as FeatureExtractionPipelineType } from '@huggingface/transformers';
 
+import { applyModelCacheDir, type TransformersEnvLike } from './model-cache';
+
 let pipeline: typeof import('@huggingface/transformers').pipeline;
+
+// The live transformers.js `env` object, captured at module load so we can
+// point its model cache at a writable, out-of-bundle directory (issue #133).
+let transformersEnv: TransformersEnvLike | null = null;
 
 // Cap ONNX threads so indexing doesn't saturate every CPU core.
 // Default onnxruntime behavior is intraOpNumThreads = physical cores, which
@@ -29,6 +35,7 @@ const MAX_EMBED_CHARS = 2048;
 try {
   const transformers = require('@huggingface/transformers');
   pipeline = transformers.pipeline;
+  transformersEnv = transformers.env ?? null;
   // WASM numThreads matters when transformers falls back to the WASM backend;
   // harmless when onnxruntime-node is in use.
   if (transformers.env?.backends?.onnx?.wasm) {
@@ -40,6 +47,18 @@ try {
 } catch (e) {
   console.error('[EmbeddingProvider] Failed to load @huggingface/transformers:', e);
   throw e;
+}
+
+/**
+ * Point transformers.js at a writable, out-of-bundle model cache (issue #133).
+ * MUST be called before the first pipeline() load. Callers pass a directory
+ * under app.getPath('userData'); transformers.js downloads to <dir>/<model_id>.
+ * Replaces the old HF_HOME / TRANSFORMERS_CACHE env vars, which transformers.js
+ * ignores — leaving them unset made the model download into the signed .app
+ * bundle and break its code-signature seal.
+ */
+export function setModelCacheDir(cacheDir: string): void {
+  applyModelCacheDir(transformersEnv, cacheDir);
 }
 
 // Alias for use in class
