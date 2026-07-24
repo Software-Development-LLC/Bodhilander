@@ -1120,10 +1120,8 @@ const App: React.FC = () => {
                 </button>
               </div>
               {(filter.active || !group.collapsed) && (
-                <div
+                <ul
                   className={`group-sessions ${dropTarget?.id === `group:${group.id}` ? 'drop-target' : ''}`}
-                  role="listbox"
-                  aria-label="Sessions"
                   onDragOver={(e) => handleGroupAreaDragOver(e, group.id)}
                   onDrop={(e) => handleGroupAreaDrop(e, group.id)}
                 >
@@ -1132,7 +1130,7 @@ const App: React.FC = () => {
                   .sort((a, b) => a.order - b.order).map(session => (
                   <SessionRow key={session.id} {...sessionRowProps(session, group.id)} />
                   ))}
-                </div>
+                </ul>
               )}
             </li>
 
@@ -1230,10 +1228,8 @@ const App: React.FC = () => {
                   </button>
                 </div>
                 {(filter.active || !subGroup.collapsed) && (
-                  <div
+                  <ul
                     className={`group-sessions ${dropTarget?.id === `group:${subGroup.id}` ? 'drop-target' : ''}`}
-                  role="listbox"
-                  aria-label="Sessions"
                     onDragOver={(e) => handleGroupAreaDragOver(e, subGroup.id)}
                     onDrop={(e) => handleGroupAreaDrop(e, subGroup.id)}
                   >
@@ -1242,7 +1238,7 @@ const App: React.FC = () => {
                     .sort((a, b) => a.order - b.order).map(session => (
                     <SessionRow key={session.id} {...sessionRowProps(session, subGroup.id)} />
                     ))}
-                  </div>
+                  </ul>
                 )}
               </li>
             ))}

@@ -35,10 +35,14 @@ function accountTitle(account: ClaudeAccount, session: Session): string {
 }
 
 /**
- * One session row in the sidebar. Rendered identically under top-level groups
- * and sub-groups; only the drag handlers differ, and those arrive as props.
+ * One session row in the sidebar — an `<li>` in the group's session list.
+ * Rendered identically under top-level groups and sub-groups; only the drag
+ * handlers differ, and those arrive as props.
  *
- * Presented as an `option` inside the group's `listbox` (see `.group-sessions`).
+ * Selection lives on a real `<button>` covering the row rather than a click
+ * handler on the container, so keyboard and screen-reader support come from the
+ * platform. The close button and the rename input stay outside it, since
+ * neither may nest inside a button.
  */
 export const SessionRow: React.FC<SessionRowProps> = ({
   session, isActive, isFocused, isDragging, dropPosition, draggable, account,
@@ -57,21 +61,8 @@ export const SessionRow: React.FC<SessionRowProps> = ({
   const showProvider = session.shellType === 'claude' && session.provider !== 'claude';
 
   return (
-    <div
+    <li
       className={classes}
-      // A selectable item in the group's session list. The sidebar drives focus
-      // itself (Ctrl+Q + arrows), so this row is not in the tab order.
-      role="option"
-      aria-selected={isActive}
-      tabIndex={-1}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      onDoubleClick={() => { if (!isEditing) onStartEdit(); }}
       onContextMenu={onContextMenu}
       draggable={draggable}
       onDragStart={onDragStart}
@@ -79,55 +70,59 @@ export const SessionRow: React.FC<SessionRowProps> = ({
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
-      {account && (
-        <span
-          className="session-account-dot"
-          style={{ background: account.color ? account.color : '#888888' }}
-          title={accountTitle(account, session)}
-          aria-label={`Account: ${account.label}`}
-          draggable={false}
+      {isEditing ? (
+        <input
+          className="session-name-input"
+          value={editingName}
+          onChange={(e) => onEditingNameChange(e.target.value)}
+          onBlur={onFinishEdit}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') onFinishEdit();
+            if (e.key === 'Escape') onCancelEdit();
+          }}
+          autoFocus
         />
-      )}
-      <div className="session-info">
-        {isEditing ? (
-          <input
-            className="session-name-input"
-            value={editingName}
-            onChange={(e) => onEditingNameChange(e.target.value)}
-            onBlur={onFinishEdit}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === 'Enter') onFinishEdit();
-              if (e.key === 'Escape') onCancelEdit();
-            }}
-            onClick={(e) => e.stopPropagation()}
-            autoFocus
-          />
-        ) : (
-          <span className="session-name" title="Double-click to rename">
-            {session.name}
+      ) : (
+        <button
+          type="button"
+          className="session-select"
+          onClick={onSelect}
+          onDoubleClick={onStartEdit}
+          aria-current={isActive}
+          title="Double-click to rename"
+        >
+          {account && (
+            <span
+              className="session-account-dot"
+              style={{ background: account.color ?? '#888888' }}
+              title={accountTitle(account, session)}
+              aria-label={`Account: ${account.label}`}
+              draggable={false}
+            />
+          )}
+          <span className="session-info">
+            <span className="session-name">{session.name}</span>
+            <SessionStatsBadge sessionId={session.id} />
           </span>
-        )}
-        <SessionStatsBadge sessionId={session.id} />
-      </div>
-      {showProvider && (
-        <span className="session-provider-badge" title={`Provider: ${provider}`} draggable={false}>
-          {provider}
-        </span>
+          {showProvider && (
+            <span className="session-provider-badge" title={`Provider: ${provider}`} draggable={false}>
+              {provider}
+            </span>
+          )}
+          <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
+        </button>
       )}
-      <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
       <button
+        type="button"
         className="session-close"
         draggable={false}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
+        onClick={onClose}
         title="Close session"
         aria-label="Close session"
       >
         ×
       </button>
-    </div>
+    </li>
   );
 };
