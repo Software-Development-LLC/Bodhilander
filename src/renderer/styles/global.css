@@ -239,10 +239,6 @@ body {
   color: #ddd;
 }
 
-.group-sessions {
-  list-style: none;
-}
-
 /* The whole row is one native button so keyboard/AT support is free. */
 .session-select {
   flex: 1;
@@ -460,6 +456,8 @@ body {
 
 .group-sessions {
   margin-left: 16px;
+  /* Rendered as a <ul> of session <li>s; no markers. */
+  list-style: none;
 }
 
 /* Sessions */
