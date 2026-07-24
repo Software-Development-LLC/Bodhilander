@@ -183,6 +183,12 @@ body {
   top: 0;
   z-index: 5;
   background: #252526;
+  /* The scrollport is the sidebar's padding box, so a bare `top: 0` would let
+     the box slide up into the 12px top padding. Pulling it up by that amount
+     and re-adding it as padding keeps the unstuck layout identical while
+     preserving an opaque top gutter once it sticks. */
+  margin-top: -12px;
+  padding-top: 12px;
   padding-bottom: 8px;
   margin-bottom: 2px;
 }

@@ -5,6 +5,7 @@ import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
+import { SidebarFilter } from './components/SidebarFilter';
 import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
@@ -62,7 +63,6 @@ const App: React.FC = () => {
 
   // Sidebar text filter (#141). Ephemeral — never persisted.
   const [filterText, setFilterText] = useState('');
-  const filterInputRef = useRef<HTMLInputElement>(null);
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -303,9 +303,12 @@ const App: React.FC = () => {
 
   const handleFinishEditGroup = async () => {
     if (editingGroupId && editingGroupName.trim()) {
-      await updateGroup(editingGroupId, { name: editingGroupName.trim() });
-      // The new name may not match the active filter (#141).
-      setFilterText('');
+      const trimmed = editingGroupName.trim();
+      const changed = groups.find(g => g.id === editingGroupId)?.name !== trimmed;
+      await updateGroup(editingGroupId, { name: trimmed });
+      // Only when the name actually changed: a click that merely opens (and
+      // blurs) the rename input must not wipe the user's query (#141).
+      if (changed) setFilterText('');
     }
     setEditingGroupId(null);
     setEditingGroupName('');
@@ -431,9 +434,11 @@ const App: React.FC = () => {
 
   const handleFinishEditSession = async () => {
     if (editingSessionId && editingSessionName.trim()) {
-      await updateSession(editingSessionId, { name: editingSessionName.trim() });
-      // The new name may not match the active filter (#141).
-      setFilterText('');
+      const trimmed = editingSessionName.trim();
+      const changed = sessions.find(s => s.id === editingSessionId)?.name !== trimmed;
+      await updateSession(editingSessionId, { name: trimmed });
+      // Only when the name actually changed (see handleFinishEditGroup).
+      if (changed) setFilterText('');
     }
     setEditingSessionId(null);
     setEditingSessionName('');
@@ -768,7 +773,9 @@ const App: React.FC = () => {
       return [
         { key: '↑↓', label: 'Navigate' },
         { key: 'Enter', label: 'Select' },
-        { key: '←→', label: 'Collapse' },
+        // Collapse/expand is unavailable while filtering — rows are
+        // force-expanded, so advertising it would be a lie (#141).
+        ...(filter.active ? [] : [{ key: '←→', label: 'Collapse' }]),
         { key: 'Ctrl+G', label: 'New Group' },
       ];
     }
@@ -777,7 +784,7 @@ const App: React.FC = () => {
       { key: 'Ctrl+Tab', label: 'Next' },
       { key: 'Ctrl+W', label: 'Close' },
     ];
-  }, [sidebarFocused]);
+  }, [sidebarFocused, filter.active]);
 
   const handleNewSubGroup = useCallback(async () => {
     if (focusedItemType === 'group' && focusedItemId) {
@@ -958,44 +965,7 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        <div className="sidebar-filter">
-          <div className="sidebar-filter-field">
-          <input
-            ref={filterInputRef}
-            className="sidebar-filter-input"
-            type="text"
-            value={filterText}
-            placeholder="Filter groups & sessions…"
-            aria-label="Filter groups and sessions"
-            onChange={(e) => setFilterText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Escape') return;
-              if (filterText) {
-                // Consume the first Escape to clear the query.
-                e.stopPropagation();
-                setFilterText('');
-              } else {
-                // Already empty: step out of the box so keyboard users have a
-                // route back, and let app-level dismiss handlers see the key.
-                filterInputRef.current?.blur();
-              }
-            }}
-          />
-          {filterText && (
-            <button
-              className="sidebar-filter-clear"
-              onClick={() => {
-                setFilterText('');
-                filterInputRef.current?.focus();
-              }}
-              title="Clear filter"
-              aria-label="Clear filter"
-            >
-              ×
-            </button>
-          )}
-          </div>
-        </div>
+        <SidebarFilter value={filterText} onChange={setFilterText} />
 
         {filter.active && visibleTopLevelGroups.length === 0 && (
           <div className="sidebar-filter-empty" role="status">No groups or sessions match</div>
@@ -1420,7 +1390,11 @@ const App: React.FC = () => {
             >
               <TerminalHeader
                 session={session}
-                onRename={(name) => updateSession(session.id, { name })}
+                onRename={(name) => {
+                  updateSession(session.id, { name });
+                  // Keep the renamed session visible in the sidebar (#141).
+                  if (session.name !== name) setFilterText('');
+                }}
                 onRestart={() => setRestartKeys(prev => ({ ...prev, [session.id]: (prev[session.id] || 0) + 1 }))}
                 onStop={() => updateSession(session.id, { state: 'stopped' })}
                 onClose={() => handleRemoveSession(session.id)}
