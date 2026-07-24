@@ -34,19 +34,23 @@ The matching logic lives in a new pure, unit-tested module so `App.tsx` only con
 ### Module: `src/renderer/store/groupFilter.ts`
 
 ```ts
-export interface FilterResult {
+export interface GroupFilterResult {
   active: boolean;                 // true when query is non-empty after trim
   visibleGroupIds: Set<string>;    // groups + sub-groups that should render
   visibleSessionIds: Set<string>;  // sessions that should render
-  fullyMatchedGroupIds: Set<string>; // groups matched by name → show all descendants
 }
 
 export function computeGroupFilter(
   groups: Group[],
   sessions: Session[],
   rawQuery: string,
-): FilterResult;
+): GroupFilterResult;
 ```
+
+Two sets are sufficient. A third "fully matched" set is unnecessary because when a
+group matches by name the module already walks its subtree and adds every
+descendant session id to `visibleSessionIds` — so the renderer only ever asks
+"is this group visible?" and "is this session visible?".
 
 ### Definitions
 
@@ -62,7 +66,7 @@ Matching is a plain case-insensitive substring test (no fuzzy matching, no regex
 
 The tree is exactly two levels deep: top-level group → sub-group → session (sessions also attach directly to top-level groups). `groups` is a flat list where sub-groups carry `parentId`; sessions carry a `groupId` that may point at either a top-level group or a sub-group.
 
-1. **A group/sub-group matched by name is "fully matched"** — it and its entire subtree render. Its id goes in `fullyMatchedGroupIds`, and every descendant group + session id is added to the visible sets. This covers: a matched top-level group reveals all its sub-groups and all sessions beneath it; a matched sub-group reveals all its sessions.
+1. **A group/sub-group matched by name is "fully matched"** — it and its entire subtree render. Every descendant group + session id is added to the visible sets. This covers: a matched top-level group reveals all its sub-groups and all sessions beneath it; a matched sub-group reveals all its sessions.
 
 2. **A matching session makes its ancestry visible** — the session id → `visibleSessionIds`; its owning group and (if that group is a sub-group) the sub-group's parent → `visibleGroupIds`.
 
@@ -70,7 +74,7 @@ The tree is exactly two levels deep: top-level group → sub-group → session (
 
 4. **Everything else is hidden** — a group/sub-group whose subtree contains no name match and no session match is absent from `visibleGroupIds`; a session that neither matches nor lives under a fully-matched group is absent from `visibleSessionIds`.
 
-Consequently, within a group that is visible only because a child matched (i.e. it is **not** in `fullyMatchedGroupIds`), only its matching sessions render — exactly the intent that a non-name-matched group shows only its matching sessions.
+Consequently, within a group that is visible only because a child matched (i.e. it was not itself name-matched), only its matching sessions render — exactly the intent that a non-name-matched group shows only its matching sessions.
 
 ## App.tsx integration
 
@@ -92,7 +96,7 @@ Filtering is pure and total over in-memory arrays — there is no I/O and nothin
 
 ## Testing
 
-Unit tests for `computeGroupFilter` in `src/renderer/store/__tests__/groupFilter.test.ts` (Jest, matching the existing `__tests__` convention):
+Unit tests for `computeGroupFilter` in `src/renderer/store/__tests__/groupFilter.test.ts` (`bun:test`, matching the existing `__tests__` convention; run with `bun test`):
 
 - Empty / whitespace-only query → `active: false`, empty sets.
 - Case-insensitive substring match on a top-level group name → group fully matched, all sub-groups + sessions visible.
