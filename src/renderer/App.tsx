@@ -245,6 +245,16 @@ const App: React.FC = () => {
     setSessionPrompt({ groupId, defaultName: `Session ${count}` });
   }, [getSessionsByGroup]);
 
+  /**
+   * A newly created group/session becomes active straight away, so it has to be
+   * visible. Clear the filter only when the new name would not match it —
+   * an unrelated query is left untouched (#141).
+   */
+  const revealNewItem = useCallback((name: string) => {
+    const query = filterText.trim().toLowerCase();
+    if (query && !name.toLowerCase().includes(query)) setFilterText('');
+  }, [filterText]);
+
   // Actually create the session after name is confirmed
   const handleConfirmSession = useCallback(async (
     name: string,
@@ -256,11 +266,8 @@ const App: React.FC = () => {
     const cwd = getEffectiveWorkingDir(sessionPrompt.groupId) || homedir;
     await createSession(sessionPrompt.groupId, name, cwd, true, provider); // launchClaude = true
     setSessionPrompt(null);
-    // A new/renamed row may not match the active filter; clearing it keeps the
-    // result visible instead of silently vanishing (#141).
-    setFilterText('');
-
-  }, [sessionPrompt, getEffectiveWorkingDir, createSession, homedir]);
+    revealNewItem(name);
+  }, [sessionPrompt, revealNewItem, getEffectiveWorkingDir, createSession, homedir]);
 
   // Show prompt for new group name
   const handleCreateGroup = () => {
@@ -271,9 +278,7 @@ const App: React.FC = () => {
   // Actually create the group after name is confirmed
   const handleConfirmGroup = async (name: string, path?: string, claudeAccountId?: string | null) => {
     setGroupPrompt(null);
-    // A new/renamed row may not match the active filter; clearing it keeps the
-    // result visible instead of silently vanishing (#141).
-    setFilterText('');
+    revealNewItem(name);
 
     // Create the group first
     const newGroup = await createGroup(name);
@@ -308,7 +313,7 @@ const App: React.FC = () => {
       }
     }
     setSubGroupPrompt(null);
-    setFilterText('');
+    revealNewItem(name);
   };
 
   const handleStartEditGroup = (groupId: string, currentName: string) => {
@@ -318,12 +323,7 @@ const App: React.FC = () => {
 
   const handleFinishEditGroup = async () => {
     if (editingGroupId && editingGroupName.trim()) {
-      const trimmed = editingGroupName.trim();
-      const changed = groups.find(g => g.id === editingGroupId)?.name !== trimmed;
-      await updateGroup(editingGroupId, { name: trimmed });
-      // Only when the name actually changed: a click that merely opens (and
-      // blurs) the rename input must not wipe the user's query (#141).
-      if (changed) setFilterText('');
+      await updateGroup(editingGroupId, { name: editingGroupName.trim() });
     }
     setEditingGroupId(null);
     setEditingGroupName('');
@@ -449,11 +449,7 @@ const App: React.FC = () => {
 
   const handleFinishEditSession = async () => {
     if (editingSessionId && editingSessionName.trim()) {
-      const trimmed = editingSessionName.trim();
-      const changed = sessions.find(s => s.id === editingSessionId)?.name !== trimmed;
-      await updateSession(editingSessionId, { name: trimmed });
-      // Only when the name actually changed (see handleFinishEditGroup).
-      if (changed) setFilterText('');
+      await updateSession(editingSessionId, { name: editingSessionName.trim() });
     }
     setEditingSessionId(null);
     setEditingSessionName('');
@@ -776,13 +772,13 @@ const App: React.FC = () => {
   const handleNewGroup = useCallback(async () => {
     const name = `Group ${groups.filter(g => !g.parentId).length + 1}`;
     const newGroup = await createGroup(name);
-    setFilterText('');
+    revealNewItem(name);
 
     const dir = await window.electronAPI.selectDirectory();
     if (dir) {
       await updateGroup(newGroup.id, { workingDir: dir });
     }
-  }, [createGroup, updateGroup, groups]);
+  }, [createGroup, updateGroup, groups, revealNewItem]);
 
   // Wiring for one session row. Hoisted out of the JSX so the per-row callbacks
   // are not nested five closures deep inside the group/sub-group maps.
@@ -812,7 +808,7 @@ const App: React.FC = () => {
   }), [
     activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
     filter.active, effectiveAccountForSession, editingSessionId, editingSessionName,
-    handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
+    handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
     handleRemoveSession,
   ]);
@@ -1272,8 +1268,6 @@ const App: React.FC = () => {
                 session={session}
                 onRename={(name) => {
                   updateSession(session.id, { name });
-                  // Keep the renamed session visible in the sidebar (#141).
-                  if (session.name !== name) setFilterText('');
                 }}
                 onRestart={() => setRestartKeys(prev => ({ ...prev, [session.id]: (prev[session.id] || 0) + 1 }))}
                 onStop={() => updateSession(session.id, { state: 'stopped' })}

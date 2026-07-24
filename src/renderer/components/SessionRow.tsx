@@ -89,8 +89,12 @@ export const SessionRow: React.FC<SessionRowProps> = ({
           className="session-select"
           onClick={onSelect}
           onDoubleClick={onStartEdit}
-          aria-current={isActive}
-          title="Double-click to rename"
+          aria-current={isActive || undefined}
+          // The sidebar has its own roving navigation (Ctrl+Q then arrows), and
+          // the close button is already a tab stop. Keeping this out of the tab
+          // order avoids two stops per row (#141).
+          tabIndex={-1}
+          title="Double-click anywhere on the row to rename"
         >
           {account && (
             <span
