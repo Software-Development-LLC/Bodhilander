@@ -177,11 +177,22 @@ body {
 
 /* Sidebar text filter (#141) */
 .sidebar-filter {
+  /* Sticky so the box stays reachable when the list is long — which is the
+     whole reason the filter exists. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #252526;
+  padding-bottom: 8px;
+  margin-bottom: 2px;
+}
+
+.sidebar-filter-field {
   position: relative;
-  margin-bottom: 10px;
 }
 
 .sidebar-filter-input {
+  display: block;
   width: 100%;
   box-sizing: border-box;
   background: #1e1e1e;
@@ -296,8 +307,14 @@ body {
   flex-shrink: 0;
 }
 
-.group-chevron:hover {
+.group-chevron:hover:not(:disabled) {
   color: #d4d4d4;
+}
+
+/* Collapse is unavailable while filtering — rows are force-expanded (#141). */
+.group-chevron:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .color-picker {

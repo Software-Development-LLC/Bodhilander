@@ -17,6 +17,22 @@ interface ShortcutHandlers {
   onToggleAnalytics?: () => void;
 }
 
+/**
+ * True when a keystroke originated inside a text-entry surface — the sidebar
+ * filter box, an inline rename input, or the terminal's hidden textarea.
+ *
+ * Such targets own the *unmodified* keys (arrows, Enter): stealing them would
+ * move the sidebar selection while the user is editing text, and the sidebar's
+ * arrow handlers persist `collapsed` to the database. Modifier shortcuts
+ * (Ctrl+N, Ctrl+W, …) are deliberately NOT affected and still work everywhere.
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as (HTMLElement & { tagName?: string }) | null;
+  if (!el || typeof el.tagName !== 'string') return false;
+  const tag = el.tagName.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
+}
+
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const isMod = e.ctrlKey || e.metaKey;
@@ -67,21 +83,25 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
       handlers.onNewSubGroup?.();
     }
 
-    // Arrow keys (for sidebar navigation)
-    if (e.key === 'ArrowUp') {
-      handlers.onNavigateUp?.();
-    }
-    if (e.key === 'ArrowDown') {
-      handlers.onNavigateDown?.();
-    }
-    if (e.key === 'ArrowLeft') {
-      handlers.onCollapse?.();
-    }
-    if (e.key === 'ArrowRight') {
-      handlers.onExpand?.();
-    }
-    if (e.key === 'Enter' && handlers.onSelect) {
-      handlers.onSelect();
+    // Arrow keys / Enter (for sidebar navigation). These are unmodified keys, so
+    // they must never fire while the user is typing in a text field — the
+    // collapse/expand handlers persist `collapsed` to the database.
+    if (!isEditableTarget(e.target)) {
+      if (e.key === 'ArrowUp') {
+        handlers.onNavigateUp?.();
+      }
+      if (e.key === 'ArrowDown') {
+        handlers.onNavigateDown?.();
+      }
+      if (e.key === 'ArrowLeft') {
+        handlers.onCollapse?.();
+      }
+      if (e.key === 'ArrowRight') {
+        handlers.onExpand?.();
+      }
+      if (e.key === 'Enter' && handlers.onSelect) {
+        handlers.onSelect();
+      }
     }
 
     // Ctrl+Shift+A = Analytics dashboard

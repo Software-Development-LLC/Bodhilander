@@ -4,7 +4,7 @@
  * Run with: bun test src/renderer/store/__tests__
  */
 import { describe, expect, test } from 'bun:test';
-import { computeGroupFilter } from '../groupFilter';
+import { computeGroupFilter, buildNavItems } from '../groupFilter';
 import { Group, Session } from '../../../shared/types';
 
 function group(id: string, name: string, parentId: string | null = null): Group {
@@ -114,11 +114,17 @@ describe('computeGroupFilter', () => {
   });
 
   test('does not mutate its inputs', () => {
-    const groups = [...GROUPS];
-    const sessions = [...SESSIONS];
+    // Deep snapshots — a shallow [...copy] shares element references, so
+    // per-element mutation would go undetected.
+    const groups = GROUPS.map(g => ({ ...g }));
+    const sessions = SESSIONS.map(s => ({ ...s }));
+    const groupsBefore = JSON.stringify(groups);
+    const sessionsBefore = JSON.stringify(sessions);
+
     computeGroupFilter(groups, sessions, 'api');
-    expect(groups).toEqual(GROUPS);
-    expect(sessions).toEqual(SESSIONS);
+
+    expect(JSON.stringify(groups)).toBe(groupsBefore);
+    expect(JSON.stringify(sessions)).toBe(sessionsBefore);
   });
 
   test('survives a cyclic parentId without infinite recursion', () => {
@@ -127,5 +133,53 @@ describe('computeGroupFilter', () => {
     const r = computeGroupFilter([a, b], [], 'alpha');
     expect(r.visibleGroupIds.has('a')).toBe(true);
     expect(r.visibleGroupIds.has('b')).toBe(true);
+  });
+});
+
+describe('buildNavItems', () => {
+  const noFilter = () => computeGroupFilter(GROUPS, SESSIONS, '');
+
+  test('unfiltered list walks groups, their sessions, then sub-groups', () => {
+    const items = buildNavItems(GROUPS, SESSIONS, noFilter());
+    expect(items.map(i => i.id)).toEqual([
+      'api', 's-api', 'api-auth', 's-login', 'api-bill', 's-invoice',
+      'web', 's-home',
+    ]);
+  });
+
+  test('collapsed group hides its children when no filter is active', () => {
+    const collapsed = GROUPS.map(g => (g.id === 'api' ? { ...g, collapsed: true } : g));
+    const items = buildNavItems(collapsed, SESSIONS, computeGroupFilter(collapsed, SESSIONS, ''));
+    expect(items.map(i => i.id)).toEqual(['api', 'web', 's-home']);
+  });
+
+  test('only rendered rows are navigable while filtering', () => {
+    const items = buildNavItems(GROUPS, SESSIONS, computeGroupFilter(GROUPS, SESSIONS, 'invoice'));
+    // parent shown as context, sub-group and its matching session navigable
+    expect(items.map(i => i.id)).toEqual(['api', 'api-bill', 's-invoice']);
+  });
+
+  test('a collapsed group is navigable while filtering (matches auto-expand)', () => {
+    const collapsed = GROUPS.map(g => (g.id === 'api' ? { ...g, collapsed: true } : g));
+    const items = buildNavItems(collapsed, SESSIONS, computeGroupFilter(collapsed, SESSIONS, 'invoice'));
+    // force-expanded on screen, so the row must be reachable by keyboard
+    expect(items.map(i => i.id)).toEqual(['api', 'api-bill', 's-invoice']);
+  });
+
+  test('no matches yields an empty nav list', () => {
+    const items = buildNavItems(GROUPS, SESSIONS, computeGroupFilter(GROUPS, SESSIONS, 'zzzz'));
+    expect(items).toEqual([]);
+  });
+
+  test('rows are ordered by their order field', () => {
+    const groups = [group('g', 'G')];
+    const sessions = [
+      session('s2', 'second', 'g'),
+      session('s1', 'first', 'g'),
+    ];
+    sessions[0].order = 2;
+    sessions[1].order = 1;
+    const items = buildNavItems(groups, sessions, computeGroupFilter(groups, sessions, ''));
+    expect(items.map(i => i.id)).toEqual(['g', 's1', 's2']);
   });
 });

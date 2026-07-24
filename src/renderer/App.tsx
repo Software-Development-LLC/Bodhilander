@@ -13,7 +13,7 @@ import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
 import { ClaudeAccount, PROVIDER_LABELS } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
-import { computeGroupFilter } from './store/groupFilter';
+import { computeGroupFilter, buildNavItems } from './store/groupFilter';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
@@ -129,6 +129,13 @@ const App: React.FC = () => {
     [groups, sessions, filterText],
   );
 
+  // The top-level rows actually rendered. Drives both the list and the empty
+  // state, so the two can never disagree.
+  const visibleTopLevelGroups = useMemo(
+    () => getTopLevelGroups().filter(g => !filter.active || filter.visibleGroupIds.has(g.id)),
+    [getTopLevelGroups, filter],
+  );
+
   // Get the active session's group ID for memory panel
   const activeSession = sessions.find(s => s.id === activeSessionId);
   const activeGroupId = activeSession?.groupId || null;
@@ -234,6 +241,10 @@ const App: React.FC = () => {
     const cwd = getEffectiveWorkingDir(sessionPrompt.groupId) || homedir;
     await createSession(sessionPrompt.groupId, name, cwd, true, provider); // launchClaude = true
     setSessionPrompt(null);
+    // A new/renamed row may not match the active filter; clearing it keeps the
+    // result visible instead of silently vanishing (#141).
+    setFilterText('');
+
   }, [sessionPrompt, getEffectiveWorkingDir, createSession, homedir]);
 
   // Show prompt for new group name
@@ -245,6 +256,9 @@ const App: React.FC = () => {
   // Actually create the group after name is confirmed
   const handleConfirmGroup = async (name: string, path?: string, claudeAccountId?: string | null) => {
     setGroupPrompt(null);
+    // A new/renamed row may not match the active filter; clearing it keeps the
+    // result visible instead of silently vanishing (#141).
+    setFilterText('');
 
     // Create the group first
     const newGroup = await createGroup(name);
@@ -279,6 +293,7 @@ const App: React.FC = () => {
       }
     }
     setSubGroupPrompt(null);
+    setFilterText('');
   };
 
   const handleStartEditGroup = (groupId: string, currentName: string) => {
@@ -289,6 +304,8 @@ const App: React.FC = () => {
   const handleFinishEditGroup = async () => {
     if (editingGroupId && editingGroupName.trim()) {
       await updateGroup(editingGroupId, { name: editingGroupName.trim() });
+      // The new name may not match the active filter (#141).
+      setFilterText('');
     }
     setEditingGroupId(null);
     setEditingGroupName('');
@@ -415,6 +432,8 @@ const App: React.FC = () => {
   const handleFinishEditSession = async () => {
     if (editingSessionId && editingSessionName.trim()) {
       await updateSession(editingSessionId, { name: editingSessionName.trim() });
+      // The new name may not match the active filter (#141).
+      setFilterText('');
     }
     setEditingSessionId(null);
     setEditingSessionName('');
@@ -642,32 +661,12 @@ const App: React.FC = () => {
     }
   }, [groups, handleNewSession]);
 
-  // Build flat navigation list for keyboard navigation
-  const navItems = useMemo(() => {
-    const items: Array<{ id: string; type: 'group' | 'session'; parentId?: string }> = [];
-
-    getTopLevelGroups().forEach(group => {
-      items.push({ id: group.id, type: 'group' });
-
-      if (!group.collapsed) {
-        getSessionsByGroup(group.id).sort((a, b) => a.order - b.order).forEach(session => {
-          items.push({ id: session.id, type: 'session', parentId: group.id });
-        });
-
-        getSubGroups(group.id).forEach(subGroup => {
-          items.push({ id: subGroup.id, type: 'group', parentId: group.id });
-
-          if (!subGroup.collapsed) {
-            getSessionsByGroup(subGroup.id).sort((a, b) => a.order - b.order).forEach(session => {
-              items.push({ id: session.id, type: 'session', parentId: subGroup.id });
-            });
-          }
-        });
-      }
-    });
-
-    return items;
-  }, [groups, sessions, getTopLevelGroups, getSubGroups, getSessionsByGroup]);
+  // Flat navigation list for keyboard navigation. Mirrors the rendered rows,
+  // so it must stay filter-aware (#141).
+  const navItems = useMemo(
+    () => buildNavItems(groups, sessions, filter),
+    [groups, sessions, filter],
+  );
 
   const handleFocusSidebar = useCallback(() => {
     sidebarRef.current?.focus();
@@ -690,7 +689,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleNavigateUp = useCallback(() => {
-    if (!sidebarFocused) return;
+    if (!sidebarFocused || navItems.length === 0) return;
     const currentIndex = navItems.findIndex(item => item.id === focusedItemId);
     const prevIndex = currentIndex > 0 ? currentIndex - 1 : navItems.length - 1;
     setFocusedItemId(navItems[prevIndex].id);
@@ -698,7 +697,7 @@ const App: React.FC = () => {
   }, [sidebarFocused, focusedItemId, navItems]);
 
   const handleNavigateDown = useCallback(() => {
-    if (!sidebarFocused) return;
+    if (!sidebarFocused || navItems.length === 0) return;
     const currentIndex = navItems.findIndex(item => item.id === focusedItemId);
     const nextIndex = currentIndex < navItems.length - 1 ? currentIndex + 1 : 0;
     setFocusedItemId(navItems[nextIndex].id);
@@ -706,7 +705,9 @@ const App: React.FC = () => {
   }, [sidebarFocused, focusedItemId, navItems]);
 
   const handleCollapse = useCallback(() => {
-    if (!sidebarFocused || !focusedItemId) return;
+    // Rows are force-expanded while filtering, so a collapse write would be an
+    // invisible, persisted change (#141).
+    if (!sidebarFocused || !focusedItemId || filter.active) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
       if (group && !group.collapsed) {
@@ -718,13 +719,13 @@ const App: React.FC = () => {
         toggleCollapse(session.groupId);
       }
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse, filter.active]);
 
   const handleExpand = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
-      if (group && group.collapsed) {
+      if (group && group.collapsed && !filter.active) {
         toggleCollapse(focusedItemId);
       }
     } else if (focusedItemType === 'session') {
@@ -735,12 +736,12 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId, filter.active]);
 
   const handleSelect = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
-      toggleCollapse(focusedItemId);
+      if (!filter.active) toggleCollapse(focusedItemId);
     } else if (focusedItemType === 'session') {
       setActiveSessionId(focusedItemId);
       setSidebarFocused(false);
@@ -749,11 +750,12 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId, filter.active]);
 
   const handleNewGroup = useCallback(async () => {
     const name = `Group ${groups.filter(g => !g.parentId).length + 1}`;
     const newGroup = await createGroup(name);
+    setFilterText('');
 
     const dir = await window.electronAPI.selectDirectory();
     if (dir) {
@@ -957,6 +959,7 @@ const App: React.FC = () => {
         </div>
 
         <div className="sidebar-filter">
+          <div className="sidebar-filter-field">
           <input
             ref={filterInputRef}
             className="sidebar-filter-input"
@@ -966,9 +969,15 @@ const App: React.FC = () => {
             aria-label="Filter groups and sessions"
             onChange={(e) => setFilterText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') {
+              if (e.key !== 'Escape') return;
+              if (filterText) {
+                // Consume the first Escape to clear the query.
                 e.stopPropagation();
                 setFilterText('');
+              } else {
+                // Already empty: step out of the box so keyboard users have a
+                // route back, and let app-level dismiss handlers see the key.
+                filterInputRef.current?.blur();
               }
             }}
           />
@@ -985,20 +994,20 @@ const App: React.FC = () => {
               ×
             </button>
           )}
+          </div>
         </div>
 
-        {filter.active && filter.visibleGroupIds.size === 0 && (
-          <div className="sidebar-filter-empty">No groups or sessions match</div>
+        {filter.active && visibleTopLevelGroups.length === 0 && (
+          <div className="sidebar-filter-empty" role="status">No groups or sessions match</div>
         )}
 
-        {getTopLevelGroups()
-          .filter(group => !filter.active || filter.visibleGroupIds.has(group.id))
+        {visibleTopLevelGroups
           .map(group => (
           <div key={group.id} className="group-container">
             {/* Render main group */}
             <div
               className={`group ${draggedItem?.type === 'group' && draggedItem.id === group.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === group.id ? `drop-${dropTarget.position}` : ''}`}
-              draggable
+              draggable={!filter.active}
               onDragStart={(e) => handleGroupDragStart(e, group.id)}
               onDragEnd={handleDragEnd}
               onDragOver={(e) => handleGroupDragOver(e, group.id)}
@@ -1015,8 +1024,13 @@ const App: React.FC = () => {
                     e.stopPropagation();
                     toggleCollapse(group.id);
                   }}
-                  title={group.collapsed ? 'Expand' : 'Collapse'}
-                  aria-label={group.collapsed ? 'Expand group' : 'Collapse group'}
+                  disabled={filter.active}
+                  title={filter.active
+                    ? 'Expanded while filtering'
+                    : (group.collapsed ? 'Expand' : 'Collapse')}
+                  aria-label={filter.active
+                    ? 'Group expanded while filtering'
+                    : (group.collapsed ? 'Expand group' : 'Collapse group')}
                 >
                   {group.collapsed && !filter.active ? '▶' : '▼'}
                 </button>
@@ -1110,7 +1124,7 @@ const App: React.FC = () => {
                     className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}
                     onClick={() => handleSessionClick(session.id)}
                     onContextMenu={(e) => handleSessionContextMenu(e, session.id, session.name)}
-                    draggable
+                    draggable={!filter.active}
                     onDragStart={(e) => handleSessionDragStart(e, session.id, group.id)}
                     onDragEnd={handleDragEnd}
                     onDragOver={(e) => handleSessionDragOver(e, session.id, group.id)}
@@ -1196,7 +1210,7 @@ const App: React.FC = () => {
               <div
                 key={subGroup.id}
                 className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === subGroup.id ? `drop-${dropTarget.position}` : ''}`}
-                draggable
+                draggable={!filter.active}
                 onDragStart={(e) => handleGroupDragStart(e, subGroup.id)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleGroupDragOver(e, subGroup.id)}
@@ -1213,8 +1227,13 @@ const App: React.FC = () => {
                       e.stopPropagation();
                       toggleCollapse(subGroup.id);
                     }}
-                    title={subGroup.collapsed ? 'Expand' : 'Collapse'}
-                    aria-label={subGroup.collapsed ? 'Expand sub-group' : 'Collapse sub-group'}
+                    disabled={filter.active}
+                    title={filter.active
+                      ? 'Expanded while filtering'
+                      : (subGroup.collapsed ? 'Expand' : 'Collapse')}
+                    aria-label={filter.active
+                      ? 'Sub-group expanded while filtering'
+                      : (subGroup.collapsed ? 'Expand sub-group' : 'Collapse sub-group')}
                   >
                     {subGroup.collapsed && !filter.active ? '▶' : '▼'}
                   </button>
@@ -1305,7 +1324,7 @@ const App: React.FC = () => {
                       className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}
                       onClick={() => handleSessionClick(session.id)}
                       onContextMenu={(e) => handleSessionContextMenu(e, session.id, session.name)}
-                      draggable
+                      draggable={!filter.active}
                       onDragStart={(e) => handleSessionDragStart(e, session.id, subGroup.id)}
                       onDragEnd={handleDragEnd}
                       onDragOver={(e) => handleSessionDragOver(e, session.id, subGroup.id)}
