@@ -746,7 +746,7 @@ const App: React.FC = () => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
-      if (group && group.collapsed && !filter.active) {
+      if (group?.collapsed && !filter.active) {
         toggleCollapse(focusedItemId);
       }
     } else if (focusedItemType === 'session') {
@@ -788,7 +788,6 @@ const App: React.FC = () => {
   // are not nested five closures deep inside the group/sub-group maps.
   const sessionRowProps = useCallback((session: Session, groupId: string) => ({
     session,
-    groupId,
     isActive: session.id === activeSessionId,
     isFocused: focusedItemType === 'session' && focusedItemId === session.id,
     isDragging: draggedItem?.type === 'session' && draggedItem.id === session.id,
@@ -1123,6 +1122,8 @@ const App: React.FC = () => {
               {(filter.active || !group.collapsed) && (
                 <div
                   className={`group-sessions ${dropTarget?.id === `group:${group.id}` ? 'drop-target' : ''}`}
+                  role="listbox"
+                  aria-label="Sessions"
                   onDragOver={(e) => handleGroupAreaDragOver(e, group.id)}
                   onDrop={(e) => handleGroupAreaDrop(e, group.id)}
                 >
@@ -1231,6 +1232,8 @@ const App: React.FC = () => {
                 {(filter.active || !subGroup.collapsed) && (
                   <div
                     className={`group-sessions ${dropTarget?.id === `group:${subGroup.id}` ? 'drop-target' : ''}`}
+                  role="listbox"
+                  aria-label="Sessions"
                     onDragOver={(e) => handleGroupAreaDragOver(e, subGroup.id)}
                     onDrop={(e) => handleGroupAreaDrop(e, subGroup.id)}
                   >

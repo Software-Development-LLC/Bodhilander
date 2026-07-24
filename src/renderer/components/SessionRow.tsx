@@ -4,8 +4,6 @@ import { SessionStatsBadge } from './SessionStatsBadge';
 
 interface SessionRowProps {
   session: Session;
-  /** Group the row is rendered under — top-level group or sub-group. */
-  groupId: string;
   isActive: boolean;
   isFocused: boolean;
   isDragging: boolean;
@@ -38,7 +36,9 @@ function accountTitle(account: ClaudeAccount, session: Session): string {
 
 /**
  * One session row in the sidebar. Rendered identically under top-level groups
- * and sub-groups; `groupId` is the only thing that differs.
+ * and sub-groups; only the drag handlers differ, and those arrive as props.
+ *
+ * Presented as an `option` inside the group's `listbox` (see `.group-sessions`).
  */
 export const SessionRow: React.FC<SessionRowProps> = ({
   session, isActive, isFocused, isDragging, dropPosition, draggable, account,
@@ -59,17 +59,19 @@ export const SessionRow: React.FC<SessionRowProps> = ({
   return (
     <div
       className={classes}
-      role="button"
+      // A selectable item in the group's session list. The sidebar drives focus
+      // itself (Ctrl+Q + arrows), so this row is not in the tab order.
+      role="option"
+      aria-selected={isActive}
       tabIndex={-1}
       onClick={onSelect}
       onKeyDown={(e) => {
-        // The sidebar drives focus itself (Ctrl+Q + arrows); this only handles
-        // activation once a row already has DOM focus.
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onSelect();
         }
       }}
+      onDoubleClick={() => { if (!isEditing) onStartEdit(); }}
       onContextMenu={onContextMenu}
       draggable={draggable}
       onDragStart={onDragStart}
@@ -80,7 +82,7 @@ export const SessionRow: React.FC<SessionRowProps> = ({
       {account && (
         <span
           className="session-account-dot"
-          style={{ background: account.color || '#888888' }}
+          style={{ background: account.color ? account.color : '#888888' }}
           title={accountTitle(account, session)}
           aria-label={`Account: ${account.label}`}
           draggable={false}
@@ -102,14 +104,7 @@ export const SessionRow: React.FC<SessionRowProps> = ({
             autoFocus
           />
         ) : (
-          <span
-            className="session-name"
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              onStartEdit();
-            }}
-            title="Double-click to rename"
-          >
+          <span className="session-name" title="Double-click to rename">
             {session.name}
           </span>
         )}
