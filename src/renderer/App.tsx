@@ -13,6 +13,7 @@ import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
 import { ClaudeAccount, PROVIDER_LABELS } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
+import { computeGroupFilter } from './store/groupFilter';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
@@ -58,6 +59,10 @@ const App: React.FC = () => {
   const [focusedItemType, setFocusedItemType] = useState<'group' | 'session' | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
+
+  // Sidebar text filter (#141). Ephemeral — never persisted.
+  const [filterText, setFilterText] = useState('');
+  const filterInputRef = useRef<HTMLInputElement>(null);
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -117,6 +122,12 @@ const App: React.FC = () => {
   const homedir = window.electronAPI.homedir;
   const counts = getStateCounts();
   const isLoading = groupsLoading || sessionsLoading;
+
+  // Which sidebar rows survive the text filter (#141).
+  const filter = useMemo(
+    () => computeGroupFilter(groups, sessions, filterText),
+    [groups, sessions, filterText],
+  );
 
   // Get the active session's group ID for memory panel
   const activeSession = sessions.find(s => s.id === activeSessionId);
@@ -945,7 +956,44 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {getTopLevelGroups().map(group => (
+        <div className="sidebar-filter">
+          <input
+            ref={filterInputRef}
+            className="sidebar-filter-input"
+            type="text"
+            value={filterText}
+            placeholder="Filter groups & sessions…"
+            aria-label="Filter groups and sessions"
+            onChange={(e) => setFilterText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                setFilterText('');
+              }
+            }}
+          />
+          {filterText && (
+            <button
+              className="sidebar-filter-clear"
+              onClick={() => {
+                setFilterText('');
+                filterInputRef.current?.focus();
+              }}
+              title="Clear filter"
+              aria-label="Clear filter"
+            >
+              ×
+            </button>
+          )}
+        </div>
+
+        {filter.active && filter.visibleGroupIds.size === 0 && (
+          <div className="sidebar-filter-empty">No groups or sessions match</div>
+        )}
+
+        {getTopLevelGroups()
+          .filter(group => !filter.active || filter.visibleGroupIds.has(group.id))
+          .map(group => (
           <div key={group.id} className="group-container">
             {/* Render main group */}
             <div
@@ -970,7 +1018,7 @@ const App: React.FC = () => {
                   title={group.collapsed ? 'Expand' : 'Collapse'}
                   aria-label={group.collapsed ? 'Expand group' : 'Collapse group'}
                 >
-                  {group.collapsed ? '▶' : '▼'}
+                  {group.collapsed && !filter.active ? '▶' : '▼'}
                 </button>
                 <button
                   className="group-color"
@@ -1048,13 +1096,15 @@ const App: React.FC = () => {
                   +
                 </button>
               </div>
-              {!group.collapsed && (
+              {(filter.active || !group.collapsed) && (
                 <div
                   className={`group-sessions ${dropTarget?.id === `group:${group.id}` ? 'drop-target' : ''}`}
                   onDragOver={(e) => handleGroupAreaDragOver(e, group.id)}
                   onDrop={(e) => handleGroupAreaDrop(e, group.id)}
                 >
-                {getSessionsByGroup(group.id).sort((a, b) => a.order - b.order).map(session => (
+                {getSessionsByGroup(group.id)
+                  .filter(session => !filter.active || filter.visibleSessionIds.has(session.id))
+                  .sort((a, b) => a.order - b.order).map(session => (
                   <div
                     key={session.id}
                     className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}
@@ -1140,7 +1190,9 @@ const App: React.FC = () => {
             </div>
 
             {/* Render sub-groups when parent not collapsed */}
-            {!group.collapsed && getSubGroups(group.id).map(subGroup => (
+            {(filter.active || !group.collapsed) && getSubGroups(group.id)
+              .filter(subGroup => !filter.active || filter.visibleGroupIds.has(subGroup.id))
+              .map(subGroup => (
               <div
                 key={subGroup.id}
                 className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === subGroup.id ? `drop-${dropTarget.position}` : ''}`}
@@ -1164,7 +1216,7 @@ const App: React.FC = () => {
                     title={subGroup.collapsed ? 'Expand' : 'Collapse'}
                     aria-label={subGroup.collapsed ? 'Expand sub-group' : 'Collapse sub-group'}
                   >
-                    {subGroup.collapsed ? '▶' : '▼'}
+                    {subGroup.collapsed && !filter.active ? '▶' : '▼'}
                   </button>
                   <button
                     className="group-color sub-group-color"
@@ -1239,13 +1291,15 @@ const App: React.FC = () => {
                     +
                   </button>
                 </div>
-                {!subGroup.collapsed && (
+                {(filter.active || !subGroup.collapsed) && (
                   <div
                     className={`group-sessions ${dropTarget?.id === `group:${subGroup.id}` ? 'drop-target' : ''}`}
                     onDragOver={(e) => handleGroupAreaDragOver(e, subGroup.id)}
                     onDrop={(e) => handleGroupAreaDrop(e, subGroup.id)}
                   >
-                  {getSessionsByGroup(subGroup.id).sort((a, b) => a.order - b.order).map(session => (
+                  {getSessionsByGroup(subGroup.id)
+                    .filter(session => !filter.active || filter.visibleSessionIds.has(session.id))
+                    .sort((a, b) => a.order - b.order).map(session => (
                     <div
                       key={session.id}
                       className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}

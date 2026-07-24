@@ -175,6 +175,58 @@ body {
   gap: 4px;
 }
 
+/* Sidebar text filter (#141) */
+.sidebar-filter {
+  position: relative;
+  margin-bottom: 10px;
+}
+
+.sidebar-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 3px;
+  color: #ddd;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 22px 5px 8px;
+}
+
+.sidebar-filter-input::placeholder {
+  color: #666;
+}
+
+.sidebar-filter-input:focus {
+  outline: none;
+  border-color: #5a7aff;
+}
+
+.sidebar-filter-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 3px;
+}
+
+.sidebar-filter-clear:hover {
+  color: #ddd;
+}
+
+.sidebar-filter-empty {
+  color: #666;
+  font-size: 12px;
+  font-style: italic;
+  padding: 8px 2px;
+}
+
 .sidebar-account {
   margin-bottom: 12px;
   padding-bottom: 12px;
