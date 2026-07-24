@@ -69,7 +69,10 @@ body {
   grid-area: sidebar;
   background: #252526;
   border-right: 1px solid #3c3c3c;
-  padding: 12px;
+  /* No top padding: it would push the sticky filter's containing block down,
+     letting scrolled rows leak into the gap above it (#141). The gutter lives
+     on .sidebar-header instead. */
+  padding: 0 12px 12px;
   position: relative;
   overflow-y: auto;
   overflow-x: hidden;
@@ -167,7 +170,8 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  padding-top: 12px;
+  margin-bottom: 0;
 }
 
 .sidebar-header-actions {
@@ -183,12 +187,10 @@ body {
   top: 0;
   z-index: 5;
   background: #252526;
-  /* The scrollport is the sidebar's padding box, so a bare `top: 0` would let
-     the box slide up into the 12px top padding. Pulling it up by that amount
-     and re-adding it as padding keeps the unstuck layout identical while
-     preserving an opaque top gutter once it sticks. */
-  margin-top: -12px;
-  padding-top: 12px;
+  /* Its own padding supplies the gap under the header when unstuck, and an
+     opaque gutter above the input once stuck. No negative margin — that would
+     paint over the header's buttons. */
+  padding-top: 8px;
   padding-bottom: 8px;
   margin-bottom: 2px;
 }
