@@ -1,0 +1,6 @@
+projectKey=Software-Development-LLC_Bodhilander_2d637ced-8612-41e6-a7d6-d6127023db10
+serverUrl=https://sonarqube.bodhilabs.dev
+serverVersion=25.6.0.109173
+dashboardUrl=https://sonarqube.bodhilabs.dev/dashboard?id=Software-Development-LLC_Bodhilander_2d637ced-8612-41e6-a7d6-d6127023db10&pullRequest=143
+ceTaskId=8d858536-ee95-4963-95b5-be022afd4d20
+ceTaskUrl=https://sonarqube.bodhilabs.dev/api/ce/task?id=8d858536-ee95-4963-95b5-be022afd4d20

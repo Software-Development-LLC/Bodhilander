@@ -6,12 +6,13 @@ import { NamePromptModal } from './components/NamePromptModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
+import { SessionRow } from './components/SessionRow';
+import { GroupColorPicker } from './components/GroupColorPicker';
 import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
-import { SessionStatsBadge } from './components/SessionStatsBadge';
 import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
-import { ClaudeAccount, PROVIDER_LABELS } from '../shared/types';
+import { ClaudeAccount, Session } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
@@ -19,6 +20,20 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
+
+/**
+ * Collapse-chevron labels. While a filter is active every row is force-expanded,
+ * so the control is disabled and says so rather than lying about state (#141).
+ */
+function chevronTitle(collapsed: boolean, filtering: boolean): string {
+  if (filtering) return 'Expanded while filtering';
+  return collapsed ? 'Expand' : 'Collapse';
+}
+
+function chevronAriaLabel(collapsed: boolean, filtering: boolean, kind: 'group' | 'sub-group'): string {
+  if (filtering) return `${kind} expanded while filtering`;
+  return collapsed ? `Expand ${kind}` : `Collapse ${kind}`;
+}
 
 const App: React.FC = () => {
   const {
@@ -673,6 +688,7 @@ const App: React.FC = () => {
     [groups, sessions, filter],
   );
 
+
   const handleFocusSidebar = useCallback(() => {
     sidebarRef.current?.focus();
     if (!focusedItemId && navItems.length > 0) {
@@ -767,6 +783,40 @@ const App: React.FC = () => {
       await updateGroup(newGroup.id, { workingDir: dir });
     }
   }, [createGroup, updateGroup, groups]);
+
+  // Wiring for one session row. Hoisted out of the JSX so the per-row callbacks
+  // are not nested five closures deep inside the group/sub-group maps.
+  const sessionRowProps = useCallback((session: Session, groupId: string) => ({
+    session,
+    groupId,
+    isActive: session.id === activeSessionId,
+    isFocused: focusedItemType === 'session' && focusedItemId === session.id,
+    isDragging: draggedItem?.type === 'session' && draggedItem.id === session.id,
+    dropPosition: dropTarget?.type === 'session' && dropTarget.id === session.id
+      ? dropTarget.position
+      : null,
+    draggable: !filter.active,
+    account: effectiveAccountForSession(session.id),
+    isEditing: editingSessionId === session.id,
+    editingName: editingSessionName,
+    onEditingNameChange: setEditingSessionName,
+    onStartEdit: () => handleStartEditSession(session.id, session.name),
+    onFinishEdit: handleFinishEditSession,
+    onCancelEdit: () => { setEditingSessionId(null); setEditingSessionName(''); },
+    onSelect: () => handleSessionClick(session.id),
+    onContextMenu: (e: React.MouseEvent) => handleSessionContextMenu(e, session.id, session.name),
+    onDragStart: (e: React.DragEvent) => handleSessionDragStart(e, session.id, groupId),
+    onDragEnd: handleDragEnd,
+    onDragOver: (e: React.DragEvent) => handleSessionDragOver(e, session.id, groupId),
+    onDrop: (e: React.DragEvent) => handleSessionDrop(e, session.id, groupId),
+    onClose: () => handleRemoveSession(session.id),
+  }), [
+    activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
+    filter.active, effectiveAccountForSession, editingSessionId, editingSessionName,
+    handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
+    handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
+    handleRemoveSession,
+  ]);
 
   const getContextShortcuts = useCallback(() => {
     if (sidebarFocused) {
@@ -968,14 +1018,14 @@ const App: React.FC = () => {
         <SidebarFilter value={filterText} onChange={setFilterText} />
 
         {filter.active && visibleTopLevelGroups.length === 0 && (
-          <div className="sidebar-filter-empty" role="status">No groups or sessions match</div>
+          <output className="sidebar-filter-empty">No groups or sessions match</output>
         )}
 
         {visibleTopLevelGroups
           .map(group => (
-          <div key={group.id} className="group-container">
+          <ul key={group.id} className="group-container">
             {/* Render main group */}
-            <div
+            <li
               className={`group ${draggedItem?.type === 'group' && draggedItem.id === group.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === group.id ? `drop-${dropTarget.position}` : ''}`}
               draggable={!filter.active}
               onDragStart={(e) => handleGroupDragStart(e, group.id)}
@@ -995,12 +1045,8 @@ const App: React.FC = () => {
                     toggleCollapse(group.id);
                   }}
                   disabled={filter.active}
-                  title={filter.active
-                    ? 'Expanded while filtering'
-                    : (group.collapsed ? 'Expand' : 'Collapse')}
-                  aria-label={filter.active
-                    ? 'Group expanded while filtering'
-                    : (group.collapsed ? 'Expand group' : 'Collapse group')}
+                  title={chevronTitle(group.collapsed, filter.active)}
+                  aria-label={chevronAriaLabel(group.collapsed, filter.active, 'group')}
                 >
                   {group.collapsed && !filter.active ? '▶' : '▼'}
                 </button>
@@ -1012,17 +1058,11 @@ const App: React.FC = () => {
                   aria-label="Change group color"
                 />
                 {colorPickerGroupId === group.id && (
-                  <div className="color-picker">
-                    {GROUP_COLORS.map(color => (
-                      <button
-                        key={color}
-                        className={`color-option ${color === group.color ? 'selected' : ''}`}
-                        style={{ background: color }}
-                        onClick={() => handleColorSelect(group.id, color)}
-                        aria-label={`Set color to ${color}`}
-                      />
-                    ))}
-                  </div>
+                  <GroupColorPicker
+                    colors={GROUP_COLORS}
+                    selected={group.color}
+                    onSelect={(color) => handleColorSelect(group.id, color)}
+                  />
                 )}
                 {editingGroupId === group.id ? (
                   <input
@@ -1089,95 +1129,17 @@ const App: React.FC = () => {
                 {getSessionsByGroup(group.id)
                   .filter(session => !filter.active || filter.visibleSessionIds.has(session.id))
                   .sort((a, b) => a.order - b.order).map(session => (
-                  <div
-                    key={session.id}
-                    className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}
-                    onClick={() => handleSessionClick(session.id)}
-                    onContextMenu={(e) => handleSessionContextMenu(e, session.id, session.name)}
-                    draggable={!filter.active}
-                    onDragStart={(e) => handleSessionDragStart(e, session.id, group.id)}
-                    onDragEnd={handleDragEnd}
-                    onDragOver={(e) => handleSessionDragOver(e, session.id, group.id)}
-                    onDrop={(e) => handleSessionDrop(e, session.id, group.id)}
-                  >
-                    {(() => {
-                      const acc = effectiveAccountForSession(session.id);
-                      if (!acc) return null;
-                      return (
-                        <span
-                          className="session-account-dot"
-                          style={{ background: acc.color || '#888888' }}
-                          title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
-                          aria-label={`Account: ${acc.label}`}
-                          draggable={false}
-                        />
-                      );
-                    })()}
-                    <div className="session-info">
-                      {editingSessionId === session.id ? (
-                        <input
-                          className="session-name-input"
-                          value={editingSessionName}
-                          onChange={(e) => setEditingSessionName(e.target.value)}
-                          onBlur={handleFinishEditSession}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === 'Enter') handleFinishEditSession();
-                            if (e.key === 'Escape') {
-                              setEditingSessionId(null);
-                              setEditingSessionName('');
-                            }
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          autoFocus
-                        />
-                      ) : (
-                        <span
-                          className="session-name"
-                          onDoubleClick={(e) => {
-                            e.stopPropagation();
-                            handleStartEditSession(session.id, session.name);
-                          }}
-                          title="Double-click to rename"
-                        >
-                          {session.name}
-                        </span>
-                      )}
-                      <SessionStatsBadge sessionId={session.id} />
-                    </div>
-                    {session.shellType === 'claude' && session.provider !== 'claude' && (
-                      <span
-                        className="session-provider-badge"
-                        title={`Provider: ${PROVIDER_LABELS[session.provider] ?? session.provider}`}
-                        draggable={false}
-                      >
-                        {PROVIDER_LABELS[session.provider] ?? session.provider}
-                      </span>
-                    )}
-                    <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
-                    <button
-                      className="session-close"
-                      draggable={false}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemoveSession(session.id);
-                      }}
-                      title="Close session"
-                      aria-label="Close session"
-                    >
-                      ×
-                    </button>
-                  </div>
+                  <SessionRow key={session.id} {...sessionRowProps(session, group.id)} />
                   ))}
                 </div>
               )}
-            </div>
+            </li>
 
             {/* Render sub-groups when parent not collapsed */}
             {(filter.active || !group.collapsed) && getSubGroups(group.id)
               .filter(subGroup => !filter.active || filter.visibleGroupIds.has(subGroup.id))
               .map(subGroup => (
-              <div
+              <li
                 key={subGroup.id}
                 className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === subGroup.id ? `drop-${dropTarget.position}` : ''}`}
                 draggable={!filter.active}
@@ -1198,12 +1160,8 @@ const App: React.FC = () => {
                       toggleCollapse(subGroup.id);
                     }}
                     disabled={filter.active}
-                    title={filter.active
-                      ? 'Expanded while filtering'
-                      : (subGroup.collapsed ? 'Expand' : 'Collapse')}
-                    aria-label={filter.active
-                      ? 'Sub-group expanded while filtering'
-                      : (subGroup.collapsed ? 'Expand sub-group' : 'Collapse sub-group')}
+                    title={chevronTitle(subGroup.collapsed, filter.active)}
+                    aria-label={chevronAriaLabel(subGroup.collapsed, filter.active, 'sub-group')}
                   >
                     {subGroup.collapsed && !filter.active ? '▶' : '▼'}
                   </button>
@@ -1215,17 +1173,7 @@ const App: React.FC = () => {
                     aria-label="Change sub-group color"
                   />
                   {colorPickerGroupId === subGroup.id && (
-                    <div className="color-picker">
-                      {GROUP_COLORS.map(color => (
-                        <button
-                          key={color}
-                          className={`color-option ${color === subGroup.color ? 'selected' : ''}`}
-                          style={{ background: color }}
-                          onClick={() => handleColorSelect(subGroup.id, color)}
-                          aria-label={`Set color to ${color}`}
-                        />
-                      ))}
-                    </div>
+                    <GroupColorPicker colors={GROUP_COLORS} selected={subGroup.color} onSelect={(color) => handleColorSelect(subGroup.id, color)} />
                   )}
                   {editingGroupId === subGroup.id ? (
                     <input
@@ -1289,80 +1237,13 @@ const App: React.FC = () => {
                   {getSessionsByGroup(subGroup.id)
                     .filter(session => !filter.active || filter.visibleSessionIds.has(session.id))
                     .sort((a, b) => a.order - b.order).map(session => (
-                    <div
-                      key={session.id}
-                      className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}
-                      onClick={() => handleSessionClick(session.id)}
-                      onContextMenu={(e) => handleSessionContextMenu(e, session.id, session.name)}
-                      draggable={!filter.active}
-                      onDragStart={(e) => handleSessionDragStart(e, session.id, subGroup.id)}
-                      onDragEnd={handleDragEnd}
-                      onDragOver={(e) => handleSessionDragOver(e, session.id, subGroup.id)}
-                      onDrop={(e) => handleSessionDrop(e, session.id, subGroup.id)}
-                    >
-                      {(() => {
-                        const acc = effectiveAccountForSession(session.id);
-                        if (!acc) return null;
-                        return (
-                          <span
-                            className="session-account-dot"
-                            style={{ background: acc.color || '#888888' }}
-                            title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
-                            aria-label={`Account: ${acc.label}`}
-                          />
-                        );
-                      })()}
-                      <div className="session-info">
-                        {editingSessionId === session.id ? (
-                          <input
-                            className="session-name-input"
-                            value={editingSessionName}
-                            onChange={(e) => setEditingSessionName(e.target.value)}
-                            onBlur={handleFinishEditSession}
-                            onKeyDown={(e) => {
-                              e.stopPropagation();
-                              if (e.key === 'Enter') handleFinishEditSession();
-                              if (e.key === 'Escape') {
-                                setEditingSessionId(null);
-                                setEditingSessionName('');
-                              }
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            autoFocus
-                          />
-                        ) : (
-                          <span
-                            className="session-name"
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              handleStartEditSession(session.id, session.name);
-                            }}
-                            title="Double-click to rename"
-                          >
-                            {session.name}
-                          </span>
-                        )}
-                        <SessionStatsBadge sessionId={session.id} />
-                      </div>
-                      <span className={`status-pill ${session.state}`}>{session.state}</span>
-                      <button
-                        className="session-close"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveSession(session.id);
-                        }}
-                        title="Close session"
-                        aria-label="Close session"
-                      >
-                        ×
-                      </button>
-                    </div>
+                    <SessionRow key={session.id} {...sessionRowProps(session, subGroup.id)} />
                     ))}
                   </div>
                 )}
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         ))}
 
       </aside>

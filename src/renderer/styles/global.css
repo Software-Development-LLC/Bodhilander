@@ -240,6 +240,7 @@ body {
 }
 
 .sidebar-filter-empty {
+  display: block;
   color: #666;
   font-size: 12px;
   font-style: italic;
@@ -279,6 +280,9 @@ body {
 
 /* Groups */
 .group {
+  /* Rendered as <li> inside .group-container <ul> for semantics; no marker. */
+  list-style: none;
+  display: block;
   margin-bottom: 16px;
 }
 
@@ -788,6 +792,7 @@ body {
 
 /* Sub-groups */
 .group-container {
+  list-style: none;
   margin-bottom: 8px;
 }
 
