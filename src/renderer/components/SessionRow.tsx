@@ -89,7 +89,9 @@ export const SessionRow: React.FC<SessionRowProps> = ({
           className="session-select"
           onClick={onSelect}
           onDoubleClick={onStartEdit}
-          aria-current={isActive || undefined}
+          // Explicit ternary, not `||`/`??`: `isActive ?? undefined` would keep
+          // `false` (it is not nullish) and re-emit aria-current="false".
+          aria-current={isActive ? true : undefined}
           // The sidebar has its own roving navigation (Ctrl+Q then arrows), and
           // the close button is already a tab stop. Keeping this out of the tab
           // order avoids two stops per row (#141).
