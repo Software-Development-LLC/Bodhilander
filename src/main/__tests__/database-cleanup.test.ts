@@ -283,6 +283,46 @@ describe('dropLegacyMemoryTables', () => {
     db.close();
   });
 
+  // Regression: '__global__' was seeded as an ordinary group in v2.2.2 with
+  // "order" = -1, putting it at the TOP of the sidebar, and the store filter
+  // that hid it only landed in v3.2.9. So upgrading installs can genuinely have
+  // real sessions in it — and sessions.group_id is ON DELETE CASCADE against
+  // groups, with session_events cascading off sessions in turn. A bare DELETE
+  // here would permanently destroy a user's sessions and their analytics
+  // history on upgrade.
+  test("NEVER cascade-deletes sessions parked in the legacy '__global__' group", () => {
+    const db = makeMemoryDb();
+    db.prepare("INSERT INTO sessions (id, group_id, name) VALUES ('s2','__global__','Parked Session')").run();
+
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(true);
+
+    // The session survives...
+    expect(db.prepare('SELECT name FROM sessions WHERE id = ?').get('s2')).toEqual({ name: 'Parked Session' });
+    // ...and so does the group that owns it, or the session would be orphaned
+    // and invisible (the sidebar renders strictly by group).
+    expect(groupIds(db).sort()).toEqual(['__global__', 'g1']);
+    db.close();
+  });
+
+  test("renames the kept '__global__' group to something meaningful and visible", () => {
+    const db = makeMemoryDb();
+    db.prepare("INSERT INTO sessions (id, group_id, name) VALUES ('s2','__global__','Parked Session')").run();
+
+    dropLegacyMemoryTables(asDb(db));
+
+    expect(
+      db.prepare('SELECT name, "order" FROM groups WHERE id = ?').get('__global__'),
+    ).toEqual({ name: 'Recovered Sessions', order: 0 });
+    db.close();
+  });
+
+  test("still removes the '__global__' group when no sessions were parked in it", () => {
+    const db = makeMemoryDb();
+    dropLegacyMemoryTables(asDb(db));
+    expect(groupIds(db)).toEqual(['g1']);
+    db.close();
+  });
+
   test("cleans up a database that has the '__global__' group but never stored a memory", () => {
     const db = new Database(':memory:');
     db.exec(`

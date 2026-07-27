@@ -110,8 +110,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     // the bogus size reaching the PTY, far too late to save the buffer. Gate on
     // ACTUAL visibility instead. A display:none ancestor makes
     // getBoundingClientRect() all-zero — the same condition the ResizeObserver
-    // already screens for on its own path. The session-activation effect
-    // re-fits once the terminal is on screen again.
+    // already screens for on its own path. What re-fits the terminal when the
+    // view comes back is that same ResizeObserver, firing on the 0 → N
+    // contentRect transition — NOT the session-activation effect, which keys on
+    // the selected session and does not re-run when only the content view
+    // changes. Do not remove the observer on the assumption that it does.
     const rect = terminalRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) return;
 

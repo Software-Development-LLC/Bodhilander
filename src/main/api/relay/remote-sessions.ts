@@ -113,7 +113,7 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
   }
 
   // Step 2 — spawn the PTY exactly as pty:create does.
-  ptyManager.createSession(id, cwd, opts.launchClaude, opts.groupId, resolveLaunchProviderId(session.provider, opts.provider));
+  ptyManager.createSession(id, cwd, opts.launchClaude, resolveLaunchProviderId(session.provider, opts.provider));
   try {
     soundManager.playStartSound();
   } catch {

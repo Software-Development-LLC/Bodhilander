@@ -103,7 +103,7 @@ afterEach(() => {
 function createAgentSession(manager: InstanceType<typeof PtyManager>, id = 'session-1') {
   const hints: ProviderInstallHint[] = [];
   manager.on('providerHint', (hint: ProviderInstallHint) => hints.push(hint));
-  manager.createSession(id, cwd, true, null, 'codex');
+  manager.createSession(id, cwd, true, 'codex');
   const ptyProc = spawned[spawned.length - 1];
   return { hints, ptyProc };
 }

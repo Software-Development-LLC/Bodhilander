@@ -90,10 +90,17 @@ async function callApi(endpoint: string, data: Record<string, unknown>): Promise
 async function handlePostToolUse(input: HookInput, sessionId?: string): Promise<void> {
   if (!input.tool_name) return;
 
+  // Deliberately send only the tool NAME, never tool_input/tool_response.
+  //
+  // /post-tool-use reads exactly { tool_name, session_id } — the payload was
+  // the last vestige of the removed memory feature, which used it to sniff git
+  // commits. Forwarding it now would actively break analytics: tool_response
+  // carries the full tool output (an entire file for Read, all matches for
+  // Grep, complete stdout for Bash), and the API server caps bodies at 1mb, so
+  // the largest tool calls would 413 and their tool_use events would vanish —
+  // silently, since callApi swallows transport errors by design.
   await callApi('/post-tool-use', {
     tool_name: input.tool_name,
-    tool_input: input.tool_input,
-    tool_output: input.tool_response,
     session_id: sessionId || input.session_id,
   });
 }

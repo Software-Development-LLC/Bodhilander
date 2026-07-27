@@ -203,7 +203,6 @@ export class PtyManager extends EventEmitter {
     id: string,
     cwd: string,
     launchClaude: boolean = false,
-    groupId: string | null = null,
     providerId: string = DEFAULT_PROVIDER_ID
   ): void {
     // Validate cwd exists
@@ -313,7 +312,7 @@ export class PtyManager extends EventEmitter {
         // Remove the dead entry so createSession can re-insert a fresh one.
         this.sessions.delete(id);
         try {
-          this.createSession(id, cwd, true, groupId, providerId);
+          this.createSession(id, cwd, true, providerId);
           return; // Successful retry — suppress the exit emission.
         } catch (e) {
           log.error(`[PTY] Resume-failure retry spawn failed for ${id}:`, e);

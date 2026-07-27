@@ -668,7 +668,7 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     // only bridges first launches where the terminal mounted before the row
     // was persisted. Unknown ids degrade to the default inside
     // PtyManager.createSession (resolveProvider).
-    ptyManager.createSession(id, cwd, launchClaude, null, resolveLaunchProviderId(session?.provider, providerId));
+    ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId));
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {

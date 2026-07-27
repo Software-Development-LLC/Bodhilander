@@ -188,7 +188,17 @@ function writeClaudeMcpConfig(config: ClaudeMcpConfig, configDir?: string): bool
   try {
     // Ensure parent dir exists (account root may not exist until first write).
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+    // Write via temp file + rename so the write is atomic. This is not our
+    // file: ~/.claude.json is Claude Code's own state (project history, OAuth
+    // account, machine id, migration flags) and routinely tens of KB. A
+    // truncating in-place write that is interrupted — crash, power loss, or
+    // Claude Code writing concurrently — would leave the user with a corrupt
+    // config and no way back. rename() within the same directory is atomic on
+    // both POSIX and NTFS.
+    const tmpPath = `${configPath}.bodhilander.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, configPath);
     return true;
   } catch (err) {
     log.error('[MCP Config] Failed to write Claude MCP config:', err);
@@ -389,7 +399,17 @@ export function unregisterMcpServer(configDir?: string): boolean {
  * (BDHLNDR-31), read straight off disk rather than from the accounts table so
  * that dirs left behind by deleted accounts are swept too.
  */
-function listAccountConfigDirs(): string[] {
+/**
+ * Account config dirs to sweep, or null if we could not find out.
+ *
+ * The null case matters: returning [] on failure is indistinguishable from
+ * "this install has no accounts", which would let the one-shot cleanup marker
+ * latch after sweeping only the global config. Every per-account .claude.json
+ * would then keep its dangling entry forever — exactly what the sweep exists
+ * to prevent. A transient EPERM (AV scanner mid-startup on Windows) or EBUSY
+ * (roaming profile mount) on the single launch the sweep runs is enough.
+ */
+function listAccountConfigDirs(): string[] | null {
   try {
     const accountsRoot = path.join(app.getPath('userData'), 'claude-accounts');
     if (!fs.existsSync(accountsRoot)) return [];
@@ -400,7 +420,7 @@ function listAccountConfigDirs(): string[] {
       .map(entry => path.join(accountsRoot, entry.name, '.claude'));
   } catch (err) {
     log.warn('[MCP Config] Failed to enumerate account config dirs:', err);
-    return [];
+    return null;
   }
 }
 
@@ -427,7 +447,13 @@ export function cleanupLegacyMcpServer(): void {
     let removed = 0;
     let failed = 0;
 
-    for (const configDir of [undefined, ...listAccountConfigDirs()]) {
+    // A null enumeration means we could not tell whether accounts exist, so
+    // count it as a failure rather than sweeping the global config and
+    // latching as if we were done.
+    const accountDirs = listAccountConfigDirs();
+    if (accountDirs === null) failed++;
+
+    for (const configDir of [undefined, ...(accountDirs ?? [])]) {
       // Pre-check so a `false` from unregisterMcpServer unambiguously means
       // "the write failed", not "there was nothing to remove".
       if (!readClaudeMcpConfig(configDir).mcpServers?.[MCP_SERVER_NAME]) continue;
@@ -455,27 +481,21 @@ export function cleanupLegacyMcpServer(): void {
   }
 }
 
-/**
- * Unregister Bodhilander hooks from Claude Code (including any legacy
- * ClaudeLander entries from before the app rename).
+/*
+ * There is deliberately no unregisterHooks() any more.
+ *
+ * It existed to tear out every Bodhilander hook, and it called
+ * purgeOurHooks(settings) with no keepPath — which now matches the analytics
+ * hook we intentionally keep installed (it is the only writer of the
+ * tool_use / turn_complete session_events that AnalyticsPanel and
+ * SessionStatsBadge read). It had zero callers, so it was a loaded gun aimed at
+ * a live feature: one plausible "clean up on uninstall" wiring would have
+ * silently disabled analytics for every user.
+ *
+ * If a real uninstall path is ever needed, write it deliberately and decide
+ * then whether the analytics hook should go with it — do not resurrect a
+ * blanket purge.
  */
-export function unregisterHooks(configDir?: string): boolean {
-  try {
-    const settings = readClaudeSettings(configDir);
-
-    if (!purgeOurHooks(settings)) return false;
-
-    if (writeClaudeSettings(settings, configDir)) {
-      log.info(`[Hooks Config] Hooks unregistered successfully for ${configDir ?? '(default)'}`);
-      return true;
-    }
-
-    return false;
-  } catch (err) {
-    log.error('[Hooks Config] Error unregistering hooks:', err);
-    return false;
-  }
-}
 
 /**
  * Get the current hooks configuration status

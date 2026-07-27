@@ -3,22 +3,20 @@ import { Group } from '../../shared/types';
 
 const DEFAULT_COLORS = ['#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2'];
 
-/**
- * The hidden group the removed memory system used for global-context
- * injection (BDHLNDR-35). Nothing creates it any more, and the one-time DB
- * cleanup drops the row, but installs upgrading from the memory era still
- * carry it until that cleanup runs.
+/*
+ * There is deliberately no "hide system groups" filter here any more.
+ *
+ * The removed memory system seeded a '__global__' group for global-context
+ * injection, and this store used to filter it out of the sidebar. But that row
+ * was an ordinary, visible drop target from v2.2.2 until the filter landed in
+ * v3.2.9, so upgrading installs can have real sessions parked in it — and a
+ * filter here would hide those sessions from their owner.
+ *
+ * dropLegacyMemoryTables() in src/main/database.ts now settles it at the source
+ * before the renderer ever asks for groups: the row is deleted when empty, and
+ * kept and renamed to "Recovered Sessions" when it still holds sessions. Either
+ * way, whatever comes back from the database is meant to be shown.
  */
-const LEGACY_GLOBAL_CONTEXT_GROUP_ID = '__global__';
-
-/**
- * Filter out system-managed groups that should never appear in the UI.
- * Legacy-data defence only: without it, a phantom "Global Context" group
- * shows up in the sidebar, pickers, and context menus of upgraded installs.
- */
-function visibleGroups(all: Group[]): Group[] {
-  return all.filter(g => g.id !== LEGACY_GLOBAL_CONTEXT_GROUP_ID);
-}
 
 export function useGroups() {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -29,7 +27,7 @@ export function useGroups() {
     const loadGroups = async () => {
       try {
         const dbGroups = await window.electronAPI.getAllGroups();
-        setGroups(visibleGroups(dbGroups));
+        setGroups(dbGroups);
       } catch (error) {
         console.error('Failed to load groups:', error);
       } finally {

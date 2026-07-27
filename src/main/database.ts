@@ -214,6 +214,15 @@ export function dropLegacyMemoryTables(database: Database.Database): boolean {
   const removing = sentinelGroup ? [...present, "groups/'__global__'"] : present;
   log.info('[DB] Removing legacy memory tables:', removing.join(', '));
 
+  // Every step below is guarded and only logs on failure — this runs against
+  // the database holding the user's real sessions and groups, so a cleanup
+  // problem must never abort startup. `failed` tracks whether the pass was
+  // actually complete, so a database that was momentarily locked or on a
+  // read-only volume gets retried next launch instead of latching the marker
+  // and abandoning the leftovers forever. Same policy as
+  // cleanupLegacyMcpServer() in mcp-config.ts.
+  let failed = 0;
+
   // Triggers first: they mirror every memories row into memories_fts, so leaving
   // them in place while the tables go away is asking for "no such table" errors
   // mid-cleanup.
@@ -221,6 +230,7 @@ export function dropLegacyMemoryTables(database: Database.Database): boolean {
     try {
       database.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
     } catch (e) {
+      failed++;
       log.warn(`[DB] could not drop trigger ${trigger}:`, (e as Error).message);
     }
   }
@@ -233,12 +243,14 @@ export function dropLegacyMemoryTables(database: Database.Database): boolean {
   try {
     database.exec('DROP TABLE IF EXISTS memories_fts');
   } catch (e) {
+    failed++;
     log.warn('[DB] could not drop memories_fts:', (e as Error).message);
   }
   for (const shadow of present.filter((n) => n.startsWith('memories_fts_'))) {
     try {
       database.exec(`DROP TABLE IF EXISTS "${shadow}"`);
     } catch (e) {
+      failed++;
       log.warn(`[DB] could not drop shadow table ${shadow}:`, (e as Error).message);
     }
   }
@@ -247,20 +259,70 @@ export function dropLegacyMemoryTables(database: Database.Database): boolean {
   try {
     database.exec('DROP TABLE IF EXISTS memories');
   } catch (e) {
+    failed++;
     log.warn('[DB] could not drop memories:', (e as Error).message);
   }
 
   // Last: the '__global__' sentinel group the feature seeded for global context.
-  // Order matters — memories.group_id was ON DELETE CASCADE against groups, so
-  // removing this row before the table was gone would churn a cascade delete
-  // through rows we're dropping wholesale anyway.
+  //
+  // NEVER delete this row blindly. `sessions.group_id` REFERENCES groups(id)
+  // ON DELETE CASCADE and foreign_keys is ON, so a bare DELETE cascades through
+  // the user's sessions — and session_events cascades off those in turn, taking
+  // their analytics history with it.
+  //
+  // That is a live risk, not a theoretical one: the row was seeded as an
+  // ordinary group in v2.2.2 with "order" = -1, which put "Global Context" at
+  // the very TOP of the sidebar, and the store filter that hides it only landed
+  // in v3.2.9. For those releases it was a perfectly normal drop target, so an
+  // upgrading install can genuinely have real sessions parked in it.
+  //
+  // So: only remove the row when it is empty. If it still holds sessions, keep
+  // it and give it a name that means something, so those sessions become
+  // visible again instead of being destroyed or orphaned. (Reassigning them
+  // isn't an option — group_id = NULL hides them just as thoroughly, since the
+  // sidebar renders strictly by group.)
   try {
-    database.prepare('DELETE FROM groups WHERE id = ?').run('__global__');
+    // Guard the lookup: a database without a sessions table (a bare fixture, or
+    // one mid-initialisation) trivially has no sessions to lose, so the row is
+    // safe to drop. Letting the missing table throw would skip the delete AND
+    // count a failure, leaving the sentinel behind forever.
+    const hasSessionsTable =
+      database
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
+        .get() != null;
+
+    const orphanedSessions = hasSessionsTable
+      ? (
+          database
+            .prepare('SELECT COUNT(*) AS n FROM sessions WHERE group_id = ?')
+            .get('__global__') as { n: number }
+        ).n
+      : 0;
+
+    if (orphanedSessions > 0) {
+      database
+        .prepare('UPDATE groups SET name = ?, "order" = 0 WHERE id = ?')
+        .run('Recovered Sessions', '__global__');
+      log.info(
+        `[DB] kept the legacy __global__ group as "Recovered Sessions" — it still holds ${orphanedSessions} session(s)`,
+      );
+    } else {
+      database.prepare('DELETE FROM groups WHERE id = ?').run('__global__');
+    }
   } catch (e) {
-    log.warn('[DB] could not remove the legacy __global__ group:', (e as Error).message);
+    failed++;
+    log.warn('[DB] could not retire the legacy __global__ group:', (e as Error).message);
   }
 
-  markCleanupRan(database, MEMORY_CLEANUP_PREF, 'memory');
+  // Only latch when the pass was actually complete. Marking done after every
+  // step failed would abandon the leftovers permanently while still charging
+  // the user a full synchronous VACUUM that reclaimed nothing.
+  if (failed === 0) {
+    markCleanupRan(database, MEMORY_CLEANUP_PREF, 'memory');
+  } else {
+    log.warn(`[DB] legacy memory cleanup incomplete (${failed} step(s) failed); will retry next launch`);
+  }
+
   return true;
 }
 
