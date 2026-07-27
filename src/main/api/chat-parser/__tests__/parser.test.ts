@@ -11,6 +11,16 @@
  * `.expected.json` via a snapshot-update flow when needed (intentionally
  * NOT automatic — bumping the snapshot requires a code change).
  *
+ * FIXTURES USE CRLF, DELIBERATELY. They are fed to a terminal emulator, so
+ * they have to look like a PTY stream. LF alone moves the cursor down without
+ * returning it to column 0 — only CR does that — so a bare-LF fixture renders
+ * each successive line indented by the length of the one before it. That is
+ * not what any real terminal produces, and it silently changes classification:
+ * the user-input `> ` rule is anchored at line start, so an indented prompt
+ * falls through to assistant prose. Do not "normalise" these to LF; the
+ * fixtures directory carries a .gitattributes marking them -text to stop a
+ * core.autocrlf checkout from doing it for you.
+ *
  * Run with: bun test src/main/api/chat-parser
  */
 
