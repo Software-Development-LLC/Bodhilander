@@ -122,7 +122,10 @@ body {
   grid-area: sidebar;
   background: #252526;
   border-right: 1px solid #3c3c3c;
-  padding: 12px;
+  /* No top padding: it would push the sticky filter's containing block down,
+     letting scrolled rows leak into the gap above it (#141). The gutter lives
+     on .sidebar-header instead. */
+  padding: 0 12px 12px;
   position: relative;
   overflow-y: auto;
   overflow-x: hidden;
@@ -319,7 +322,98 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  padding-top: 12px;
+  margin-bottom: 0;
+}
+
+/* Sidebar text filter (#141) */
+.sidebar-filter {
+  /* Sticky so the box stays reachable when the list is long — which is the
+     whole reason the filter exists. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #252526;
+  /* Its own padding supplies the gap under the header when unstuck, and an
+     opaque gutter above the input once stuck. No negative margin — that would
+     paint over the header's buttons. */
+  padding-top: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 2px;
+}
+
+.sidebar-filter-field {
+  position: relative;
+}
+
+.sidebar-filter-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 3px;
+  color: #ddd;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 22px 5px 8px;
+}
+
+.sidebar-filter-input::placeholder {
+  color: #666;
+}
+
+.sidebar-filter-input:focus {
+  outline: none;
+  border-color: #5a7aff;
+}
+
+.sidebar-filter-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 3px;
+}
+
+.sidebar-filter-clear:hover {
+  color: #ddd;
+}
+
+/* The whole row is one native button so keyboard/AT support is free. */
+.session-select {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-select:focus-visible {
+  outline: 1px solid #5a7aff;
+  outline-offset: -1px;
+}
+
+.sidebar-filter-empty {
+  display: block;
+  color: #666;
+  font-size: 12px;
+  font-style: italic;
+  padding: 8px 2px;
 }
 
 .sidebar-account {
@@ -362,6 +456,9 @@ body {
 
 /* Groups */
 .group {
+  /* Rendered as <li> inside .group-container <ul> for semantics; no marker. */
+  list-style: none;
+  display: block;
   margin-bottom: 16px;
 }
 
@@ -398,8 +495,14 @@ body {
   flex-shrink: 0;
 }
 
-.group-chevron:hover {
+.group-chevron:hover:not(:disabled) {
   color: #d4d4d4;
+}
+
+/* Collapse is unavailable while filtering — rows are force-expanded (#141). */
+.group-chevron:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .color-picker {
@@ -507,10 +610,14 @@ body {
 
 .group-sessions {
   margin-left: 16px;
+  /* Rendered as a <ul> of session <li>s; no markers. */
+  list-style: none;
 }
 
 /* Sessions */
 .session {
+  /* Rendered as <li> inside the .group-sessions <ul>; no marker. */
+  list-style: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -865,6 +972,7 @@ body {
 
 /* Sub-groups */
 .group-container {
+  list-style: none;
   margin-bottom: 8px;
 }
 

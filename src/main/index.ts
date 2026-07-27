@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { runGuardedShutdown } from './shutdown';
+import { isAppQuitting, markAppQuitting, shouldHideToTrayOnClose } from './quit-state';
 import { resolveLaunchProviderId } from './providers';
 import { startProviderInstall, cancelProviderInstall } from './provider-install';
 import { detectProviders } from './provider-detector';
@@ -96,7 +97,8 @@ if (process.platform === 'win32') {
 
 let mainWindow: BrowserWindow | null = null;
 let stateMonitor: StateMonitor | null = null;
-let isQuitting = false;
+// "App is quitting" is tracked in the shared, electron-free quit-state module
+// (see ./quit-state) so auto-updater.ts can flag a quitAndInstall the same way.
 
 // Register deep link protocol
 if (process.defaultApp) {
@@ -617,16 +619,16 @@ function createWindow(): void {
   mainWindow.on('resize', saveWindowBounds);
   mainWindow.on('move', saveWindowBounds);
 
-  // Handle close-to-tray behavior
+  // Handle close-to-tray behavior. Crucially, when the app is quitting (e.g.
+  // autoUpdater.quitAndInstall() closes all windows before app.quit()), we must
+  // NOT hide to tray — otherwise the window never closes, app.quit() is never
+  // reached, before-quit never runs, and Squirrel's ShipIt waits forever for a
+  // PID that never dies (issue #139).
   mainWindow.on('close', (event) => {
-    if (!isQuitting) {
-      const closeToTray = prefsRepo.getPreference('closeToTray');
-      // Default is true (close to tray)
-      if (closeToTray !== 'false') {
-        event.preventDefault();
-        mainWindow?.hide();
-        return;
-      }
+    const closeToTray = prefsRepo.getPreference('closeToTray');
+    if (shouldHideToTrayOnClose(isAppQuitting(), closeToTray ?? undefined)) {
+      event.preventDefault();
+      mainWindow?.hide();
     }
   });
 
@@ -907,6 +909,10 @@ safeHandle('app:download-update', () => {
 
 // App restart and update (for About dialog)
 safeHandle('app:restart-and-update', async () => {
+  // Flag the quit BEFORE quitAndInstall so the close-to-tray handler lets the
+  // window actually close (issue #139). Without this the app hides to tray and
+  // never terminates, so the downloaded update never installs.
+  markAppQuitting();
   const { autoUpdater } = await import('electron-updater');
   autoUpdater.quitAndInstall(false, true);
 });
@@ -1339,7 +1345,7 @@ app.on('before-quit', (event) => {
   shuttingDown = true;
 
   event.preventDefault();
-  isQuitting = true;
+  markAppQuitting();
 
   runGuardedShutdown({
     budgetMs: QUIT_CLEANUP_BUDGET_MS,

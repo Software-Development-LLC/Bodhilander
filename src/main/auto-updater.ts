@@ -2,6 +2,7 @@ import { autoUpdater, UpdateInfo } from 'electron-updater';
 import { BrowserWindow, dialog, Notification } from 'electron';
 import * as log from 'electron-log';
 import { getPreference, setPreference } from './repositories/preferences';
+import { markAppQuitting } from './quit-state';
 
 // Configure logging
 autoUpdater.logger = log;
@@ -240,7 +241,10 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
   }).then((result) => {
     isDialogOpen = false;
     if (result.response === 0) {
-      // User clicked Restart Now
+      // User clicked Restart Now. Flag the quit BEFORE quitAndInstall so the
+      // main window's close-to-tray handler doesn't swallow the window close
+      // and strand the app running — which blocks ShipIt from installing (#139).
+      markAppQuitting();
       autoUpdater.quitAndInstall(false, true);
     }
   });

@@ -1,6 +1,6 @@
 {
   "name": "bodhilander",
-  "version": "3.5.0-beta.2",
+  "version": "3.5.0-beta.5",
   "description": "Cross-platform Claude Code session manager",
   "homepage": "https://github.com/Software-Development-LLC/Bodhilander",
   "author": {
@@ -68,7 +68,10 @@
   },
   "devDependencies": {
     "@electron/notarize": "^3.1.1",
+    "@happy-dom/global-registrator": "^20.11.1",
     "@tailwindcss/vite": "^4.0.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

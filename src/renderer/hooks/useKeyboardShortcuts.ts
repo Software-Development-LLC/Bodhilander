@@ -192,10 +192,27 @@ export function isAppShortcut(e: KeyboardEvent): boolean {
 const isTextEntryFocused = () => {
   const el = document.activeElement as HTMLElement | null;
   if (!el) return false;
-  if (el.isContentEditable) return true;
-  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
-  return !!el.closest('.terminal-container, .xterm');
+  if (isEditableTarget(el)) return true;
+  // Extra case isEditableTarget can't see: focus parked on the xterm wrapper
+  // rather than its hidden textarea. Arrows belong to the shell there.
+  return !!el.closest?.('.terminal-container, .xterm');
 };
+
+/**
+ * True when a keystroke originated inside a text-entry surface — the sidebar
+ * filter box, an inline rename input, or the terminal's hidden textarea.
+ *
+ * Such targets own the *unmodified* keys (arrows, Enter): stealing them would
+ * move the sidebar selection while the user is editing text, and the sidebar's
+ * arrow handlers persist `collapsed` to the database. Modifier shortcuts
+ * (Ctrl+N, Ctrl+W, …) are deliberately NOT affected and still work everywhere.
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as (HTMLElement & { tagName?: string }) | null;
+  if (!el || typeof el.tagName !== 'string') return false;
+  const tag = el.tagName.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
+}
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -280,7 +297,10 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
     // isTextEntryFocused() check is the second line of defence so these can
     // never steal a keystroke from the shell or from a rename field.
     if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-    if (isTextEntryFocused()) return;
+    // Check the event's own target as well as the focused element (#141): the
+    // sidebar's collapse/expand handlers persist `collapsed` to the database,
+    // so an arrow key typed in the filter box must never reach them.
+    if (isEditableTarget(e.target) || isTextEntryFocused()) return;
 
     switch (e.key) {
       case 'ArrowUp':
