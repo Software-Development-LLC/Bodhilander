@@ -111,7 +111,7 @@ describe('hasAppModFor', () => {
     expect(hasAppModFor(key('n', { ctrl: true }), WIN)).toBe(false);
   });
 
-  test('each platform rejects the other platform s modifier', () => {
+  test("each platform rejects the other platform's modifier", () => {
     expect(hasAppModFor(key('n', { ctrl: true, shift: true }), MAC)).toBe(false);
     expect(hasAppModFor(key('n', { meta: true }), WIN)).toBe(false);
   });
@@ -218,7 +218,7 @@ describe('isSettingsFor', () => {
     expect(isAppShortcutFor(key(',', { ctrl: true }, 'Comma'), WIN)).toBe(true);
   });
 
-  test('the other platform s modifier does not fire it', () => {
+  test("the other platform's modifier does not fire it", () => {
     expect(isSettingsFor(key(',', { ctrl: true }, 'Comma'), MAC)).toBe(false);
     expect(isSettingsFor(key(',', { meta: true }, 'Comma'), WIN)).toBe(false);
   });

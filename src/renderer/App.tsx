@@ -10,7 +10,7 @@ import { SessionRow } from './components/SessionRow';
 import { GroupColorPicker } from './components/GroupColorPicker';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
-import { ViewSwitcher, ContentView } from './components/ViewSwitcher';
+import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { ClaudeAccount, Session } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
