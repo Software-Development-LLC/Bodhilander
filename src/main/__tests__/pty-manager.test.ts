@@ -49,12 +49,12 @@ function fakeSpawn(file: string, args: string[]): FakePty {
 
 // Mock discipline: bun's mock.module patches a specifier for the whole test
 // process, so ONLY mock modules that no other test file exercises for real
-// (node-pty, electron-log, memory/injector) or that are mocked with a
-// compatible shape elsewhere (electron, preferences, accounts,
-// shell-detector). The provider registry, sessions repository, and key-vault
-// are used REAL — resolve.test/sessions.test/key-vault.test cover them —
-// which works because these tests run codex, a passthrough provider whose
-// capabilities are all false, so no DB-backed function is ever called.
+// (node-pty, electron-log) or that are mocked with a compatible shape
+// elsewhere (electron, preferences, accounts, shell-detector). The provider
+// registry, sessions repository, and key-vault are used REAL —
+// resolve.test/sessions.test/key-vault.test cover them — which works because
+// these tests run codex, a passthrough provider whose capabilities are all
+// false, so no DB-backed function is ever called.
 mock.module('node-pty', () => ({ spawn: fakeSpawn }));
 mock.module('electron-log', () => ({
   default: { info() {}, warn() {}, error() {} },
@@ -80,10 +80,6 @@ mock.module('../repositories/accounts', () => ({
   deleteAccount: () => undefined,
   getAccount: () => null,
 }));
-mock.module('../memory/injector', () => ({
-  writeMemoryFile: () => {},
-  getMemoryInjectionContent: () => null,
-}));
 // Any real, existing executable path works — the pty spawn is mocked.
 mock.module('../shell-detector', () => ({
   detectShell: () => ({ shell: process.execPath, args: ['-l', '-i'], isWSL: false }),
@@ -107,7 +103,7 @@ afterEach(() => {
 function createAgentSession(manager: InstanceType<typeof PtyManager>, id = 'session-1') {
   const hints: ProviderInstallHint[] = [];
   manager.on('providerHint', (hint: ProviderInstallHint) => hints.push(hint));
-  manager.createSession(id, cwd, true, null, 'codex');
+  manager.createSession(id, cwd, true, 'codex');
   const ptyProc = spawned[spawned.length - 1];
   return { hints, ptyProc };
 }
@@ -234,5 +230,59 @@ describe('createInstallSession', () => {
     expect(events).toEqual([{ id: '__install-codex', data: 'npm ERR! network unreachable\n' }]);
     expect(exits).toEqual([{ id: '__install-codex', exitCode: 1 }]);
     expect(manager.getSession('__install-codex')).toBeUndefined();
+  });
+});
+
+describe('resize (dynamic sizing)', () => {
+  test('drives the pty and fans out a resize event; skips no-op resizes', () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    const calls: Array<[number, number]> = [];
+    ptyProc.resize = (c: number, r: number) => calls.push([c, r]);
+    const events: Array<{ id: string; cols: number; rows: number }> = [];
+    manager.on('resize', (e: { id: string; cols: number; rows: number }) => events.push(e));
+
+    manager.resize('session-1', 100, 40);
+    expect(calls).toEqual([[100, 40]]);
+    expect(events).toEqual([{ id: 'session-1', cols: 100, rows: 40 }]);
+
+    // A no-op resize (same dimensions) must not churn the pty or re-emit — other
+    // viewers shouldn't get a redundant terminal:size.
+    manager.resize('session-1', 100, 40);
+    expect(calls.length).toBe(1);
+    expect(events.length).toBe(1);
+
+    manager.resize('session-1', 80, 24);
+    expect(events.length).toBe(2);
+    expect(events[1]).toEqual({ id: 'session-1', cols: 80, rows: 24 });
+  });
+
+  test('resizing an unknown session is a no-op (no throw, no event)', () => {
+    const manager = new PtyManager();
+    const events: unknown[] = [];
+    manager.on('resize', (e) => events.push(e));
+    manager.resize('does-not-exist', 100, 40);
+    expect(events).toEqual([]);
+  });
+});
+
+describe('getSerializedBuffer (rendered-text history)', () => {
+  test('returns resolved text of the scrollback, keeping content that scrolled off', async () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('\x1b[32mhello\x1b[0m world\r\n');
+    for (let i = 0; i < 40; i++) ptyProc.dataCb!(`line ${i}\r\n`);
+
+    const text = await manager.getSerializedBuffer('session-1');
+    expect(text.length).toBeGreaterThan(0);
+    expect(text).toContain('hello');
+    // "line 5" scrolled off the 24-row screen — it must survive in the serialized
+    // scrollback (this is the history a phone reads).
+    expect(text).toContain('line 5');
+  });
+
+  test('returns empty string for an unknown session', async () => {
+    const manager = new PtyManager();
+    expect(await manager.getSerializedBuffer('nope')).toBe('');
   });
 });

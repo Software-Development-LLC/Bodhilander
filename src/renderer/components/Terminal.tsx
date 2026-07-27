@@ -4,6 +4,10 @@ import { FitAddon } from 'xterm-addon-fit';
 import { WebglAddon } from 'xterm-addon-webgl';
 import { ProviderInstallHint } from '../../shared/types';
 import { ProviderInstallModal } from './ProviderInstallModal';
+// The keyboard scheme lives in one place — see the table at the top of
+// useKeyboardShortcuts.ts. Importing the predicates (instead of re-deriving
+// them here) is what keeps the xterm allowlist and the app handler in sync.
+import { IS_MAC, isAppShortcut, isCopyShortcut, isPasteShortcut } from '../hooks/useKeyboardShortcuts';
 import 'xterm/css/xterm.css';
 import '../styles/terminal.css';
 
@@ -50,6 +54,10 @@ const AUTO_SCROLL_THRESHOLD = 5;
 // this by requiring a sane minimum before propagating a resize.
 const MIN_COLS = 10;
 const MIN_ROWS = 2;
+// Context-menu hints. Copy/paste are Cmd+C/Cmd+V on macOS and Ctrl+Shift+C/V
+// elsewhere, because bare Ctrl+C must stay available to send SIGINT.
+const COPY_SHORTCUT_LABEL = IS_MAC ? 'Cmd+C' : 'Ctrl+Shift+C';
+const PASTE_SHORTCUT_LABEL = IS_MAC ? 'Cmd+V' : 'Ctrl+Shift+V';
 
 const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, provider, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError, externalPty = false }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -66,11 +74,18 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const [installHint, setInstallHint] = useState<ProviderInstallHint | null>(null);
   const [installFlow, setInstallFlow] = useState<{ ptyId: string; command: string } | null>(null);
   const [installSucceeded, setInstallSucceeded] = useState(false);
+  // Dynamic sizing: when a remote/mobile viewer shrinks the shared PTY below this
+  // desktop's size, we show a banner + a Resume button. `desktopSizeRef` tracks
+  // the size THIS window last asked for, so we can tell a mobile resize (smaller,
+  // unrequested) from our own.
+  const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const [mobileSize, setMobileSize] = useState<{ cols: number; rows: number } | null>(null);
 
   // Track isActive in a ref so handleResize (set up in the main effect which
-  // does NOT depend on isActive) can skip hidden terminals. Without this,
-  // window-resize and ResizeObserver events call fitAddon.fit() on a
-  // display:none container, corrupting xterm's internal column count.
+  // does NOT depend on isActive) can skip background sessions without a layout
+  // measurement. It is only a fast path — the authoritative "is this terminal
+  // actually on screen" test lives in handleResize itself, because isActive
+  // says nothing about which content view is showing.
   const isActiveRef = useRef(isActive);
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
 
@@ -80,11 +95,28 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // effect all go through the same path.
   const handleResize = useCallback(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
-    // Skip hidden terminals entirely. fitAddon.fit() on a display:none
-    // container measures ≈2 cols and internally resizes xterm to that bogus
-    // value, corrupting the buffer. The session-activation effect handles
-    // resize when the terminal becomes visible again.
+    // Cheap first cut: a non-active session is always hidden (App.tsx gives
+    // every .terminal-wrapper but the active one display:none), so this
+    // early-out spares the layout flush below for every background session on
+    // each window resize.
     if (!isActiveRef.current) return;
+    // …but isActive only tracks which SESSION is selected; it says nothing
+    // about which CONTENT VIEW is showing. App.tsx hides the whole
+    // .terminal-area with display:none while Analytics or Arena is active, and
+    // those are first-class destinations with their own accelerators — so the
+    // active session is routinely off-screen. fitAddon.fit() on a hidden
+    // container measures ≈2 cols and reflows xterm to that bogus width,
+    // re-wrapping the entire scrollback; the MIN_COLS guard below only stops
+    // the bogus size reaching the PTY, far too late to save the buffer. Gate on
+    // ACTUAL visibility instead. A display:none ancestor makes
+    // getBoundingClientRect() all-zero — the same condition the ResizeObserver
+    // already screens for on its own path. What re-fits the terminal when the
+    // view comes back is that same ResizeObserver, firing on the 0 → N
+    // contentRect transition — NOT the session-activation effect, which keys on
+    // the selected session and does not re-run when only the content view
+    // changes. Do not remove the observer on the assumption that it does.
+    const rect = terminalRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) return;
 
     // BDHLNDR-43: fitAddon.fit() drives xterm's internal resize
     // (onResize → _renderService.handleResize / the deferred
@@ -100,11 +132,39 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       const { cols, rows } = xtermRef.current;
       // Guard: don't propagate bogus dimensions from an unsized container.
       if (cols >= MIN_COLS && rows >= MIN_ROWS) {
+        desktopSizeRef.current = { cols, rows };
+        setMobileSize(null); // we're (re)asserting the desktop's own size
         window.electronAPI.resizeSession(sessionId, cols, rows);
       }
     } catch (e) {
       console.warn('[Terminal] resize during teardown (non-fatal):', e);
     }
+  }, [sessionId]);
+
+  // Resume the desktop's own size (undo a mobile viewer's shrink).
+  const resumeDesktopSize = useCallback(() => {
+    setMobileSize(null);
+    handleResize();
+  }, [handleResize]);
+
+  // Dynamic sizing: react to PTY resizes driven by another viewer. If the shared
+  // terminal was shrunk (by a phone) below this window's size, follow it locally
+  // (so nothing renders stale/garbled) and show the banner. When it matches our
+  // own size again, clear the banner.
+  useEffect(() => {
+    return window.electronAPI.onPtyResize((id, cols, rows) => {
+      if (id !== sessionId) return;
+      const desk = desktopSizeRef.current;
+      if (!desk) return; // haven't fit yet — nothing to compare against
+      if (cols === desk.cols && rows === desk.rows) {
+        setMobileSize(null);
+        return;
+      }
+      if (cols < desk.cols || rows < desk.rows) {
+        setMobileSize({ cols, rows });
+        try { xtermRef.current?.resize(cols, rows); } catch { /* disposed */ }
+      }
+    });
   }, [sessionId]);
 
   // Surface provider launch failures (spawn ENOENT / command not found)
@@ -234,13 +294,14 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     setContextMenu(prev => ({ ...prev, visible: false }));
   }, []);
 
-  // Paste text into terminal (with debounce)
-  const handlePaste = useCallback(async () => {
+  // Paste is the one clipboard action that is NOT idempotent, and it can reach
+  // us from three places: the context menu, the terminal's own key handler, and
+  // the Edit menu accelerator (main -> 'menu:paste'). Funnel all three through
+  // here so PASTE_DEBOUNCE_MS collapses any duplicate delivery into a single
+  // write to the PTY.
+  const pasteFromClipboard = useCallback(async () => {
     const now = Date.now();
-    if (now - lastPasteTimeRef.current < PASTE_DEBOUNCE_MS) {
-      setContextMenu(prev => ({ ...prev, visible: false }));
-      return;
-    }
+    if (now - lastPasteTimeRef.current < PASTE_DEBOUNCE_MS) return;
     lastPasteTimeRef.current = now;
 
     try {
@@ -251,8 +312,13 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     } catch (err) {
       console.error('Failed to paste:', err);
     }
-    setContextMenu(prev => ({ ...prev, visible: false }));
   }, [sessionId]);
+
+  // Paste text into terminal (context menu entry point)
+  const handlePaste = useCallback(async () => {
+    await pasteFromClipboard();
+    setContextMenu(prev => ({ ...prev, visible: false }));
+  }, [pasteFromClipboard]);
 
   // Handle Edit menu events from the menu bar
   useEffect(() => {
@@ -270,15 +336,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       }
     }));
 
-    cleanups.push(window.electronAPI.onMenuPaste(async () => {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) {
-          window.electronAPI.writeToSession(sessionId, text);
-        }
-      } catch (err) {
-        console.error('Failed to paste:', err);
-      }
+    cleanups.push(window.electronAPI.onMenuPaste(() => {
+      // Shares the debounce with the key handler and context menu — if a
+      // platform ever delivers the accelerator to both the menu and the
+      // renderer, the second one is swallowed instead of pasting twice.
+      pasteFromClipboard();
     }));
 
     cleanups.push(window.electronAPI.onMenuSelectAll(() => {
@@ -296,7 +358,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     }));
 
     return () => cleanups.forEach(fn => fn());
-  }, [isActive, sessionId]);
+  }, [isActive, sessionId, pasteFromClipboard]);
 
   // Handle right-click context menu
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -443,12 +505,22 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       window.electronAPI.primePty(sessionId);
     }
 
-    // Handle keyboard shortcuts
+    // Keyboard routing. The scheme (and the reason for it) lives in
+    // hooks/useKeyboardShortcuts.ts. Only two classes of keystroke are taken
+    // from the terminal here:
+    //   1. the terminal-local copy/paste bindings, and
+    //   2. app-level shortcuts, which are simply withheld from the PTY and left
+    //      to bubble to the window listener in useKeyboardShortcuts.
+    // EVERYTHING else returns true and goes straight to the PTY. That is what
+    // makes bare Ctrl+C (SIGINT), Ctrl+W (delete word), Ctrl+N (history),
+    // Ctrl+G (abort), Ctrl+Q (XON), Ctrl+A/E (line motion), Ctrl+K (kill line)
+    // and Ctrl+F work again — the old allowlist matched `ctrlKey || metaKey`
+    // and swallowed all of them, while simultaneously failing to forward the
+    // view shortcuts, so Analytics never opened while the terminal had focus
+    // (i.e. essentially always).
     term.attachCustomKeyEventHandler((event) => {
-      const isMod = event.ctrlKey || event.metaKey;
-
-      // Ctrl+Shift+C = Copy (only on keydown)
-      if (isMod && event.shiftKey && event.key === 'C' && event.type === 'keydown') {
+      // Copy — Cmd+C (macOS) / Ctrl+Shift+C (Windows/Linux)
+      if (isCopyShortcut(event) && event.type === 'keydown') {
         event.preventDefault();
         event.stopPropagation();
         const selection = term.getSelection();
@@ -457,47 +529,36 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         }
         return false;
       }
-      // Ctrl+Shift+V = Paste (only on keydown, with debounce)
-      if (isMod && event.shiftKey && event.key === 'V' && event.type === 'keydown') {
+
+      // Paste — Cmd+V (macOS) / Ctrl+Shift+V (Windows/Linux). Goes through the
+      // shared debounce so it can never double-paste alongside the Edit menu.
+      if (isPasteShortcut(event) && event.type === 'keydown') {
         event.preventDefault();
         event.stopPropagation();
-        const now = Date.now();
-        if (now - lastPasteTimeRef.current < PASTE_DEBOUNCE_MS) {
-          return false;
-        }
-        lastPasteTimeRef.current = now;
-
-        navigator.clipboard.readText().then(text => {
-          if (text) {
-            window.electronAPI.writeToSession(sessionId, text);
-          }
-        });
+        pasteFromClipboard();
         return false;
       }
 
-      // Global shortcuts - dispatch to window so useKeyboardShortcuts handles them
-      // Use toLowerCase() for case-insensitive matching (key can be 'W' or 'w' depending on shift/OS)
-      const key = event.key.toLowerCase();
-      const isGlobalShortcut = (
-        (isMod && key === 'q') ||                                // Ctrl+Q
-        (isMod && event.key === 'Tab') ||                        // Ctrl+Tab
-        (isMod && key === 'w') ||                                // Ctrl+W / Ctrl+Shift+W
-        (isMod && key === 'n') ||                                // Ctrl+N
-        (isMod && key === 'g')                                   // Ctrl+G / Ctrl+Shift+G
-      );
-
-      if (isGlobalShortcut && event.type === 'keydown') {
-        window.dispatchEvent(new KeyboardEvent('keydown', {
-          key: event.key,
-          ctrlKey: event.ctrlKey,
-          metaKey: event.metaKey,
-          shiftKey: event.shiftKey,
-          altKey: event.altKey,
-          bubbles: true,
-        }));
+      // App-level shortcuts: keep them away from the PTY and let the ORIGINAL
+      // event carry on to the window listener in useKeyboardShortcuts.
+      //
+      // Do NOT re-dispatch a synthetic KeyboardEvent here. Returning false is
+      // all xterm needs — its handler is
+      //   _keyDown(e){ ... if (this._customKeyEventHandler(e) === false) return false; ... }
+      // which bails BEFORE its cancel(e), so it never calls preventDefault or
+      // stopPropagation. The real event therefore still bubbles from xterm's
+      // hidden <textarea> up to window, where useKeyboardShortcuts' keydown
+      // listener handles it exactly once. A synthetic dispatch would be a
+      // SECOND delivery: New Group fired twice, creating two groups and opening
+      // two directory pickers.
+      //
+      // Unlike copy/paste above we also must not preventDefault/stopPropagation
+      // — that would kill the very bubble the window listener depends on.
+      if (isAppShortcut(event) && event.type === 'keydown') {
         return false;
       }
 
+      // Not ours — the shell gets it.
       return true;
     });
 
@@ -526,6 +587,10 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     }
 
     window.addEventListener('resize', handleResize);
+    // Dynamic sizing: a remote viewer (phone) can shrink the shared PTY to fit
+    // its screen while the user is away. When the desktop window regains focus,
+    // re-assert its own fit size so the terminal snaps back to full width.
+    window.addEventListener('focus', handleResize);
 
     // Initial fit after layout settles
     requestAnimationFrame(() => {
@@ -539,6 +604,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       // fire handleResize into the disposed terminal after this cleanup.
       if (resizeRafId) cancelAnimationFrame(resizeRafId);
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('focus', handleResize);
       resizeObserver.disconnect();
       cleanupPtyData();
       window.electronAPI.killSession(sessionId);
@@ -570,7 +636,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       xtermRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [sessionId, cwd, launchClaude, isRunning, handleResize]);
+  }, [sessionId, cwd, launchClaude, isRunning, handleResize, pasteFromClipboard]);
 
   const handleStart = () => {
     setError(null);
@@ -684,6 +750,16 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         className="terminal-container"
         onContextMenu={handleContextMenu}
       />
+      {mobileSize && (
+        <div className="mobile-resize-banner">
+          <span className="mobile-resize-banner-text">
+            📱 Resized to fit a mobile viewer ({mobileSize.cols}×{mobileSize.rows}).
+          </span>
+          <button className="mobile-resize-banner-btn" onClick={resumeDesktopSize}>
+            Resume desktop size
+          </button>
+        </div>
+      )}
       {installHintUi}
       {contextMenu.visible && (
         <div
@@ -699,12 +775,12 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
             disabled={!contextMenu.hasSelection}
             className={!contextMenu.hasSelection ? 'disabled' : ''}
           >
-            Copy
-            <span className="shortcut">Ctrl+Shift+C</span>
+            Copy{' '}
+            <span className="shortcut">{COPY_SHORTCUT_LABEL}</span>
           </button>
           <button onClick={handlePaste}>
-            Paste
-            <span className="shortcut">Ctrl+Shift+V</span>
+            Paste{' '}
+            <span className="shortcut">{PASTE_SHORTCUT_LABEL}</span>
           </button>
         </div>
       )}

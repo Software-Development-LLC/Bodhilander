@@ -19,9 +19,7 @@ import { createGroupsRouter } from './routes/groups';
 import { createSystemRouter } from './routes/system';
 import { createPairingRouter } from './routes/pairing';
 import { createTerminalRouter } from './routes/terminal';
-import { createMemoriesRouter } from './routes/memories';
 import { createHooksRouter } from './routes/hooks';
-import { createCodeSearchRouter } from './routes/code-search';
 import { createWebPushRouter } from './routes/web-push';
 
 export interface HttpServerConfig {
@@ -210,14 +208,8 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   // Pairing routes (rate limited, no auth required for initiation)
   app.use('/api/v1/pairing', pairingLimiter, createPairingRouter(config.pairingManager, config.onDeviceUnpaired));
 
-  // Memory routes for MCP server (localhost-only, no device auth needed)
-  app.use('/api/v1/memories', generalLimiter, createMemoriesRouter());
-
   // Hook routes for Claude Code hooks (localhost-only, no device auth needed)
   app.use('/api/v1/hooks', generalLimiter, createHooksRouter());
-
-  // Code search routes for MCP server (localhost-only, no device auth needed)
-  app.use('/api/v1/code', generalLimiter, createCodeSearchRouter());
 
   // Web Push routes (BDHLNDR-49). Mounts BOTH the unauthenticated
   // /public-key endpoint and the auth-required /subscribe endpoints. The

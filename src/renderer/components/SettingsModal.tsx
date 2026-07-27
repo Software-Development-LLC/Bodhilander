@@ -2,17 +2,40 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
+import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
+
+// Exported so callers that deep-link into a tab (menu, tray) can type their
+// state instead of passing a bare string.
+export type SettingsTab =
+  | 'general'
+  | 'terminal'
+  | 'sound'
+  | 'integrations'
+  | 'providers'
+  | 'accounts'
+  | 'mobile'
+  | 'remoteHosting'
+  | 'updates';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Tab to land on when the modal opens. Defaults to 'general'. */
+  initialTab?: SettingsTab;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  type SettingsTab = 'general' | 'appearance' | 'terminal' | 'sound' | 'integrations' | 'providers' | 'mobile' | 'remoteHosting' | 'updates';
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general' }) => {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const navClass = (tab: SettingsTab) =>
     `settings-nav-item ${activeTab === tab ? 'active' : ''}`;
+
+  // App keeps this component mounted and only flips isOpen, so activeTab
+  // survives a close — a useState initial value would only honour initialTab
+  // the very first time. Re-apply it on each open so "Settings → Claude
+  // Accounts" lands on the right tab even after the user browsed elsewhere.
+  useEffect(() => {
+    if (isOpen) setActiveTab(initialTab);
+  }, [isOpen, initialTab]);
 
   // Update channel state (BDHLNDR-32)
   const [updateChannel, setUpdateChannelState] = useState<'stable' | 'beta'>('stable');
@@ -44,8 +67,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [editorOptions, setEditorOptions] = useState<{ value: string; label: string }[]>([]);
 
   // Appearance settings state
-  const [showSplash, setShowSplash] = useState(true);
-  const [splashDuration, setSplashDuration] = useState(2.5);
 
   // Terminal settings state
   const [fontSize, setFontSize] = useState(14);
@@ -90,8 +111,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           autoLaunchPref,
           shellPathPref,
           closeToTrayPref,
-          showSplashPref,
-          splashDurationPref,
           fontSizePref,
           webglRendererPref,
           enableNotificationsPref,
@@ -106,8 +125,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           window.electronAPI.getPreference('autoLaunchClaude'),
           window.electronAPI.getPreference('customShellPath'),
           window.electronAPI.getPreference('closeToTray'),
-          window.electronAPI.getPreference('showSplash'),
-          window.electronAPI.getPreference('splashDuration'),
           window.electronAPI.getPreference('fontSize'),
           window.electronAPI.getPreference('webglRenderer'),
           window.electronAPI.getPreference('enableNotifications'),
@@ -123,8 +140,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         setAutoLaunchClaude(autoLaunchPref === 'true');
         setCustomShellPath(shellPathPref || '');
         setCloseToTray(closeToTrayPref !== 'false');
-        setShowSplash(showSplashPref === 'true');
-        setSplashDuration(splashDurationPref ? parseFloat(splashDurationPref) : 2.5);
         setFontSize(fontSizePref ? parseInt(fontSizePref, 10) : 14);
         setWebglRenderer(webglRendererPref === 'true');
         setEnableNotifications(enableNotificationsPref !== 'false');
@@ -309,17 +324,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     await window.electronAPI.setPreference('preferredEditor', editor);
   }, []);
 
-  // Appearance setting handlers
-  const handleShowSplashChange = useCallback(async (enabled: boolean) => {
-    setShowSplash(enabled);
-    await window.electronAPI.setPreference('showSplash', enabled.toString());
-  }, []);
-
-  const handleSplashDurationChange = useCallback(async (duration: number) => {
-    setSplashDuration(duration);
-    await window.electronAPI.setPreference('splashDuration', duration.toString());
-  }, []);
-
   // Terminal setting handlers
   const handleFontSizeChange = useCallback(async (size: number) => {
     setFontSize(size);
@@ -385,12 +389,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               General
             </button>
             <button
-              className={navClass('appearance')}
-              onClick={() => setActiveTab('appearance')}
-            >
-              Appearance
-            </button>
-            <button
               className={navClass('terminal')}
               onClick={() => setActiveTab('terminal')}
             >
@@ -425,6 +423,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               onClick={() => setActiveTab('providers')}
             >
               Providers
+            </button>
+            <button
+              className={navClass('accounts')}
+              onClick={() => setActiveTab('accounts')}
+            >
+              Claude Accounts
             </button>
             <button
               className={navClass('updates')}
@@ -604,39 +608,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               </div>
             )}
 
-            {activeTab === 'appearance' && (
-              <div className="settings-section">
-                <h3>Appearance</h3>
-
-                <div className="settings-group">
-                  <h4>Splash Screen</h4>
-                  <div className="settings-row">
-                    <label htmlFor="show-splash">Show Splash Screen:</label>
-                    <input
-                      id="show-splash"
-                      type="checkbox"
-                      checked={showSplash}
-                      onChange={e => handleShowSplashChange(e.target.checked)}
-                    />
-                    <span className="settings-hint">Display splash screen on startup</span>
-                  </div>
-
-                  <div className="settings-row">
-                    <label htmlFor="splash-duration">Splash Duration:</label>
-                    <input
-                      type="range"
-                      id="splash-duration"
-                      min="1"
-                      max="5"
-                      step="0.5"
-                      value={splashDuration}
-                      onChange={e => handleSplashDurationChange(parseFloat(e.target.value))}
-                    />
-                    <span className="range-value">{splashDuration}s</span>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {activeTab === 'terminal' && (
               <div className="settings-section">
@@ -763,6 +734,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             )}
 
             {activeTab === 'providers' && <ProviderSettings />}
+
+            {activeTab === 'accounts' && (
+              <div className="settings-section">
+                <h3>Claude Accounts</h3>
+                {/* Panel is shared with the standalone accounts modal; it owns
+                    its own add-account overlay because that flow runs a pty. */}
+                <ClaudeAccountsPanel />
+              </div>
+            )}
 
             {activeTab === 'remoteHosting' && <RemoteHostingSettings />}
 

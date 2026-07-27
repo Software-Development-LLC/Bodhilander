@@ -39,25 +39,6 @@ Organize sessions into groups and subgroups by project, client, or workflow. Col
 ### Persistent Sessions
 Sessions survive app restarts. Your context is preserved.
 
-### Session Memory
-Automatically captures and persists knowledge across sessions:
-- **Auto-extraction** - Detects decisions, fixes, and patterns from Claude output
-- **Memory injection** - Injects relevant context when sessions start
-- **Memory types** - Decisions, error fixes, patterns, context, and notes
-- **Pin & search** - Pin important memories and search across all captured knowledge
-- **MCP Server** - Claude can search and manage memories on demand
-
-See [MCP Memory Server Documentation](docs/mcp-memory-server.md) for Claude Code integration.
-
-### Semantic Code Search
-AI-powered code search with vector embeddings:
-- **Semantic search** - Find code by meaning using natural language queries
-- **Symbol lookup** - Search for functions, classes, interfaces, and other definitions
-- **Background indexing** - Tree-sitter parsing with ONNX embeddings and sqlite-vec storage
-- **File watching** - Automatic re-indexing when files change
-- **Editor integration** - Open results directly in VS Code, Cursor, Sublime, Vim, Emacs, and more
-- **MCP tools** - Claude can use `search_code` and `find_symbol` tools directly
-
 ### Notifications & Sound
 Stay informed without watching the window:
 - **Desktop notifications** - Alerts when sessions need attention
@@ -142,7 +123,6 @@ npm run dist:win     # Windows
 | Next Session | `Ctrl/Cmd + Tab` |
 | Previous Session | `Ctrl/Cmd + Shift + Tab` |
 | Next Waiting | `Ctrl/Cmd + Shift + W` |
-| Code Search | `Ctrl/Cmd + Shift + F` |
 | New Group | `Ctrl/Cmd + G` |
 | New Sub-group | `Ctrl/Cmd + Shift + G` |
 | Focus Sidebar | `Ctrl/Cmd + Q` |
@@ -155,7 +135,6 @@ npm run dist:win     # Windows
 Bodhilander offers extensive configuration across multiple tabs:
 
 - **General** - Auto-launch Claude, custom shell path, preferred editor, close-to-tray
-- **Appearance** - Splash screen toggle and duration
 - **Terminal** - Font size, WebGL renderer acceleration
 - **Sound** - Master toggle, per-event sounds, volume, debounce frequency, custom audio files
 - **Mobile** - API server, pairing, device management, Tailscale Funnel guidance for remote access
@@ -184,8 +163,8 @@ Bodhilander offers extensive configuration across multiple tabs:
 | Phase | Status | Features |
 |-------|--------|----------|
 | **1 (MVP)** | Complete | Multi-session management, state detection, groups, persistence, auto-update |
-| **2** | Complete | Memory system, notifications & sound, settings |
-| **3** | Complete | Semantic code search, Teams integration, mobile companion, editor integration |
+| **2** | Complete | Notifications & sound, settings |
+| **3** | Complete | Teams integration, mobile companion, editor integration |
 | **4** | Future | AI session summaries, advanced analytics |
 
 ---

@@ -1,8 +1,15 @@
 /**
- * MCP Server and Hooks Auto-Configuration
+ * Hooks Auto-Configuration (+ legacy MCP cleanup)
  *
- * Automatically registers the Bodhilander Memory MCP server and hooks with Claude Code
- * so users don't need to manually configure them.
+ * Automatically registers the Bodhilander hook script with Claude Code so users
+ * don't need to configure it manually. The hook is what writes the
+ * tool_use/turn_complete/error/notification session events that back the
+ * analytics panel, so it is installed into the global ~/.claude and into every
+ * isolated account config dir.
+ *
+ * The former "bodhilander-memory" MCP server no longer ships. Its registration
+ * code is gone; all that remains here is `cleanupLegacyMcpServer()`, which rips
+ * the now-dangling entry back out of users' Claude configs.
  */
 
 import * as fs from 'fs';
@@ -10,6 +17,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { app } from 'electron';
 import log from 'electron-log';
+import { getPreference, setPreference } from './repositories/preferences';
 
 interface McpServerConfig {
   command: string;
@@ -44,7 +52,24 @@ interface ClaudeSettingsConfig {
   [key: string]: unknown;
 }
 
+/**
+ * Name of the MCP server this app used to register. The server itself is gone;
+ * the constant survives only so the cleanup sweep can find and delete stale
+ * entries from configs written by older versions.
+ */
 const MCP_SERVER_NAME = 'bodhilander-memory';
+
+/**
+ * Preference key marking that the legacy MCP entry has been swept.
+ *
+ * Stored in the app's existing SQLite `preferences` table (same mechanism as
+ * `legacyCodeSearchCleanupDone` in database.ts) rather than a new marker file:
+ * the app has no electron-store, and a preference travels with the rest of the
+ * user's state instead of leaving a stray dotfile behind. One-shot by design —
+ * without the marker we would re-delete the entry on every launch and fight a
+ * user who deliberately re-added an MCP server under that name.
+ */
+const LEGACY_MCP_CLEANUP_PREF = 'legacyMemoryMcpCleanupDone';
 
 // Substrings identifying hook commands this app (or its prior incarnation as
 // "ClaudeLander") has registered. Used for cleanup during upgrade/reinstall.
@@ -115,34 +140,10 @@ function purgeOurHooks(settings: ClaudeSettingsConfig, keepPath?: string): boole
 }
 
 /**
- * Get the path to the MCP server script
- */
-function getMcpServerPath(): string {
-  // In development, use the dist folder relative to the project
-  if (!app.isPackaged) {
-    return path.join(app.getAppPath(), 'dist', 'mcp-server', 'index.js');
-  }
-
-  // In production, the MCP server is in the resources folder
-  // For asar-packed apps, it's in app.asar/dist/mcp-server
-  // But we need it outside asar for Node to run it directly
-  const resourcesPath = process.resourcesPath;
-
-  // Check for unpacked location first (if we configure electron-builder to unpack it)
-  const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked', 'dist', 'mcp-server', 'index.js');
-  if (fs.existsSync(unpackedPath)) {
-    return unpackedPath;
-  }
-
-  // Fall back to regular path (may not work if inside asar)
-  return path.join(resourcesPath, 'app', 'dist', 'mcp-server', 'index.js');
-}
-
-/**
  * Resolve the `.claude` config directory for a given account (BDHLNDR-31).
  * When configDir is omitted, defaults to the user's global ~/.claude.
- * Pass an account's isolated configDir to register MCP/hooks into that
- * account's sandbox instead of the global one.
+ * Pass an account's isolated configDir to target that account's sandbox
+ * instead of the global one.
  */
 function resolveConfigDir(configDir?: string): string {
   return configDir ?? path.join(os.homedir(), '.claude');
@@ -187,7 +188,17 @@ function writeClaudeMcpConfig(config: ClaudeMcpConfig, configDir?: string): bool
   try {
     // Ensure parent dir exists (account root may not exist until first write).
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+    // Write via temp file + rename so the write is atomic. This is not our
+    // file: ~/.claude.json is Claude Code's own state (project history, OAuth
+    // account, machine id, migration flags) and routinely tens of KB. A
+    // truncating in-place write that is interrupted — crash, power loss, or
+    // Claude Code writing concurrently — would leave the user with a corrupt
+    // config and no way back. rename() within the same directory is atomic on
+    // both POSIX and NTFS.
+    const tmpPath = `${configPath}.bodhilander.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, configPath);
     return true;
   } catch (err) {
     log.error('[MCP Config] Failed to write Claude MCP config:', err);
@@ -235,7 +246,14 @@ function writeClaudeSettings(settings: ClaudeSettingsConfig, configDir?: string)
       fs.mkdirSync(claudeDir, { recursive: true });
     }
 
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    // Temp file + atomic rename, same as writeClaudeMcpConfig. settings.json is
+    // the user's own Claude Code configuration (permissions, model, statusLine,
+    // their own hooks) and we rewrite it on every launch, so a torn write from
+    // a crash or power loss would cost them real state. rename() within a
+    // directory is atomic on both POSIX and NTFS.
+    const tmpPath = `${settingsPath}.bodhilander.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, settingsPath);
     return true;
   } catch (err) {
     log.error('[Hooks Config] Failed to write Claude settings:', err);
@@ -263,83 +281,60 @@ function getHookScriptPath(): string {
 }
 
 /**
- * Check if our MCP server is already configured with the correct path
- */
-function isServerConfigured(config: ClaudeMcpConfig, expectedPath: string): boolean {
-  const serverConfig = config.mcpServers?.[MCP_SERVER_NAME];
-  if (!serverConfig) return false;
-
-  // Check if the path matches
-  const configuredPath = serverConfig.args?.[0];
-  return configuredPath === expectedPath;
-}
-
-/**
  * Check if hooks pointing at the current hook script are already configured.
  * Matches on the exact hookScriptPath so that an install-location change
  * (e.g. version upgrade to a new unpacked path) triggers a re-register.
+ */
+/**
+ * The hook entries we install — the single source of truth for both "are they
+ * already correct?" and what gets written. Keeping one definition is what lets
+ * registration CONVERGE: change a matcher here and existing installs get
+ * rewritten on next launch instead of keeping whatever they were first given.
+ */
+function desiredHookConfigs(hookScriptPath: string): { postToolUse: HookConfig; stop: HookConfig } {
+  return {
+    // Match ALL tools. The old 'Bash' matcher was a memory-feature artifact —
+    // it existed only to sniff `git commit` invocations for auto-saved
+    // "decision" memories. Analytics wants every tool call, so restricting to
+    // Bash just undercounted everything. Claude Code's hook docs give "*", ""
+    // and an omitted matcher as equivalent match-all values.
+    postToolUse: {
+      matcher: '*',
+      hooks: [{ type: 'command', command: `node "${hookScriptPath}" PostToolUse` }],
+    },
+    stop: {
+      matcher: '',
+      hooks: [{ type: 'command', command: `node "${hookScriptPath}" Stop` }],
+    },
+  };
+}
+
+function hasHookConfig(configs: HookConfig[] | undefined, desired: HookConfig): boolean {
+  if (!configs) return false;
+  return configs.some(
+    config =>
+      config.matcher === desired.matcher &&
+      config.hooks.some(h => h.command === desired.hooks[0].command),
+  );
+}
+
+/**
+ * True only when BOTH our entries are present with the exact matcher and
+ * command we want.
+ *
+ * Deliberately an AND, and deliberately compares the matcher. The previous
+ * version OR'd the two hook types and only checked that the path appeared
+ * somewhere, which meant (a) a settings file carrying just one of the two
+ * reported "configured" and the missing one was never added, and (b) an entry
+ * with a stale matcher was accepted forever, so changing a matcher here would
+ * only ever reach fresh installs.
  */
 function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: string): boolean {
   const hooks = settings.hooks;
   if (!hooks) return false;
 
-  const checkHookType = (hookConfigs: HookConfig[] | undefined): boolean => {
-    if (!hookConfigs) return false;
-    return hookConfigs.some(config =>
-      config.hooks.some(h => h.command.includes(hookScriptPath))
-    );
-  };
-
-  return checkHookType(hooks.PostToolUse) || checkHookType(hooks.Stop);
-}
-
-/**
- * Register the Bodhilander Memory MCP server with Claude Code
- * Returns true if configuration was added/updated, false if already configured
- */
-export function registerMcpServer(configDir?: string): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; path?: string; error?: string } {
-  try {
-    const mcpServerPath = getMcpServerPath();
-
-    // Verify the MCP server exists
-    if (!fs.existsSync(mcpServerPath)) {
-      log.warn('[MCP Config] MCP server not found at:', mcpServerPath);
-      return { success: false, action: 'error', error: `MCP server not found at ${mcpServerPath}` };
-    }
-
-    const config = readClaudeMcpConfig(configDir);
-
-    // Check if already configured correctly
-    if (isServerConfigured(config, mcpServerPath)) {
-      log.info(`[MCP Config] MCP server already configured correctly for ${configDir ?? '(default)'}`);
-      return { success: true, action: 'unchanged', path: mcpServerPath };
-    }
-
-    // Determine if we're adding or updating
-    const action = config.mcpServers?.[MCP_SERVER_NAME] ? 'updated' : 'added';
-
-    // Add or update the MCP server configuration
-    if (!config.mcpServers) {
-      config.mcpServers = {};
-    }
-
-    config.mcpServers[MCP_SERVER_NAME] = {
-      command: 'node',
-      args: [mcpServerPath],
-    };
-
-    // Write the updated config
-    if (writeClaudeMcpConfig(config, configDir)) {
-      log.info(`[MCP Config] MCP server ${action} successfully for ${configDir ?? '(default)'}:`, mcpServerPath);
-      return { success: true, action, path: mcpServerPath };
-    } else {
-      return { success: false, action: 'error', error: 'Failed to write config file' };
-    }
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    log.error('[MCP Config] Error registering MCP server:', errorMsg);
-    return { success: false, action: 'error', error: errorMsg };
-  }
+  const desired = desiredHookConfigs(hookScriptPath);
+  return hasHookConfig(hooks.PostToolUse, desired.postToolUse) && hasHookConfig(hooks.Stop, desired.stop);
 }
 
 /**
@@ -380,22 +375,22 @@ export function registerHooks(configDir?: string): { success: boolean; action: '
     // Determine if we're adding or updating
     const action = settings.hooks ? 'updated' : 'added';
 
-    // Initialize hooks object if needed
+    const { postToolUse: postToolUseHook, stop: stopHook } = desiredHookConfigs(hookScriptPath);
+
+    // Drop any of OUR entries still present before appending the desired ones.
+    // The earlier purge kept current-path entries to avoid thrashing settings
+    // on every launch; here we know they are wrong in some way (wrong matcher,
+    // or one of the pair missing), so a stale-but-same-path entry has to go —
+    // otherwise upgrading users would end up with both the old Bash-only entry
+    // and the new match-all one, firing the hook twice on every Bash call.
+    purgeOurHooks(settings);
+
+    // Initialise AFTER the purge, not before: purgeOurHooks deletes emptied
+    // hook types and drops settings.hooks entirely when nothing is left, so
+    // initialising first would hand us an object the purge then removed.
     if (!settings.hooks) {
       settings.hooks = {};
     }
-
-    // PostToolUse hook for Bash (captures git commits)
-    const postToolUseHook: HookConfig = {
-      matcher: 'Bash',
-      hooks: [{ type: 'command', command: `node "${hookScriptPath}" PostToolUse` }],
-    };
-
-    // Stop hook (captures session summaries after significant work)
-    const stopHook: HookConfig = {
-      matcher: '',  // Match all stops
-      hooks: [{ type: 'command', command: `node "${hookScriptPath}" Stop` }],
-    };
 
     // Append to any existing (non-ours) entries on these hook types.
     settings.hooks.PostToolUse = [...(settings.hooks.PostToolUse ?? []), postToolUseHook];
@@ -416,7 +411,8 @@ export function registerHooks(configDir?: string): { success: boolean; action: '
 }
 
 /**
- * Unregister the Bodhilander Memory MCP server from Claude Code
+ * Remove the legacy `bodhilander-memory` MCP entry from one Claude config.
+ * Returns true if an entry was found and removed.
  */
 export function unregisterMcpServer(configDir?: string): boolean {
   try {
@@ -444,50 +440,107 @@ export function unregisterMcpServer(configDir?: string): boolean {
 }
 
 /**
- * Unregister Bodhilander hooks from Claude Code (including any legacy
- * ClaudeLander entries from before the app rename).
+ * Every account config dir under `<userData>/claude-accounts/<id>/.claude`
+ * (BDHLNDR-31), read straight off disk rather than from the accounts table so
+ * that dirs left behind by deleted accounts are swept too.
  */
-export function unregisterHooks(configDir?: string): boolean {
+/**
+ * Account config dirs to sweep, or null if we could not find out.
+ *
+ * The null case matters: returning [] on failure is indistinguishable from
+ * "this install has no accounts", which would let the one-shot cleanup marker
+ * latch after sweeping only the global config. Every per-account .claude.json
+ * would then keep its dangling entry forever — exactly what the sweep exists
+ * to prevent. A transient EPERM (AV scanner mid-startup on Windows) or EBUSY
+ * (roaming profile mount) on the single launch the sweep runs is enough.
+ */
+function listAccountConfigDirs(): string[] | null {
   try {
-    const settings = readClaudeSettings(configDir);
+    const accountsRoot = path.join(app.getPath('userData'), 'claude-accounts');
+    if (!fs.existsSync(accountsRoot)) return [];
 
-    if (!purgeOurHooks(settings)) return false;
-
-    if (writeClaudeSettings(settings, configDir)) {
-      log.info(`[Hooks Config] Hooks unregistered successfully for ${configDir ?? '(default)'}`);
-      return true;
-    }
-
-    return false;
+    return fs
+      .readdirSync(accountsRoot, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => path.join(accountsRoot, entry.name, '.claude'));
   } catch (err) {
-    log.error('[Hooks Config] Error unregistering hooks:', err);
-    return false;
+    log.warn('[MCP Config] Failed to enumerate account config dirs:', err);
+    return null;
   }
 }
 
 /**
- * Get the current MCP server configuration status
+ * One-shot uninstall of the removed memory MCP server (see MCP_SERVER_NAME).
+ *
+ * The server binary no longer ships, so any surviving registration points at a
+ * missing script and makes Claude Code report a broken MCP server on every
+ * launch. This sweeps the entry out of the global `~/.claude.json` AND out of
+ * each `<userData>/claude-accounts/<id>/.claude.json`. Note those files are
+ * SIBLINGS of the corresponding `.claude/` directories, not inside them —
+ * getClaudeConfigPath() takes the dirname, so passing an account's `.claude`
+ * dir resolves to the right place.
+ *
+ * Runs at most once per install: after a successful pass the
+ * LEGACY_MCP_CLEANUP_PREF marker is set, so a user who later re-adds an MCP
+ * server under that name keeps it. Hooks are untouched — the hook script is
+ * still shipped and still registered.
  */
-export function getMcpServerStatus(configDir?: string): { configured: boolean; path?: string; expectedPath?: string } {
+export function cleanupLegacyMcpServer(): void {
   try {
-    const expectedPath = getMcpServerPath();
-    const config = readClaudeMcpConfig(configDir);
-    const serverConfig = config.mcpServers?.[MCP_SERVER_NAME];
+    if (getPreference(LEGACY_MCP_CLEANUP_PREF) === 'true') return;
 
-    if (!serverConfig) {
-      return { configured: false, expectedPath };
+    let removed = 0;
+    let failed = 0;
+
+    // A null enumeration means we could not tell whether accounts exist, so
+    // count it as a failure rather than sweeping the global config and
+    // latching as if we were done.
+    const accountDirs = listAccountConfigDirs();
+    if (accountDirs === null) failed++;
+
+    for (const configDir of [undefined, ...(accountDirs ?? [])]) {
+      // Pre-check so a `false` from unregisterMcpServer unambiguously means
+      // "the write failed", not "there was nothing to remove".
+      if (!readClaudeMcpConfig(configDir).mcpServers?.[MCP_SERVER_NAME]) continue;
+
+      if (unregisterMcpServer(configDir)) removed++;
+      else failed++;
     }
 
-    return {
-      configured: true,
-      path: serverConfig.args?.[0],
-      expectedPath,
-    };
+    if (removed > 0) {
+      log.info(`[MCP Config] Removed legacy '${MCP_SERVER_NAME}' entry from ${removed} Claude config(s)`);
+    }
+
+    // Only latch the marker once every config came out clean — a config that
+    // couldn't be written (permissions, read-only volume) gets another try on
+    // the next launch. Marking done when nothing was found is correct: an
+    // absent entry means there is nothing left to sweep.
+    if (failed === 0) {
+      setPreference(LEGACY_MCP_CLEANUP_PREF, 'true');
+    } else {
+      log.warn(`[MCP Config] Legacy MCP cleanup incomplete for ${failed} config(s); will retry next launch`);
+    }
   } catch (err) {
-    log.error('[MCP Config] Error getting MCP server status:', err);
-    return { configured: false };
+    // Leave the marker unset so the sweep retries next launch; it's idempotent.
+    log.warn('[MCP Config] Legacy MCP server cleanup failed:', err);
   }
 }
+
+/*
+ * There is deliberately no unregisterHooks() any more.
+ *
+ * It existed to tear out every Bodhilander hook, and it called
+ * purgeOurHooks(settings) with no keepPath — which now matches the analytics
+ * hook we intentionally keep installed (it is the only writer of the
+ * tool_use / turn_complete session_events that AnalyticsPanel and
+ * SessionStatsBadge read). It had zero callers, so it was a loaded gun aimed at
+ * a live feature: one plausible "clean up on uninstall" wiring would have
+ * silently disabled analytics for every user.
+ *
+ * If a real uninstall path is ever needed, write it deliberately and decide
+ * then whether the analytics hook should go with it — do not resurrect a
+ * blanket purge.
+ */
 
 /**
  * Get the current hooks configuration status

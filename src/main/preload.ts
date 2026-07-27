@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -33,6 +33,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('pty:exit', listener);
     return () => {
       ipcRenderer.removeListener('pty:exit', listener);
+    };
+  },
+  // Dynamic sizing: the PTY was resized (possibly by a remote/mobile viewer).
+  onPtyResize: (callback: (id: string, cols: number, rows: number) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, id: string, cols: number, rows: number) => callback(id, cols, rows);
+    ipcRenderer.on('pty:resized', listener);
+    return () => {
+      ipcRenderer.removeListener('pty:resized', listener);
     };
   },
   onStateChange: (callback: (event: { sessionId: string; state: string; event: string; timestamp: number }) => void) => {
@@ -74,6 +82,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('menu:next-waiting', callback);
     return () => ipcRenderer.removeListener('menu:next-waiting', callback);
   },
+  onMenuOpenAccounts: (callback: () => void) => {
+    ipcRenderer.on('menu:open-accounts', callback);
+    return () => ipcRenderer.removeListener('menu:open-accounts', callback);
+  },
+
+  // View switcher — the content area is one of terminal/analytics/arena, driven
+  // from the View menu so the accelerators live with the OS instead of being
+  // swallowed by the renderer's keydown handler.
+  onMenuViewTerminal: (callback: () => void) => {
+    ipcRenderer.on('menu:view-terminal', callback);
+    return () => ipcRenderer.removeListener('menu:view-terminal', callback);
+  },
+  onMenuViewAnalytics: (callback: () => void) => {
+    ipcRenderer.on('menu:view-analytics', callback);
+    return () => ipcRenderer.removeListener('menu:view-analytics', callback);
+  },
+  onMenuViewArena: (callback: () => void) => {
+    ipcRenderer.on('menu:view-arena', callback);
+    return () => ipcRenderer.removeListener('menu:view-arena', callback);
+  },
+  onMenuFocusSidebar: (callback: () => void) => {
+    ipcRenderer.on('menu:focus-sidebar', callback);
+    return () => ipcRenderer.removeListener('menu:focus-sidebar', callback);
+  },
 
   // Edit menu events
   onMenuCopy: (callback: () => void) => {
@@ -91,10 +123,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuClearTerminal: (callback: () => void) => {
     ipcRenderer.on('menu:clearTerminal', callback);
     return () => ipcRenderer.removeListener('menu:clearTerminal', callback);
-  },
-  onMenuFind: (callback: () => void) => {
-    ipcRenderer.on('menu:find', callback);
-    return () => ipcRenderer.removeListener('menu:find', callback);
   },
 
   // Session selection from notifications/tray
@@ -134,33 +162,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:sessions:update', id, updates),
   deleteDbSession: (id: string): Promise<void> =>
     ipcRenderer.invoke('db:sessions:delete', id),
-
-  // Database - Memories
-  getMemoriesBySession: (sessionId: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getBySession', sessionId),
-  getMemoriesByGroup: (groupId: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getByGroup', groupId),
-  getPinnedMemories: (groupId?: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getPinned', groupId),
-  searchMemories: (query: string, groupId?: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:search', query, groupId),
-  createMemory: (input: MemoryCreateInput): Promise<Memory> =>
-    ipcRenderer.invoke('db:memories:create', input),
-  updateMemory: (id: string, updates: MemoryUpdateInput): Promise<void> =>
-    ipcRenderer.invoke('db:memories:update', id, updates),
-  deleteMemory: (id: string): Promise<void> =>
-    ipcRenderer.invoke('db:memories:delete', id),
-  getMemoriesForInjection: (sessionId: string, groupId: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getForInjection', sessionId, groupId),
-  getMemoryById: (id: string): Promise<Memory | null> =>
-    ipcRenderer.invoke('db:memories:getById', id),
-  getGlobalContextMemories: (): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getGlobal'),
-  onMemoryExtracted: (callback: (memory: Memory) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, memory: Memory) => callback(memory);
-    ipcRenderer.on('memory:extracted', listener);
-    return () => ipcRenderer.removeListener('memory:extracted', listener);
-  },
 
   // Database - Session Events (BDHLNDR-17)
   getSessionEvents: (sessionId: string, limit?: number): Promise<SessionEvent[]> =>
@@ -294,48 +295,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('api:updateDevicePermissions', deviceId, permissions),
   apiHasPairingCode: (): Promise<{ active: boolean }> => ipcRenderer.invoke('api:hasPairingCode'),
 
-  // Vector Search
-  getIndexStatus: (directoryPath: string): Promise<CodeIndex | null> =>
-    ipcRenderer.invoke('vector-search:get-index-status', directoryPath),
-
-  getAllIndexes: (): Promise<CodeIndex[]> =>
-    ipcRenderer.invoke('vector-search:get-all-indexes'),
-
-  startIndexing: (directoryPath: string): Promise<{ success: boolean }> =>
-    ipcRenderer.invoke('vector-search:start-indexing', directoryPath),
-
-  searchCode: (directoryPath: string, query: string, limit?: number): Promise<CodeSearchResult[]> =>
-    ipcRenderer.invoke('vector-search:search-code', directoryPath, query, limit),
-
-  searchSymbols: (directoryPath: string, name: string, symbolType?: SymbolType, limit?: number): Promise<SymbolSearchResult[]> =>
-    ipcRenderer.invoke('vector-search:search-symbols', directoryPath, name, symbolType, limit),
-
-  cancelIndexing: (indexId: string): Promise<{ success: boolean }> =>
-    ipcRenderer.invoke('vector-search:cancel-indexing', indexId),
-
-  deleteCodeIndex: (directoryPath: string): Promise<{ success: boolean }> =>
-    ipcRenderer.invoke('vector-search:delete-index', directoryPath),
-
-  retryIndexing: (directoryPath: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('vector-search:retry-indexing', directoryPath),
-
-  onIndexingProgress: (callback: (progress: IndexProgress) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, progress: IndexProgress) => callback(progress);
-    ipcRenderer.on('vector-search:progress', listener);
-    return () => ipcRenderer.removeListener('vector-search:progress', listener);
-  },
-
-  onIndexingComplete: (callback: (data: { indexId: string }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { indexId: string }) => callback(data);
-    ipcRenderer.on('vector-search:complete', listener);
-    return () => ipcRenderer.removeListener('vector-search:complete', listener);
-  },
-
-  onIndexingError: (callback: (data: { indexId: string; error: string }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { indexId: string; error: string }) => callback(data);
-    ipcRenderer.on('vector-search:error', listener);
-    return () => ipcRenderer.removeListener('vector-search:error', listener);
-  },
 
   // Editor Integration
   openInEditor: (filePath: string, line?: number, column?: number): Promise<{ success: boolean; error?: string }> =>

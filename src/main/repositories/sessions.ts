@@ -9,7 +9,7 @@ export function sessionExists(id: string): boolean {
 
 export function getAllSessions(): Session[] {
   const db = getDatabase();
-  const rows = db.prepare('SELECT * FROM sessions ORDER BY "order"').all() as any[];
+  const rows = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
 
   return rows.map(row => ({
     id: row.id,

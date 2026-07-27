@@ -30,8 +30,6 @@ export interface ProviderCapabilities {
   resume: boolean;
   /** CLI fires lifecycle hooks Bodhilander can wire a state-reporting script into. */
   hooks: boolean;
-  /** CLI accepts an appended system prompt flag (memory injection). */
-  systemPrompt: boolean;
   /**
    * CLI supports isolated per-account config directories (BDHLNDR-31,
    * Claude's CLAUDE_CONFIG_DIR). Gates account resolution at spawn time.
@@ -65,13 +63,6 @@ export interface ProviderDefinition {
   /** CLI binary name — also what installed-CLI detection probes for. */
   command: string;
   capabilities: ProviderCapabilities;
-  /**
-   * Flag that appends a system prompt (e.g. `--append-system-prompt`). The
-   * pty layer interpolates the shell-appropriate env-var reference after it,
-   * so the prompt text never needs shell escaping. Required when
-   * capabilities.systemPrompt is true.
-   */
-  systemPromptFlag?: string;
   /**
    * Provider-specific TUI patterns that signal "waiting for user input",
    * merged with the generic pattern set by the pty state detector.

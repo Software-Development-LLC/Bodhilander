@@ -30,10 +30,8 @@ export const claudeProvider: ProviderDefinition = {
   capabilities: {
     resume: true,
     hooks: true,
-    systemPrompt: true,
     accounts: true,
   },
-  systemPromptFlag: '--append-system-prompt',
   waitingPatterns: CLAUDE_WAITING_PATTERNS,
   apiKey: {
     envVar: 'ANTHROPIC_API_KEY',

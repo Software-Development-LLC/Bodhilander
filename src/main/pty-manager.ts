@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { EventEmitter } from 'events';
+import { Terminal as HeadlessTerminal } from '@xterm/headless';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import {
   resolveProvider,
   getSocketPath,
@@ -24,7 +26,6 @@ import {
   clearClaudeSessionId as clearStoredClaudeSessionId,
 } from './repositories/sessions';
 import { resolveAccountForSession, touchAccount } from './repositories/accounts';
-import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 import { vaultEnvFor } from './key-vault';
 import { redactEnv } from './redact-env';
 import log from 'electron-log';
@@ -33,7 +34,6 @@ interface PtySession {
   id: string;
   pty: pty.IPty;
   cwd: string;
-  groupId: string | null;  // For memory injection
   /** Provider this session runs an agent under; null for plain shell sessions. */
   provider: ProviderDefinition | null;
   shellInfo: ShellInfo;
@@ -84,8 +84,25 @@ interface PtySession {
  */
 const RESUME_FAILURE_WINDOW_MS = 5000;
 
-// Max scrollback buffer size (100KB should be plenty for recent terminal history)
-const MAX_SCROLLBACK_SIZE = 100 * 1024;
+// Max scrollback buffer replayed to remote viewers (web/phone) on attach. This
+// is the ONLY history a remote viewer can see — it has no live stream from before
+// it connected — so it needs to be generous. 100KB is barely one screen on a
+// wide terminal (e.g. 184 cols), which left the phone with nothing to scroll. 2MB
+// holds thousands of lines even on a wide terminal.
+const MAX_SCROLLBACK_SIZE = 2 * 1024 * 1024;
+
+/**
+ * Append PTY output to a session's replay buffer, trimming to the cap. The trim
+ * is amortized: we only slice once the buffer grows 25% past the cap (then cut
+ * back to the cap), so a chatty PTY doesn't pay an O(cap) string copy on every
+ * single chunk once it's full.
+ */
+function appendScrollback(session: PtySession, data: string): void {
+  session.scrollbackBuffer += data;
+  if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE * 1.25) {
+    session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
+  }
+}
 
 /**
  * Only classify launch failures in this window after spawn. The 'broken'
@@ -186,7 +203,6 @@ export class PtyManager extends EventEmitter {
     id: string,
     cwd: string,
     launchClaude: boolean = false,
-    groupId: string | null = null,
     providerId: string = DEFAULT_PROVIDER_ID
   ): void {
     // Validate cwd exists
@@ -216,7 +232,7 @@ export class PtyManager extends EventEmitter {
     let resumeAttempted = false;
 
     if (provider) {
-      const agentSpawn = this.buildAgentSpawn(provider, id, cwd, groupId, shellInfo);
+      const agentSpawn = this.buildAgentSpawn(provider, id, cwd, shellInfo);
       shell = agentSpawn.shell;
       args = agentSpawn.args;
       env = agentSpawn.env;
@@ -258,14 +274,8 @@ export class PtyManager extends EventEmitter {
         }
       }
 
-      // Append to scrollback buffer
-      if (session) {
-        session.scrollbackBuffer += filteredData;
-        // Trim if too large (keep last MAX_SCROLLBACK_SIZE bytes)
-        if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
-          session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
-        }
-      }
+      // Append to scrollback buffer (replayed to remote viewers on attach).
+      if (session) appendScrollback(session, filteredData);
 
       this.emit('data', { id, data: filteredData });
 
@@ -302,7 +312,7 @@ export class PtyManager extends EventEmitter {
         // Remove the dead entry so createSession can re-insert a fresh one.
         this.sessions.delete(id);
         try {
-          this.createSession(id, cwd, true, groupId, providerId);
+          this.createSession(id, cwd, true, providerId);
           return; // Successful retry — suppress the exit emission.
         } catch (e) {
           log.error(`[PTY] Resume-failure retry spawn failed for ${id}:`, e);
@@ -314,17 +324,10 @@ export class PtyManager extends EventEmitter {
       this.sessions.delete(id);
     });
 
-    // Write memory file for reference — only for providers that can actually
-    // consume it via system-prompt injection.
-    if (provider?.capabilities.systemPrompt && groupId) {
-      writeMemoryFile(id, groupId, cwd);
-    }
-
     this.sessions.set(id, {
       id,
       pty: ptyProcess,
       cwd,
-      groupId,
       provider,
       shellInfo,
       lastState: 'idle',
@@ -351,14 +354,13 @@ export class PtyManager extends EventEmitter {
   /**
    * Resolve everything needed to spawn an agent session under the user's
    * shell: conversation UUID + resume mode (BDHLNDR-9), account config dir
-   * (BDHLNDR-31), the provider's command/env, optional system-prompt
-   * injection, and the shell-appropriate argv wrapping.
+   * (BDHLNDR-31), the provider's command/env, and the shell-appropriate argv
+   * wrapping.
    */
   private buildAgentSpawn(
     provider: ProviderDefinition,
     id: string,
     cwd: string,
-    groupId: string | null,
     shellInfo: ShellInfo
   ): { shell: string; args: string[]; env: { [key: string]: string }; resumeAttempted: boolean } {
     let agentSessionId: string | null = null;
@@ -404,9 +406,7 @@ export class PtyManager extends EventEmitter {
       ? ' ' + launch.args.join(' ')
       : '';
 
-    // Get memory content for system prompt injection
-    // Pass via environment variable to avoid shell escaping issues with newlines
-    let agentCmd = `${launch.command}${sessionFlag}`;
+    const agentCmd = `${launch.command}${sessionFlag}`;
     // vaultEnvFor is empty unless the user explicitly opted this provider
     // into API-key auth (#99) — CLI login/subscription stays the default.
     const vaultEnv = vaultEnvFor(provider.id);
@@ -416,22 +416,9 @@ export class PtyManager extends EventEmitter {
     }
     const processEnv = { ...process.env, ...launch.env, ...vaultEnv } as { [key: string]: string };
 
-    const supportsSystemPrompt = provider.capabilities.systemPrompt && !!provider.systemPromptFlag;
-    if (groupId && supportsSystemPrompt) {
-      const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
-      if (memoryContent) {
-        processEnv.BODHILANDER_SYSTEM_PROMPT = memoryContent;
-      }
-    }
-
-    // Rebuild the command with the system prompt flag reading from an env
-    // var, using the shell-appropriate variable reference syntax. Gated on
-    // capability so an inherited BODHILANDER_SYSTEM_PROMPT in the parent
-    // environment can't produce a bogus flag for providers without one.
-    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: true });
-    if (supportsSystemPrompt && processEnv.BODHILANDER_SYSTEM_PROMPT) {
-      agentCmd = `${launch.command} ${provider.systemPromptFlag} ${shellLaunch.envRef('BODHILANDER_SYSTEM_PROMPT')}${sessionFlag}`;
-    }
+    // The agent command interpolates no env values — everything the CLI needs
+    // travels in processEnv — so cmd.exe can host it unchanged (#106).
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
 
     return {
       shell: shellLaunch.shell,
@@ -530,10 +517,7 @@ export class PtyManager extends EventEmitter {
         if (filteredData.trim() === '') return;
       }
 
-      session.scrollbackBuffer += filteredData;
-      if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
-        session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
-      }
+      appendScrollback(session, filteredData);
 
       if (session.deferEmission) return;
 
@@ -555,7 +539,6 @@ export class PtyManager extends EventEmitter {
       id,
       pty: ptyProcess,
       cwd,
-      groupId: null,
       // No provider: install ptys need no agent state detection or hints.
       provider: null,
       shellInfo,
@@ -585,9 +568,9 @@ export class PtyManager extends EventEmitter {
    * id that's not tied to a DB session — reuses the standard pty events so the
    * renderer Terminal can attach unchanged.
    *
-   * Skips memory injection, session-UUID management, and state detection; this
-   * pty exists only long enough for the user to complete `/login` via browser
-   * OAuth, after which the caller tears it down.
+   * Skips session-UUID management and state detection; this pty exists only
+   * long enough for the user to complete `/login` via browser OAuth, after
+   * which the caller tears it down.
    */
   createLoginSession(id: string, configDir: string): void {
     const shellInfo = this.getShellInfo();
@@ -632,10 +615,7 @@ export class PtyManager extends EventEmitter {
         if (filteredData.trim() === '') return;
       }
 
-      session.scrollbackBuffer += filteredData;
-      if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE) {
-        session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
-      }
+      appendScrollback(session, filteredData);
 
       // Hold emission until the renderer primes this pty (BDHLNDR-33). The
       // scrollback is accumulated above regardless, so nothing is lost.
@@ -660,7 +640,6 @@ export class PtyManager extends EventEmitter {
       id,
       pty: ptyProcess,
       cwd,
-      groupId: null,
       provider: claudeProvider,
       shellInfo,
       lastState: 'idle',
@@ -715,6 +694,11 @@ export class PtyManager extends EventEmitter {
     session.lastCols = cols;
     session.lastRows = rows;
     session.pty.resize(cols, rows);
+    // Notify listeners (e.g. the relay agent, which forwards the new size to
+    // remote viewers so they re-render at the current PTY dimensions). Dynamic
+    // sizing: whichever viewer is active drives the size, and everyone else
+    // follows via this event.
+    this.emit('resize', { id, cols, rows });
   }
 
   kill(id: string): Promise<void> {
@@ -807,6 +791,37 @@ export class PtyManager extends EventEmitter {
   getBuffer(id: string): string {
     const session = this.sessions.get(id);
     return session?.scrollbackBuffer || '';
+  }
+
+  /**
+   * Rendered-text history for remote viewers. Replays the raw scrollback through
+   * a headless terminal at the session's CURRENT width and serializes the result
+   * to resolved text (colors kept, but no cursor-addressing). Unlike the raw
+   * bytes, this can be reflowed to a different width (e.g. a phone) WITHOUT
+   * garbling — Claude's absolute cursor moves have already been applied here.
+   * Falls back to the raw buffer if serialization isn't available.
+   */
+  async getSerializedBuffer(id: string): Promise<string> {
+    const session = this.sessions.get(id);
+    const raw = session?.scrollbackBuffer;
+    if (!session || !raw) return '';
+    try {
+      const term = new HeadlessTerminal({
+        cols: session.lastCols || 80,
+        rows: session.lastRows || 24,
+        scrollback: 20000,
+        allowProposedApi: true,
+      });
+      const serializer = new SerializeAddon();
+      term.loadAddon(serializer);
+      await new Promise<void>((resolve) => term.write(raw, () => resolve()));
+      const text = serializer.serialize({ scrollback: 20000 });
+      term.dispose();
+      return text;
+    } catch (err) {
+      console.warn('[PtyManager] getSerializedBuffer failed, falling back to raw:', err);
+      return raw;
+    }
   }
 
   /**

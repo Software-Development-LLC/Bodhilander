@@ -1,7 +1,10 @@
 import './styles.css';
 import '@xterm/xterm/css/xterm.css';
 import { Terminal } from '@xterm/xterm';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { FitAddon } from '@xterm/addon-fit';
 import { RelayConnection, type ConnState, type Inner } from './connection';
+import { createReconnectScheduler } from './reconnect';
 
 // ---------------------------------------------------------------------------
 // Types (mirror the agent's sealed payloads)
@@ -154,9 +157,20 @@ let lastSessionsJson = '';
 function startPolling() { stopPolling(); pollTimer = setInterval(() => app.conn?.command({ type: 'sessions:list' }), 2500); }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
+// Re-open the channel after a delay. Used both when the socket drops (`closed`)
+// and when the agent is `offline` — in the offline case the relay keeps our
+// socket open but won't route until the desktop connects, so without this the
+// view stays stuck on "offline" until a manual refresh even after the machine
+// comes online. Retrying makes it recover on its own within a few seconds.
+const reconnector = createReconnectScheduler({
+  isAlive: () => app.conn != null, // false ⇒ deliberate teardown, don't resurrect
+  reconnect: () => { app.conn?.close(); connect(); },
+});
+
 function onConnState(s: ConnState, detail?: string) {
   const dot = $('#mdot'); const list = $('#sessions');
   if (s === 'ready') {
+    reconnector.cancel();
     dot?.classList.remove('off');
     app.conn!.command({ type: 'groups:list' });
     app.conn!.command({ type: 'sessions:list' });
@@ -164,12 +178,16 @@ function onConnState(s: ConnState, detail?: string) {
   } else if (s === 'offline') {
     stopPolling(); dot?.classList.add('off');
     if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">🌙</div><p>This machine is offline. It'll appear here when it reconnects.</p></li>`;
+    reconnector.schedule(3000); // agent not connected yet — keep polling until it appears
   } else if (s === 'error') {
+    // A hard error (e.g. identity-verification failure) should surface, not retry.
+    // Cancel any reconnect queued by a prior offline/closed so it can't fire on top.
+    reconnector.cancel();
     stopPolling(); dot?.classList.add('off');
     if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">⚠️</div><p>${esc(detail || 'Connection problem.')}</p></li>`;
   } else if (s === 'closed') {
     stopPolling(); dot?.classList.add('off');
-    setTimeout(() => { if (app.conn) connect(); }, 3000); // simple reconnect
+    reconnector.schedule(3000); // socket dropped — reconnect
   }
 }
 
@@ -186,15 +204,19 @@ function onAgentMessage(m: Inner) {
     updateTermHeader(); // keep the open terminal's state chip / attention banner live
     return;
   }
-  if (m.type === 'terminal:size') { if (m.sessionId === app.activeId && term) term.resize(Math.max(2, Number(m.cols) || 80), Math.max(2, Number(m.rows) || 24)); return; }
-  if (m.type === 'terminal:output') {
+  if (m.type === 'terminal:size') {
+    // The PTY's authoritative size. Mirror it exactly (rendering a different grid
+    // than the PTY clamps Claude's cursor moves and garbles output). With dynamic
+    // sizing this is usually the size WE just reported, so the terminal fits the
+    // pane 1:1; when the desktop owns a bigger size, scaleTerm shrinks it to fit.
     if (m.sessionId === app.activeId && term) {
-      // .screen owns the scroll now, so keep it pinned to the latest output
-      // (tail) unless the user has scrolled up to read history.
-      const screen = $('#screen');
-      const atBottom = !screen || screen.scrollHeight - screen.scrollTop - screen.clientHeight < 40;
-      term.write(String(m.data), () => { if (atBottom && screen) screen.scrollTop = screen.scrollHeight; });
+      term.resize(Math.max(2, Number(m.cols) || 80), Math.max(2, Number(m.rows) || 24));
+      scaleTerm();
     }
+    return;
+  }
+  if (m.type === 'terminal:output') {
+    if (m.sessionId === app.activeId && term) term.write(String(m.data));
     return;
   }
   if (m.type === 'terminal:exit') { if (m.sessionId === app.activeId && term) term.write('\r\n\x1b[90m[session exited]\x1b[0m\r\n'); return; }
@@ -218,7 +240,13 @@ function groupPath(groupId: string): { label: string; color: string } {
 
 function renderSessions() {
   const ul = $('#sessions')!;
-  const sorted = [...app.sessions].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || a.name.localeCompare(b.name));
+  // Sort by attention state, then name, then id. The id tiebreak matters: two
+  // sessions can share a name (same name in different folders), and without a
+  // total order the comparator returns 0, leaving them in whatever order the
+  // agent happened to send — which used to shuffle and make them swap places.
+  const sorted = [...app.sessions].sort(
+    (a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+  );
   const waiting = sorted.filter((s) => s.state === 'waiting').length;
   const attn = $('#attn')!;
   if (waiting) { attn.textContent = `${waiting} needs you`; attn.classList.remove('hidden'); } else attn.classList.add('hidden');
@@ -243,6 +271,46 @@ function renderSessions() {
 // Terminal (xterm)
 // ---------------------------------------------------------------------------
 let term: Terminal | null = null;
+let fitAddon: FitAddon | null = null;
+let termScale = 1;
+const isMobileView = () => matchMedia('(max-width:859px)').matches;
+
+// Dynamic sizing: on mobile the phone reports its own grid to the agent
+// (terminal:resize), which resizes the shared PTY so Claude REDRAWS to fit the
+// phone — clean, readable, no garble. We compute the grid with FitAddon's
+// proposeDimensions (measures the pane at our font size) without locally resizing
+// (the size comes back authoritatively via terminal:size). Only assert on real
+// changes to avoid reflow churn.
+function assertMobileSize() {
+  if (!term || !fitAddon || !isMobileView() || !app.activeId) return;
+  const dims = fitAddon.proposeDimensions();
+  if (!dims || !dims.cols || !dims.rows || !isFinite(dims.cols) || !isFinite(dims.rows)) return;
+  // No-op if the PTY is already our size (term.cols/rows track the last
+  // terminal:size). If the desktop reclaimed a bigger size, this differs and we
+  // re-assert — that's how the phone takes the size back when it's active again.
+  if (dims.cols === term.cols && dims.rows === term.rows) return;
+  app.conn?.command({ type: 'terminal:resize', sessionId: app.activeId, cols: dims.cols, rows: dims.rows });
+}
+
+// Fallback scaler: normally the PTY matches our reported size so the terminal
+// fits the pane 1:1 (scale ≈ 1). But when another viewer (the desktop) is active
+// and owns a larger size, we render THAT size and scale it down so it stays clean
+// (not garbled/clipped) until we reclaim the size on the next interaction.
+function scaleTerm() {
+  const xtermEl = term?.element as HTMLElement | undefined;
+  const screenEl = $<HTMLElement>('#screen');
+  if (!xtermEl || !screenEl) return;
+  if (!isMobileView()) { xtermEl.style.transform = ''; xtermEl.style.transformOrigin = ''; termScale = 1; return; }
+  xtermEl.style.transformOrigin = 'top left';
+  xtermEl.style.transform = 'none';
+  const natural = xtermEl.querySelector<HTMLElement>('.xterm-screen')?.getBoundingClientRect().width || xtermEl.scrollWidth || 1;
+  const avail = screenEl.clientWidth;
+  let s = avail / natural;
+  if (!isFinite(s) || s <= 0) s = 1;
+  s = Math.min(1, s);
+  termScale = s;
+  xtermEl.style.transform = `scale(${s})`;
+}
 function xtermTheme() {
   const dark = isDark();
   return dark
@@ -252,7 +320,11 @@ function xtermTheme() {
 function applyTermTheme() { if (term) term.options.theme = xtermTheme(); }
 function ensureTerm() {
   if (term) return;
-  term = new Terminal({ fontFamily: 'var(--mono)', fontSize: 13, cursorBlink: true, scrollback: 5000, theme: xtermTheme(), allowProposedApi: true, screenReaderMode: true });
+  // xterm measures the character cell with this font on a canvas, where a CSS
+  // `var(--mono)` does NOT resolve — it would silently fall back to a different
+  // font and mis-measure the cell, so FitAddon then computes the wrong cols/rows
+  // (garbled wrapping). Pass the resolved stack literally.
+  term = new Terminal({ fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace', fontSize: 13, cursorBlink: true, scrollback: 5000, theme: xtermTheme(), allowProposedApi: true, screenReaderMode: true });
   // This is a read-only VIEWER of the desktop's real terminal. Swallow terminal
   // query sequences (Device Attributes, cursor-position / status reports) so we
   // never echo an auto-response back into the shared PTY — the desktop is the
@@ -264,15 +336,59 @@ function ensureTerm() {
   term.parser.registerCsiHandler({ prefix: '?', final: 'c' }, swallow);
   term.parser.registerCsiHandler({ final: 'n' }, swallow); // DSR / cursor-position report
   term.open($('#screen')!);
+  fitAddon = new FitAddon();
+  term.loadAddon(fitAddon); // used only to PROPOSE a size to report; never fit() locally
+  // Use the WebGL renderer: the default DOM renderer accumulates sub-pixel cell
+  // drift on some mobile browsers, overlapping adjacent rows (garbled text). The
+  // WebGL renderer paints every cell at exact pixel coordinates. Fall back to the
+  // DOM renderer if the GL context can't be created / is lost.
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch { /* no WebGL — keep the DOM renderer */ }
   term.onData((d) => app.conn?.command({ type: 'terminal:input', sessionId: app.activeId, data: d }));
-  // The terminal matches the desktop's size (via terminal:size), so we don't
-  // fit/resize the PTY. We only keep the pane sized to the visible viewport so
-  // the on-screen keyboard doesn't hide it (and can't be over-scrolled past).
+  // Mobile touch scroll: xterm's own viewport doesn't reliably scroll from touch,
+  // but its programmatic scroll (what wheel uses on desktop) does. Translate a
+  // vertical finger drag into term.scrollLines so history is reachable.
+  const screenEl = $('#screen')!;
+  let lastTouchY = 0, scrollAccum = 0;
+  screenEl.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) { lastTouchY = e.touches[0]!.clientY; scrollAccum = 0; }
+    // Touching the terminal = the phone is the active viewer → reclaim our size
+    // if the desktop had taken it (no-op when already ours).
+    assertMobileSizeDebounced();
+  }, { passive: true });
+  screenEl.addEventListener('touchmove', (e) => {
+    if (!term || e.touches.length !== 1) return;
+    const y = e.touches[0]!.clientY;
+    scrollAccum += y - lastTouchY;
+    lastTouchY = y;
+    // Cell height on screen = unscaled cell height × the visual scale.
+    const cellUnscaled = Math.max(1, (screenEl.querySelector<HTMLElement>('.xterm-viewport')?.clientHeight || screenEl.clientHeight) / term.rows);
+    const cell = cellUnscaled * termScale;
+    const lines = Math.trunc(scrollAccum / cell);
+    if (lines !== 0) {
+      term.scrollLines(-lines); // drag down → reveal older lines above
+      scrollAccum -= lines * cell;
+      e.preventDefault(); // we handled it; don't let the page rubber-band
+    }
+  }, { passive: false });
+  // Keep the pane pinned to the visible viewport (keyboard show/hide) and, when
+  // the visible size settles, report our new grid to the agent so Claude reflows.
   const vv = window.visualViewport;
   if (vv) {
-    vv.addEventListener('resize', syncTermPane);
+    vv.addEventListener('resize', () => { syncTermPane(); scaleTerm(); assertMobileSizeDebounced(); });
     vv.addEventListener('scroll', syncTermPane);
   }
+}
+
+// Reporting our size reflows Claude on the desktop end, so debounce it — a
+// keyboard animation or orientation change shouldn't fire a dozen resizes.
+let assertTimer: ReturnType<typeof setTimeout> | null = null;
+function assertMobileSizeDebounced() {
+  if (assertTimer) clearTimeout(assertTimer);
+  assertTimer = setTimeout(() => { assertTimer = null; assertMobileSize(); }, 250);
 }
 
 // Pin the terminal pane to the *visual* viewport. The layout viewport (what a
@@ -309,10 +425,15 @@ function openTerminal(s: RSession) {
   $('#attnBanner')!.classList.toggle('hidden', s.state !== 'waiting');
   document.body.setAttribute('data-view', 'term');
   syncTermPane();
-  requestAnimationFrame(syncTermPane);
   pushLayer(() => { document.body.removeAttribute('data-view'); if (app.activeId) app.conn?.command({ type: 'terminal:unsubscribe', sessionId: app.activeId }); app.activeId = null; });
-  requestAnimationFrame(() => { term!.focus(); });
-  app.conn?.command({ type: 'terminal:subscribe', sessionId: s.id });
+  requestAnimationFrame(() => {
+    syncTermPane();
+    term!.focus();
+    app.conn?.command({ type: 'terminal:subscribe', sessionId: s.id });
+    // Report our grid so the agent reflows Claude to fit the phone. The size
+    // comes back via terminal:size and drives the local xterm + scale.
+    assertMobileSize();
+  });
 }
 
 // accessory keys

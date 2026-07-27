@@ -11,6 +11,16 @@
  * `.expected.json` via a snapshot-update flow when needed (intentionally
  * NOT automatic — bumping the snapshot requires a code change).
  *
+ * FIXTURES USE CRLF, DELIBERATELY. They are fed to a terminal emulator, so
+ * they have to look like a PTY stream. LF alone moves the cursor down without
+ * returning it to column 0 — only CR does that — so a bare-LF fixture renders
+ * each successive line indented by the length of the one before it. That is
+ * not what any real terminal produces, and it silently changes classification:
+ * the user-input `> ` rule is anchored at line start, so an indented prompt
+ * falls through to assistant prose. Do not "normalise" these to LF; the
+ * fixtures directory carries a .gitattributes marking them -text to stop a
+ * core.autocrlf checkout from doing it for you.
+ *
  * Run with: bun test src/main/api/chat-parser
  */
 
@@ -63,6 +73,40 @@ function loadFixtures(): Fixture[] {
     };
   });
 }
+
+/**
+ * Self-enforce the CRLF invariant the fixtures above depend on.
+ *
+ * .gitattributes stops a `core.autocrlf` checkout from rewriting these, but it
+ * cannot stop an editor — or a contributor bypassing git — from re-saving one
+ * with bare LF. That silently reintroduces the exact bug this corpus already
+ * hit once: a bare LF leaves the cursor where it was, so the next line renders
+ * indented by the length of the previous one and stops matching any
+ * line-start-anchored rule.
+ *
+ * Scoped to the synthetic *.txt fixtures. The real-* captures are raw PTY
+ * recordings whose byte stream is whatever the terminal actually emitted
+ * (including bare line feeds between spinner frames), so the same rule does
+ * not apply to them.
+ */
+describe('fixture line endings', () => {
+  test('every synthetic fixture uses CRLF, never a bare LF', () => {
+    const offenders: string[] = [];
+
+    for (const txt of fs.readdirSync(FIXTURES_DIR).filter((f) => f.endsWith('.txt')).sort()) {
+      // latin1 is a byte-for-byte decode, so a CR survives as '\r'.
+      const segments = fs.readFileSync(path.join(FIXTURES_DIR, txt), 'latin1').split('\n');
+      segments.forEach((segment, idx) => {
+        // The tail after the final LF is not a line — nothing to terminate.
+        if (idx === segments.length - 1) return;
+        if (!segment.endsWith('\r')) offenders.push(`${txt}:${idx + 1}`);
+      });
+    }
+
+    // Any entry here names the file:line that needs its CR put back.
+    expect(offenders).toEqual([]);
+  });
+});
 
 describe('ChatParser snapshot fixtures', () => {
   const fixtures = loadFixtures();

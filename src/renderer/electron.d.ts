@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, CodeIndex, CodeSearchResult, SymbolSearchResult, IndexProgress, SymbolType, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -14,6 +14,7 @@ interface ElectronAPI {
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => () => void;
   onPtyExit: (callback: (id: string, exitCode: number) => void) => () => void;
+  onPtyResize: (callback: (id: string, cols: number, rows: number) => void) => () => void;
   onStateChange: (callback: (event: { sessionId: string; state: string; event: string; timestamp: number }) => void) => () => void;
   onSessionsRefresh: (callback: () => void) => () => void;
   onGroupsRefresh: (callback: () => void) => () => void;
@@ -24,13 +25,19 @@ interface ElectronAPI {
   onMenuNextSession: (callback: () => void) => () => void;
   onMenuPrevSession: (callback: () => void) => () => void;
   onMenuNextWaiting: (callback: () => void) => () => void;
+  onMenuOpenAccounts: (callback: () => void) => () => void;
+
+  // View menu events — content-area switcher + sidebar focus
+  onMenuViewTerminal: (callback: () => void) => () => void;
+  onMenuViewAnalytics: (callback: () => void) => () => void;
+  onMenuViewArena: (callback: () => void) => () => void;
+  onMenuFocusSidebar: (callback: () => void) => () => void;
 
   // Edit menu events
   onMenuCopy: (callback: () => void) => () => void;
   onMenuPaste: (callback: () => void) => () => void;
   onMenuSelectAll: (callback: () => void) => () => void;
   onMenuClearTerminal: (callback: () => void) => () => void;
-  onMenuFind: (callback: () => void) => () => void;
 
   // Session selection
   onSessionSelect: (callback: (sessionId: string) => void) => () => void;
@@ -50,19 +57,6 @@ interface ElectronAPI {
   createDbSession: (session: Session) => Promise<void>;
   updateDbSession: (id: string, updates: Partial<Session>) => Promise<void>;
   deleteDbSession: (id: string) => Promise<void>;
-
-  // Database - Memories
-  getMemoriesBySession: (sessionId: string) => Promise<Memory[]>;
-  getMemoriesByGroup: (groupId: string) => Promise<Memory[]>;
-  getPinnedMemories: (groupId?: string) => Promise<Memory[]>;
-  searchMemories: (query: string, groupId?: string) => Promise<Memory[]>;
-  createMemory: (input: MemoryCreateInput) => Promise<Memory>;
-  updateMemory: (id: string, updates: MemoryUpdateInput) => Promise<void>;
-  deleteMemory: (id: string) => Promise<void>;
-  getMemoriesForInjection: (sessionId: string, groupId: string) => Promise<Memory[]>;
-  getMemoryById: (id: string) => Promise<Memory | null>;
-  getGlobalContextMemories: () => Promise<Memory[]>;
-  onMemoryExtracted: (callback: (memory: Memory) => void) => () => void;
 
   // Session Events (BDHLNDR-17)
   getSessionEvents: (sessionId: string, limit?: number) => Promise<SessionEvent[]>;
@@ -144,17 +138,6 @@ interface ElectronAPI {
   apiHasPairingCode: () => Promise<{ active: boolean }>;
 
   // Vector Search
-  getIndexStatus: (directoryPath: string) => Promise<CodeIndex | null>;
-  getAllIndexes: () => Promise<CodeIndex[]>;
-  startIndexing: (directoryPath: string) => Promise<{ success: boolean; error?: string }>;
-  searchCode: (directoryPath: string, query: string, limit?: number) => Promise<CodeSearchResult[]>;
-  searchSymbols: (directoryPath: string, name: string, symbolType?: SymbolType, limit?: number) => Promise<SymbolSearchResult[]>;
-  cancelIndexing: (indexId: string) => Promise<{ success: boolean }>;
-  deleteCodeIndex: (directoryPath: string) => Promise<{ success: boolean }>;
-  retryIndexing: (directoryPath: string) => Promise<{ success: boolean; error?: string }>;
-  onIndexingProgress: (callback: (progress: IndexProgress) => void) => () => void;
-  onIndexingComplete: (callback: (data: { indexId: string; directoryPath?: string }) => void) => () => void;
-  onIndexingError: (callback: (data: { indexId: string; error: string; directoryPath?: string }) => void) => () => void;
 
   // Editor Integration
   openInEditor: (filePath: string, line?: number, column?: number) => Promise<{ success: boolean; error?: string }>;

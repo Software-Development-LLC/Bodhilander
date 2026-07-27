@@ -2,10 +2,11 @@
 /**
  * Bodhilander Hook Handler
  *
- * This script is called by Claude Code hooks to capture events and save memories.
- * It receives hook data on stdin and calls the Bodhilander API.
+ * This script is called by Claude Code hooks to report session activity.
+ * It receives hook data on stdin and calls the Bodhilander API, which records
+ * the events the analytics views read.
  *
- * Usage: node bodhilander-hook.js <hook-type> [--group-id <id>] [--session-id <id>]
+ * Usage: node bodhilander-hook.js <hook-type> [--session-id <id>]
  *
  * Hook types: PostToolUse, Stop, Notification
  */
@@ -14,15 +15,14 @@ const API_BASE = process.env.BODHILANDER_API_URL || 'http://127.0.0.1:8443';
 const API_PREFIX = '/api/v1/hooks';
 
 interface HookInput {
-  // PostToolUse fields
+  // PostToolUse fields. Claude Code also sends the tool's arguments and its
+  // result, but we deliberately do not declare or forward them — see
+  // handlePostToolUse for why (they are unread by the API and large enough to
+  // trip its body limit).
   tool_name?: string;
-  tool_input?: unknown;
-  tool_result?: unknown;
 
   // Stop fields
   stop_reason?: string;
-  num_turns?: number;
-  transcript?: Array<{ role: string; content: string }>;
 
   // Notification fields
   type?: string;
@@ -86,93 +86,44 @@ async function callApi(endpoint: string, data: Record<string, unknown>): Promise
 }
 
 /**
- * Extract summary from Stop hook transcript
- */
-function extractSummaryHint(transcript: Array<{ role: string; content: string }> | undefined): string | null {
-  if (!transcript || transcript.length === 0) return null;
-
-  // Get the last assistant message
-  for (let i = transcript.length - 1; i >= 0; i--) {
-    if (transcript[i].role === 'assistant') {
-      const content = transcript[i].content;
-      // Look for explicit summary markers or decision statements
-      if (typeof content === 'string') {
-        // Check for decision patterns
-        const decisionPatterns = [
-          /(?:decided|choosing|will use|going with|implementing)\s+(.{10,100})/i,
-          /(?:the approach|the solution|the fix)\s+(?:is|was)\s+(.{10,100})/i,
-        ];
-
-        for (const pattern of decisionPatterns) {
-          const match = content.match(pattern);
-          if (match) {
-            return match[0];
-          }
-        }
-      }
-      break;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Count significant tool uses from transcript
- */
-function countToolUses(transcript: Array<{ role: string; content: string }> | undefined): number {
-  if (!transcript) return 0;
-
-  let count = 0;
-  for (const msg of transcript) {
-    if (msg.role === 'assistant' && typeof msg.content === 'string') {
-      // Count tool use markers (this is a heuristic)
-      const toolMatches = msg.content.match(/(?:Edit|Write|Bash|Read)/g);
-      if (toolMatches) count += toolMatches.length;
-    }
-  }
-
-  return count;
-}
-
-/**
  * Process PostToolUse hook
  */
-async function handlePostToolUse(input: HookInput, groupId?: string, sessionId?: string): Promise<void> {
+async function handlePostToolUse(input: HookInput, sessionId?: string): Promise<void> {
   if (!input.tool_name) return;
 
+  // Deliberately send only the tool NAME, never the tool's input or result.
+  //
+  // /post-tool-use reads exactly { tool_name, session_id } — the rest of the
+  // payload was the last vestige of the removed memory feature, which used it
+  // to sniff git commits. Forwarding it now would actively break analytics:
+  // the result carries the full tool output (an entire file for Read, all
+  // matches for Grep, complete stdout for Bash), and the API server caps
+  // bodies at 1mb, so the largest tool calls would 413 and their tool_use
+  // events would vanish — silently, since callApi swallows transport errors by
+  // design. This hook now fires for EVERY tool, so that would have been most
+  // of the interesting ones.
   await callApi('/post-tool-use', {
     tool_name: input.tool_name,
-    tool_input: input.tool_input,
-    tool_output: input.tool_result,
     session_id: sessionId || input.session_id,
-    group_id: groupId,
   });
 }
 
 /**
  * Process Stop hook
  */
-async function handleStop(input: HookInput, groupId?: string, sessionId?: string): Promise<void> {
-  const toolUsesCount = countToolUses(input.transcript);
-  const summaryHint = extractSummaryHint(input.transcript);
-
+async function handleStop(input: HookInput, sessionId?: string): Promise<void> {
   await callApi('/stop', {
     session_id: sessionId || input.session_id,
-    group_id: groupId,
     stop_reason: input.stop_reason,
-    tool_uses_count: toolUsesCount,
-    summary_hint: summaryHint,
   });
 }
 
 /**
  * Process Notification hook
  */
-async function handleNotification(input: HookInput, groupId?: string, sessionId?: string): Promise<void> {
+async function handleNotification(input: HookInput, sessionId?: string): Promise<void> {
   await callApi('/notification', {
     session_id: sessionId || input.session_id,
-    group_id: groupId,
     notification_type: input.type,
     message: input.message,
   });
@@ -181,31 +132,28 @@ async function handleNotification(input: HookInput, groupId?: string, sessionId?
 /**
  * Parse command line arguments
  */
-function parseArgs(): { hookType: string; groupId?: string; sessionId?: string } {
+function parseArgs(): { hookType: string; sessionId?: string } {
   const args = process.argv.slice(2);
   let hookType = 'PostToolUse';
-  let groupId: string | undefined;
   // Use BODHILANDER_SESSION_ID env var (set by the session provider's launch env, src/main/providers) as default
   let sessionId: string | undefined = process.env.BODHILANDER_SESSION_ID;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--group-id' && args[i + 1]) {
-      groupId = args[++i];
-    } else if (args[i] === '--session-id' && args[i + 1]) {
+    if (args[i] === '--session-id' && args[i + 1]) {
       sessionId = args[++i];
     } else if (!args[i].startsWith('-')) {
       hookType = args[i];
     }
   }
 
-  return { hookType, groupId, sessionId };
+  return { hookType, sessionId };
 }
 
 /**
  * Main entry point
  */
 async function main(): Promise<void> {
-  const { hookType, groupId, sessionId } = parseArgs();
+  const { hookType, sessionId } = parseArgs();
 
   // Read hook data from stdin
   let inputData: string;
@@ -228,13 +176,13 @@ async function main(): Promise<void> {
   // Process based on hook type
   switch (hookType) {
     case 'PostToolUse':
-      await handlePostToolUse(input, groupId, sessionId);
+      await handlePostToolUse(input, sessionId);
       break;
     case 'Stop':
-      await handleStop(input, groupId, sessionId);
+      await handleStop(input, sessionId);
       break;
     case 'Notification':
-      await handleNotification(input, groupId, sessionId);
+      await handleNotification(input, sessionId);
       break;
     default:
       console.error(`[Bodhilander Hook] Unknown hook type: ${hookType}`);

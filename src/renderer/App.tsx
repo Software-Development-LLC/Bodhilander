@@ -3,21 +3,36 @@ import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsModal, SettingsTab } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
-import { MemoryPanel } from './components/panels/MemoryPanel';
+import { SidebarFilter } from './components/SidebarFilter';
+import { SessionRow } from './components/SessionRow';
+import { GroupColorPicker } from './components/GroupColorPicker';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
-import { SessionStatsBadge } from './components/SessionStatsBadge';
-import { CodeSearchModal } from './components/CodeSearchModal';
-import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
-import { ClaudeAccount, PROVIDER_LABELS } from '../shared/types';
+import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
+import { ClaudeAccount, Session } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
+import { computeGroupFilter, buildNavItems } from './store/groupFilter';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
+
+/**
+ * Collapse-chevron labels. While a filter is active every row is force-expanded,
+ * so the control is disabled and says so rather than lying about state (#141).
+ */
+function chevronTitle(collapsed: boolean, filtering: boolean): string {
+  if (filtering) return 'Expanded while filtering';
+  return collapsed ? 'Expand' : 'Collapse';
+}
+
+function chevronAriaLabel(collapsed: boolean, filtering: boolean, kind: 'group' | 'sub-group'): string {
+  if (filtering) return `${kind} expanded while filtering`;
+  return collapsed ? `Expand ${kind}` : `Collapse ${kind}`;
+}
 
 const App: React.FC = () => {
   const {
@@ -59,10 +74,15 @@ const App: React.FC = () => {
   const [focusedItemType, setFocusedItemType] = useState<'group' | 'session' | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const [sidebarWidth, setSidebarWidth] = useState(260);
+
+  // Sidebar text filter (#141). Ephemeral — never persisted.
+  const [filterText, setFilterText] = useState('');
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [claudeAccountsOpen, setClaudeAccountsOpen] = useState(false);
+  // Which Settings tab to land on. Claude accounts left the sidebar and became
+  // a Settings tab, so App needs to be able to open Settings straight to it.
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('general');
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
   // True when the running build is itself a beta (version contains -beta.).
   // Shows a BETA pill in the sidebar so opt-in testers know what they're on
@@ -80,17 +100,14 @@ const App: React.FC = () => {
   // New item choice menu state (for + button on groups)
   const [newItemChoice, setNewItemChoice] = useState<{ x: number; y: number; groupId: string } | null>(null);
 
-  // Memory panel state
-  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
-
-  // Analytics view state (BDHLNDR-18)
-  const [analyticsViewOpen, setAnalyticsViewOpen] = useState(false);
-  const [arenaViewOpen, setArenaViewOpen] = useState(false);
+  // Which destination the content area is showing (BDHLNDR-18). Terminal,
+  // Analytics and Arena all live in the same content area, so they are one
+  // value rather than a boolean each.
+  const [contentView, setContentView] = useState<ContentView>('terminal');
   // Group whose working dir the arena panel should scope to ("Ask Arena" menu).
   const [arenaGroupId, setArenaGroupId] = useState<string | null>(null);
 
   // Code search modal state
-  const [codeSearchOpen, setCodeSearchOpen] = useState(false);
 
   // Destructive action confirmation state
   const [confirmAction, setConfirmAction] = useState<{
@@ -120,9 +137,24 @@ const App: React.FC = () => {
   const counts = getStateCounts();
   const isLoading = groupsLoading || sessionsLoading;
 
-  // Get the active session's group ID for memory panel
-  const activeSession = sessions.find(s => s.id === activeSessionId);
-  const activeGroupId = activeSession?.groupId || null;
+  // Bare Ctrl belongs to the terminal (SIGINT, readline), so app-level actions
+  // bind Cmd on macOS and Ctrl+Shift everywhere else. Every shortcut hint we
+  // show the user has to reflect that, or the label lies about the key.
+  const isMac = useMemo(() => window.electronAPI.platform === 'darwin', []);
+  const appMod = isMac ? '⌘' : 'Ctrl+Shift+';
+
+  // Which sidebar rows survive the text filter (#141).
+  const filter = useMemo(
+    () => computeGroupFilter(groups, sessions, filterText),
+    [groups, sessions, filterText],
+  );
+
+  // The top-level rows actually rendered. Drives both the list and the empty
+  // state, so the two can never disagree.
+  const visibleTopLevelGroups = useMemo(
+    () => getTopLevelGroups().filter(g => !filter.active || filter.visibleGroupIds.has(g.id)),
+    [getTopLevelGroups, filter],
+  );
 
   // Resolve the effective Claude account for a session, applying the same
   // fallback chain the main process uses (session → group → default). Used by
@@ -187,12 +219,15 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Refresh accounts whenever the accounts modal closes (covers delete/rename).
+  // Refresh accounts whenever Settings closes (covers delete/rename). The
+  // Settings "Claude accounts" tab is the only place accounts are edited now,
+  // so it has to re-pull — otherwise the sidebar's per-session account dots go
+  // stale.
   useEffect(() => {
-    if (!claudeAccountsOpen) {
+    if (!settingsOpen) {
       window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
     }
-  }, [claudeAccountsOpen]);
+  }, [settingsOpen]);
 
   // Determine once at mount whether the running app build is a beta —
   // controls the BETA pill shown in the sidebar header (BDHLNDR-32).
@@ -214,6 +249,16 @@ const App: React.FC = () => {
     setSessionPrompt({ groupId, defaultName: `Session ${count}` });
   }, [getSessionsByGroup]);
 
+  /**
+   * A newly created group/session becomes active straight away, so it has to be
+   * visible. Clear the filter only when the new name would not match it —
+   * an unrelated query is left untouched (#141).
+   */
+  const revealNewItem = useCallback((name: string) => {
+    const query = filterText.trim().toLowerCase();
+    if (query && !name.toLowerCase().includes(query)) setFilterText('');
+  }, [filterText]);
+
   // Actually create the session after name is confirmed
   const handleConfirmSession = useCallback(async (
     name: string,
@@ -225,7 +270,8 @@ const App: React.FC = () => {
     const cwd = getEffectiveWorkingDir(sessionPrompt.groupId) || homedir;
     await createSession(sessionPrompt.groupId, name, cwd, true, provider); // launchClaude = true
     setSessionPrompt(null);
-  }, [sessionPrompt, getEffectiveWorkingDir, createSession, homedir]);
+    revealNewItem(name);
+  }, [sessionPrompt, revealNewItem, getEffectiveWorkingDir, createSession, homedir]);
 
   // Show prompt for new group name
   const handleCreateGroup = () => {
@@ -236,6 +282,7 @@ const App: React.FC = () => {
   // Actually create the group after name is confirmed
   const handleConfirmGroup = async (name: string, path?: string, claudeAccountId?: string | null) => {
     setGroupPrompt(null);
+    revealNewItem(name);
 
     // Create the group first
     const newGroup = await createGroup(name);
@@ -270,6 +317,7 @@ const App: React.FC = () => {
       }
     }
     setSubGroupPrompt(null);
+    revealNewItem(name);
   };
 
   const handleStartEditGroup = (groupId: string, currentName: string) => {
@@ -364,7 +412,7 @@ const App: React.FC = () => {
         label: 'Ask Arena About This Folder',
         onClick: () => {
           setArenaGroupId(groupId);
-          setArenaViewOpen(true);
+          setContentView('arena');
         },
         // Arena scoping runs the CLIs inside the group's working dir.
         disabled: !group?.workingDir,
@@ -633,32 +681,13 @@ const App: React.FC = () => {
     }
   }, [groups, handleNewSession]);
 
-  // Build flat navigation list for keyboard navigation
-  const navItems = useMemo(() => {
-    const items: Array<{ id: string; type: 'group' | 'session'; parentId?: string }> = [];
+  // Flat navigation list for keyboard navigation. Mirrors the rendered rows,
+  // so it must stay filter-aware (#141).
+  const navItems = useMemo(
+    () => buildNavItems(groups, sessions, filter),
+    [groups, sessions, filter],
+  );
 
-    getTopLevelGroups().forEach(group => {
-      items.push({ id: group.id, type: 'group' });
-
-      if (!group.collapsed) {
-        getSessionsByGroup(group.id).sort((a, b) => a.order - b.order).forEach(session => {
-          items.push({ id: session.id, type: 'session', parentId: group.id });
-        });
-
-        getSubGroups(group.id).forEach(subGroup => {
-          items.push({ id: subGroup.id, type: 'group', parentId: group.id });
-
-          if (!subGroup.collapsed) {
-            getSessionsByGroup(subGroup.id).sort((a, b) => a.order - b.order).forEach(session => {
-              items.push({ id: session.id, type: 'session', parentId: subGroup.id });
-            });
-          }
-        });
-      }
-    });
-
-    return items;
-  }, [groups, sessions, getTopLevelGroups, getSubGroups, getSessionsByGroup]);
 
   const handleFocusSidebar = useCallback(() => {
     sidebarRef.current?.focus();
@@ -681,7 +710,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleNavigateUp = useCallback(() => {
-    if (!sidebarFocused) return;
+    if (!sidebarFocused || navItems.length === 0) return;
     const currentIndex = navItems.findIndex(item => item.id === focusedItemId);
     const prevIndex = currentIndex > 0 ? currentIndex - 1 : navItems.length - 1;
     setFocusedItemId(navItems[prevIndex].id);
@@ -689,7 +718,7 @@ const App: React.FC = () => {
   }, [sidebarFocused, focusedItemId, navItems]);
 
   const handleNavigateDown = useCallback(() => {
-    if (!sidebarFocused) return;
+    if (!sidebarFocused || navItems.length === 0) return;
     const currentIndex = navItems.findIndex(item => item.id === focusedItemId);
     const nextIndex = currentIndex < navItems.length - 1 ? currentIndex + 1 : 0;
     setFocusedItemId(navItems[nextIndex].id);
@@ -697,7 +726,9 @@ const App: React.FC = () => {
   }, [sidebarFocused, focusedItemId, navItems]);
 
   const handleCollapse = useCallback(() => {
-    if (!sidebarFocused || !focusedItemId) return;
+    // Rows are force-expanded while filtering, so a collapse write would be an
+    // invisible, persisted change (#141).
+    if (!sidebarFocused || !focusedItemId || filter.active) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
       if (group && !group.collapsed) {
@@ -709,13 +740,13 @@ const App: React.FC = () => {
         toggleCollapse(session.groupId);
       }
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse, filter.active]);
 
   const handleExpand = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
-      if (group && group.collapsed) {
+      if (group?.collapsed && !filter.active) {
         toggleCollapse(focusedItemId);
       }
     } else if (focusedItemType === 'session') {
@@ -726,12 +757,12 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId, filter.active]);
 
   const handleSelect = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
-      toggleCollapse(focusedItemId);
+      if (!filter.active) toggleCollapse(focusedItemId);
     } else if (focusedItemType === 'session') {
       setActiveSessionId(focusedItemId);
       setSidebarFocused(false);
@@ -740,33 +771,71 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId, filter.active]);
 
   const handleNewGroup = useCallback(async () => {
     const name = `Group ${groups.filter(g => !g.parentId).length + 1}`;
     const newGroup = await createGroup(name);
+    revealNewItem(name);
 
     const dir = await window.electronAPI.selectDirectory();
     if (dir) {
       await updateGroup(newGroup.id, { workingDir: dir });
     }
-  }, [createGroup, updateGroup, groups]);
+  }, [createGroup, updateGroup, groups, revealNewItem]);
+
+  // Wiring for one session row. Hoisted out of the JSX so the per-row callbacks
+  // are not nested five closures deep inside the group/sub-group maps.
+  const sessionRowProps = useCallback((session: Session, groupId: string) => ({
+    session,
+    isActive: session.id === activeSessionId,
+    isFocused: focusedItemType === 'session' && focusedItemId === session.id,
+    isDragging: draggedItem?.type === 'session' && draggedItem.id === session.id,
+    dropPosition: dropTarget?.type === 'session' && dropTarget.id === session.id
+      ? dropTarget.position
+      : null,
+    draggable: !filter.active,
+    account: effectiveAccountForSession(session.id),
+    isEditing: editingSessionId === session.id,
+    editingName: editingSessionName,
+    onEditingNameChange: setEditingSessionName,
+    onStartEdit: () => handleStartEditSession(session.id, session.name),
+    onFinishEdit: handleFinishEditSession,
+    onCancelEdit: () => { setEditingSessionId(null); setEditingSessionName(''); },
+    onSelect: () => handleSessionClick(session.id),
+    onContextMenu: (e: React.MouseEvent) => handleSessionContextMenu(e, session.id, session.name),
+    onDragStart: (e: React.DragEvent) => handleSessionDragStart(e, session.id, groupId),
+    onDragEnd: handleDragEnd,
+    onDragOver: (e: React.DragEvent) => handleSessionDragOver(e, session.id, groupId),
+    onDrop: (e: React.DragEvent) => handleSessionDrop(e, session.id, groupId),
+    onClose: () => handleRemoveSession(session.id),
+  }), [
+    activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
+    filter.active, effectiveAccountForSession, editingSessionId, editingSessionName,
+    handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
+    handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
+    handleRemoveSession,
+  ]);
 
   const getContextShortcuts = useCallback(() => {
     if (sidebarFocused) {
       return [
         { key: '↑↓', label: 'Navigate' },
         { key: 'Enter', label: 'Select' },
-        { key: '←→', label: 'Collapse' },
-        { key: 'Ctrl+G', label: 'New Group' },
+        // Collapse/expand is unavailable while filtering — rows are
+        // force-expanded, so advertising it would be a lie (#141).
+        ...(filter.active ? [] : [{ key: '←→', label: 'Collapse' }]),
+        { key: `${appMod}G`, label: 'New Group' },
       ];
     }
     return [
-      { key: 'Ctrl+Q', label: 'Sidebar' },
+      { key: `${appMod}B`, label: 'Sidebar' },
+      // Ctrl+Tab is the one binding that is identical on every platform — Tab
+      // is not a readline key, so the terminal doesn't need it.
       { key: 'Ctrl+Tab', label: 'Next' },
-      { key: 'Ctrl+W', label: 'Close' },
+      { key: `${appMod}W`, label: 'Close' },
     ];
-  }, [sidebarFocused]);
+  }, [sidebarFocused, appMod, filter.active]);
 
   const handleNewSubGroup = useCallback(async () => {
     if (focusedItemType === 'group' && focusedItemId) {
@@ -777,10 +846,10 @@ const App: React.FC = () => {
     }
   }, [focusedItemType, focusedItemId, groups, handleCreateSubGroup]);
 
-  const handleCodeSearch = useCallback(() => {
-    setCodeSearchOpen(true);
-  }, []);
 
+  // Arrow/Home/End move between view tabs and select as they go (the WAI-ARIA
+  // tabs pattern with automatic activation). Combined with the roving
+  // tabIndex below, the whole strip is a single Tab stop.
   const shortcutHandlers = useMemo(() => ({
     onNewSession: handleKeyboardNewSession,
     onNextSession: handleNextSession,
@@ -795,9 +864,10 @@ const App: React.FC = () => {
     onCollapse: handleCollapse,
     onExpand: handleExpand,
     onSelect: handleSelect,
-    onCodeSearch: handleCodeSearch,
-    onToggleAnalytics: () => setAnalyticsViewOpen(prev => !prev),
-  }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect, handleCodeSearch]);
+    onViewTerminal: () => setContentView('terminal'),
+    onViewAnalytics: () => setContentView('analytics'),
+    onViewArena: () => setContentView('arena'),
+  }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect]);
 
   useKeyboardShortcuts(shortcutHandlers);
 
@@ -818,14 +888,29 @@ const App: React.FC = () => {
       window.electronAPI.onMenuNextSession(handleNextSession),
       window.electronAPI.onMenuPrevSession(handlePrevSession),
       window.electronAPI.onMenuNextWaiting(handleNextWaiting),
+      window.electronAPI.onMenuViewTerminal(() => setContentView('terminal')),
+      window.electronAPI.onMenuViewAnalytics(() => setContentView('analytics')),
+      window.electronAPI.onMenuViewArena(() => setContentView('arena')),
+      window.electronAPI.onMenuFocusSidebar(handleFocusSidebar),
+      // "Claude Accounts..." is the only discoverable entry point to accounts
+      // now that the sidebar key button is gone, so it deep-links Settings
+      // straight to the accounts tab rather than dropping the user on General.
+      window.electronAPI.onMenuOpenAccounts(() => {
+        setSettingsInitialTab('accounts');
+        setSettingsOpen(true);
+      }),
       window.electronAPI.onSessionSelect(handleSessionSelect),
     ];
     return () => cleanups.forEach(cleanup => cleanup());
-  }, [handleKeyboardNewSession, handleCloseSession, handleNextSession, handlePrevSession, handleNextWaiting, handleSessionSelect]);
+  }, [handleKeyboardNewSession, handleCloseSession, handleNextSession, handlePrevSession, handleNextWaiting, handleFocusSidebar, handleSessionSelect]);
 
-  // Listen for settings modal open event
+  // Listen for settings modal open event (app menu Cmd/Ctrl+, and the tray).
   useEffect(() => {
     const unsubscribe = window.electronAPI.onOpenSettings(() => {
+      // A plain "Settings" invocation always lands on General. The modal stays
+      // mounted and re-applies initialTab on every open, so without this reset
+      // a previous deep-link (e.g. straight to Claude accounts) would stick.
+      setSettingsInitialTab('general');
       setSettingsOpen(true);
     });
     return unsubscribe;
@@ -899,72 +984,33 @@ const App: React.FC = () => {
               </span>
             )}
           </h2>
-          <div className="sidebar-header-actions">
-            <button
-              className={`icon-button ${memoryPanelOpen ? 'active' : ''}`}
-              onClick={() => setMemoryPanelOpen(prev => !prev)}
-              title="Toggle Memory Panel"
-              aria-label="Toggle Memory Panel"
-            >
-              *
-            </button>
-            <button
-              className={`icon-button ${analyticsViewOpen ? 'active' : ''}`}
-              onClick={() => setAnalyticsViewOpen(prev => !prev)}
-              title="Analytics Dashboard (Ctrl+Shift+A)"
-              aria-label="Analytics Dashboard"
-            >
-              📊
-            </button>
-            <button
-              className={`icon-button ${arenaViewOpen ? 'active' : ''}`}
-              onClick={() => setArenaViewOpen(prev => !prev)}
-              title="Arena — compare agents"
-              aria-label="Arena"
-            >
-              ⚔️
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setCodeSearchOpen(true)}
-              title="Code Search (Ctrl+Shift+F)"
-              aria-label="Code Search"
-            >
-              🔍
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setSettingsOpen(true)}
-              title="Settings"
-              aria-label="Settings"
-            >
-              ⚙
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setClaudeAccountsOpen(true)}
-              title="Claude accounts"
-              aria-label="Claude accounts"
-            >
-              🔑
-            </button>
-            <button
-              className="icon-button"
-              onClick={handleCreateGroup}
-              title="New Group"
-              aria-label="New Group"
-            >
-              +
-            </button>
-          </div>
+          {/* Only "+" survives here: it acts on the list directly beneath it.
+              Analytics and Arena moved to the content-area view switcher, and
+              Settings (with Claude accounts as a tab) is reachable from the
+              app menu and the tray. */}
+          <button
+            className="icon-button"
+            onClick={handleCreateGroup}
+            title={`New Group (${appMod}G)`}
+            aria-label="New Group"
+          >
+            +
+          </button>
         </div>
 
-        {getTopLevelGroups().map(group => (
-          <div key={group.id} className="group-container">
+        <SidebarFilter value={filterText} onChange={setFilterText} />
+
+        {filter.active && visibleTopLevelGroups.length === 0 && (
+          <output className="sidebar-filter-empty">No groups or sessions match</output>
+        )}
+
+        {visibleTopLevelGroups
+          .map(group => (
+          <ul key={group.id} className="group-container">
             {/* Render main group */}
-            <div
+            <li
               className={`group ${draggedItem?.type === 'group' && draggedItem.id === group.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === group.id ? `drop-${dropTarget.position}` : ''}`}
-              draggable
+              draggable={!filter.active}
               onDragStart={(e) => handleGroupDragStart(e, group.id)}
               onDragEnd={handleDragEnd}
               onDragOver={(e) => handleGroupDragOver(e, group.id)}
@@ -981,10 +1027,11 @@ const App: React.FC = () => {
                     e.stopPropagation();
                     toggleCollapse(group.id);
                   }}
-                  title={group.collapsed ? 'Expand' : 'Collapse'}
-                  aria-label={group.collapsed ? 'Expand group' : 'Collapse group'}
+                  disabled={filter.active}
+                  title={chevronTitle(group.collapsed, filter.active)}
+                  aria-label={chevronAriaLabel(group.collapsed, filter.active, 'group')}
                 >
-                  {group.collapsed ? '▶' : '▼'}
+                  {group.collapsed && !filter.active ? '▶' : '▼'}
                 </button>
                 <button
                   className="group-color"
@@ -994,17 +1041,11 @@ const App: React.FC = () => {
                   aria-label="Change group color"
                 />
                 {colorPickerGroupId === group.id && (
-                  <div className="color-picker">
-                    {GROUP_COLORS.map(color => (
-                      <button
-                        key={color}
-                        className={`color-option ${color === group.color ? 'selected' : ''}`}
-                        style={{ background: color }}
-                        onClick={() => handleColorSelect(group.id, color)}
-                        aria-label={`Set color to ${color}`}
-                      />
-                    ))}
-                  </div>
+                  <GroupColorPicker
+                    colors={GROUP_COLORS}
+                    selected={group.color}
+                    onSelect={(color) => handleColorSelect(group.id, color)}
+                  />
                 )}
                 {editingGroupId === group.id ? (
                   <input
@@ -1062,103 +1103,29 @@ const App: React.FC = () => {
                   +
                 </button>
               </div>
-              {!group.collapsed && (
-                <div
+              {(filter.active || !group.collapsed) && (
+                <ul
                   className={`group-sessions ${dropTarget?.id === `group:${group.id}` ? 'drop-target' : ''}`}
                   onDragOver={(e) => handleGroupAreaDragOver(e, group.id)}
                   onDrop={(e) => handleGroupAreaDrop(e, group.id)}
                 >
-                {getSessionsByGroup(group.id).sort((a, b) => a.order - b.order).map(session => (
-                  <div
-                    key={session.id}
-                    className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}
-                    onClick={() => handleSessionClick(session.id)}
-                    onContextMenu={(e) => handleSessionContextMenu(e, session.id, session.name)}
-                    draggable
-                    onDragStart={(e) => handleSessionDragStart(e, session.id, group.id)}
-                    onDragEnd={handleDragEnd}
-                    onDragOver={(e) => handleSessionDragOver(e, session.id, group.id)}
-                    onDrop={(e) => handleSessionDrop(e, session.id, group.id)}
-                  >
-                    {(() => {
-                      const acc = effectiveAccountForSession(session.id);
-                      if (!acc) return null;
-                      return (
-                        <span
-                          className="session-account-dot"
-                          style={{ background: acc.color || '#888888' }}
-                          title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
-                          aria-label={`Account: ${acc.label}`}
-                          draggable={false}
-                        />
-                      );
-                    })()}
-                    <div className="session-info">
-                      {editingSessionId === session.id ? (
-                        <input
-                          className="session-name-input"
-                          value={editingSessionName}
-                          onChange={(e) => setEditingSessionName(e.target.value)}
-                          onBlur={handleFinishEditSession}
-                          onKeyDown={(e) => {
-                            e.stopPropagation();
-                            if (e.key === 'Enter') handleFinishEditSession();
-                            if (e.key === 'Escape') {
-                              setEditingSessionId(null);
-                              setEditingSessionName('');
-                            }
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          autoFocus
-                        />
-                      ) : (
-                        <span
-                          className="session-name"
-                          onDoubleClick={(e) => {
-                            e.stopPropagation();
-                            handleStartEditSession(session.id, session.name);
-                          }}
-                          title="Double-click to rename"
-                        >
-                          {session.name}
-                        </span>
-                      )}
-                      <SessionStatsBadge sessionId={session.id} />
-                    </div>
-                    {session.shellType === 'claude' && session.provider !== 'claude' && (
-                      <span
-                        className="session-provider-badge"
-                        title={`Provider: ${PROVIDER_LABELS[session.provider] ?? session.provider}`}
-                        draggable={false}
-                      >
-                        {PROVIDER_LABELS[session.provider] ?? session.provider}
-                      </span>
-                    )}
-                    <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
-                    <button
-                      className="session-close"
-                      draggable={false}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemoveSession(session.id);
-                      }}
-                      title="Close session"
-                      aria-label="Close session"
-                    >
-                      ×
-                    </button>
-                  </div>
+                {getSessionsByGroup(group.id)
+                  .filter(session => !filter.active || filter.visibleSessionIds.has(session.id))
+                  .sort((a, b) => a.order - b.order).map(session => (
+                  <SessionRow key={session.id} {...sessionRowProps(session, group.id)} />
                   ))}
-                </div>
+                </ul>
               )}
-            </div>
+            </li>
 
             {/* Render sub-groups when parent not collapsed */}
-            {!group.collapsed && getSubGroups(group.id).map(subGroup => (
-              <div
+            {(filter.active || !group.collapsed) && getSubGroups(group.id)
+              .filter(subGroup => !filter.active || filter.visibleGroupIds.has(subGroup.id))
+              .map(subGroup => (
+              <li
                 key={subGroup.id}
                 className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === subGroup.id ? `drop-${dropTarget.position}` : ''}`}
-                draggable
+                draggable={!filter.active}
                 onDragStart={(e) => handleGroupDragStart(e, subGroup.id)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleGroupDragOver(e, subGroup.id)}
@@ -1175,10 +1142,11 @@ const App: React.FC = () => {
                       e.stopPropagation();
                       toggleCollapse(subGroup.id);
                     }}
-                    title={subGroup.collapsed ? 'Expand' : 'Collapse'}
-                    aria-label={subGroup.collapsed ? 'Expand sub-group' : 'Collapse sub-group'}
+                    disabled={filter.active}
+                    title={chevronTitle(subGroup.collapsed, filter.active)}
+                    aria-label={chevronAriaLabel(subGroup.collapsed, filter.active, 'sub-group')}
                   >
-                    {subGroup.collapsed ? '▶' : '▼'}
+                    {subGroup.collapsed && !filter.active ? '▶' : '▼'}
                   </button>
                   <button
                     className="group-color sub-group-color"
@@ -1188,17 +1156,7 @@ const App: React.FC = () => {
                     aria-label="Change sub-group color"
                   />
                   {colorPickerGroupId === subGroup.id && (
-                    <div className="color-picker">
-                      {GROUP_COLORS.map(color => (
-                        <button
-                          key={color}
-                          className={`color-option ${color === subGroup.color ? 'selected' : ''}`}
-                          style={{ background: color }}
-                          onClick={() => handleColorSelect(subGroup.id, color)}
-                          aria-label={`Set color to ${color}`}
-                        />
-                      ))}
-                    </div>
+                    <GroupColorPicker colors={GROUP_COLORS} selected={subGroup.color} onSelect={(color) => handleColorSelect(subGroup.id, color)} />
                   )}
                   {editingGroupId === subGroup.id ? (
                     <input
@@ -1253,106 +1211,53 @@ const App: React.FC = () => {
                     +
                   </button>
                 </div>
-                {!subGroup.collapsed && (
-                  <div
+                {(filter.active || !subGroup.collapsed) && (
+                  <ul
                     className={`group-sessions ${dropTarget?.id === `group:${subGroup.id}` ? 'drop-target' : ''}`}
                     onDragOver={(e) => handleGroupAreaDragOver(e, subGroup.id)}
                     onDrop={(e) => handleGroupAreaDrop(e, subGroup.id)}
                   >
-                  {getSessionsByGroup(subGroup.id).sort((a, b) => a.order - b.order).map(session => (
-                    <div
-                      key={session.id}
-                      className={`session ${session.id === activeSessionId ? 'active' : ''} ${focusedItemType === 'session' && focusedItemId === session.id ? 'item-focused' : ''} ${draggedItem?.type === 'session' && draggedItem.id === session.id ? 'dragging' : ''} ${dropTarget?.type === 'session' && dropTarget.id === session.id ? `drop-${dropTarget.position}` : ''}`}
-                      onClick={() => handleSessionClick(session.id)}
-                      onContextMenu={(e) => handleSessionContextMenu(e, session.id, session.name)}
-                      draggable
-                      onDragStart={(e) => handleSessionDragStart(e, session.id, subGroup.id)}
-                      onDragEnd={handleDragEnd}
-                      onDragOver={(e) => handleSessionDragOver(e, session.id, subGroup.id)}
-                      onDrop={(e) => handleSessionDrop(e, session.id, subGroup.id)}
-                    >
-                      {(() => {
-                        const acc = effectiveAccountForSession(session.id);
-                        if (!acc) return null;
-                        return (
-                          <span
-                            className="session-account-dot"
-                            style={{ background: acc.color || '#888888' }}
-                            title={`Claude account: ${acc.label}${acc.email ? ` (${acc.email})` : ''}${session.claudeAccountId ? ' — session override' : ' — inherited'}`}
-                            aria-label={`Account: ${acc.label}`}
-                          />
-                        );
-                      })()}
-                      <div className="session-info">
-                        {editingSessionId === session.id ? (
-                          <input
-                            className="session-name-input"
-                            value={editingSessionName}
-                            onChange={(e) => setEditingSessionName(e.target.value)}
-                            onBlur={handleFinishEditSession}
-                            onKeyDown={(e) => {
-                              e.stopPropagation();
-                              if (e.key === 'Enter') handleFinishEditSession();
-                              if (e.key === 'Escape') {
-                                setEditingSessionId(null);
-                                setEditingSessionName('');
-                              }
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            autoFocus
-                          />
-                        ) : (
-                          <span
-                            className="session-name"
-                            onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              handleStartEditSession(session.id, session.name);
-                            }}
-                            title="Double-click to rename"
-                          >
-                            {session.name}
-                          </span>
-                        )}
-                        <SessionStatsBadge sessionId={session.id} />
-                      </div>
-                      <span className={`status-pill ${session.state}`}>{session.state}</span>
-                      <button
-                        className="session-close"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveSession(session.id);
-                        }}
-                        title="Close session"
-                        aria-label="Close session"
-                      >
-                        ×
-                      </button>
-                    </div>
+                  {getSessionsByGroup(subGroup.id)
+                    .filter(session => !filter.active || filter.visibleSessionIds.has(session.id))
+                    .sort((a, b) => a.order - b.order).map(session => (
+                    <SessionRow key={session.id} {...sessionRowProps(session, subGroup.id)} />
                     ))}
-                  </div>
+                  </ul>
                 )}
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         ))}
 
       </aside>
 
       <main className="main">
-        {analyticsViewOpen && (
+        <ViewSwitcher value={contentView} onChange={setContentView} shortcutPrefix={appMod} />
+        {contentView === 'analytics' && (
           <AnalyticsPanel
-            onClose={() => setAnalyticsViewOpen(false)}
+            onClose={() => setContentView('terminal')}
             activeSessionId={activeSessionId}
           />
         )}
-        {arenaViewOpen && (
+        {contentView === 'arena' && (
           <ArenaPanel
-            onClose={() => setArenaViewOpen(false)}
+            onClose={() => setContentView('terminal')}
             groups={groups}
             initialGroupId={arenaGroupId}
           />
         )}
-        <div className="terminal-area" style={{ display: analyticsViewOpen || arenaViewOpen ? 'none' : undefined }}>
+        {/* The terminal area is HIDDEN, never unmounted, when another view is
+            selected. Unmounting would dispose every xterm instance and kill the
+            PTYs, so switching tabs would visually reset all live sessions.
+            display:none also takes the panel out of the accessibility tree, so
+            the inactive tabpanel is not announced — no `hidden` attr needed. */}
+        <div
+          className="terminal-area"
+          id="view-panel-terminal"
+          role="tabpanel"
+          aria-labelledby="view-tab-terminal"
+          style={{ display: contentView === 'terminal' ? undefined : 'none' }}
+        >
           {sessions.map(session => (
             <div
               key={session.id}
@@ -1361,7 +1266,9 @@ const App: React.FC = () => {
             >
               <TerminalHeader
                 session={session}
-                onRename={(name) => updateSession(session.id, { name })}
+                onRename={(name) => {
+                  updateSession(session.id, { name });
+                }}
                 onRestart={() => setRestartKeys(prev => ({ ...prev, [session.id]: (prev[session.id] || 0) + 1 }))}
                 onStop={() => updateSession(session.id, { state: 'stopped' })}
                 onClose={() => handleRemoveSession(session.id)}
@@ -1404,14 +1311,6 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
-
-      {/* Memory Panel */}
-      <MemoryPanel
-        isOpen={memoryPanelOpen}
-        onToggle={() => setMemoryPanelOpen(prev => !prev)}
-        sessionId={activeSessionId}
-        groupId={activeGroupId}
-      />
 
       <footer className="status-bar">
         <div className="status-left">
@@ -1498,23 +1397,13 @@ const App: React.FC = () => {
         onClose={() => setNewItemChoice(null)}
       />
 
-      {/* Settings modal */}
+      {/* Settings modal — also hosts the Claude accounts tab now that the
+          sidebar key button is gone (the "Claude Accounts..." menu item
+          deep-links straight to it). */}
       <SettingsModal
         isOpen={settingsOpen}
+        initialTab={settingsInitialTab}
         onClose={() => setSettingsOpen(false)}
-      />
-
-      {/* Claude accounts modal (BDHLNDR-31) */}
-      <ClaudeAccountsModal
-        isOpen={claudeAccountsOpen}
-        onClose={() => setClaudeAccountsOpen(false)}
-      />
-
-      {/* Code Search modal */}
-      <CodeSearchModal
-        isOpen={codeSearchOpen}
-        directoryPath={activeSession?.workingDir || null}
-        onClose={() => setCodeSearchOpen(false)}
       />
 
       {/* Destructive action confirmation dialog */}
