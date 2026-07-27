@@ -1,0 +1,13 @@
+# These fixtures are terminal-capture data: the exact bytes ARE the test input.
+#
+# CR is load-bearing. In a terminal, LF moves the cursor DOWN but does not
+# return it to column 0 — that is what CR does. A fixture written with bare LF
+# therefore produces progressively indented rows in the emulator, which is not
+# what a real PTY stream looks like and changes how lines classify. (That is
+# exactly how 06-response came to fail: its second line landed at column 34, so
+# the user-input `> ` check, which is anchored at line start, never matched.)
+#
+# Marking them -text disables all line-ending normalisation, so a checkout on a
+# machine with core.autocrlf=true cannot silently rewrite them.
+*.txt -text
+*.raw -text
