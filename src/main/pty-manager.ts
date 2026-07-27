@@ -26,7 +26,6 @@ import {
   clearClaudeSessionId as clearStoredClaudeSessionId,
 } from './repositories/sessions';
 import { resolveAccountForSession, touchAccount } from './repositories/accounts';
-import { writeMemoryFile, getMemoryInjectionContent } from './memory/injector';
 import { vaultEnvFor } from './key-vault';
 import { redactEnv } from './redact-env';
 import log from 'electron-log';
@@ -35,7 +34,6 @@ interface PtySession {
   id: string;
   pty: pty.IPty;
   cwd: string;
-  groupId: string | null;  // For memory injection
   /** Provider this session runs an agent under; null for plain shell sessions. */
   provider: ProviderDefinition | null;
   shellInfo: ShellInfo;
@@ -235,7 +233,7 @@ export class PtyManager extends EventEmitter {
     let resumeAttempted = false;
 
     if (provider) {
-      const agentSpawn = this.buildAgentSpawn(provider, id, cwd, groupId, shellInfo);
+      const agentSpawn = this.buildAgentSpawn(provider, id, cwd, shellInfo);
       shell = agentSpawn.shell;
       args = agentSpawn.args;
       env = agentSpawn.env;
@@ -327,17 +325,10 @@ export class PtyManager extends EventEmitter {
       this.sessions.delete(id);
     });
 
-    // Write memory file for reference — only for providers that can actually
-    // consume it via system-prompt injection.
-    if (provider?.capabilities.systemPrompt && groupId) {
-      writeMemoryFile(id, groupId, cwd);
-    }
-
     this.sessions.set(id, {
       id,
       pty: ptyProcess,
       cwd,
-      groupId,
       provider,
       shellInfo,
       lastState: 'idle',
@@ -364,14 +355,13 @@ export class PtyManager extends EventEmitter {
   /**
    * Resolve everything needed to spawn an agent session under the user's
    * shell: conversation UUID + resume mode (BDHLNDR-9), account config dir
-   * (BDHLNDR-31), the provider's command/env, optional system-prompt
-   * injection, and the shell-appropriate argv wrapping.
+   * (BDHLNDR-31), the provider's command/env, and the shell-appropriate argv
+   * wrapping.
    */
   private buildAgentSpawn(
     provider: ProviderDefinition,
     id: string,
     cwd: string,
-    groupId: string | null,
     shellInfo: ShellInfo
   ): { shell: string; args: string[]; env: { [key: string]: string }; resumeAttempted: boolean } {
     let agentSessionId: string | null = null;
@@ -417,9 +407,7 @@ export class PtyManager extends EventEmitter {
       ? ' ' + launch.args.join(' ')
       : '';
 
-    // Get memory content for system prompt injection
-    // Pass via environment variable to avoid shell escaping issues with newlines
-    let agentCmd = `${launch.command}${sessionFlag}`;
+    const agentCmd = `${launch.command}${sessionFlag}`;
     // vaultEnvFor is empty unless the user explicitly opted this provider
     // into API-key auth (#99) — CLI login/subscription stays the default.
     const vaultEnv = vaultEnvFor(provider.id);
@@ -429,22 +417,9 @@ export class PtyManager extends EventEmitter {
     }
     const processEnv = { ...process.env, ...launch.env, ...vaultEnv } as { [key: string]: string };
 
-    const supportsSystemPrompt = provider.capabilities.systemPrompt && !!provider.systemPromptFlag;
-    if (groupId && supportsSystemPrompt) {
-      const memoryContent = getMemoryInjectionContent(id, groupId, cwd);
-      if (memoryContent) {
-        processEnv.BODHILANDER_SYSTEM_PROMPT = memoryContent;
-      }
-    }
-
-    // Rebuild the command with the system prompt flag reading from an env
-    // var, using the shell-appropriate variable reference syntax. Gated on
-    // capability so an inherited BODHILANDER_SYSTEM_PROMPT in the parent
-    // environment can't produce a bogus flag for providers without one.
-    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: true });
-    if (supportsSystemPrompt && processEnv.BODHILANDER_SYSTEM_PROMPT) {
-      agentCmd = `${launch.command} ${provider.systemPromptFlag} ${shellLaunch.envRef('BODHILANDER_SYSTEM_PROMPT')}${sessionFlag}`;
-    }
+    // The agent command interpolates no env values — everything the CLI needs
+    // travels in processEnv — so cmd.exe can host it unchanged (#106).
+    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
 
     return {
       shell: shellLaunch.shell,
@@ -565,7 +540,6 @@ export class PtyManager extends EventEmitter {
       id,
       pty: ptyProcess,
       cwd,
-      groupId: null,
       // No provider: install ptys need no agent state detection or hints.
       provider: null,
       shellInfo,
@@ -595,9 +569,9 @@ export class PtyManager extends EventEmitter {
    * id that's not tied to a DB session — reuses the standard pty events so the
    * renderer Terminal can attach unchanged.
    *
-   * Skips memory injection, session-UUID management, and state detection; this
-   * pty exists only long enough for the user to complete `/login` via browser
-   * OAuth, after which the caller tears it down.
+   * Skips session-UUID management and state detection; this pty exists only
+   * long enough for the user to complete `/login` via browser OAuth, after
+   * which the caller tears it down.
    */
   createLoginSession(id: string, configDir: string): void {
     const shellInfo = this.getShellInfo();
@@ -667,7 +641,6 @@ export class PtyManager extends EventEmitter {
       id,
       pty: ptyProcess,
       cwd,
-      groupId: null,
       provider: claudeProvider,
       shellInfo,
       lastState: 'idle',

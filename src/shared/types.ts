@@ -266,63 +266,6 @@ export interface DevicePermissions {
 }
 
 // =============================================================================
-// Memory Types
-// =============================================================================
-// Types for session memory/knowledge persistence feature
-// =============================================================================
-
-/**
- * Reserved group ID for global context that applies to all projects.
- * Memories with this group_id are injected into every session.
- */
-export const GLOBAL_CONTEXT_GROUP_ID = '__global__';
-
-export type MemoryType = 'decision' | 'error_fix' | 'pattern' | 'context' | 'note';
-export type MemorySource = 'auto' | 'manual' | 'claude';
-
-export interface Memory {
-  id: string;
-  sessionId: string | null;
-  groupId: string;
-  type: MemoryType;
-  content: string;
-  source: MemorySource;
-  tags: string[];
-  pinned: boolean;
-  createdAt: Date;
-  updatedAt: Date | null;
-}
-
-export interface MemoryCreateInput {
-  id: string;
-  sessionId: string | null;
-  groupId: string;
-  type: MemoryType;
-  content: string;
-  source: MemorySource;
-  tags?: string[];
-  pinned?: boolean;
-}
-
-export interface MemoryUpdateInput {
-  content?: string;
-  type?: MemoryType;
-  tags?: string[];
-  pinned?: boolean;
-}
-
-export interface MemoryEvent {
-  type: 'memory';
-  sessionId: string;
-  memory: {
-    type: MemoryType;
-    content: string;
-    source: 'claude';
-  };
-  timestamp: number;
-}
-
-// =============================================================================
 // Session Event Types (BDHLNDR-17)
 // =============================================================================
 // Types for session event tracking and analytics

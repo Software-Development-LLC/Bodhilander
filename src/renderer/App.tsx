@@ -5,7 +5,6 @@ import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
 import { SettingsModal } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
-import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { SessionStatsBadge } from './components/SessionStatsBadge';
@@ -79,9 +78,6 @@ const App: React.FC = () => {
   // New item choice menu state (for + button on groups)
   const [newItemChoice, setNewItemChoice] = useState<{ x: number; y: number; groupId: string } | null>(null);
 
-  // Memory panel state
-  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
-
   // Analytics view state (BDHLNDR-18)
   const [analyticsViewOpen, setAnalyticsViewOpen] = useState(false);
   const [arenaViewOpen, setArenaViewOpen] = useState(false);
@@ -117,10 +113,6 @@ const App: React.FC = () => {
   const homedir = window.electronAPI.homedir;
   const counts = getStateCounts();
   const isLoading = groupsLoading || sessionsLoading;
-
-  // Get the active session's group ID for memory panel
-  const activeSession = sessions.find(s => s.id === activeSessionId);
-  const activeGroupId = activeSession?.groupId || null;
 
   // Resolve the effective Claude account for a session, applying the same
   // fallback chain the main process uses (session → group → default). Used by
@@ -895,14 +887,6 @@ const App: React.FC = () => {
           </h2>
           <div className="sidebar-header-actions">
             <button
-              className={`icon-button ${memoryPanelOpen ? 'active' : ''}`}
-              onClick={() => setMemoryPanelOpen(prev => !prev)}
-              title="Toggle Memory Panel"
-              aria-label="Toggle Memory Panel"
-            >
-              *
-            </button>
-            <button
               className={`icon-button ${analyticsViewOpen ? 'active' : ''}`}
               onClick={() => setAnalyticsViewOpen(prev => !prev)}
               title="Analytics Dashboard (Ctrl+Shift+A)"
@@ -1390,14 +1374,6 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
-
-      {/* Memory Panel */}
-      <MemoryPanel
-        isOpen={memoryPanelOpen}
-        onToggle={() => setMemoryPanelOpen(prev => !prev)}
-        sessionId={activeSessionId}
-        groupId={activeGroupId}
-      />
 
       <footer className="status-bar">
         <div className="status-left">

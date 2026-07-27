@@ -1,17 +1,23 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Group, GLOBAL_CONTEXT_GROUP_ID } from '../../shared/types';
+import { Group } from '../../shared/types';
 
 const DEFAULT_COLORS = ['#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2'];
 
 /**
- * Filter out system-managed groups that should never appear in the UI
- * (BDHLNDR-35). The `__global__` group is required by the memory system's
- * global-context injection but must stay hidden from the sidebar, pickers,
- * and context menus. MemoryPanel references it directly via the constant,
- * not through this store.
+ * The hidden group the removed memory system used for global-context
+ * injection (BDHLNDR-35). Nothing creates it any more, and the one-time DB
+ * cleanup drops the row, but installs upgrading from the memory era still
+ * carry it until that cleanup runs.
+ */
+const LEGACY_GLOBAL_CONTEXT_GROUP_ID = '__global__';
+
+/**
+ * Filter out system-managed groups that should never appear in the UI.
+ * Legacy-data defence only: without it, a phantom "Global Context" group
+ * shows up in the sidebar, pickers, and context menus of upgraded installs.
  */
 function visibleGroups(all: Group[]): Group[] {
-  return all.filter(g => g.id !== GLOBAL_CONTEXT_GROUP_ID);
+  return all.filter(g => g.id !== LEGACY_GLOBAL_CONTEXT_GROUP_ID);
 }
 
 export function useGroups() {

@@ -58,13 +58,6 @@ body {
   height: 100vh;
 }
 
-.app:has(.panel) {
-  grid-template-columns: var(--sidebar-width, 260px) 1fr auto;
-  grid-template-areas:
-    "sidebar content panel"
-    "footer footer footer";
-}
-
 .sidebar {
   grid-area: sidebar;
   background: #252526;

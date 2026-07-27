@@ -27,7 +27,6 @@ export function passthroughProvider(
     capabilities: {
       resume: false,
       hooks: false,
-      systemPrompt: false,
       accounts: false,
     },
     buildCommand: (config) => ({

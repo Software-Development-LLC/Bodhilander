@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -51,19 +51,6 @@ interface ElectronAPI {
   createDbSession: (session: Session) => Promise<void>;
   updateDbSession: (id: string, updates: Partial<Session>) => Promise<void>;
   deleteDbSession: (id: string) => Promise<void>;
-
-  // Database - Memories
-  getMemoriesBySession: (sessionId: string) => Promise<Memory[]>;
-  getMemoriesByGroup: (groupId: string) => Promise<Memory[]>;
-  getPinnedMemories: (groupId?: string) => Promise<Memory[]>;
-  searchMemories: (query: string, groupId?: string) => Promise<Memory[]>;
-  createMemory: (input: MemoryCreateInput) => Promise<Memory>;
-  updateMemory: (id: string, updates: MemoryUpdateInput) => Promise<void>;
-  deleteMemory: (id: string) => Promise<void>;
-  getMemoriesForInjection: (sessionId: string, groupId: string) => Promise<Memory[]>;
-  getMemoryById: (id: string) => Promise<Memory | null>;
-  getGlobalContextMemories: () => Promise<Memory[]>;
-  onMemoryExtracted: (callback: (memory: Memory) => void) => () => void;
 
   // Session Events (BDHLNDR-17)
   getSessionEvents: (sessionId: string, limit?: number) => Promise<SessionEvent[]>;

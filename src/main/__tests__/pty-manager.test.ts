@@ -49,12 +49,12 @@ function fakeSpawn(file: string, args: string[]): FakePty {
 
 // Mock discipline: bun's mock.module patches a specifier for the whole test
 // process, so ONLY mock modules that no other test file exercises for real
-// (node-pty, electron-log, memory/injector) or that are mocked with a
-// compatible shape elsewhere (electron, preferences, accounts,
-// shell-detector). The provider registry, sessions repository, and key-vault
-// are used REAL — resolve.test/sessions.test/key-vault.test cover them —
-// which works because these tests run codex, a passthrough provider whose
-// capabilities are all false, so no DB-backed function is ever called.
+// (node-pty, electron-log) or that are mocked with a compatible shape
+// elsewhere (electron, preferences, accounts, shell-detector). The provider
+// registry, sessions repository, and key-vault are used REAL —
+// resolve.test/sessions.test/key-vault.test cover them — which works because
+// these tests run codex, a passthrough provider whose capabilities are all
+// false, so no DB-backed function is ever called.
 mock.module('node-pty', () => ({ spawn: fakeSpawn }));
 mock.module('electron-log', () => ({
   default: { info() {}, warn() {}, error() {} },
@@ -79,10 +79,6 @@ mock.module('../repositories/accounts', () => ({
   updateAccount: () => undefined,
   deleteAccount: () => undefined,
   getAccount: () => null,
-}));
-mock.module('../memory/injector', () => ({
-  writeMemoryFile: () => {},
-  getMemoryInjectionContent: () => null,
 }));
 // Any real, existing executable path works — the pty spawn is mocked.
 mock.module('../shell-detector', () => ({

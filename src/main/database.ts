@@ -17,17 +17,20 @@ export function getDatabase(): Database.Database {
   initializeTables(db);
   initializeArenaTables(db);
 
-  // Reclaim for the removed code-indexing feature. dropLegacyCodeSearchTables
-  // records a completion marker, so this branch — including the synchronous
-  // VACUUM — runs at most ONCE per database (on the first launch after
-  // upgrading), never on subsequent startups.
-  if (dropLegacyCodeSearchTables(db)) {
+  // Reclaim for the removed code-indexing and memory features. Each drop
+  // records its own completion marker, so this branch — including the
+  // synchronous VACUUM — runs at most ONCE per database (on the first launch
+  // after upgrading), never on subsequent startups. Both cleanups run before
+  // the check so a single VACUUM covers whatever either of them freed.
+  const droppedCodeSearch = dropLegacyCodeSearchTables(db);
+  const droppedMemory = dropLegacyMemoryTables(db);
+  if (droppedCodeSearch || droppedMemory) {
     try {
       db.exec('VACUUM');
-      log.info('[DB] VACUUM complete — reclaimed code-index disk space');
+      log.info('[DB] VACUUM complete — reclaimed legacy feature disk space');
     } catch (e) {
       // Space stays allocated until a later VACUUM; the data is already gone.
-      log.warn('[DB] VACUUM after code-index cleanup failed:', (e as Error).message);
+      log.warn('[DB] VACUUM after legacy cleanup failed:', (e as Error).message);
     }
   }
 
@@ -47,24 +50,24 @@ const LEGACY_CODE_SEARCH_TABLES = ['code_chunks', 'symbols', 'indexed_files', 'c
  */
 const CODE_SEARCH_CLEANUP_PREF = 'legacyCodeSearchCleanupDone';
 
-function codeSearchCleanupAlreadyRan(database: Database.Database): boolean {
+function cleanupAlreadyRan(database: Database.Database, pref: string): boolean {
   try {
     const row = database
       .prepare('SELECT value FROM preferences WHERE key = ?')
-      .get(CODE_SEARCH_CLEANUP_PREF) as { value?: string } | undefined;
+      .get(pref) as { value?: string } | undefined;
     return row?.value === 'true';
   } catch {
     return false; // preferences unavailable — treat as not-yet-run
   }
 }
 
-function markCodeSearchCleanupRan(database: Database.Database): void {
+function markCleanupRan(database: Database.Database, pref: string, label: string): void {
   try {
     database
       .prepare('INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)')
-      .run(CODE_SEARCH_CLEANUP_PREF, 'true');
+      .run(pref, 'true');
   } catch (e) {
-    log.warn('[DB] could not record code-search cleanup marker:', (e as Error).message);
+    log.warn(`[DB] could not record ${label} cleanup marker:`, (e as Error).message);
   }
 }
 
@@ -79,14 +82,14 @@ function markCodeSearchCleanupRan(database: Database.Database): void {
  * on every launch.
  *
  * Deliberately best-effort and non-fatal: this runs against the database holding
- * the user's real data (sessions, groups, memories), so every step is guarded and
- * a failure only logs rather than aborting startup or leaving things half-done.
+ * the user's real data (sessions, groups), so every step is guarded and a failure
+ * only logs rather than aborting startup or leaving things half-done.
  *
  * @returns true if it actually dropped something (so the caller can VACUUM).
  */
 export function dropLegacyCodeSearchTables(database: Database.Database): boolean {
   // Converge: once we've run, never do this work (or the VACUUM) again.
-  if (codeSearchCleanupAlreadyRan(database)) return false;
+  if (cleanupAlreadyRan(database, CODE_SEARCH_CLEANUP_PREF)) return false;
 
   let present: string[];
   try {
@@ -105,7 +108,7 @@ export function dropLegacyCodeSearchTables(database: Database.Database): boolean
     return false;
   }
   if (present.length === 0) {
-    markCodeSearchCleanupRan(database); // fresh install — nothing to do, ever
+    markCleanupRan(database, CODE_SEARCH_CLEANUP_PREF, 'code-search'); // fresh install — nothing to do, ever
     return false;
   }
 
@@ -143,7 +146,121 @@ export function dropLegacyCodeSearchTables(database: Database.Database): boolean
     }
   }
 
-  markCodeSearchCleanupRan(database);
+  markCleanupRan(database, CODE_SEARCH_CLEANUP_PREF, 'code-search');
+  return true;
+}
+
+/** FTS5 sync triggers created by the removed memory / context feature. */
+const LEGACY_MEMORY_TRIGGERS = ['memories_ai', 'memories_ad', 'memories_au'] as const;
+
+/**
+ * Marker recording that the one-time cleanup has run.
+ *
+ * Same reasoning as CODE_SEARCH_CLEANUP_PREF — it keeps the caller's VACUUM a
+ * one-time cost instead of something that repeats on every launch.
+ */
+const MEMORY_CLEANUP_PREF = 'legacyMemoryCleanupDone';
+
+/**
+ * Drop the leftover tables from the removed memory / context feature. Nothing
+ * reads them anymore and the FTS5 index keeps a second copy of every memory's
+ * text, so we reclaim the space on first launch after upgrading.
+ *
+ * Runs at most ONCE per database (guarded by MEMORY_CLEANUP_PREF), so the
+ * caller's VACUUM is a one-time startup cost rather than something that repeats
+ * on every launch.
+ *
+ * Deliberately best-effort and non-fatal: this runs against the database holding
+ * the user's real data (sessions, groups), so every step is guarded and a failure
+ * only logs rather than aborting startup or leaving things half-done.
+ *
+ * @returns true if it actually dropped something (so the caller can VACUUM).
+ */
+export function dropLegacyMemoryTables(database: Database.Database): boolean {
+  // Converge: once we've run, never do this work (or the VACUUM) again.
+  if (cleanupAlreadyRan(database, MEMORY_CLEANUP_PREF)) return false;
+
+  let present: string[];
+  try {
+    present = (
+      database
+        .prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'table'
+              AND (name IN ('memories','memories_fts')
+                   OR name LIKE 'memories_fts_%')`,
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+  } catch (e) {
+    log.warn('[DB] could not check for legacy memory tables:', (e as Error).message);
+    return false;
+  }
+
+  // The '__global__' group was seeded by the same feature, so it counts as work
+  // even on a database that never stored a single memory row.
+  let sentinelGroup = false;
+  try {
+    sentinelGroup = database.prepare('SELECT id FROM groups WHERE id = ?').get('__global__') != null;
+  } catch (e) {
+    log.warn('[DB] could not check for the legacy __global__ group:', (e as Error).message);
+  }
+
+  if (present.length === 0 && !sentinelGroup) {
+    markCleanupRan(database, MEMORY_CLEANUP_PREF, 'memory'); // fresh install — nothing to do, ever
+    return false;
+  }
+
+  const removing = sentinelGroup ? [...present, "groups/'__global__'"] : present;
+  log.info('[DB] Removing legacy memory tables:', removing.join(', '));
+
+  // Triggers first: they mirror every memories row into memories_fts, so leaving
+  // them in place while the tables go away is asking for "no such table" errors
+  // mid-cleanup.
+  for (const trigger of LEGACY_MEMORY_TRIGGERS) {
+    try {
+      database.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+    } catch (e) {
+      log.warn(`[DB] could not drop trigger ${trigger}:`, (e as Error).message);
+    }
+  }
+
+  // memories_fts is an fts5 virtual table. Unlike vec0, fts5 IS compiled into
+  // better-sqlite3, so this DROP succeeds and takes the five shadow tables that
+  // hold the index (_data/_idx/_content/_docsize/_config) with it. We sweep up
+  // any strays afterwards anyway — a cleanup interrupted on an earlier launch
+  // could have left shadow tables behind without their parent.
+  try {
+    database.exec('DROP TABLE IF EXISTS memories_fts');
+  } catch (e) {
+    log.warn('[DB] could not drop memories_fts:', (e as Error).message);
+  }
+  for (const shadow of present.filter((n) => n.startsWith('memories_fts_'))) {
+    try {
+      database.exec(`DROP TABLE IF EXISTS "${shadow}"`);
+    } catch (e) {
+      log.warn(`[DB] could not drop shadow table ${shadow}:`, (e as Error).message);
+    }
+  }
+
+  // Dropping the table also drops its indexes.
+  try {
+    database.exec('DROP TABLE IF EXISTS memories');
+  } catch (e) {
+    log.warn('[DB] could not drop memories:', (e as Error).message);
+  }
+
+  // Last: the '__global__' sentinel group the feature seeded for global context.
+  // Order matters — memories.group_id was ON DELETE CASCADE against groups, so
+  // removing this row before the table was gone would churn a cascade delete
+  // through rows we're dropping wholesale anyway.
+  try {
+    database.prepare('DELETE FROM groups WHERE id = ?').run('__global__');
+  } catch (e) {
+    log.warn('[DB] could not remove the legacy __global__ group:', (e as Error).message);
+  }
+
+  markCleanupRan(database, MEMORY_CLEANUP_PREF, 'memory');
   return true;
 }
 
@@ -319,69 +436,8 @@ function initializeTables(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_push_subs_device ON push_subscriptions(device_id);
   `);
 
-  // Migration: Create memories table if it doesn't exist
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY,
-      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
-      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-      type TEXT NOT NULL CHECK(type IN ('decision', 'error_fix', 'pattern', 'context', 'note')),
-      content TEXT NOT NULL,
-      source TEXT DEFAULT 'auto' CHECK(source IN ('auto', 'manual', 'claude')),
-      tags TEXT,
-      pinned INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
-    CREATE INDEX IF NOT EXISTS idx_memories_group ON memories(group_id);
-    CREATE INDEX IF NOT EXISTS idx_memories_pinned ON memories(pinned) WHERE pinned = 1;
-  `);
-
-  // Create FTS5 virtual table for full-text search if it doesn't exist
-  try {
-    database.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-        content,
-        content=memories,
-        content_rowid=rowid
-      );
-    `);
-
-    // Create triggers to keep FTS in sync
-    database.exec(`
-      CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-        INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-        INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
-        INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
-      END;
-    `);
-  } catch (e) {
-    // FTS5 triggers might already exist, ignore errors
-    console.log('FTS5 setup (may already exist):', e);
-  }
-
-  // Ensure __global__ group exists for global context memories (BDHLNDR-35).
-  // This row is required by the memory system (memories with group_id =
-  // '__global__' inject into every session as global context) but is hidden
-  // from the sidebar UI — see the store filter in src/renderer/store/groups.ts.
   // Note: we no longer seed a visible "Default" group on first run. Users
   // create their own groups; existing installs keep whatever's already there.
-  const globalGroup = database.prepare('SELECT id FROM groups WHERE id = ?').get('__global__');
-  if (!globalGroup) {
-    database.prepare(`
-      INSERT INTO groups (id, name, color, working_dir, "order")
-      VALUES ('__global__', 'Global Context', '#61afef', '', -1)
-    `).run();
-  }
 }
 
 // Arena mode tables (#100, epic #94). One run = one prompt fanned out to N

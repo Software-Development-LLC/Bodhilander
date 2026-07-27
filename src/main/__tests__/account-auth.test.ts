@@ -48,9 +48,18 @@ mock.module('../repositories/accounts', () => ({
   touchAccount: () => undefined,
 }));
 
+// Stubbed so the flow never writes into a real ~/.claude. registerHooks is the
+// only registration left now that the memory MCP server is gone; the calls are
+// recorded so the tests can assert it targets the new account's isolated
+// config dir. cleanupLegacyMcpServer is included because bun's mock.module
+// patches globally and index.ts imports it from here.
+const hookRegistrations: Array<string | undefined> = [];
 mock.module('../mcp-config', () => ({
-  registerMcpServer: () => undefined,
-  registerHooks: () => undefined,
+  registerHooks: (configDir?: string) => {
+    hookRegistrations.push(configDir);
+    return { success: true, action: 'added' as const };
+  },
+  cleanupLegacyMcpServer: () => undefined,
 }));
 
 // Seed spy with a controllable delay — a slow copy is exactly what widened
@@ -88,6 +97,7 @@ beforeEach(() => {
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'account-auth-'));
   accounts.length = 0;
   seedCalls.length = 0;
+  hookRegistrations.length = 0;
   seedDelayMs = 0;
 });
 
@@ -104,6 +114,9 @@ describe('startLoginFlow legacy seeding', () => {
     expect(accounts.length).toBe(1);
     expect(accounts[0].isDefault).toBe(true);
     expect(pty.loginSessions).toEqual([ptyId]);
+    // Hooks land in the account's isolated config dir, not the global ~/.claude
+    // (BDHLNDR-31), and before the login pty spawns.
+    expect(hookRegistrations).toEqual([account.configDir]);
 
     accountAuth.cancelLoginFlow(pty, ptyId, false);
   });
@@ -115,6 +128,8 @@ describe('startLoginFlow legacy seeding', () => {
 
     expect(seedCalls).toEqual([first.account.configDir]);
     expect(accounts.map((a) => a.isDefault)).toEqual([true, false]);
+    // Seeding is first-account-only; hook registration is per-account.
+    expect(hookRegistrations).toEqual([first.account.configDir, second.account.configDir]);
 
     accountAuth.cancelLoginFlow(pty, first.ptyId, false);
     accountAuth.cancelLoginFlow(pty, second.ptyId, false);

@@ -10,9 +10,8 @@ files:
   - dist/**/*
   - package.json
 
-# Unpack MCP server, hooks, and native modules from asar
+# Unpack hooks and native modules from asar
 asarUnpack:
-  - dist/mcp-server/**/*
   - dist/hooks/**/*
   # BDHLNDR-69: the PWA bundle is served at runtime by express.static, which
   # streams files via fs.createReadStream — that path doesn't work reliably
