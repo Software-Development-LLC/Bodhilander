@@ -1,4 +1,4 @@
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -25,13 +25,19 @@ interface ElectronAPI {
   onMenuNextSession: (callback: () => void) => () => void;
   onMenuPrevSession: (callback: () => void) => () => void;
   onMenuNextWaiting: (callback: () => void) => () => void;
+  onMenuOpenAccounts: (callback: () => void) => () => void;
+
+  // View menu events — content-area switcher + sidebar focus
+  onMenuViewTerminal: (callback: () => void) => () => void;
+  onMenuViewAnalytics: (callback: () => void) => () => void;
+  onMenuViewArena: (callback: () => void) => () => void;
+  onMenuFocusSidebar: (callback: () => void) => () => void;
 
   // Edit menu events
   onMenuCopy: (callback: () => void) => () => void;
   onMenuPaste: (callback: () => void) => () => void;
   onMenuSelectAll: (callback: () => void) => () => void;
   onMenuClearTerminal: (callback: () => void) => () => void;
-  onMenuFind: (callback: () => void) => () => void;
 
   // Session selection
   onSessionSelect: (callback: (sessionId: string) => void) => () => void;
@@ -51,19 +57,6 @@ interface ElectronAPI {
   createDbSession: (session: Session) => Promise<void>;
   updateDbSession: (id: string, updates: Partial<Session>) => Promise<void>;
   deleteDbSession: (id: string) => Promise<void>;
-
-  // Database - Memories
-  getMemoriesBySession: (sessionId: string) => Promise<Memory[]>;
-  getMemoriesByGroup: (groupId: string) => Promise<Memory[]>;
-  getPinnedMemories: (groupId?: string) => Promise<Memory[]>;
-  searchMemories: (query: string, groupId?: string) => Promise<Memory[]>;
-  createMemory: (input: MemoryCreateInput) => Promise<Memory>;
-  updateMemory: (id: string, updates: MemoryUpdateInput) => Promise<void>;
-  deleteMemory: (id: string) => Promise<void>;
-  getMemoriesForInjection: (sessionId: string, groupId: string) => Promise<Memory[]>;
-  getMemoryById: (id: string) => Promise<Memory | null>;
-  getGlobalContextMemories: () => Promise<Memory[]>;
-  onMemoryExtracted: (callback: (memory: Memory) => void) => () => void;
 
   // Session Events (BDHLNDR-17)
   getSessionEvents: (sessionId: string, limit?: number) => Promise<SessionEvent[]>;

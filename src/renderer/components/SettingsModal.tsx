@@ -2,17 +2,40 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
+import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
+
+// Exported so callers that deep-link into a tab (menu, tray) can type their
+// state instead of passing a bare string.
+export type SettingsTab =
+  | 'general'
+  | 'terminal'
+  | 'sound'
+  | 'integrations'
+  | 'providers'
+  | 'accounts'
+  | 'mobile'
+  | 'remoteHosting'
+  | 'updates';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Tab to land on when the modal opens. Defaults to 'general'. */
+  initialTab?: SettingsTab;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  type SettingsTab = 'general' | 'terminal' | 'sound' | 'integrations' | 'providers' | 'mobile' | 'remoteHosting' | 'updates';
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general' }) => {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const navClass = (tab: SettingsTab) =>
     `settings-nav-item ${activeTab === tab ? 'active' : ''}`;
+
+  // App keeps this component mounted and only flips isOpen, so activeTab
+  // survives a close — a useState initial value would only honour initialTab
+  // the very first time. Re-apply it on each open so "Settings → Claude
+  // Accounts" lands on the right tab even after the user browsed elsewhere.
+  useEffect(() => {
+    if (isOpen) setActiveTab(initialTab);
+  }, [isOpen, initialTab]);
 
   // Update channel state (BDHLNDR-32)
   const [updateChannel, setUpdateChannelState] = useState<'stable' | 'beta'>('stable');
@@ -402,6 +425,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               Providers
             </button>
             <button
+              className={navClass('accounts')}
+              onClick={() => setActiveTab('accounts')}
+            >
+              Claude Accounts
+            </button>
+            <button
               className={navClass('updates')}
               onClick={() => setActiveTab('updates')}
             >
@@ -705,6 +734,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             )}
 
             {activeTab === 'providers' && <ProviderSettings />}
+
+            {activeTab === 'accounts' && (
+              <div className="settings-section">
+                <h3>Claude Accounts</h3>
+                {/* Panel is shared with the standalone accounts modal; it owns
+                    its own add-account overlay because that flow runs a pty. */}
+                <ClaudeAccountsPanel />
+              </div>
+            )}
 
             {activeTab === 'remoteHosting' && <RemoteHostingSettings />}
 

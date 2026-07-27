@@ -1,18 +1,22 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Group, GLOBAL_CONTEXT_GROUP_ID } from '../../shared/types';
+import { Group } from '../../shared/types';
 
 const DEFAULT_COLORS = ['#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2'];
 
-/**
- * Filter out system-managed groups that should never appear in the UI
- * (BDHLNDR-35). The `__global__` group is required by the memory system's
- * global-context injection but must stay hidden from the sidebar, pickers,
- * and context menus. MemoryPanel references it directly via the constant,
- * not through this store.
+/*
+ * There is deliberately no "hide system groups" filter here any more.
+ *
+ * The removed memory system seeded a '__global__' group for global-context
+ * injection, and this store used to filter it out of the sidebar. But that row
+ * was an ordinary, visible drop target from v2.2.2 until the filter landed in
+ * v3.2.9, so upgrading installs can have real sessions parked in it — and a
+ * filter here would hide those sessions from their owner.
+ *
+ * dropLegacyMemoryTables() in src/main/database.ts now settles it at the source
+ * before the renderer ever asks for groups: the row is deleted when empty, and
+ * kept and renamed to "Recovered Sessions" when it still holds sessions. Either
+ * way, whatever comes back from the database is meant to be shown.
  */
-function visibleGroups(all: Group[]): Group[] {
-  return all.filter(g => g.id !== GLOBAL_CONTEXT_GROUP_ID);
-}
 
 export function useGroups() {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -23,7 +27,7 @@ export function useGroups() {
     const loadGroups = async () => {
       try {
         const dbGroups = await window.electronAPI.getAllGroups();
-        setGroups(visibleGroups(dbGroups));
+        setGroups(dbGroups);
       } catch (error) {
         console.error('Failed to load groups:', error);
       } finally {

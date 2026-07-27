@@ -1,9 +1,12 @@
 /**
- * Tests for dropLegacyCodeSearchTables — the one-time reclaim of the removed
- * code-indexing feature's tables. These can be very large (chunk source text +
- * 768-dim embeddings), and this runs against the database holding the user's
- * real data, so the contract is: drop the legacy tables, never touch anything
- * else, and never throw.
+ * Tests for the one-time reclaims of removed features' tables:
+ * dropLegacyCodeSearchTables (code-indexing: chunk source text + 768-dim
+ * embeddings) and dropLegacyMemoryTables (memory/context: the memories table
+ * plus an FTS5 index holding a second copy of every memory's text).
+ *
+ * Both run against the database holding the user's real data, so both share the
+ * same contract: drop the legacy schema, never touch anything else, run at most
+ * once, and never throw.
  *
  * Run with: bun test src/main/__tests__/database-cleanup.test.ts
  */
@@ -26,7 +29,7 @@ mock.module('electron-log', () => ({
   default: { info() {}, warn() {}, error() {} },
 }));
 
-const { dropLegacyCodeSearchTables } = await import('../database');
+const { dropLegacyCodeSearchTables, dropLegacyMemoryTables } = await import('../database');
 
 /** A db with the legacy code-search tables plus a couple of "real" user tables. */
 function makeLegacyDb(): Database {
@@ -43,13 +46,13 @@ function makeLegacyDb(): Database {
     CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT);
 
     -- real user data that must survive untouched
-    CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT);
-    CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT);
+    CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, group_id TEXT REFERENCES groups(id), name TEXT);
   `);
   db.prepare("INSERT INTO code_indexes (id, directory_path) VALUES ('i1', '/tmp/x')").run();
   db.prepare("INSERT INTO code_chunks (id, index_id, content) VALUES ('c1','i1','some source')").run();
-  db.prepare("INSERT INTO sessions (id, name) VALUES ('s1','My Session')").run();
-  db.prepare("INSERT INTO memories (id, content) VALUES ('m1','remember this')").run();
+  db.prepare("INSERT INTO groups (id, name) VALUES ('g1','Work')").run();
+  db.prepare("INSERT INTO sessions (id, group_id, name) VALUES ('s1','g1','My Session')").run();
   return db;
 }
 
@@ -71,9 +74,9 @@ describe('dropLegacyCodeSearchTables', () => {
     const db = makeLegacyDb();
     dropLegacyCodeSearchTables(asDb(db));
     expect(tableNames(db)).toContain('sessions');
-    expect(tableNames(db)).toContain('memories');
+    expect(tableNames(db)).toContain('groups');
     expect(db.prepare('SELECT name FROM sessions WHERE id = ?').get('s1')).toEqual({ name: 'My Session' });
-    expect(db.prepare('SELECT content FROM memories WHERE id = ?').get('m1')).toEqual({ content: 'remember this' });
+    expect(db.prepare('SELECT name FROM groups WHERE id = ?').get('g1')).toEqual({ name: 'Work' });
     db.close();
   });
 
@@ -175,7 +178,7 @@ describe('dropLegacyCodeSearchTables — vec0 virtual table fallback', () => {
     const db = makeVecDb();
     dropLegacyCodeSearchTables(asDb(withMissingVecModule(db)));
     expect(db.prepare('SELECT name FROM sessions WHERE id = ?').get('s1')).toEqual({ name: 'My Session' });
-    expect(db.prepare('SELECT content FROM memories WHERE id = ?').get('m1')).toEqual({ content: 'remember this' });
+    expect(db.prepare('SELECT name FROM groups WHERE id = ?').get('g1')).toEqual({ name: 'Work' });
     db.close();
   });
 
@@ -184,6 +187,220 @@ describe('dropLegacyCodeSearchTables — vec0 virtual table fallback', () => {
     dropLegacyCodeSearchTables(asDb(withMissingVecModule(db)));
     const row = db.prepare('SELECT value FROM preferences WHERE key = ?').get('legacyCodeSearchCleanupDone');
     expect(row).toEqual({ value: 'true' });
+    db.close();
+  });
+});
+
+/**
+ * A db carrying the removed memory/context feature's schema — the memories
+ * table, the fts5 index (which bun:sqlite builds with the same shadow tables
+ * better-sqlite3 does), the three sync triggers, and the '__global__' sentinel
+ * group the feature seeded — alongside real user data.
+ */
+function makeMemoryDb(): Database {
+  const db = new Database(':memory:');
+  db.exec('PRAGMA foreign_keys = ON');
+  db.exec(`
+    -- the completion marker lives here (same as production)
+    CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT);
+
+    -- real user data that must survive untouched
+    CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT, "order" INTEGER DEFAULT 0);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      group_id TEXT REFERENCES groups(id) ON DELETE CASCADE,
+      name TEXT
+    );
+
+    -- the removed memory/context feature
+    CREATE TABLE memories (
+      id TEXT PRIMARY KEY,
+      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+      content TEXT NOT NULL
+    );
+    CREATE INDEX idx_memories_group ON memories(group_id);
+    CREATE VIRTUAL TABLE memories_fts USING fts5(content, content=memories, content_rowid=rowid);
+    CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+    END;
+    CREATE TRIGGER memories_ad AFTER DELETE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
+    END;
+    CREATE TRIGGER memories_au AFTER UPDATE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
+      INSERT INTO memories_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+    END;
+  `);
+  db.prepare(`INSERT INTO groups (id, name, "order") VALUES ('__global__', 'Global Context', -1)`).run();
+  db.prepare(`INSERT INTO groups (id, name, "order") VALUES ('g1', 'Work', 0)`).run();
+  db.prepare("INSERT INTO sessions (id, group_id, name) VALUES ('s1','g1','My Session')").run();
+  db.prepare("INSERT INTO memories (id, session_id, group_id, content) VALUES ('m1','s1','__global__','remember this')").run();
+  return db;
+}
+
+const triggerNames = (db: Database): string[] =>
+  (db.prepare("SELECT name FROM sqlite_master WHERE type='trigger'").all() as { name: string }[]).map((r) => r.name);
+
+const groupIds = (db: Database): string[] =>
+  (db.prepare('SELECT id FROM groups').all() as { id: string }[]).map((r) => r.id);
+
+describe('dropLegacyMemoryTables', () => {
+  test('drops memories, the fts5 index and its shadow tables, and reports it did work', () => {
+    const db = makeMemoryDb();
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(true);
+    const names = tableNames(db);
+    expect(names).not.toContain('memories');
+    expect(names).not.toContain('memories_fts');
+    // The fts5 shadow tables are where the duplicated text actually lives —
+    // this is what the reclaim is for.
+    expect(names.filter((n) => n.startsWith('memories_fts_'))).toEqual([]);
+    db.close();
+  });
+
+  test('drops the three FTS sync triggers', () => {
+    const db = makeMemoryDb();
+    dropLegacyMemoryTables(asDb(db));
+    expect(triggerNames(db)).toEqual([]);
+    db.close();
+  });
+
+  test("removes the '__global__' sentinel group the feature seeded", () => {
+    const db = makeMemoryDb();
+    dropLegacyMemoryTables(asDb(db));
+    expect(groupIds(db)).toEqual(['g1']);
+    db.close();
+  });
+
+  test('leaves real user data completely intact', () => {
+    const db = makeMemoryDb();
+    dropLegacyMemoryTables(asDb(db));
+    const names = tableNames(db);
+    expect(names).toContain('sessions');
+    expect(names).toContain('groups');
+    expect(db.prepare('SELECT name FROM sessions WHERE id = ?').get('s1')).toEqual({ name: 'My Session' });
+    expect(db.prepare('SELECT name FROM groups WHERE id = ?').get('g1')).toEqual({ name: 'Work' });
+    db.close();
+  });
+
+  // Regression: '__global__' was seeded as an ordinary group in v2.2.2 with
+  // "order" = -1, putting it at the TOP of the sidebar, and the store filter
+  // that hid it only landed in v3.2.9. So upgrading installs can genuinely have
+  // real sessions in it — and sessions.group_id is ON DELETE CASCADE against
+  // groups, with session_events cascading off sessions in turn. A bare DELETE
+  // here would permanently destroy a user's sessions and their analytics
+  // history on upgrade.
+  test("NEVER cascade-deletes sessions parked in the legacy '__global__' group", () => {
+    const db = makeMemoryDb();
+    db.prepare("INSERT INTO sessions (id, group_id, name) VALUES ('s2','__global__','Parked Session')").run();
+
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(true);
+
+    // The session survives...
+    expect(db.prepare('SELECT name FROM sessions WHERE id = ?').get('s2')).toEqual({ name: 'Parked Session' });
+    // ...and so does the group that owns it, or the session would be orphaned
+    // and invisible (the sidebar renders strictly by group).
+    expect(groupIds(db).sort()).toEqual(['__global__', 'g1']);
+    db.close();
+  });
+
+  test("renames the kept '__global__' group to something meaningful and visible", () => {
+    const db = makeMemoryDb();
+    db.prepare("INSERT INTO sessions (id, group_id, name) VALUES ('s2','__global__','Parked Session')").run();
+
+    dropLegacyMemoryTables(asDb(db));
+
+    expect(
+      db.prepare('SELECT name, "order" FROM groups WHERE id = ?').get('__global__'),
+    ).toEqual({ name: 'Recovered Sessions', order: 0 });
+    db.close();
+  });
+
+  test("still removes the '__global__' group when no sessions were parked in it", () => {
+    const db = makeMemoryDb();
+    dropLegacyMemoryTables(asDb(db));
+    expect(groupIds(db)).toEqual(['g1']);
+    db.close();
+  });
+
+  test("cleans up a database that has the '__global__' group but never stored a memory", () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT);
+      CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT);
+    `);
+    db.prepare("INSERT INTO groups (id, name) VALUES ('__global__','Global Context')").run();
+    // The sentinel row alone counts as work — it's invisible in the sidebar and
+    // nothing creates it anymore.
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(true);
+    expect(groupIds(db)).toEqual([]);
+    db.close();
+  });
+
+  test('is a no-op (returns false) on a database with nothing to clean', () => {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT);
+      CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT);
+    `);
+    db.prepare("INSERT INTO groups (id, name) VALUES ('g1','Work')").run();
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(false);
+    expect(tableNames(db)).toContain('sessions');
+    expect(groupIds(db)).toEqual(['g1']);
+    db.close();
+  });
+
+  test('is idempotent — a second run finds nothing and returns false', () => {
+    const db = makeMemoryDb();
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(true);
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(false);
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(false);
+    db.close();
+  });
+
+  test('records the completion marker so the work is genuinely one-time', () => {
+    const db = makeMemoryDb();
+    dropLegacyMemoryTables(asDb(db));
+    const row = db.prepare('SELECT value FROM preferences WHERE key = ?').get('legacyMemoryCleanupDone');
+    expect(row).toEqual({ value: 'true' });
+    db.close();
+  });
+
+  test('marks a fresh install done too, so it never looks again', () => {
+    const db = new Database(':memory:');
+    db.exec("CREATE TABLE preferences (key TEXT PRIMARY KEY, value TEXT); CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT)");
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(false);
+    expect(db.prepare('SELECT value FROM preferences WHERE key = ?').get('legacyMemoryCleanupDone'))
+      .toEqual({ value: 'true' });
+    db.close();
+  });
+
+  test('the marker — not the schema — is what gates the run', () => {
+    const db = makeMemoryDb();
+    db.prepare("INSERT INTO preferences (key, value) VALUES ('legacyMemoryCleanupDone','true')").run();
+    // Legacy schema is right there, but the marker says we already ran: no work,
+    // and crucially no VACUUM on every subsequent launch.
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(false);
+    expect(tableNames(db)).toContain('memories');
+    db.close();
+  });
+
+  test('never throws, even on a closed/unusable database', () => {
+    const db = new Database(':memory:');
+    db.close();
+    expect(() => dropLegacyMemoryTables(asDb(db))).not.toThrow();
+  });
+});
+
+describe('the two legacy cleanups are independent', () => {
+  test("the code-search marker does not suppress the memory cleanup", () => {
+    const db = makeMemoryDb();
+    db.prepare("INSERT INTO preferences (key, value) VALUES ('legacyCodeSearchCleanupDone','true')").run();
+    expect(dropLegacyCodeSearchTables(asDb(db))).toBe(false);
+    // Separate markers: the memory cleanup still has its work to do.
+    expect(dropLegacyMemoryTables(asDb(db))).toBe(true);
+    expect(tableNames(db)).not.toContain('memories');
     db.close();
   });
 });

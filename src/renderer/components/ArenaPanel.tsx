@@ -176,7 +176,16 @@ export const ArenaPanel: React.FC<ArenaPanelProps> = ({ onClose, groups, initial
   }, []);
 
   return (
-    <div className="arena-panel">
+    /* Panel half of the view-switcher tab contract in App.tsx, which renders
+     * `<button role="tab" id="view-tab-arena" aria-controls="view-panel-arena">`.
+     * The panel is unmounted rather than hidden when another view is selected,
+     * so no aria-hidden/hidden state is needed here. */
+    <div
+      className="arena-panel"
+      id="view-panel-arena"
+      role="tabpanel"
+      aria-labelledby="view-tab-arena"
+    >
       <div className="arena-header">
         <h2>Arena</h2>
         <span className="arena-subtitle">

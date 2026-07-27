@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, Memory, MemoryCreateInput, MemoryUpdateInput, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -82,6 +82,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('menu:next-waiting', callback);
     return () => ipcRenderer.removeListener('menu:next-waiting', callback);
   },
+  onMenuOpenAccounts: (callback: () => void) => {
+    ipcRenderer.on('menu:open-accounts', callback);
+    return () => ipcRenderer.removeListener('menu:open-accounts', callback);
+  },
+
+  // View switcher — the content area is one of terminal/analytics/arena, driven
+  // from the View menu so the accelerators live with the OS instead of being
+  // swallowed by the renderer's keydown handler.
+  onMenuViewTerminal: (callback: () => void) => {
+    ipcRenderer.on('menu:view-terminal', callback);
+    return () => ipcRenderer.removeListener('menu:view-terminal', callback);
+  },
+  onMenuViewAnalytics: (callback: () => void) => {
+    ipcRenderer.on('menu:view-analytics', callback);
+    return () => ipcRenderer.removeListener('menu:view-analytics', callback);
+  },
+  onMenuViewArena: (callback: () => void) => {
+    ipcRenderer.on('menu:view-arena', callback);
+    return () => ipcRenderer.removeListener('menu:view-arena', callback);
+  },
+  onMenuFocusSidebar: (callback: () => void) => {
+    ipcRenderer.on('menu:focus-sidebar', callback);
+    return () => ipcRenderer.removeListener('menu:focus-sidebar', callback);
+  },
 
   // Edit menu events
   onMenuCopy: (callback: () => void) => {
@@ -99,10 +123,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuClearTerminal: (callback: () => void) => {
     ipcRenderer.on('menu:clearTerminal', callback);
     return () => ipcRenderer.removeListener('menu:clearTerminal', callback);
-  },
-  onMenuFind: (callback: () => void) => {
-    ipcRenderer.on('menu:find', callback);
-    return () => ipcRenderer.removeListener('menu:find', callback);
   },
 
   // Session selection from notifications/tray
@@ -142,33 +162,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:sessions:update', id, updates),
   deleteDbSession: (id: string): Promise<void> =>
     ipcRenderer.invoke('db:sessions:delete', id),
-
-  // Database - Memories
-  getMemoriesBySession: (sessionId: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getBySession', sessionId),
-  getMemoriesByGroup: (groupId: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getByGroup', groupId),
-  getPinnedMemories: (groupId?: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getPinned', groupId),
-  searchMemories: (query: string, groupId?: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:search', query, groupId),
-  createMemory: (input: MemoryCreateInput): Promise<Memory> =>
-    ipcRenderer.invoke('db:memories:create', input),
-  updateMemory: (id: string, updates: MemoryUpdateInput): Promise<void> =>
-    ipcRenderer.invoke('db:memories:update', id, updates),
-  deleteMemory: (id: string): Promise<void> =>
-    ipcRenderer.invoke('db:memories:delete', id),
-  getMemoriesForInjection: (sessionId: string, groupId: string): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getForInjection', sessionId, groupId),
-  getMemoryById: (id: string): Promise<Memory | null> =>
-    ipcRenderer.invoke('db:memories:getById', id),
-  getGlobalContextMemories: (): Promise<Memory[]> =>
-    ipcRenderer.invoke('db:memories:getGlobal'),
-  onMemoryExtracted: (callback: (memory: Memory) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, memory: Memory) => callback(memory);
-    ipcRenderer.on('memory:extracted', listener);
-    return () => ipcRenderer.removeListener('memory:extracted', listener);
-  },
 
   // Database - Session Events (BDHLNDR-17)
   getSessionEvents: (sessionId: string, limit?: number): Promise<SessionEvent[]> =>

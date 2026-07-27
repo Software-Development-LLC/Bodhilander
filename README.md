@@ -39,16 +39,6 @@ Organize sessions into groups and subgroups by project, client, or workflow. Col
 ### Persistent Sessions
 Sessions survive app restarts. Your context is preserved.
 
-### Session Memory
-Automatically captures and persists knowledge across sessions:
-- **Auto-extraction** - Detects decisions, fixes, and patterns from Claude output
-- **Memory injection** - Injects relevant context when sessions start
-- **Memory types** - Decisions, error fixes, patterns, context, and notes
-- **Pin & search** - Pin important memories and search across all captured knowledge
-- **MCP Server** - Claude can search and manage memories on demand
-
-See [MCP Memory Server Documentation](docs/mcp-memory-server.md) for Claude Code integration.
-
 ### Notifications & Sound
 Stay informed without watching the window:
 - **Desktop notifications** - Alerts when sessions need attention
@@ -173,7 +163,7 @@ Bodhilander offers extensive configuration across multiple tabs:
 | Phase | Status | Features |
 |-------|--------|----------|
 | **1 (MVP)** | Complete | Multi-session management, state detection, groups, persistence, auto-update |
-| **2** | Complete | Memory system, notifications & sound, settings |
+| **2** | Complete | Notifications & sound, settings |
 | **3** | Complete | Teams integration, mobile companion, editor integration |
 | **4** | Future | AI session summaries, advanced analytics |
 

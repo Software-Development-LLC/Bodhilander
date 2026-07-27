@@ -12,7 +12,6 @@ import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
-import * as memoriesRepo from './repositories/memories';
 import * as sessionEventsRepo from './repositories/session-events';
 import * as arenaRepo from './repositories/arena';
 import { arenaEngine } from './arena/engine';
@@ -28,10 +27,10 @@ import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChanne
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { Group, Session, SessionState, MemoryCreateInput, MemoryUpdateInput } from '../shared/types';
+import { Group, Session, SessionState } from '../shared/types';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
-import { registerMcpServer, registerHooks } from './mcp-config';
+import { registerHooks, cleanupLegacyMcpServer } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
@@ -313,31 +312,22 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
 }
 
 /**
- * Register the Bodhilander Memory MCP server and hook script into every
- * Claude config dir we know about: the global ~/.claude plus each registered
- * account's isolated .claude (BDHLNDR-31).
+ * Register the Bodhilander hook script into every Claude config dir we know
+ * about: the global ~/.claude plus each registered account's isolated .claude
+ * (BDHLNDR-31).
  */
-function registerMcpAndHooksEverywhere(): void {
+function registerHooksEverywhere(): void {
   const targets: (string | undefined)[] = [undefined]; // undefined = global ~/.claude
   try {
     for (const acc of accountsRepo.getAllAccounts()) {
       targets.push(acc.configDir);
     }
   } catch (err) {
-    log.warn('[MCP Config] Failed to list accounts for MCP registration:', err);
+    log.warn('[MCP Config] Failed to list accounts for hook registration:', err);
   }
 
   for (const configDir of targets) {
     const label = configDir ?? '(default)';
-    const mcpResult = registerMcpServer(configDir);
-    if (mcpResult.success) {
-      if (mcpResult.action !== 'unchanged') {
-        log.info(`MCP server ${mcpResult.action} for ${label}: ${mcpResult.path}`);
-      }
-    } else {
-      log.warn(`MCP server registration failed for ${label}:`, mcpResult.error);
-    }
-
     const hooksResult = registerHooks(configDir);
     if (hooksResult.success) {
       if (hooksResult.action !== 'unchanged') {
@@ -361,11 +351,15 @@ function createWindow(): void {
   // Initialize database
   getDatabase();
 
-  // Register MCP server + hooks with Claude Code (auto-configure on startup).
-  // Registers into the user's global ~/.claude plus each registered account's
-  // isolated config dir (BDHLNDR-31), so the Bodhilander memory MCP and hook
-  // script work regardless of which account the session is running under.
-  registerMcpAndHooksEverywhere();
+  // Register hooks with Claude Code (auto-configure on startup). Registers into
+  // the user's global ~/.claude plus each registered account's isolated config
+  // dir (BDHLNDR-31), so the hook script fires regardless of which account the
+  // session is running under.
+  registerHooksEverywhere();
+
+  // One-shot sweep: rip the retired 'bodhilander-memory' MCP server back out of
+  // any Claude config an older build wrote it into.
+  cleanupLegacyMcpServer();
 
   // Mark all sessions as stopped on startup (PTY processes don't survive restarts)
   sessionsRepo.markAllSessionsStopped();
@@ -471,7 +465,8 @@ function createWindow(): void {
     // Initialize Teams auth service
     teamsAuthService.initialize();
 
-    // Auto-start API server for MCP memory access
+    // Auto-start the API server — it serves the relay/PWA clients and the
+    // hook callbacks that feed session_events.
     getApiServer().start().then(({ port }) => {
       log.info(`[Main] API server auto-started on port ${port}`);
     }).catch((err) => {
@@ -667,16 +662,15 @@ function safeOn(channel: string, handler: (...args: any[]) => void): void {
 // IPC Handlers
 ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: boolean = false, providerId?: string) => {
   try {
-    // Look up the session to get its groupId for memory injection
+    // Look up the session to get its persisted provider.
     const sessions = sessionsRepo.getAllSessions();
     const session = sessions.find(s => s.id === id);
-    const groupId = session?.groupId || null;
 
     // The persisted row is authoritative (#96); the explicit providerId (#98)
     // only bridges first launches where the terminal mounted before the row
     // was persisted. Unknown ids degrade to the default inside
     // PtyManager.createSession (resolveProvider).
-    ptyManager.createSession(id, cwd, launchClaude, groupId, resolveLaunchProviderId(session?.provider, providerId));
+    ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId));
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {
@@ -799,47 +793,6 @@ safeHandle('accounts:update', (
 
 safeHandle('accounts:setDefault', (id: string) => {
   accountsRepo.setDefaultAccount(id);
-});
-
-// Database IPC Handlers - Memories
-safeHandle('db:memories:getBySession', (sessionId: string) => {
-  return memoriesRepo.getMemoriesBySession(sessionId);
-});
-
-safeHandle('db:memories:getByGroup', (groupId: string) => {
-  return memoriesRepo.getMemoriesByGroup(groupId);
-});
-
-safeHandle('db:memories:getPinned', (groupId?: string) => {
-  return memoriesRepo.getPinnedMemories(groupId);
-});
-
-safeHandle('db:memories:search', (query: string, groupId?: string) => {
-  return memoriesRepo.searchMemories(query, groupId);
-});
-
-safeHandle('db:memories:create', (input: MemoryCreateInput) => {
-  return memoriesRepo.createMemory(input);
-});
-
-safeHandle('db:memories:update', (id: string, updates: MemoryUpdateInput) => {
-  memoriesRepo.updateMemory(id, updates);
-});
-
-safeHandle('db:memories:delete', (id: string) => {
-  memoriesRepo.deleteMemory(id);
-});
-
-safeHandle('db:memories:getForInjection', (sessionId: string, groupId: string) => {
-  return memoriesRepo.getMemoriesForInjection(sessionId, groupId);
-});
-
-safeHandle('db:memories:getById', (id: string) => {
-  return memoriesRepo.getMemoryById(id);
-});
-
-safeHandle('db:memories:getGlobal', () => {
-  return memoriesRepo.getGlobalContextMemories();
 });
 
 // Database IPC Handlers - Session Events (BDHLNDR-17)

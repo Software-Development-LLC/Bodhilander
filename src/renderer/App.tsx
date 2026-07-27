@@ -3,15 +3,14 @@ import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsModal, SettingsTab } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
 import { SessionRow } from './components/SessionRow';
 import { GroupColorPicker } from './components/GroupColorPicker';
-import { MemoryPanel } from './components/panels/MemoryPanel';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
-import { ClaudeAccountsModal } from './components/ClaudeAccountsModal';
+import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { ClaudeAccount, Session } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -81,7 +80,9 @@ const App: React.FC = () => {
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [claudeAccountsOpen, setClaudeAccountsOpen] = useState(false);
+  // Which Settings tab to land on. Claude accounts left the sidebar and became
+  // a Settings tab, so App needs to be able to open Settings straight to it.
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('general');
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
   // True when the running build is itself a beta (version contains -beta.).
   // Shows a BETA pill in the sidebar so opt-in testers know what they're on
@@ -99,12 +100,10 @@ const App: React.FC = () => {
   // New item choice menu state (for + button on groups)
   const [newItemChoice, setNewItemChoice] = useState<{ x: number; y: number; groupId: string } | null>(null);
 
-  // Memory panel state
-  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
-
-  // Analytics view state (BDHLNDR-18)
-  const [analyticsViewOpen, setAnalyticsViewOpen] = useState(false);
-  const [arenaViewOpen, setArenaViewOpen] = useState(false);
+  // Which destination the content area is showing (BDHLNDR-18). Terminal,
+  // Analytics and Arena all live in the same content area, so they are one
+  // value rather than a boolean each.
+  const [contentView, setContentView] = useState<ContentView>('terminal');
   // Group whose working dir the arena panel should scope to ("Ask Arena" menu).
   const [arenaGroupId, setArenaGroupId] = useState<string | null>(null);
 
@@ -138,6 +137,12 @@ const App: React.FC = () => {
   const counts = getStateCounts();
   const isLoading = groupsLoading || sessionsLoading;
 
+  // Bare Ctrl belongs to the terminal (SIGINT, readline), so app-level actions
+  // bind Cmd on macOS and Ctrl+Shift everywhere else. Every shortcut hint we
+  // show the user has to reflect that, or the label lies about the key.
+  const isMac = useMemo(() => window.electronAPI.platform === 'darwin', []);
+  const appMod = isMac ? '⌘' : 'Ctrl+Shift+';
+
   // Which sidebar rows survive the text filter (#141).
   const filter = useMemo(
     () => computeGroupFilter(groups, sessions, filterText),
@@ -150,10 +155,6 @@ const App: React.FC = () => {
     () => getTopLevelGroups().filter(g => !filter.active || filter.visibleGroupIds.has(g.id)),
     [getTopLevelGroups, filter],
   );
-
-  // Get the active session's group ID for memory panel
-  const activeSession = sessions.find(s => s.id === activeSessionId);
-  const activeGroupId = activeSession?.groupId || null;
 
   // Resolve the effective Claude account for a session, applying the same
   // fallback chain the main process uses (session → group → default). Used by
@@ -218,12 +219,15 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Refresh accounts whenever the accounts modal closes (covers delete/rename).
+  // Refresh accounts whenever Settings closes (covers delete/rename). The
+  // Settings "Claude accounts" tab is the only place accounts are edited now,
+  // so it has to re-pull — otherwise the sidebar's per-session account dots go
+  // stale.
   useEffect(() => {
-    if (!claudeAccountsOpen) {
+    if (!settingsOpen) {
       window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
     }
-  }, [claudeAccountsOpen]);
+  }, [settingsOpen]);
 
   // Determine once at mount whether the running app build is a beta —
   // controls the BETA pill shown in the sidebar header (BDHLNDR-32).
@@ -408,7 +412,7 @@ const App: React.FC = () => {
         label: 'Ask Arena About This Folder',
         onClick: () => {
           setArenaGroupId(groupId);
-          setArenaViewOpen(true);
+          setContentView('arena');
         },
         // Arena scoping runs the CLIs inside the group's working dir.
         disabled: !group?.workingDir,
@@ -821,15 +825,17 @@ const App: React.FC = () => {
         // Collapse/expand is unavailable while filtering — rows are
         // force-expanded, so advertising it would be a lie (#141).
         ...(filter.active ? [] : [{ key: '←→', label: 'Collapse' }]),
-        { key: 'Ctrl+G', label: 'New Group' },
+        { key: `${appMod}G`, label: 'New Group' },
       ];
     }
     return [
-      { key: 'Ctrl+Q', label: 'Sidebar' },
+      { key: `${appMod}B`, label: 'Sidebar' },
+      // Ctrl+Tab is the one binding that is identical on every platform — Tab
+      // is not a readline key, so the terminal doesn't need it.
       { key: 'Ctrl+Tab', label: 'Next' },
-      { key: 'Ctrl+W', label: 'Close' },
+      { key: `${appMod}W`, label: 'Close' },
     ];
-  }, [sidebarFocused, filter.active]);
+  }, [sidebarFocused, appMod, filter.active]);
 
   const handleNewSubGroup = useCallback(async () => {
     if (focusedItemType === 'group' && focusedItemId) {
@@ -841,6 +847,9 @@ const App: React.FC = () => {
   }, [focusedItemType, focusedItemId, groups, handleCreateSubGroup]);
 
 
+  // Arrow/Home/End move between view tabs and select as they go (the WAI-ARIA
+  // tabs pattern with automatic activation). Combined with the roving
+  // tabIndex below, the whole strip is a single Tab stop.
   const shortcutHandlers = useMemo(() => ({
     onNewSession: handleKeyboardNewSession,
     onNextSession: handleNextSession,
@@ -855,7 +864,9 @@ const App: React.FC = () => {
     onCollapse: handleCollapse,
     onExpand: handleExpand,
     onSelect: handleSelect,
-    onToggleAnalytics: () => setAnalyticsViewOpen(prev => !prev),
+    onViewTerminal: () => setContentView('terminal'),
+    onViewAnalytics: () => setContentView('analytics'),
+    onViewArena: () => setContentView('arena'),
   }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect]);
 
   useKeyboardShortcuts(shortcutHandlers);
@@ -877,14 +888,29 @@ const App: React.FC = () => {
       window.electronAPI.onMenuNextSession(handleNextSession),
       window.electronAPI.onMenuPrevSession(handlePrevSession),
       window.electronAPI.onMenuNextWaiting(handleNextWaiting),
+      window.electronAPI.onMenuViewTerminal(() => setContentView('terminal')),
+      window.electronAPI.onMenuViewAnalytics(() => setContentView('analytics')),
+      window.electronAPI.onMenuViewArena(() => setContentView('arena')),
+      window.electronAPI.onMenuFocusSidebar(handleFocusSidebar),
+      // "Claude Accounts..." is the only discoverable entry point to accounts
+      // now that the sidebar key button is gone, so it deep-links Settings
+      // straight to the accounts tab rather than dropping the user on General.
+      window.electronAPI.onMenuOpenAccounts(() => {
+        setSettingsInitialTab('accounts');
+        setSettingsOpen(true);
+      }),
       window.electronAPI.onSessionSelect(handleSessionSelect),
     ];
     return () => cleanups.forEach(cleanup => cleanup());
-  }, [handleKeyboardNewSession, handleCloseSession, handleNextSession, handlePrevSession, handleNextWaiting, handleSessionSelect]);
+  }, [handleKeyboardNewSession, handleCloseSession, handleNextSession, handlePrevSession, handleNextWaiting, handleFocusSidebar, handleSessionSelect]);
 
-  // Listen for settings modal open event
+  // Listen for settings modal open event (app menu Cmd/Ctrl+, and the tray).
   useEffect(() => {
     const unsubscribe = window.electronAPI.onOpenSettings(() => {
+      // A plain "Settings" invocation always lands on General. The modal stays
+      // mounted and re-applies initialTab on every open, so without this reset
+      // a previous deep-link (e.g. straight to Claude accounts) would stick.
+      setSettingsInitialTab('general');
       setSettingsOpen(true);
     });
     return unsubscribe;
@@ -958,56 +984,18 @@ const App: React.FC = () => {
               </span>
             )}
           </h2>
-          <div className="sidebar-header-actions">
-            <button
-              className={`icon-button ${memoryPanelOpen ? 'active' : ''}`}
-              onClick={() => setMemoryPanelOpen(prev => !prev)}
-              title="Toggle Memory Panel"
-              aria-label="Toggle Memory Panel"
-            >
-              *
-            </button>
-            <button
-              className={`icon-button ${analyticsViewOpen ? 'active' : ''}`}
-              onClick={() => setAnalyticsViewOpen(prev => !prev)}
-              title="Analytics Dashboard (Ctrl+Shift+A)"
-              aria-label="Analytics Dashboard"
-            >
-              📊
-            </button>
-            <button
-              className={`icon-button ${arenaViewOpen ? 'active' : ''}`}
-              onClick={() => setArenaViewOpen(prev => !prev)}
-              title="Arena — compare agents"
-              aria-label="Arena"
-            >
-              ⚔️
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setSettingsOpen(true)}
-              title="Settings"
-              aria-label="Settings"
-            >
-              ⚙
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setClaudeAccountsOpen(true)}
-              title="Claude accounts"
-              aria-label="Claude accounts"
-            >
-              🔑
-            </button>
-            <button
-              className="icon-button"
-              onClick={handleCreateGroup}
-              title="New Group"
-              aria-label="New Group"
-            >
-              +
-            </button>
-          </div>
+          {/* Only "+" survives here: it acts on the list directly beneath it.
+              Analytics and Arena moved to the content-area view switcher, and
+              Settings (with Claude accounts as a tab) is reachable from the
+              app menu and the tray. */}
+          <button
+            className="icon-button"
+            onClick={handleCreateGroup}
+            title={`New Group (${appMod}G)`}
+            aria-label="New Group"
+          >
+            +
+          </button>
         </div>
 
         <SidebarFilter value={filterText} onChange={setFilterText} />
@@ -1244,20 +1232,32 @@ const App: React.FC = () => {
       </aside>
 
       <main className="main">
-        {analyticsViewOpen && (
+        <ViewSwitcher value={contentView} onChange={setContentView} shortcutPrefix={appMod} />
+        {contentView === 'analytics' && (
           <AnalyticsPanel
-            onClose={() => setAnalyticsViewOpen(false)}
+            onClose={() => setContentView('terminal')}
             activeSessionId={activeSessionId}
           />
         )}
-        {arenaViewOpen && (
+        {contentView === 'arena' && (
           <ArenaPanel
-            onClose={() => setArenaViewOpen(false)}
+            onClose={() => setContentView('terminal')}
             groups={groups}
             initialGroupId={arenaGroupId}
           />
         )}
-        <div className="terminal-area" style={{ display: analyticsViewOpen || arenaViewOpen ? 'none' : undefined }}>
+        {/* The terminal area is HIDDEN, never unmounted, when another view is
+            selected. Unmounting would dispose every xterm instance and kill the
+            PTYs, so switching tabs would visually reset all live sessions.
+            display:none also takes the panel out of the accessibility tree, so
+            the inactive tabpanel is not announced — no `hidden` attr needed. */}
+        <div
+          className="terminal-area"
+          id="view-panel-terminal"
+          role="tabpanel"
+          aria-labelledby="view-tab-terminal"
+          style={{ display: contentView === 'terminal' ? undefined : 'none' }}
+        >
           {sessions.map(session => (
             <div
               key={session.id}
@@ -1311,14 +1311,6 @@ const App: React.FC = () => {
           )}
         </div>
       </main>
-
-      {/* Memory Panel */}
-      <MemoryPanel
-        isOpen={memoryPanelOpen}
-        onToggle={() => setMemoryPanelOpen(prev => !prev)}
-        sessionId={activeSessionId}
-        groupId={activeGroupId}
-      />
 
       <footer className="status-bar">
         <div className="status-left">
@@ -1405,16 +1397,13 @@ const App: React.FC = () => {
         onClose={() => setNewItemChoice(null)}
       />
 
-      {/* Settings modal */}
+      {/* Settings modal — also hosts the Claude accounts tab now that the
+          sidebar key button is gone (the "Claude Accounts..." menu item
+          deep-links straight to it). */}
       <SettingsModal
         isOpen={settingsOpen}
+        initialTab={settingsInitialTab}
         onClose={() => setSettingsOpen(false)}
-      />
-
-      {/* Claude accounts modal (BDHLNDR-31) */}
-      <ClaudeAccountsModal
-        isOpen={claudeAccountsOpen}
-        onClose={() => setClaudeAccountsOpen(false)}
       />
 
       {/* Destructive action confirmation dialog */}
