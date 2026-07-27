@@ -91,18 +91,16 @@ function loadFixtures(): Fixture[] {
  */
 describe('fixture line endings', () => {
   test('every synthetic fixture uses CRLF, never a bare LF', () => {
-    const LF = 0x0a;
-    const CR = 0x0d;
     const offenders: string[] = [];
 
     for (const txt of fs.readdirSync(FIXTURES_DIR).filter((f) => f.endsWith('.txt')).sort()) {
-      const bytes = fs.readFileSync(path.join(FIXTURES_DIR, txt));
-      let line = 1;
-      for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] !== LF) continue;
-        if (i === 0 || bytes[i - 1] !== CR) offenders.push(`${txt}:${line}`);
-        line += 1;
-      }
+      // latin1 is a byte-for-byte decode, so a CR survives as '\r'.
+      const segments = fs.readFileSync(path.join(FIXTURES_DIR, txt), 'latin1').split('\n');
+      segments.forEach((segment, idx) => {
+        // The tail after the final LF is not a line — nothing to terminate.
+        if (idx === segments.length - 1) return;
+        if (!segment.endsWith('\r')) offenders.push(`${txt}:${idx + 1}`);
+      });
     }
 
     // Any entry here names the file:line that needs its CR put back.
