@@ -36,6 +36,13 @@ export interface ElectronAPI {
   onMenuNextSession: (callback: () => void) => () => void;
   onMenuPrevSession: (callback: () => void) => () => void;
   onMenuNextWaiting: (callback: () => void) => () => void;
+  onMenuOpenAccounts: (callback: () => void) => () => void;
+
+  // View menu events — content-area switcher + sidebar focus
+  onMenuViewTerminal: (callback: () => void) => () => void;
+  onMenuViewAnalytics: (callback: () => void) => () => void;
+  onMenuViewArena: (callback: () => void) => () => void;
+  onMenuFocusSidebar: (callback: () => void) => () => void;
 
   // Session selection from notifications/tray
   onSessionSelect: (callback: (sessionId: string) => void) => () => void;

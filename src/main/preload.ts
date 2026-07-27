@@ -82,6 +82,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('menu:next-waiting', callback);
     return () => ipcRenderer.removeListener('menu:next-waiting', callback);
   },
+  onMenuOpenAccounts: (callback: () => void) => {
+    ipcRenderer.on('menu:open-accounts', callback);
+    return () => ipcRenderer.removeListener('menu:open-accounts', callback);
+  },
+
+  // View switcher — the content area is one of terminal/analytics/arena, driven
+  // from the View menu so the accelerators live with the OS instead of being
+  // swallowed by the renderer's keydown handler.
+  onMenuViewTerminal: (callback: () => void) => {
+    ipcRenderer.on('menu:view-terminal', callback);
+    return () => ipcRenderer.removeListener('menu:view-terminal', callback);
+  },
+  onMenuViewAnalytics: (callback: () => void) => {
+    ipcRenderer.on('menu:view-analytics', callback);
+    return () => ipcRenderer.removeListener('menu:view-analytics', callback);
+  },
+  onMenuViewArena: (callback: () => void) => {
+    ipcRenderer.on('menu:view-arena', callback);
+    return () => ipcRenderer.removeListener('menu:view-arena', callback);
+  },
+  onMenuFocusSidebar: (callback: () => void) => {
+    ipcRenderer.on('menu:focus-sidebar', callback);
+    return () => ipcRenderer.removeListener('menu:focus-sidebar', callback);
+  },
 
   // Edit menu events
   onMenuCopy: (callback: () => void) => {
@@ -99,10 +123,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onMenuClearTerminal: (callback: () => void) => {
     ipcRenderer.on('menu:clearTerminal', callback);
     return () => ipcRenderer.removeListener('menu:clearTerminal', callback);
-  },
-  onMenuFind: (callback: () => void) => {
-    ipcRenderer.on('menu:find', callback);
-    return () => ipcRenderer.removeListener('menu:find', callback);
   },
 
   // Session selection from notifications/tray

@@ -26,6 +26,18 @@ const COLORS = {
   border: '#3c3c3c',
 };
 
+/* Panel half of the view-switcher tab contract in App.tsx, which renders
+ * `<button role="tab" id="view-tab-analytics" aria-controls="view-panel-analytics">`.
+ * Hoisted to a const because this component has three separate roots (loading,
+ * error, loaded) and every one of them is the tabpanel: if only the loaded root
+ * carried the id, the tab's aria-controls would dangle while analytics is still
+ * loading or has failed. */
+const TABPANEL_PROPS = {
+  id: 'view-panel-analytics',
+  role: 'tabpanel',
+  'aria-labelledby': 'view-tab-analytics',
+} as const;
+
 const STATE_COLORS: Record<string, string> = {
   working: COLORS.working,
   waiting: COLORS.waiting,
@@ -387,7 +399,7 @@ export default function AnalyticsPanel({ onClose, activeSessionId }: AnalyticsPa
 
   if (loading && !globalStats) {
     return (
-      <div className="analytics-panel">
+      <div className="analytics-panel" {...TABPANEL_PROPS}>
         <div className="analytics-header">
           <h2>Analytics</h2>
           <div className="analytics-header-actions">
@@ -401,7 +413,7 @@ export default function AnalyticsPanel({ onClose, activeSessionId }: AnalyticsPa
 
   if (error) {
     return (
-      <div className="analytics-panel">
+      <div className="analytics-panel" {...TABPANEL_PROPS}>
         <div className="analytics-header">
           <h2>Analytics</h2>
           <div className="analytics-header-actions">
@@ -417,7 +429,7 @@ export default function AnalyticsPanel({ onClose, activeSessionId }: AnalyticsPa
   const showSessionView = viewMode === 'session' && activeSessionId && sessionStats;
 
   return (
-    <div className="analytics-panel">
+    <div className="analytics-panel" {...TABPANEL_PROPS}>
       <div className="analytics-header">
         <h2>Analytics{showSessionView && activeSession ? ` — ${activeSession.name}` : ''}</h2>
         <div className="analytics-header-actions">

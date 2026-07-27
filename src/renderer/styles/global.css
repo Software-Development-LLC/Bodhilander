@@ -1,3 +1,63 @@
+/* ---------------------------------------------------------------------------
+ * Design tokens
+ *
+ * There was never a design system here: ~1700 lines of hardcoded hex grew
+ * organically, and two rules were already calling var() against tokens that
+ * had never been defined anywhere in the renderer (`--border-color` in
+ * .sound-event-row, `--color-danger` in RemoteHostingSettings.tsx) — both were
+ * silently using their fallbacks. This block is the de-facto palette extracted
+ * from the existing stylesheet by frequency, so defining it changes nothing
+ * visually except that those two orphans now resolve to the house colors
+ * instead of one-off fallbacks (#333 -> #3c3c3c, #e5534b -> #e06c75).
+ *
+ * NEW CODE SHOULD USE THESE TOKENS. The existing rules were deliberately NOT
+ * mass-rewritten to var() — that is a 1700-line diff with real regression risk
+ * and zero user-visible gain. Only the rules this change already had to touch
+ * were converted (.sidebar h2 / .sidebar-header h2, .main, .view-switcher,
+ * .view-tab, .icon-button:focus-visible, .arena-panel); the rest migrate
+ * opportunistically as they are edited.
+ * ------------------------------------------------------------------------- */
+:root {
+  /* Surfaces */
+  --color-bg: #1e1e1e;             /* app + content background (x38) */
+  --color-surface: #252526;        /* sidebar, chrome bars, modals (x18) */
+  --color-surface-raised: #2d2d2d; /* popovers, cards */
+  --color-hover: #37373d;          /* row / control hover fill */
+
+  /* Borders */
+  --color-border: #3c3c3c;         /* the border color (x78) */
+  --color-border-control: #555;    /* buttons and inputs (x10) */
+  /* Alias so the pre-existing `var(--border-color, #333)` call resolves. */
+  --border-color: var(--color-border);
+
+  /* Text */
+  --color-text: #d4d4d4;           /* body copy (x50) */
+  --color-text-muted: #888;        /* labels, secondary copy (x63) */
+  --color-text-dim: #666;          /* hints, disabled */
+  --color-text-on-accent: #fff;
+
+  /* Accent + state */
+  --color-accent: #5a7aff;         /* selection, primary buttons (x34) */
+  --color-accent-hover: #3a52e0;
+  --color-accent-muted: #1a2a6e;   /* selected-row fill */
+  --color-focus-ring: #cdd7ff;     /* legible on the accent fill AND on #252526 */
+  --color-info: #61afef;           /* "working" (x5) */
+  --color-waiting: #e5c07b;        /* "waiting" (x4) */
+  /* Pre-existing `var(--color-danger, #e5534b)` now lands on the house red. */
+  --color-danger: #e06c75;         /* errors, destructive actions (x12) */
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Type scale */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -85,17 +145,116 @@ body {
 }
 
 .sidebar h2 {
-  font-size: 11px;
+  font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #888;
+  color: var(--color-text-muted);
   margin-bottom: 12px;
+}
+
+/* The only <h2> in the sidebar today is the one inside .sidebar-header, which
+ * is a `display:flex; align-items:center` row. A bottom margin on a centered
+ * flex item shifts the item's box up relative to its siblings, so the title
+ * read as sitting optically above the button row. Scoped here rather than
+ * dropped from the bare element selector so a future stacked sidebar <h2>
+ * (outside the header row) keeps its 12px of separation. Must stay AFTER
+ * `.sidebar h2` — the two selectors have identical specificity (0,1,1), so
+ * source order is what decides the winner. */
+.sidebar-header h2 {
+  margin-bottom: 0;
 }
 
 .main {
   grid-area: content;
   display: flex;
   flex-direction: column;
+  /* Positioning context for the content column. Without this, an absolutely
+   * positioned destination resolved against the VIEWPORT — .arena-panel used
+   * `position:absolute; inset:0` and therefore covered the sidebar and the
+   * status bar, unlike .analytics-panel which correctly filled only this
+   * column. Audited the full chain before adding it: .terminal-wrapper is
+   * absolute inside .terminal-area, which is already position:relative, so its
+   * containing block does not move; the terminal's .provider-install-banner /
+   * .mobile-resize-banner are absolute inside .terminal-wrapper (itself
+   * absolute), so they do not move either; .modal-overlay, .context-menu and
+   * .new-item-choice are position:fixed and a `relative` ancestor never
+   * captures fixed elements. No z-index is set here, so no new stacking
+   * context is created and the z-index:1000 modal layer is unaffected. */
+  position: relative;
+}
+
+/* ---------------------------------------------------------------------------
+ * Content-area view switcher — [ Terminal | Analytics | Arena ].
+ *
+ * Replaces the icon buttons that used to sit in the sidebar header. It is app
+ * chrome, not page content, so it reads as a compact segmented control: the
+ * #252526 surface sitting on the #1e1e1e content background with the standard
+ * #3c3c3c hairline, hugging its own labels rather than spanning the column.
+ * ------------------------------------------------------------------------- */
+.view-switcher {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* Hug the labels. `align-self` covers the flex-child case (a direct child of
+   * .main); `width: fit-content` covers it too if the switcher is ever nested
+   * in a plain block wrapper — without one of these the default `stretch`
+   * would blow the control out to the full column width. */
+  align-self: flex-start;
+  width: fit-content;
+  flex-shrink: 0;
+  margin: 8px 12px;
+  padding: 3px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* Idle labels use --color-text rather than the --color-text-muted this app
+ * normally gives secondary chrome: #888 on #252526 is 4.3:1, which misses
+ * WCAG AA for 13px text, and these are primary navigation targets. Nothing is
+ * lost — the selected segment is identified by the accent fill, not by being
+ * the only legible label. */
+.view-tab {
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  padding: 5px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s;
+}
+
+.view-tab:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+/* Selected segment. `[aria-selected="true"]` is matched alongside .active so
+ * the control still reads correctly if only the ARIA state is present. */
+.view-tab.active,
+.view-tab[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+}
+
+.view-tab.active:hover,
+.view-tab[aria-selected="true"]:hover {
+  background: var(--color-accent-hover);
+  color: var(--color-text-on-accent);
+}
+
+/* This app's users keyboard-navigate. Focus follows selection in the tab
+ * strip, so the ring lands on the accent-filled segment most of the time — the
+ * light tint keeps it obvious there as well as on the plain surface. The 3px
+ * of padding on .view-switcher leaves room for the 2px ring so it never
+ * collides with the control's own border. */
+.view-tab:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 0;
 }
 
 .terminal-area {
@@ -163,11 +322,6 @@ body {
   margin-bottom: 8px;
 }
 
-.sidebar-header-actions {
-  display: flex;
-  gap: 4px;
-}
-
 .sidebar-account {
   margin-bottom: 12px;
   padding-bottom: 12px;
@@ -191,6 +345,13 @@ body {
 .icon-button:hover {
   background: #3c3c3c;
   color: #fff;
+}
+
+/* Keyboard focus for the icon buttons that remain (the sidebar's "+"), matched
+ * to the view switcher's ring so focus looks the same everywhere. */
+.icon-button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
 }
 
 .icon-button.small {
@@ -1445,13 +1606,24 @@ body {
 }
 
 /* Arena mode (#100) */
+/* Arena is a content-area destination exactly like Analytics, so it now flows
+ * as an ordinary flex child of .main and fills whatever height is left in the
+ * column. It used to be `position:absolute; inset:0; z-index:5`, which was
+ * wrong twice over: .main had no positioning context, so `inset:0` resolved
+ * against the viewport and Arena covered the sidebar and the status bar; and
+ * an overlay would now also paint over the .view-switcher, leaving no way back
+ * to Terminal except the keyboard. `flex:1; min-height:0` is used rather than
+ * .analytics-panel's `height:100%` because it states the intent directly: with
+ * the switcher above it, `height:100%` resolves against the FULL column and
+ * only ends up fitting because flex-shrink squeezes the item back down again.
+ * .main also gained `position: relative` as a containing block so no future
+ * destination can escape the content column. */
 .arena-panel {
-  position: absolute;
-  inset: 0;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #1e1e1e;
-  z-index: 5;
+  background: var(--color-bg);
   padding: 16px;
   gap: 12px;
   overflow: hidden;

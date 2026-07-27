@@ -1,5 +1,61 @@
 import { useEffect, useCallback } from 'react';
 
+/* ===========================================================================
+ * THE KEYBOARD SCHEME — read this before touching anything below.
+ *
+ * THE RULE: bare Ctrl ALWAYS belongs to the terminal. Bodhilander is a
+ * terminal app; Ctrl+C/W/N/G/Q/A/K/F are job-control and readline keys the PTY
+ * needs. Never write `const isMod = e.ctrlKey || e.metaKey` again — that
+ * conflation is exactly what made Ctrl+C unable to send SIGINT on
+ * Windows/Linux and stole Ctrl+W (delete word), Ctrl+N (history), Ctrl+G
+ * (abort) and Ctrl+Q (XON) on every platform.
+ *
+ * App actions therefore use a platform-specific modifier, the same split
+ * Windows Terminal, GNOME Terminal and iTerm2 use:
+ *     macOS         -> Cmd
+ *     Windows/Linux -> Ctrl+Shift
+ *
+ *   Action            | macOS          | Windows/Linux   | owner
+ *   ------------------|----------------|-----------------|--------------------
+ *   Terminal view     | Cmd+1          | Ctrl+Shift+1    | here + menu
+ *   Analytics view    | Cmd+2          | Ctrl+Shift+2    | here + menu
+ *   Arena view        | Cmd+3          | Ctrl+Shift+3    | here + menu
+ *   New session       | Cmd+N          | Ctrl+Shift+N    | here + menu
+ *   Close session     | Cmd+W          | Ctrl+Shift+W    | here + menu
+ *   Next session      | Ctrl+Tab       | Ctrl+Tab        | here + menu
+ *   Prev session      | Ctrl+Shift+Tab | Ctrl+Shift+Tab  | here + menu
+ *   Next waiting      | Cmd+Shift+J    | Ctrl+Shift+J    | here + menu
+ *   Focus sidebar     | Cmd+B          | Ctrl+Shift+B    | here + menu
+ *   New group         | Cmd+G          | Ctrl+Shift+G    | here
+ *   New sub-group     | Cmd+Shift+G    | (none)          | here
+ *   Settings          | Cmd+,          | Ctrl+,          | menu only
+ *   Copy              | Cmd+C          | Ctrl+Shift+C    | menu + Terminal.tsx
+ *   Paste             | Cmd+V          | Ctrl+Shift+V    | menu + Terminal.tsx
+ *   Select all        | Cmd+A          | Ctrl+Shift+A    | menu only
+ *   Clear terminal    | Cmd+K          | Ctrl+Shift+K    | menu only
+ *
+ * Three rows break the pattern, on purpose:
+ *  - Ctrl+Tab / Ctrl+Shift+Tab are identical on both platforms. Tab is not a
+ *    readline key so borrowing bare Ctrl is safe, and Cmd+Tab could never work
+ *    on macOS because the OS app switcher eats it before we see it.
+ *  - New sub-group is macOS-only (Cmd+Shift+G). Windows/Linux has no safe chord
+ *    left — Shift is already spent on the base modifier and Ctrl+Alt is AltGr.
+ *    See isNewSubGroup for the full reasoning; it stays reachable everywhere
+ *    from the group context menu and the per-group "+" button.
+ *  - Settings keeps bare Ctrl+, on Windows/Linux. Comma is not a control
+ *    character, so the PTY loses nothing.
+ *
+ * Most rows are ALSO registered as menu accelerators in main/menu.ts. Electron
+ * consumes menu accelerators before the renderer ever sees the keydown, so in
+ * practice the menu wins and the handlers here are the fallback path (menu
+ * hidden/disabled, or a binding the menu does not carry, e.g. New Group). Both
+ * paths must agree — hence one table, in one file.
+ *
+ * Terminal.tsx imports `isAppShortcut` from here as the allowlist of keystrokes
+ * it withholds from the PTY, so the "what belongs to the app" decision is made
+ * exactly once.
+ * =========================================================================== */
+
 interface ShortcutHandlers {
   onNewSession: () => void;
   onNextSession: () => void;
@@ -8,86 +64,240 @@ interface ShortcutHandlers {
   onCloseSession: () => void;
   onFocusSidebar: () => void;
   onNewGroup: () => void;
+  onViewTerminal: () => void;
+  onViewAnalytics: () => void;
+  onViewArena: () => void;
   onNewSubGroup?: () => void;
   onNavigateUp?: () => void;
   onNavigateDown?: () => void;
   onCollapse?: () => void;
   onExpand?: () => void;
   onSelect?: () => void;
-  onToggleAnalytics?: () => void;
 }
+
+/** True on macOS. `platform` is exposed by preload.ts (process.platform). */
+export const IS_MAC = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
+
+/**
+ * Match a key by produced character OR physical position. Both are needed:
+ * Shift mutates `event.key` (Ctrl+Shift+1 reports '!' on a US layout) while
+ * `event.code` stays put; conversely `event.key` is what a Dvorak/AZERTY user
+ * sees printed on the cap.
+ */
+const isKey = (e: KeyboardEvent, key: string, code: string) =>
+  e.key.toLowerCase() === key || e.code === code;
+
+/**
+ * The app-action modifier: Cmd on macOS, Ctrl+Shift elsewhere. Each branch
+ * rejects the other platform's modifier so that bare Ctrl — on BOTH platforms —
+ * falls straight through to the terminal.
+ */
+const hasAppMod = (e: KeyboardEvent) =>
+  IS_MAC
+    ? e.metaKey && !e.ctrlKey && !e.altKey
+    : e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+
+/**
+ * Table rows written "Cmd+X / Ctrl+Shift+X". On Windows/Linux Shift is already
+ * part of the base modifier, so only macOS has to reject a stray Shift (which
+ * is what keeps Cmd+G and Cmd+Shift+G distinct there).
+ */
+const appKey = (e: KeyboardEvent, key: string, code: string) =>
+  hasAppMod(e) && (IS_MAC ? !e.shiftKey : true) && isKey(e, key, code);
+
+/**
+ * Table rows written "Cmd+Shift+X / Ctrl+Shift+X" (Next waiting). macOS needs
+ * the extra Shift; on Windows/Linux the base modifier already supplies it.
+ */
+const appShiftKey = (e: KeyboardEvent, key: string, code: string) =>
+  hasAppMod(e) && (IS_MAC ? e.shiftKey : true) && isKey(e, key, code);
+
+/**
+ * New sub-group — Cmd+Shift+G, macOS ONLY. The platform asymmetry is deliberate;
+ * do not "fix" it by adding a Windows/Linux chord.
+ *
+ * Windows/Linux already spends Shift on the base modifier (Ctrl+Shift+G is New
+ * Group there), so the obvious third modifier is Alt — and that is exactly the
+ * trap. On Windows, AltGr reports as `ctrlKey && altKey` and nothing
+ * distinguishes it from a real Ctrl+Alt, so Ctrl+Alt+G is indistinguishable
+ * from AltGr+G. On the many European layouts where AltGr+G produces a character,
+ * typing that character would create a sub-group and the character would never
+ * reach the shell. macOS has no AltGr, so Cmd+Shift+G is safe there.
+ *
+ * Nothing becomes unreachable: New Sub-Group is on the group context menu and
+ * behind the per-group "+" button on every platform.
+ */
+const isNewSubGroup = (e: KeyboardEvent) =>
+  IS_MAC && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && isKey(e, 'g', 'KeyG');
+
+/**
+ * Next/Prev session — Ctrl+Tab / Ctrl+Shift+Tab on both platforms. Keyed on
+ * ctrlKey specifically and never metaKey: Cmd+Tab is the macOS app switcher,
+ * which is why the old `isMod && key === 'Tab'` never fired there.
+ */
+const isSessionCycle = (e: KeyboardEvent) =>
+  e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'Tab';
+
+/**
+ * Settings — Cmd+, / Ctrl+,. Handled entirely by the main-process menu; listed
+ * here only so Terminal.tsx knows to keep it away from the PTY.
+ */
+const isSettings = (e: KeyboardEvent) =>
+  (IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) &&
+  !e.altKey && !e.shiftKey && isKey(e, ',', 'Comma');
+
+/** Copy — Cmd+C / Ctrl+Shift+C. Terminal.tsx implements the terminal-local half. */
+export const isCopyShortcut = (e: KeyboardEvent) => appKey(e, 'c', 'KeyC');
+
+/** Paste — Cmd+V / Ctrl+Shift+V. Terminal.tsx implements the terminal-local half. */
+export const isPasteShortcut = (e: KeyboardEvent) => appKey(e, 'v', 'KeyV');
+
+/**
+ * "This keystroke belongs to the app, not to the PTY."
+ *
+ * Terminal.tsx uses this as the allowlist of keystrokes it withholds from the
+ * PTY, so the two files can never drift. Anything this returns false for MUST
+ * reach the shell — in particular every bare Ctrl+<letter> combination. The only
+ * bare-Ctrl chords this claims are the two the table calls out (Ctrl+Tab and
+ * Ctrl+,), neither of which the PTY wants.
+ */
+export function isAppShortcut(e: KeyboardEvent): boolean {
+  if (isSessionCycle(e)) return true;                 // Ctrl+Tab / Ctrl+Shift+Tab
+  if (isSettings(e)) return true;                     // Cmd+, / Ctrl+,
+  if (isNewSubGroup(e)) return true;                  // Cmd+Shift+G (macOS only)
+  if (appShiftKey(e, 'j', 'KeyJ')) return true;       // Next waiting
+  return (
+    appKey(e, '1', 'Digit1') ||                       // Terminal view
+    appKey(e, '2', 'Digit2') ||                       // Analytics view
+    appKey(e, '3', 'Digit3') ||                       // Arena view
+    appKey(e, 'n', 'KeyN') ||                         // New session
+    appKey(e, 'w', 'KeyW') ||                         // Close session
+    appKey(e, 'b', 'KeyB') ||                         // Focus sidebar
+    appKey(e, 'g', 'KeyG') ||                         // New group
+    appKey(e, 'c', 'KeyC') ||                         // Copy         (Edit menu)
+    appKey(e, 'v', 'KeyV') ||                         // Paste        (Edit menu)
+    appKey(e, 'a', 'KeyA') ||                         // Select all   (Edit menu)
+    appKey(e, 'k', 'KeyK')                            // Clear        (Edit menu)
+  );
+}
+
+/**
+ * True when the caret is in the terminal or any text field. Bare arrows and
+ * Enter drive the sidebar list, and they must never act from there: arrows are
+ * readline motion/history keys, and xterm's preventDefault does NOT stop the
+ * keydown from bubbling up to our window listener. xterm's focus target is a
+ * hidden <textarea>, so the tag check covers it; the closest() check covers
+ * clicks that land on the terminal wrapper itself.
+ */
+const isTextEntryFocused = () => {
+  const el = document.activeElement as HTMLElement | null;
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
+  return !!el.closest('.terminal-container, .xterm');
+};
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    const isMod = e.ctrlKey || e.metaKey;
-    const key = e.key.toLowerCase();
-
-    if (isMod && key === 'n') {
-      e.preventDefault();
-      handlers.onNewSession();
-    }
-
-    if (isMod && e.key === 'Tab') {
+    // Next / Prev session — Ctrl+Tab, Ctrl+Shift+Tab (identical both platforms)
+    if (isSessionCycle(e)) {
       e.preventDefault();
       if (e.shiftKey) {
         handlers.onPrevSession();
       } else {
         handlers.onNextSession();
       }
+      return;
     }
 
-    // Ctrl+Shift+W = Next waiting (check before Ctrl+W)
-    if (isMod && e.shiftKey && key === 'w') {
+    // New sub-group — Cmd+Shift+G, macOS only (no Windows/Linux chord is safe;
+    // see isNewSubGroup). Checked before New Group because on macOS both start
+    // Cmd+G and only the Shift tells them apart.
+    if (isNewSubGroup(e)) {
+      e.preventDefault();
+      handlers.onNewSubGroup?.();
+      return;
+    }
+
+    // Next waiting — Cmd+Shift+J / Ctrl+Shift+J
+    if (appShiftKey(e, 'j', 'KeyJ')) {
       e.preventDefault();
       handlers.onNextWaiting();
       return;
     }
 
-    // Ctrl+W = Close session
-    if (isMod && key === 'w') {
+    // View switcher — Cmd+1/2/3 / Ctrl+Shift+1/2/3. Digits, not letters, so the
+    // View menu's reload/zoom/devtools roles keep their accelerators.
+    if (appKey(e, '1', 'Digit1')) {
+      e.preventDefault();
+      handlers.onViewTerminal();
+      return;
+    }
+    if (appKey(e, '2', 'Digit2')) {
+      e.preventDefault();
+      handlers.onViewAnalytics();
+      return;
+    }
+    if (appKey(e, '3', 'Digit3')) {
+      e.preventDefault();
+      handlers.onViewArena();
+      return;
+    }
+
+    // New session — Cmd+N / Ctrl+Shift+N
+    if (appKey(e, 'n', 'KeyN')) {
+      e.preventDefault();
+      handlers.onNewSession();
+      return;
+    }
+
+    // Close session — Cmd+W / Ctrl+Shift+W
+    if (appKey(e, 'w', 'KeyW')) {
       e.preventDefault();
       handlers.onCloseSession();
+      return;
     }
 
-    // Ctrl+Q = Focus sidebar
-    if (isMod && key === 'q') {
+    // Focus sidebar — Cmd+B / Ctrl+Shift+B. Replaces the old Cmd+Q, which
+    // macOS handed to the menu's quit role before the renderer saw it (so the
+    // shortcut quit the app instead of focusing the sidebar). Ctrl+Shift+B on
+    // Windows/Linux also dodges tmux's Ctrl+B prefix.
+    if (appKey(e, 'b', 'KeyB')) {
       e.preventDefault();
       handlers.onFocusSidebar();
+      return;
     }
 
-    // Ctrl+G = New group
-    if (isMod && !e.shiftKey && key === 'g') {
+    // New group — Cmd+G / Ctrl+Shift+G
+    if (appKey(e, 'g', 'KeyG')) {
       e.preventDefault();
       handlers.onNewGroup();
+      return;
     }
 
-    // Ctrl+Shift+G = New sub-group
-    if (isMod && e.shiftKey && key === 'g') {
-      e.preventDefault();
-      handlers.onNewSubGroup?.();
-    }
+    // --- Sidebar navigation: bare arrows / Enter, no modifiers ---------------
+    // App.tsx's handlers already bail unless the sidebar is focused; the
+    // isTextEntryFocused() check is the second line of defence so these can
+    // never steal a keystroke from the shell or from a rename field.
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (isTextEntryFocused()) return;
 
-    // Arrow keys (for sidebar navigation)
-    if (e.key === 'ArrowUp') {
-      handlers.onNavigateUp?.();
-    }
-    if (e.key === 'ArrowDown') {
-      handlers.onNavigateDown?.();
-    }
-    if (e.key === 'ArrowLeft') {
-      handlers.onCollapse?.();
-    }
-    if (e.key === 'ArrowRight') {
-      handlers.onExpand?.();
-    }
-    if (e.key === 'Enter' && handlers.onSelect) {
-      handlers.onSelect();
-    }
-
-    // Ctrl+Shift+A = Analytics dashboard
-    if (isMod && e.shiftKey && key === 'a') {
-      e.preventDefault();
-      handlers.onToggleAnalytics?.();
+    switch (e.key) {
+      case 'ArrowUp':
+        handlers.onNavigateUp?.();
+        break;
+      case 'ArrowDown':
+        handlers.onNavigateDown?.();
+        break;
+      case 'ArrowLeft':
+        handlers.onCollapse?.();
+        break;
+      case 'ArrowRight':
+        handlers.onExpand?.();
+        break;
+      case 'Enter':
+        handlers.onSelect?.();
+        break;
     }
   }, [handlers]);
 
