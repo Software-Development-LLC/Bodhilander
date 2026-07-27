@@ -775,11 +775,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
             disabled={!contextMenu.hasSelection}
             className={!contextMenu.hasSelection ? 'disabled' : ''}
           >
-            Copy
+            Copy{' '}
             <span className="shortcut">{COPY_SHORTCUT_LABEL}</span>
           </button>
           <button onClick={handlePaste}>
-            Paste
+            Paste{' '}
             <span className="shortcut">{PASTE_SHORTCUT_LABEL}</span>
           </button>
         </div>

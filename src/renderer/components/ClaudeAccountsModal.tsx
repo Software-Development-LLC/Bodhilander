@@ -272,14 +272,6 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="claude-account-login-title"
-        // When the panel is hosted in Settings this modal is a DOM descendant of
-        // the settings dialog, whose key handler closes on Escape and traps Tab.
-        // Swallow keys here so a stray Escape doesn't tear the settings modal
-        // out from under the user. Defence in depth only: it stops nothing once
-        // focus leaves this subtree (the settings Tab trap cycles through the
-        // account-panel controls behind this overlay), so the pty's actual
-        // lifetime guarantee is the unmount cleanup in ClaudeAccountsPanel.
-        onKeyDown={e => e.stopPropagation()}
       >
         <h3 id="claude-account-login-title">Log in to "{account.label}"</h3>
         <p className="hint">

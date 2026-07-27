@@ -10,8 +10,7 @@ import { SessionRow } from './components/SessionRow';
 import { GroupColorPicker } from './components/GroupColorPicker';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
-import { SessionStatsBadge } from './components/SessionStatsBadge';
-import { ClaudeAccount, PROVIDER_LABELS, Session } from '../shared/types';
+import { ClaudeAccount, Session } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
@@ -864,7 +863,7 @@ const App: React.FC = () => {
   // Arrow/Home/End move between view tabs and select as they go (the WAI-ARIA
   // tabs pattern with automatic activation). Combined with the roving
   // tabIndex below, the whole strip is a single Tab stop.
-  const handleViewTabKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+  const handleViewTabKeyDown = useCallback((e: React.KeyboardEvent<HTMLButtonElement>) => {
     const currentIndex = VIEW_TABS.findIndex(tab => tab.id === contentView);
     let nextIndex = -1;
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
@@ -1269,12 +1268,11 @@ const App: React.FC = () => {
       </aside>
 
       <main className="main">
-        <div
-          className="view-switcher"
-          role="tablist"
-          aria-label="Content view"
-          onKeyDown={handleViewTabKeyDown}
-        >
+        {/* The arrow-key handler lives on the tabs, not the tablist: the tabs
+            are what actually take focus (roving tabIndex), and a keyboard
+            listener on the non-focusable container is exactly what
+            jsx-a11y/interactive-supports-focus objects to. */}
+        <div className="view-switcher" role="tablist" aria-label="Content view">
           {VIEW_TABS.map(tab => (
             <button
               key={tab.id}
@@ -1287,6 +1285,7 @@ const App: React.FC = () => {
               tabIndex={contentView === tab.id ? 0 : -1}
               title={`${tab.label} (${appMod}${tab.digit})`}
               onClick={() => setContentView(tab.id)}
+              onKeyDown={handleViewTabKeyDown}
             >
               {tab.label}
             </button>
