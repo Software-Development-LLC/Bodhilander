@@ -246,7 +246,14 @@ function writeClaudeSettings(settings: ClaudeSettingsConfig, configDir?: string)
       fs.mkdirSync(claudeDir, { recursive: true });
     }
 
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    // Temp file + atomic rename, same as writeClaudeMcpConfig. settings.json is
+    // the user's own Claude Code configuration (permissions, model, statusLine,
+    // their own hooks) and we rewrite it on every launch, so a torn write from
+    // a crash or power loss would cost them real state. rename() within a
+    // directory is atomic on both POSIX and NTFS.
+    const tmpPath = `${settingsPath}.bodhilander.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, settingsPath);
     return true;
   } catch (err) {
     log.error('[Hooks Config] Failed to write Claude settings:', err);

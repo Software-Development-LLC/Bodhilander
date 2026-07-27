@@ -10,6 +10,7 @@ import { SessionRow } from './components/SessionRow';
 import { GroupColorPicker } from './components/GroupColorPicker';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
+import { ViewSwitcher, ContentView } from './components/ViewSwitcher';
 import { ClaudeAccount, Session } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -18,20 +19,6 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
-
-// The content area hosts exactly one destination at a time. A single
-// discriminated value (rather than one boolean per panel) makes "Analytics and
-// Arena are both open" unrepresentable — that used to happen with two
-// independent booleans.
-type ContentView = 'terminal' | 'analytics' | 'arena';
-
-// Tab strip at the top of the content area. Digits (not letters) because the
-// View menu roles already own Cmd/Ctrl+R, 0, +, - and we must not collide.
-const VIEW_TABS: Array<{ id: ContentView; label: string; digit: string }> = [
-  { id: 'terminal', label: 'Terminal', digit: '1' },
-  { id: 'analytics', label: 'Analytics', digit: '2' },
-  { id: 'arena', label: 'Arena', digit: '3' },
-];
 
 /**
  * Collapse-chevron labels. While a filter is active every row is force-expanded,
@@ -863,29 +850,6 @@ const App: React.FC = () => {
   // Arrow/Home/End move between view tabs and select as they go (the WAI-ARIA
   // tabs pattern with automatic activation). Combined with the roving
   // tabIndex below, the whole strip is a single Tab stop.
-  const handleViewTabKeyDown = useCallback((e: React.KeyboardEvent<HTMLButtonElement>) => {
-    const currentIndex = VIEW_TABS.findIndex(tab => tab.id === contentView);
-    let nextIndex = -1;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-      nextIndex = (currentIndex + 1) % VIEW_TABS.length;
-    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-      nextIndex = (currentIndex - 1 + VIEW_TABS.length) % VIEW_TABS.length;
-    } else if (e.key === 'Home') {
-      nextIndex = 0;
-    } else if (e.key === 'End') {
-      nextIndex = VIEW_TABS.length - 1;
-    }
-    if (nextIndex === -1) return;
-
-    e.preventDefault();
-    e.stopPropagation(); // don't also drive the sidebar's arrow navigation
-    const next = VIEW_TABS[nextIndex];
-    setContentView(next.id);
-    // Focus follows selection, otherwise the next arrow press would start
-    // from the tab the user just left.
-    e.currentTarget.querySelector<HTMLButtonElement>(`#view-tab-${next.id}`)?.focus();
-  }, [contentView]);
-
   const shortcutHandlers = useMemo(() => ({
     onNewSession: handleKeyboardNewSession,
     onNextSession: handleNextSession,
@@ -1268,29 +1232,7 @@ const App: React.FC = () => {
       </aside>
 
       <main className="main">
-        {/* The arrow-key handler lives on the tabs, not the tablist: the tabs
-            are what actually take focus (roving tabIndex), and a keyboard
-            listener on the non-focusable container is exactly what
-            jsx-a11y/interactive-supports-focus objects to. */}
-        <div className="view-switcher" role="tablist" aria-label="Content view">
-          {VIEW_TABS.map(tab => (
-            <button
-              key={tab.id}
-              id={`view-tab-${tab.id}`}
-              className={`view-tab ${contentView === tab.id ? 'active' : ''}`}
-              role="tab"
-              aria-selected={contentView === tab.id}
-              aria-controls={`view-panel-${tab.id}`}
-              // Roving tabIndex: Tab reaches the strip once, arrows move within it.
-              tabIndex={contentView === tab.id ? 0 : -1}
-              title={`${tab.label} (${appMod}${tab.digit})`}
-              onClick={() => setContentView(tab.id)}
-              onKeyDown={handleViewTabKeyDown}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <ViewSwitcher value={contentView} onChange={setContentView} shortcutPrefix={appMod} />
         {contentView === 'analytics' && (
           <AnalyticsPanel
             onClose={() => setContentView('terminal')}

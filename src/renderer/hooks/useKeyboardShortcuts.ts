@@ -79,12 +79,23 @@ interface ShortcutHandlers {
 export const IS_MAC = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
 
 /**
+ * The subset of KeyboardEvent these predicates read.
+ *
+ * Declared structurally so tests can pass plain objects. Every predicate below
+ * is pure and takes the platform as an argument rather than closing over
+ * IS_MAC, because IS_MAC is fixed at import time — parameterising is the only
+ * way to exercise both platform branches in one test run. The thin
+ * IS_MAC-bound wrappers further down are what the app itself calls.
+ */
+export type KeyLike = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>;
+
+/**
  * Match a key by produced character OR physical position. Both are needed:
  * Shift mutates `event.key` (Ctrl+Shift+1 reports '!' on a US layout) while
  * `event.code` stays put; conversely `event.key` is what a Dvorak/AZERTY user
  * sees printed on the cap.
  */
-const isKey = (e: KeyboardEvent, key: string, code: string) =>
+const isKey = (e: KeyLike, key: string, code: string) =>
   e.key.toLowerCase() === key || e.code === code;
 
 /**
@@ -92,25 +103,31 @@ const isKey = (e: KeyboardEvent, key: string, code: string) =>
  * rejects the other platform's modifier so that bare Ctrl — on BOTH platforms —
  * falls straight through to the terminal.
  */
-const hasAppMod = (e: KeyboardEvent) =>
-  IS_MAC
+export const hasAppModFor = (e: KeyLike, isMac: boolean) =>
+  isMac
     ? e.metaKey && !e.ctrlKey && !e.altKey
     : e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+
+const hasAppMod = (e: KeyLike) => hasAppModFor(e, IS_MAC);
 
 /**
  * Table rows written "Cmd+X / Ctrl+Shift+X". On Windows/Linux Shift is already
  * part of the base modifier, so only macOS has to reject a stray Shift (which
  * is what keeps Cmd+G and Cmd+Shift+G distinct there).
  */
-const appKey = (e: KeyboardEvent, key: string, code: string) =>
-  hasAppMod(e) && (IS_MAC ? !e.shiftKey : true) && isKey(e, key, code);
+export const appKeyFor = (e: KeyLike, key: string, code: string, isMac: boolean) =>
+  hasAppModFor(e, isMac) && (isMac ? !e.shiftKey : true) && isKey(e, key, code);
+
+const appKey = (e: KeyLike, key: string, code: string) => appKeyFor(e, key, code, IS_MAC);
 
 /**
  * Table rows written "Cmd+Shift+X / Ctrl+Shift+X" (Next waiting). macOS needs
  * the extra Shift; on Windows/Linux the base modifier already supplies it.
  */
-const appShiftKey = (e: KeyboardEvent, key: string, code: string) =>
-  hasAppMod(e) && (IS_MAC ? e.shiftKey : true) && isKey(e, key, code);
+export const appShiftKeyFor = (e: KeyLike, key: string, code: string, isMac: boolean) =>
+  hasAppModFor(e, isMac) && (isMac ? e.shiftKey : true) && isKey(e, key, code);
+
+const appShiftKey = (e: KeyLike, key: string, code: string) => appShiftKeyFor(e, key, code, IS_MAC);
 
 /**
  * New sub-group — Cmd+Shift+G, macOS ONLY. The platform asymmetry is deliberate;
@@ -127,30 +144,34 @@ const appShiftKey = (e: KeyboardEvent, key: string, code: string) =>
  * Nothing becomes unreachable: New Sub-Group is on the group context menu and
  * behind the per-group "+" button on every platform.
  */
-const isNewSubGroup = (e: KeyboardEvent) =>
-  IS_MAC && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && isKey(e, 'g', 'KeyG');
+export const isNewSubGroupFor = (e: KeyLike, isMac: boolean) =>
+  isMac && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && isKey(e, 'g', 'KeyG');
+
+const isNewSubGroup = (e: KeyLike) => isNewSubGroupFor(e, IS_MAC);
 
 /**
  * Next/Prev session — Ctrl+Tab / Ctrl+Shift+Tab on both platforms. Keyed on
  * ctrlKey specifically and never metaKey: Cmd+Tab is the macOS app switcher,
  * which is why the old `isMod && key === 'Tab'` never fired there.
  */
-const isSessionCycle = (e: KeyboardEvent) =>
+export const isSessionCycle = (e: KeyLike) =>
   e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'Tab';
 
 /**
  * Settings — Cmd+, / Ctrl+,. Handled entirely by the main-process menu; listed
  * here only so Terminal.tsx knows to keep it away from the PTY.
  */
-const isSettings = (e: KeyboardEvent) =>
-  (IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) &&
+export const isSettingsFor = (e: KeyLike, isMac: boolean) =>
+  (isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) &&
   !e.altKey && !e.shiftKey && isKey(e, ',', 'Comma');
 
+const isSettings = (e: KeyLike) => isSettingsFor(e, IS_MAC);
+
 /** Copy — Cmd+C / Ctrl+Shift+C. Terminal.tsx implements the terminal-local half. */
-export const isCopyShortcut = (e: KeyboardEvent) => appKey(e, 'c', 'KeyC');
+export const isCopyShortcut = (e: KeyLike) => appKey(e, 'c', 'KeyC');
 
 /** Paste — Cmd+V / Ctrl+Shift+V. Terminal.tsx implements the terminal-local half. */
-export const isPasteShortcut = (e: KeyboardEvent) => appKey(e, 'v', 'KeyV');
+export const isPasteShortcut = (e: KeyLike) => appKey(e, 'v', 'KeyV');
 
 /**
  * "This keystroke belongs to the app, not to the PTY."
@@ -161,24 +182,29 @@ export const isPasteShortcut = (e: KeyboardEvent) => appKey(e, 'v', 'KeyV');
  * bare-Ctrl chords this claims are the two the table calls out (Ctrl+Tab and
  * Ctrl+,), neither of which the PTY wants.
  */
-export function isAppShortcut(e: KeyboardEvent): boolean {
+export function isAppShortcutFor(e: KeyLike, isMac: boolean): boolean {
+  const key = (k: string, code: string) => appKeyFor(e, k, code, isMac);
   if (isSessionCycle(e)) return true;                 // Ctrl+Tab / Ctrl+Shift+Tab
-  if (isSettings(e)) return true;                     // Cmd+, / Ctrl+,
-  if (isNewSubGroup(e)) return true;                  // Cmd+Shift+G (macOS only)
-  if (appShiftKey(e, 'j', 'KeyJ')) return true;       // Next waiting
+  if (isSettingsFor(e, isMac)) return true;           // Cmd+, / Ctrl+,
+  if (isNewSubGroupFor(e, isMac)) return true;        // Cmd+Shift+G (macOS only)
+  if (appShiftKeyFor(e, 'j', 'KeyJ', isMac)) return true; // Next waiting
   return (
-    appKey(e, '1', 'Digit1') ||                       // Terminal view
-    appKey(e, '2', 'Digit2') ||                       // Analytics view
-    appKey(e, '3', 'Digit3') ||                       // Arena view
-    appKey(e, 'n', 'KeyN') ||                         // New session
-    appKey(e, 'w', 'KeyW') ||                         // Close session
-    appKey(e, 'b', 'KeyB') ||                         // Focus sidebar
-    appKey(e, 'g', 'KeyG') ||                         // New group
-    appKey(e, 'c', 'KeyC') ||                         // Copy         (Edit menu)
-    appKey(e, 'v', 'KeyV') ||                         // Paste        (Edit menu)
-    appKey(e, 'a', 'KeyA') ||                         // Select all   (Edit menu)
-    appKey(e, 'k', 'KeyK')                            // Clear        (Edit menu)
+    key('1', 'Digit1') ||                             // Terminal view
+    key('2', 'Digit2') ||                             // Analytics view
+    key('3', 'Digit3') ||                             // Arena view
+    key('n', 'KeyN') ||                               // New session
+    key('w', 'KeyW') ||                               // Close session
+    key('b', 'KeyB') ||                               // Focus sidebar
+    key('g', 'KeyG') ||                               // New group
+    key('c', 'KeyC') ||                               // Copy         (Edit menu)
+    key('v', 'KeyV') ||                               // Paste        (Edit menu)
+    key('a', 'KeyA') ||                               // Select all   (Edit menu)
+    key('k', 'KeyK')                                  // Clear        (Edit menu)
   );
+}
+
+export function isAppShortcut(e: KeyLike): boolean {
+  return isAppShortcutFor(e, IS_MAC);
 }
 
 /**

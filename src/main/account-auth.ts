@@ -93,7 +93,7 @@ export async function startLoginFlow(
   try {
     registerHooks(configDir);
   } catch (err) {
-    log.warn(`[Accounts] MCP/hooks registration failed for new account ${accountId}:`, err);
+    log.warn(`[Accounts] Hook registration failed for new account ${accountId}:`, err);
   }
 
   const ptyId = `__login-${accountId}`;
