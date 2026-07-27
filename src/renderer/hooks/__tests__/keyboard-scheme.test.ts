@@ -28,6 +28,13 @@ import {
 const MAC = true;
 const WIN = false;
 
+/** The conventional KeyboardEvent.code for a single character. */
+function defaultCode(k: string): string {
+  if (/^[a-z]$/.test(k)) return `Key${k.toUpperCase()}`;
+  if (/^\d$/.test(k)) return `Digit${k}`;
+  return k;
+}
+
 /** Build a KeyLike. `code` defaults to the conventional code for a letter/digit. */
 function key(
   k: string,
@@ -36,7 +43,7 @@ function key(
 ): KeyLike {
   return {
     key: k,
-    code: code ?? (/^[a-z]$/.test(k) ? `Key${k.toUpperCase()}` : /^[0-9]$/.test(k) ? `Digit${k}` : k),
+    code: code ?? defaultCode(k),
     ctrlKey: mods.ctrl ?? false,
     metaKey: mods.meta ?? false,
     shiftKey: mods.shift ?? false,
