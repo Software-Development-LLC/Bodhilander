@@ -15,10 +15,11 @@ const API_BASE = process.env.BODHILANDER_API_URL || 'http://127.0.0.1:8443';
 const API_PREFIX = '/api/v1/hooks';
 
 interface HookInput {
-  // PostToolUse fields
+  // PostToolUse fields. Claude Code also sends the tool's arguments and its
+  // result, but we deliberately do not declare or forward them — see
+  // handlePostToolUse for why (they are unread by the API and large enough to
+  // trip its body limit).
   tool_name?: string;
-  tool_input?: unknown;
-  tool_response?: unknown;
 
   // Stop fields
   stop_reason?: string;
@@ -90,15 +91,17 @@ async function callApi(endpoint: string, data: Record<string, unknown>): Promise
 async function handlePostToolUse(input: HookInput, sessionId?: string): Promise<void> {
   if (!input.tool_name) return;
 
-  // Deliberately send only the tool NAME, never tool_input/tool_response.
+  // Deliberately send only the tool NAME, never the tool's input or result.
   //
-  // /post-tool-use reads exactly { tool_name, session_id } — the payload was
-  // the last vestige of the removed memory feature, which used it to sniff git
-  // commits. Forwarding it now would actively break analytics: tool_response
-  // carries the full tool output (an entire file for Read, all matches for
-  // Grep, complete stdout for Bash), and the API server caps bodies at 1mb, so
-  // the largest tool calls would 413 and their tool_use events would vanish —
-  // silently, since callApi swallows transport errors by design.
+  // /post-tool-use reads exactly { tool_name, session_id } — the rest of the
+  // payload was the last vestige of the removed memory feature, which used it
+  // to sniff git commits. Forwarding it now would actively break analytics:
+  // the result carries the full tool output (an entire file for Read, all
+  // matches for Grep, complete stdout for Bash), and the API server caps
+  // bodies at 1mb, so the largest tool calls would 413 and their tool_use
+  // events would vanish — silently, since callApi swallows transport errors by
+  // design. This hook now fires for EVERY tool, so that would have been most
+  // of the interesting ones.
   await callApi('/post-tool-use', {
     tool_name: input.tool_name,
     session_id: sessionId || input.session_id,

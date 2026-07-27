@@ -278,18 +278,56 @@ function getHookScriptPath(): string {
  * Matches on the exact hookScriptPath so that an install-location change
  * (e.g. version upgrade to a new unpacked path) triggers a re-register.
  */
+/**
+ * The hook entries we install — the single source of truth for both "are they
+ * already correct?" and what gets written. Keeping one definition is what lets
+ * registration CONVERGE: change a matcher here and existing installs get
+ * rewritten on next launch instead of keeping whatever they were first given.
+ */
+function desiredHookConfigs(hookScriptPath: string): { postToolUse: HookConfig; stop: HookConfig } {
+  return {
+    // Match ALL tools. The old 'Bash' matcher was a memory-feature artifact —
+    // it existed only to sniff `git commit` invocations for auto-saved
+    // "decision" memories. Analytics wants every tool call, so restricting to
+    // Bash just undercounted everything. Claude Code's hook docs give "*", ""
+    // and an omitted matcher as equivalent match-all values.
+    postToolUse: {
+      matcher: '*',
+      hooks: [{ type: 'command', command: `node "${hookScriptPath}" PostToolUse` }],
+    },
+    stop: {
+      matcher: '',
+      hooks: [{ type: 'command', command: `node "${hookScriptPath}" Stop` }],
+    },
+  };
+}
+
+function hasHookConfig(configs: HookConfig[] | undefined, desired: HookConfig): boolean {
+  if (!configs) return false;
+  return configs.some(
+    config =>
+      config.matcher === desired.matcher &&
+      config.hooks.some(h => h.command === desired.hooks[0].command),
+  );
+}
+
+/**
+ * True only when BOTH our entries are present with the exact matcher and
+ * command we want.
+ *
+ * Deliberately an AND, and deliberately compares the matcher. The previous
+ * version OR'd the two hook types and only checked that the path appeared
+ * somewhere, which meant (a) a settings file carrying just one of the two
+ * reported "configured" and the missing one was never added, and (b) an entry
+ * with a stale matcher was accepted forever, so changing a matcher here would
+ * only ever reach fresh installs.
+ */
 function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: string): boolean {
   const hooks = settings.hooks;
   if (!hooks) return false;
 
-  const checkHookType = (hookConfigs: HookConfig[] | undefined): boolean => {
-    if (!hookConfigs) return false;
-    return hookConfigs.some(config =>
-      config.hooks.some(h => h.command.includes(hookScriptPath))
-    );
-  };
-
-  return checkHookType(hooks.PostToolUse) || checkHookType(hooks.Stop);
+  const desired = desiredHookConfigs(hookScriptPath);
+  return hasHookConfig(hooks.PostToolUse, desired.postToolUse) && hasHookConfig(hooks.Stop, desired.stop);
 }
 
 /**
@@ -330,22 +368,22 @@ export function registerHooks(configDir?: string): { success: boolean; action: '
     // Determine if we're adding or updating
     const action = settings.hooks ? 'updated' : 'added';
 
-    // Initialize hooks object if needed
+    const { postToolUse: postToolUseHook, stop: stopHook } = desiredHookConfigs(hookScriptPath);
+
+    // Drop any of OUR entries still present before appending the desired ones.
+    // The earlier purge kept current-path entries to avoid thrashing settings
+    // on every launch; here we know they are wrong in some way (wrong matcher,
+    // or one of the pair missing), so a stale-but-same-path entry has to go —
+    // otherwise upgrading users would end up with both the old Bash-only entry
+    // and the new match-all one, firing the hook twice on every Bash call.
+    purgeOurHooks(settings);
+
+    // Initialise AFTER the purge, not before: purgeOurHooks deletes emptied
+    // hook types and drops settings.hooks entirely when nothing is left, so
+    // initialising first would hand us an object the purge then removed.
     if (!settings.hooks) {
       settings.hooks = {};
     }
-
-    // PostToolUse hook for Bash (captures git commits)
-    const postToolUseHook: HookConfig = {
-      matcher: 'Bash',
-      hooks: [{ type: 'command', command: `node "${hookScriptPath}" PostToolUse` }],
-    };
-
-    // Stop hook (captures session summaries after significant work)
-    const stopHook: HookConfig = {
-      matcher: '',  // Match all stops
-      hooks: [{ type: 'command', command: `node "${hookScriptPath}" Stop` }],
-    };
 
     // Append to any existing (non-ours) entries on these hook types.
     settings.hooks.PostToolUse = [...(settings.hooks.PostToolUse ?? []), postToolUseHook];
