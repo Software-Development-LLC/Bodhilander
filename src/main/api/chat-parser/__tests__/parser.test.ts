@@ -74,6 +74,42 @@ function loadFixtures(): Fixture[] {
   });
 }
 
+/**
+ * Self-enforce the CRLF invariant the fixtures above depend on.
+ *
+ * .gitattributes stops a `core.autocrlf` checkout from rewriting these, but it
+ * cannot stop an editor — or a contributor bypassing git — from re-saving one
+ * with bare LF. That silently reintroduces the exact bug this corpus already
+ * hit once: a bare LF leaves the cursor where it was, so the next line renders
+ * indented by the length of the previous one and stops matching any
+ * line-start-anchored rule.
+ *
+ * Scoped to the synthetic *.txt fixtures. The real-* captures are raw PTY
+ * recordings whose byte stream is whatever the terminal actually emitted
+ * (including bare line feeds between spinner frames), so the same rule does
+ * not apply to them.
+ */
+describe('fixture line endings', () => {
+  test('every synthetic fixture uses CRLF, never a bare LF', () => {
+    const LF = 0x0a;
+    const CR = 0x0d;
+    const offenders: string[] = [];
+
+    for (const txt of fs.readdirSync(FIXTURES_DIR).filter((f) => f.endsWith('.txt')).sort()) {
+      const bytes = fs.readFileSync(path.join(FIXTURES_DIR, txt));
+      let line = 1;
+      for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] !== LF) continue;
+        if (i === 0 || bytes[i - 1] !== CR) offenders.push(`${txt}:${line}`);
+        line += 1;
+      }
+    }
+
+    // Any entry here names the file:line that needs its CR put back.
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('ChatParser snapshot fixtures', () => {
   const fixtures = loadFixtures();
   expect(fixtures.length).toBeGreaterThanOrEqual(5);
