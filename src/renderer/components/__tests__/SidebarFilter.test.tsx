@@ -11,17 +11,32 @@ import { SidebarFilter } from '../SidebarFilter';
 afterEach(cleanup);
 
 /** Mirrors how App.tsx owns the value, so tests exercise the real interaction. */
-function Harness({ initial = '' }: { initial?: string }) {
+function Harness({
+  initial = '',
+  activeOnly: initialActiveOnly = false,
+  onActiveOnlyChange,
+}: {
+  initial?: string;
+  activeOnly?: boolean;
+  onActiveOnlyChange?: (v: boolean) => void;
+}) {
   const [value, setValue] = useState(initial);
+  const [activeOnly, setActiveOnly] = useState(initialActiveOnly);
   return (
     <>
-      <SidebarFilter value={value} onChange={setValue} />
+      <SidebarFilter
+        value={value}
+        onChange={setValue}
+        activeOnly={activeOnly}
+        onActiveOnlyChange={(v) => { setActiveOnly(v); onActiveOnlyChange?.(v); }}
+      />
       <span data-testid="value">{value}</span>
     </>
   );
 }
 
 const input = () => screen.getByLabelText('Filter groups and sessions') as HTMLInputElement;
+const toggle = () => screen.getByLabelText('Show only groups with active sessions') as HTMLButtonElement;
 const currentValue = () => screen.getByTestId('value').textContent;
 
 describe('SidebarFilter', () => {
@@ -87,4 +102,30 @@ describe('SidebarFilter', () => {
     fireEvent.keyDown(input(), { key: 'a' });
     expect(currentValue()).toBe('api');
   });
+
+  test('the active-only toggle is off by default and reports aria-pressed', () => {
+    render(<Harness />);
+    expect(toggle().getAttribute('aria-pressed')).toBe('false');
+  });
+
+  test('the toggle reflects an initial on state', () => {
+    render(<Harness activeOnly={true} />);
+    expect(toggle().getAttribute('aria-pressed')).toBe('true');
+    expect(toggle().className).toContain('active');
+  });
+
+  test('clicking the toggle flips it and reports the new value', () => {
+    const seen: boolean[] = [];
+    render(<Harness onActiveOnlyChange={(v) => seen.push(v)} />);
+    fireEvent.click(toggle());
+    expect(seen).toEqual([true]);
+    expect(toggle().getAttribute('aria-pressed')).toBe('true');
+  });
+
+  test('the toggle is a real button (keyboard + AT support from the platform)', () => {
+    render(<Harness />);
+    expect(toggle().tagName).toBe('BUTTON');
+    expect(toggle().getAttribute('type')).toBe('button');
+  });
+
 });
