@@ -77,6 +77,8 @@ const App: React.FC = () => {
 
   // Sidebar text filter (#141). Ephemeral — never persisted.
   const [filterText, setFilterText] = useState('');
+  // "Show only active" toggle (#149). Persisted via the preferences table.
+  const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -145,9 +147,22 @@ const App: React.FC = () => {
 
   // Which sidebar rows survive the text filter (#141).
   const filter = useMemo(
-    () => computeGroupFilter(groups, sessions, filterText),
-    [groups, sessions, filterText],
+    () => computeGroupFilter(groups, sessions, filterText, showActiveOnly),
+    [groups, sessions, filterText, showActiveOnly],
   );
+
+  // Load the persisted toggle once; stay off if the preference is unavailable.
+  useEffect(() => {
+    window.electronAPI.getPreference('sidebar.showActiveOnly')
+      .then(v => { if (v === 'true') setShowActiveOnly(true); })
+      .catch(() => { /* preferences unavailable — leave off */ });
+  }, []);
+
+  const handleActiveOnlyChange = useCallback((next: boolean) => {
+    setShowActiveOnly(next);
+    window.electronAPI.setPreference('sidebar.showActiveOnly', String(next))
+      .catch(err => console.error('Failed to persist showActiveOnly:', err));
+  }, []);
 
   // The top-level rows actually rendered. Drives both the list and the empty
   // state, so the two can never disagree.
@@ -998,10 +1013,19 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <SidebarFilter value={filterText} onChange={setFilterText} />
+        <SidebarFilter
+          value={filterText}
+          onChange={setFilterText}
+          activeOnly={showActiveOnly}
+          onActiveOnlyChange={handleActiveOnlyChange}
+        />
 
         {filter.active && visibleTopLevelGroups.length === 0 && (
-          <output className="sidebar-filter-empty">No groups or sessions match</output>
+          <output className="sidebar-filter-empty">
+            {showActiveOnly && !filterText.trim()
+              ? 'No groups have active sessions'
+              : 'No groups or sessions match'}
+          </output>
         )}
 
         {visibleTopLevelGroups
