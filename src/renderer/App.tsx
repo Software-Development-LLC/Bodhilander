@@ -695,7 +695,7 @@ const App: React.FC = () => {
   // so it must stay filter-aware (#141).
   const navItems = useMemo(
     () => buildNavItems(groups, sessions, filter, isSearching),
-    [groups, sessions, filter],
+    [groups, sessions, filter, isSearching],
   );
 
 
