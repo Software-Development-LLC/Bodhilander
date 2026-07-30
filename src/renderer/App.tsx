@@ -16,6 +16,7 @@ import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useActiveOnlyPreference } from './hooks/useActiveOnlyPreference';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -78,7 +79,7 @@ const App: React.FC = () => {
   // Sidebar text filter (#141). Ephemeral — never persisted.
   const [filterText, setFilterText] = useState('');
   // "Show only active" toggle (#149). Persisted via the preferences table.
-  const [showActiveOnly, setShowActiveOnly] = useState(false);
+  const [showActiveOnly, handleActiveOnlyChange] = useActiveOnlyPreference();
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -151,18 +152,12 @@ const App: React.FC = () => {
     [groups, sessions, filterText, showActiveOnly],
   );
 
-  // Load the persisted toggle once; stay off if the preference is unavailable.
-  useEffect(() => {
-    window.electronAPI.getPreference('sidebar.showActiveOnly')
-      .then(v => { if (v === 'true') setShowActiveOnly(true); })
-      .catch(() => { /* preferences unavailable — leave off */ });
-  }, []);
-
-  const handleActiveOnlyChange = useCallback((next: boolean) => {
-    setShowActiveOnly(next);
-    window.electronAPI.setPreference('sidebar.showActiveOnly', String(next))
-      .catch(err => console.error('Failed to persist showActiveOnly:', err));
-  }, []);
+  // "Search mode" is a text query only. It force-expands collapsed groups and
+  // suspends collapse/drag while you search — transient, cleared when the box
+  // empties. The active-only toggle must NOT do those things: it is persisted,
+  // so locking collapse/drag on it would disable them app-wide across launches
+  // (#149). It only prunes which rows render, via `filter`.
+  const isSearching = filterText.trim().length > 0;
 
   // The top-level rows actually rendered. Drives both the list and the empty
   // state, so the two can never disagree.
@@ -699,7 +694,7 @@ const App: React.FC = () => {
   // Flat navigation list for keyboard navigation. Mirrors the rendered rows,
   // so it must stay filter-aware (#141).
   const navItems = useMemo(
-    () => buildNavItems(groups, sessions, filter),
+    () => buildNavItems(groups, sessions, filter, isSearching),
     [groups, sessions, filter],
   );
 
@@ -743,7 +738,7 @@ const App: React.FC = () => {
   const handleCollapse = useCallback(() => {
     // Rows are force-expanded while filtering, so a collapse write would be an
     // invisible, persisted change (#141).
-    if (!sidebarFocused || !focusedItemId || filter.active) return;
+    if (!sidebarFocused || !focusedItemId || isSearching) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
       if (group && !group.collapsed) {
@@ -755,13 +750,13 @@ const App: React.FC = () => {
         toggleCollapse(session.groupId);
       }
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse, filter.active]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse, isSearching]);
 
   const handleExpand = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
-      if (group?.collapsed && !filter.active) {
+      if (group?.collapsed && !isSearching) {
         toggleCollapse(focusedItemId);
       }
     } else if (focusedItemType === 'session') {
@@ -772,12 +767,12 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId, filter.active]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId, isSearching]);
 
   const handleSelect = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
-      if (!filter.active) toggleCollapse(focusedItemId);
+      if (!isSearching) toggleCollapse(focusedItemId);
     } else if (focusedItemType === 'session') {
       setActiveSessionId(focusedItemId);
       setSidebarFocused(false);
@@ -786,7 +781,7 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId, filter.active]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId, isSearching]);
 
   const handleNewGroup = useCallback(async () => {
     const name = `Group ${groups.filter(g => !g.parentId).length + 1}`;
@@ -809,7 +804,7 @@ const App: React.FC = () => {
     dropPosition: dropTarget?.type === 'session' && dropTarget.id === session.id
       ? dropTarget.position
       : null,
-    draggable: !filter.active,
+    draggable: !isSearching,
     account: effectiveAccountForSession(session.id),
     isEditing: editingSessionId === session.id,
     editingName: editingSessionName,
@@ -826,7 +821,7 @@ const App: React.FC = () => {
     onClose: () => handleRemoveSession(session.id),
   }), [
     activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
-    filter.active, effectiveAccountForSession, editingSessionId, editingSessionName,
+    isSearching, effectiveAccountForSession, editingSessionId, editingSessionName,
     handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
     handleRemoveSession,
@@ -839,7 +834,7 @@ const App: React.FC = () => {
         { key: 'Enter', label: 'Select' },
         // Collapse/expand is unavailable while filtering — rows are
         // force-expanded, so advertising it would be a lie (#141).
-        ...(filter.active ? [] : [{ key: '←→', label: 'Collapse' }]),
+        ...(isSearching ? [] : [{ key: '←→', label: 'Collapse' }]),
         { key: `${appMod}G`, label: 'New Group' },
       ];
     }
@@ -850,7 +845,7 @@ const App: React.FC = () => {
       { key: 'Ctrl+Tab', label: 'Next' },
       { key: `${appMod}W`, label: 'Close' },
     ];
-  }, [sidebarFocused, appMod, filter.active]);
+  }, [sidebarFocused, appMod, isSearching]);
 
   const handleNewSubGroup = useCallback(async () => {
     if (focusedItemType === 'group' && focusedItemId) {
@@ -1034,7 +1029,7 @@ const App: React.FC = () => {
             {/* Render main group */}
             <li
               className={`group ${draggedItem?.type === 'group' && draggedItem.id === group.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === group.id ? `drop-${dropTarget.position}` : ''}`}
-              draggable={!filter.active}
+              draggable={!isSearching}
               onDragStart={(e) => handleGroupDragStart(e, group.id)}
               onDragEnd={handleDragEnd}
               onDragOver={(e) => handleGroupDragOver(e, group.id)}
@@ -1051,11 +1046,11 @@ const App: React.FC = () => {
                     e.stopPropagation();
                     toggleCollapse(group.id);
                   }}
-                  disabled={filter.active}
-                  title={chevronTitle(group.collapsed, filter.active)}
-                  aria-label={chevronAriaLabel(group.collapsed, filter.active, 'group')}
+                  disabled={isSearching}
+                  title={chevronTitle(group.collapsed, isSearching)}
+                  aria-label={chevronAriaLabel(group.collapsed, isSearching, 'group')}
                 >
-                  {group.collapsed && !filter.active ? '▶' : '▼'}
+                  {group.collapsed && !isSearching ? '▶' : '▼'}
                 </button>
                 <button
                   className="group-color"
@@ -1127,7 +1122,7 @@ const App: React.FC = () => {
                   +
                 </button>
               </div>
-              {(filter.active || !group.collapsed) && (
+              {(isSearching || !group.collapsed) && (
                 <ul
                   className={`group-sessions ${dropTarget?.id === `group:${group.id}` ? 'drop-target' : ''}`}
                   onDragOver={(e) => handleGroupAreaDragOver(e, group.id)}
@@ -1143,13 +1138,13 @@ const App: React.FC = () => {
             </li>
 
             {/* Render sub-groups when parent not collapsed */}
-            {(filter.active || !group.collapsed) && getSubGroups(group.id)
+            {(isSearching || !group.collapsed) && getSubGroups(group.id)
               .filter(subGroup => !filter.active || filter.visibleGroupIds.has(subGroup.id))
               .map(subGroup => (
               <li
                 key={subGroup.id}
                 className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === subGroup.id ? `drop-${dropTarget.position}` : ''}`}
-                draggable={!filter.active}
+                draggable={!isSearching}
                 onDragStart={(e) => handleGroupDragStart(e, subGroup.id)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleGroupDragOver(e, subGroup.id)}
@@ -1166,11 +1161,11 @@ const App: React.FC = () => {
                       e.stopPropagation();
                       toggleCollapse(subGroup.id);
                     }}
-                    disabled={filter.active}
-                    title={chevronTitle(subGroup.collapsed, filter.active)}
-                    aria-label={chevronAriaLabel(subGroup.collapsed, filter.active, 'sub-group')}
+                    disabled={isSearching}
+                    title={chevronTitle(subGroup.collapsed, isSearching)}
+                    aria-label={chevronAriaLabel(subGroup.collapsed, isSearching, 'sub-group')}
                   >
-                    {subGroup.collapsed && !filter.active ? '▶' : '▼'}
+                    {subGroup.collapsed && !isSearching ? '▶' : '▼'}
                   </button>
                   <button
                     className="group-color sub-group-color"
@@ -1235,7 +1230,7 @@ const App: React.FC = () => {
                     +
                   </button>
                 </div>
-                {(filter.active || !subGroup.collapsed) && (
+                {(isSearching || !subGroup.collapsed) && (
                   <ul
                     className={`group-sessions ${dropTarget?.id === `group:${subGroup.id}` ? 'drop-target' : ''}`}
                     onDragOver={(e) => handleGroupAreaDragOver(e, subGroup.id)}

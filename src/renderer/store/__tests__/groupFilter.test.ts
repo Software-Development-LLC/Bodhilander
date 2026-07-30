@@ -171,6 +171,32 @@ describe('buildNavItems', () => {
     expect(items.map(i => i.id)).toEqual(['api', 'api-bill', 's-invoice']);
   });
 
+  test('activeOnly does NOT force-expand: a collapsed group keeps its sessions off the nav list (#149)', () => {
+    const groups = [
+      { ...group('a', 'Alpha'), collapsed: true },
+      { ...group('b', 'Beta') },
+    ];
+    const sessions = [
+      session('s1', 'x', 'a', 'working'),
+      session('s2', 'y', 'b', 'working'),
+    ];
+    // forceExpand defaults to filter.active; pass `false` as the caller (App)
+    // does for the active-only toggle (no text search).
+    const f = computeGroupFilter(groups, sessions, '', true);
+    const items = buildNavItems(groups, sessions, f, false);
+    // 'a' is visible (has an active session) but collapsed, so its session is
+    // not walked; 'b' is expanded so its session is.
+    expect(items.map(i => i.id)).toEqual(['a', 'b', 's2']);
+  });
+
+  test('a text search still force-expands (forceExpand defaults to filter.active)', () => {
+    const groups = [{ ...group('a', 'Alpha'), collapsed: true }];
+    const sessions = [session('s1', 'x', 'a', 'working')];
+    const f = computeGroupFilter(groups, sessions, 'alpha');
+    const items = buildNavItems(groups, sessions, f); // default forceExpand
+    expect(items.map(i => i.id)).toEqual(['a', 's1']);
+  });
+
   test('no matches yields an empty nav list', () => {
     const items = buildNavItems(GROUPS, SESSIONS, computeGroupFilter(GROUPS, SESSIONS, 'zzzz'));
     expect(items).toEqual([]);

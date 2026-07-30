@@ -115,12 +115,17 @@ export function buildNavItems(
   groups: Group[],
   sessions: Session[],
   filter: GroupFilterResult,
+  forceExpand: boolean = filter.active,
 ): NavItem[] {
   const items: NavItem[] = [];
 
+  // Row visibility follows the filter (text OR active-only). Expansion is a
+  // separate concern: only a text search force-expands collapsed groups, so
+  // callers pass `forceExpand` independently (#149). The default keeps the
+  // pre-#149 behavior for callers that don't distinguish the two.
   const groupVisible = (g: Group) => !filter.active || filter.visibleGroupIds.has(g.id);
   const sessionVisible = (s: Session) => !filter.active || filter.visibleSessionIds.has(s.id);
-  const expanded = (g: Group) => filter.active || !g.collapsed;
+  const expanded = (g: Group) => forceExpand || !g.collapsed;
 
   const sessionsOf = (groupId: string) =>
     sessions.filter(s => s.groupId === groupId && sessionVisible(s)).sort(byOrder);
