@@ -88,13 +88,24 @@ The `!activeOnly` guard on the second clause is the AND: with the toggle on, a n
 - parent name-matches, child has one active + one stopped session, toggle on → parent + child visible, only the active session renders.
 - parent name-matches, all descendant sessions stopped, toggle on → hidden.
 
-`buildNavItems` is unchanged: it already derives rows from `visibleGroupIds` / `visibleSessionIds` and treats a collapsed group as expanded while `active`, so it follows the combined result automatically.
+### Search-mode vs. row-filtering (revised during review)
+
+`filter.active` originally drove two things at once: *row filtering* and the *search-mode locks* — force-expanding collapsed groups, disabling collapse chevrons, and disabling drag-reorder. That conflation is safe only while `active` means a transient text query. The active-only toggle is **persisted**, so keeping the locks on `filter.active` would disable collapse and drag app-wide across launches (a real bug caught in review).
+
+So the two concerns are split:
+
+- **Row filtering** stays on `filter.active` (text OR active-only) — `visibleTopLevelGroups`, the session/sub-group visibility filters, and the empty-state gate.
+- **Search-mode locks** move to a separate `isSearching = filterText.trim().length > 0` (text query only) — force-expand, chevron `disabled`, `draggable`, the keyboard collapse/expand/select guards, and the collapse hint.
+
+`buildNavItems` therefore takes an explicit `forceExpand` parameter (defaulting to `filter.active` for back-compat) which `App.tsx` passes `isSearching`, so keyboard navigation mirrors exactly what renders: under the toggle a collapsed group is still collapsed (its sessions neither rendered nor navigable), while under a text search collapsed groups force-expand as before.
+
+**Consequence — the collapse asymmetry:** with the active-only toggle on (and no text query), a collapsed group that contains an active session shows in the list but stays collapsed; you expand it to see which session is live. This differs from the text filter, which force-expands. It is deliberate: the toggle is persistent and must not override the user's collapse state or lock collapse/drag. (Confirmed by the `activeOnly does NOT force-expand` nav test.)
 
 ## App.tsx integration
 
-1. `const [showActiveOnly, setShowActiveOnly] = useState(false)`; load from `getPreference('sidebar.showActiveOnly')` in a mount effect; on toggle, set state and `setPreference(...)`.
+1. Persistence lives in a `useActiveOnlyPreference` hook: loads `getPreference('sidebar.showActiveOnly')` once on mount, persists via `setPreference` on toggle, and ignores a stale mount-read once the user has interacted (closes a load race).
 2. `filter = useMemo(() => computeGroupFilter(groups, sessions, filterText, showActiveOnly), [groups, sessions, filterText, showActiveOnly])`.
-3. `visibleTopLevelGroups` and the auto-expand (`filter.active || !group.collapsed`) are unchanged — they already key off `filter.active`, which now also reflects the toggle.
+3. `const isSearching = filterText.trim().length > 0` gates the search-mode locks (see above); `visibleTopLevelGroups` and the render-time filters stay on `filter.active`.
 4. Render the toggle button in the `.sidebar-filter` row, left of the input.
 5. Empty state adapts: when `filter.active` and nothing renders — "No groups have active sessions" if `showActiveOnly && !filterText.trim()`, otherwise the existing "No groups or sessions match".
 
@@ -107,7 +118,9 @@ The selected session (`activeSessionId`) can be filtered out of the sidebar whil
 ## Testing
 
 - **`groupFilter.test.ts`** (bun): existing tests stay green (toggle defaults off). New cases: active-only with no query; active-only + text AND; descendant counting across sub-groups; name-matched group intersected with active-only (all-stopped subtree hidden); `error` counts as active; `stopped` excluded; empty query + toggle off returns inactive.
-- **DOM test** for the toggle button: renders with correct `aria-pressed`, flips on click, invokes the persist callback. (Persistence itself — the `getPreference`/`setPreference` round trip — is exercised via a mocked `electronAPI` in the button's harness, matching the `SidebarFilter` test style.)
+- **`useActiveOnlyPreference.test.ts`**: the persistence round trip against a mocked `electronAPI` — load `'true'`/`null`, persist `'true'`/`'false'`, and the toggle-before-load race.
+- **`SidebarFilter.test.tsx`**: the toggle button — `aria-pressed` in both states, click flips it, it is a real `<button>`.
+- **`buildNavItems` nav tests**: active-only respects collapse (does not force-expand); a text search still force-expands.
 
 ## Rollout
 
