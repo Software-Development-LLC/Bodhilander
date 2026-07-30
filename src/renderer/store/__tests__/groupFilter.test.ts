@@ -21,8 +21,13 @@ function group(id: string, name: string, parentId: string | null = null): Group 
   } as Group;
 }
 
-function session(id: string, name: string, groupId: string): Session {
-  return { id, name, groupId } as Session;
+function session(
+  id: string,
+  name: string,
+  groupId: string,
+  state: Session['state'] = 'idle',
+): Session {
+  return { id, name, groupId, state } as Session;
 }
 
 // Tree used by most tests:
@@ -181,5 +186,94 @@ describe('buildNavItems', () => {
     sessions[1].order = 1;
     const items = buildNavItems(groups, sessions, computeGroupFilter(groups, sessions, ''));
     expect(items.map(i => i.id)).toEqual(['g', 's1', 's2']);
+  });
+});
+
+describe('computeGroupFilter — activeOnly (#149)', () => {
+  test('with no query, hides groups whose sessions are all stopped', () => {
+    const groups = [group('a', 'Alpha'), group('b', 'Beta')];
+    const sessions = [
+      session('s1', 'x', 'a', 'working'),
+      session('s2', 'y', 'b', 'stopped'),
+    ];
+    const r = computeGroupFilter(groups, sessions, '', true);
+    expect(r.active).toBe(true);
+    expect([...r.visibleGroupIds]).toEqual(['a']);
+    expect([...r.visibleSessionIds]).toEqual(['s1']);
+  });
+
+  test('error counts as active', () => {
+    const r = computeGroupFilter([group('a', 'Alpha')], [session('s1', 'x', 'a', 'error')], '', true);
+    expect(r.visibleSessionIds.has('s1')).toBe(true);
+    expect(r.visibleGroupIds.has('a')).toBe(true);
+  });
+
+  test('every non-stopped state counts as active', () => {
+    const groups = [group('a', 'Alpha')];
+    for (const st of ['idle', 'working', 'waiting', 'error'] as const) {
+      const r = computeGroupFilter(groups, [session('s', 'x', 'a', st)], '', true);
+      expect(r.visibleSessionIds.has('s')).toBe(true);
+    }
+    const stopped = computeGroupFilter(groups, [session('s', 'x', 'a', 'stopped')], '', true);
+    expect(stopped.visibleSessionIds.size).toBe(0);
+  });
+
+  test('an active sub-group keeps its parent visible', () => {
+    const groups = [group('a', 'Alpha'), group('a1', 'Child', 'a')];
+    const sessions = [session('s1', 'x', 'a1', 'waiting')];
+    const r = computeGroupFilter(groups, sessions, '', true);
+    expect([...r.visibleGroupIds].sort()).toEqual(['a', 'a1']);
+  });
+
+  test('a stopped sub-group under an active parent is hidden', () => {
+    const groups = [group('a', 'Alpha'), group('a1', 'Child', 'a'), group('a2', 'Other', 'a')];
+    const sessions = [
+      session('s1', 'x', 'a1', 'working'),
+      session('s2', 'y', 'a2', 'stopped'),
+    ];
+    const r = computeGroupFilter(groups, sessions, '', true);
+    expect([...r.visibleGroupIds].sort()).toEqual(['a', 'a1']);
+    expect([...r.visibleSessionIds]).toEqual(['s1']);
+  });
+
+  test('activeOnly + text is AND: only active sessions matching text', () => {
+    const groups = [group('a', 'Alpha')];
+    const sessions = [
+      session('s1', 'login', 'a', 'working'),
+      session('s2', 'login', 'a', 'stopped'),
+      session('s3', 'logout', 'a', 'working'),
+    ];
+    const r = computeGroupFilter(groups, sessions, 'login', true);
+    expect([...r.visibleSessionIds]).toEqual(['s1']);
+    expect([...r.visibleGroupIds]).toEqual(['a']);
+  });
+
+  test('name-matched group with only stopped sessions is hidden when activeOnly', () => {
+    const r = computeGroupFilter([group('a', 'Alpha')], [session('s1', 'x', 'a', 'stopped')], 'alpha', true);
+    expect(r.visibleGroupIds.size).toBe(0);
+    expect(r.visibleSessionIds.size).toBe(0);
+  });
+
+  test('name-matched group reveals its active sessions when activeOnly', () => {
+    const groups = [group('a', 'Alpha')];
+    const sessions = [session('s1', 'x', 'a', 'idle'), session('s2', 'y', 'a', 'stopped')];
+    const r = computeGroupFilter(groups, sessions, 'alpha', true);
+    expect([...r.visibleGroupIds]).toEqual(['a']);
+    expect([...r.visibleSessionIds]).toEqual(['s1']);
+  });
+
+  test('activeOnly off leaves the result identical to a plain text filter', () => {
+    const groups = [group('a', 'Alpha'), group('a1', 'Child', 'a')];
+    const sessions = [session('s1', 'x', 'a', 'stopped'), session('s2', 'y', 'a1', 'stopped')];
+    const withFlag = computeGroupFilter(groups, sessions, 'alpha', false);
+    const plain = computeGroupFilter(groups, sessions, 'alpha');
+    expect([...withFlag.visibleGroupIds].sort()).toEqual([...plain.visibleGroupIds].sort());
+    expect([...withFlag.visibleSessionIds].sort()).toEqual([...plain.visibleSessionIds].sort());
+  });
+
+  test('empty query and activeOnly off is inactive', () => {
+    const r = computeGroupFilter([group('a', 'Alpha')], [], '', false);
+    expect(r.active).toBe(false);
+    expect(r.visibleGroupIds.size).toBe(0);
   });
 });
