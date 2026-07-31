@@ -399,7 +399,7 @@ const App: React.FC = () => {
     if (sessionIds.length === 0) return;
     setRestartKeys(prev => {
       const next = { ...prev };
-      for (const id of sessionIds) next[id] = (next[id] || 0) + 1;
+      for (const id of sessionIds) next[id] = (next[id] ?? 0) + 1;
       return next;
     });
   };
@@ -443,13 +443,15 @@ const App: React.FC = () => {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
         label: `${currentAccountId === null ? '✓ ' : '   '}Inherit account from group`,
-        onClick: () => handleAssignSessionAccount(sessionId, null),
+        // Fire-and-forget: the menu closes on click and the store logs its own
+        // failures, so there's nothing for the caller to await.
+        onClick: () => { void handleAssignSessionAccount(sessionId, null); },
       });
       for (const acc of claudeAccounts) {
         const isCurrent = currentAccountId === acc.id;
         items.push({
           label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
-          onClick: () => handleAssignSessionAccount(sessionId, acc.id),
+          onClick: () => { void handleAssignSessionAccount(sessionId, acc.id); },
         });
       }
     }
@@ -487,13 +489,15 @@ const App: React.FC = () => {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
         label: `${currentAccountId === null ? '✓ ' : '   '}Use default account`,
-        onClick: () => handleAssignGroupAccount(groupId, null),
+        // Fire-and-forget, as above — the restart prompt is raised from inside
+        // the handler once main reports which sessions moved.
+        onClick: () => { void handleAssignGroupAccount(groupId, null); },
       });
       for (const acc of claudeAccounts) {
         const isCurrent = currentAccountId === acc.id;
         items.push({
           label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
-          onClick: () => handleAssignGroupAccount(groupId, acc.id),
+          onClick: () => { void handleAssignGroupAccount(groupId, acc.id); },
         });
       }
     }
