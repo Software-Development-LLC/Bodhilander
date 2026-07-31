@@ -85,6 +85,25 @@ export function useGroups() {
     }
   }, []);
 
+  /**
+   * Reassign a group's Claude account (BDHLNDR-31). Returns the sessions that
+   * inherited the change and therefore need a pty restart — see
+   * useSessions().setSessionAccount for why the plain updateGroup path isn't
+   * enough.
+   */
+  const setGroupAccount = useCallback(async (id: string, accountId: string | null): Promise<string[]> => {
+    try {
+      const { affectedSessionIds } = await window.electronAPI.assignAccountToGroup(id, accountId);
+      setGroups(prev => prev.map(g =>
+        g.id === id ? { ...g, claudeAccountId: accountId } : g
+      ));
+      return affectedSessionIds;
+    } catch (error) {
+      console.error('Failed to assign account to group:', error);
+      return [];
+    }
+  }, []);
+
   const removeGroup = useCallback(async (id: string) => {
     try {
       await window.electronAPI.deleteGroup(id);
@@ -172,6 +191,7 @@ export function useGroups() {
     loading,
     createGroup,
     updateGroup,
+    setGroupAccount,
     removeGroup,
     reorderGroup,
     toggleCollapse,

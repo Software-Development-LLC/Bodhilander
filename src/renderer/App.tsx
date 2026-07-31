@@ -41,6 +41,7 @@ const App: React.FC = () => {
     loading: groupsLoading,
     createGroup,
     updateGroup,
+    setGroupAccount,
     removeGroup,
     reorderGroup,
     toggleCollapse,
@@ -114,9 +115,11 @@ const App: React.FC = () => {
 
   // Destructive action confirmation state
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'closeSession' | 'deleteGroup';
+    type: 'closeSession' | 'deleteGroup' | 'restartForAccountSwitch';
     id: string;
     message: string;
+    /** Sessions to respawn, for 'restartForAccountSwitch'. */
+    sessionIds?: string[];
   } | null>(null);
 
   const GROUP_COLORS = [
@@ -130,6 +133,7 @@ const App: React.FC = () => {
     setActiveSessionId,
     createSession,
     updateSession,
+    setSessionAccount,
     removeSession,
     getSessionsByGroup,
     getStateCounts,
@@ -376,6 +380,55 @@ const App: React.FC = () => {
     setColorPickerGroupId(null);
   };
 
+  /**
+   * Of the sessions whose account just changed, the ones with a pty to replace.
+   * Stopped sessions are skipped — they have nothing running under the old
+   * account and pick the new one up whenever the user starts them.
+   */
+  const liveSessionsAmong = (sessionIds: string[]) =>
+    sessionIds.filter(id => sessions.find(s => s.id === id)?.state !== 'stopped');
+
+  /**
+   * Respawn the ptys of sessions whose account just changed (BDHLNDR-31).
+   * The account only reaches the CLI as CLAUDE_CONFIG_DIR, which is fixed when
+   * the pty spawns — without this the picked account applies to nothing until
+   * the user restarts by hand. Main has already carried the conversation
+   * transcript over, so the relaunch resumes where the old account left off.
+   */
+  const restartSessions = (sessionIds: string[]) => {
+    if (sessionIds.length === 0) return;
+    setRestartKeys(prev => {
+      const next = { ...prev };
+      for (const id of sessionIds) next[id] = (next[id] ?? 0) + 1;
+      return next;
+    });
+  };
+
+  // Switching one session's account restarts it outright: the user pointed at
+  // that session and picked an account, so the restart is the thing they asked
+  // for.
+  const handleAssignSessionAccount = async (sessionId: string, accountId: string | null) => {
+    restartSessions(liveSessionsAmong(await setSessionAccount(sessionId, accountId)));
+  };
+
+  // A group switch can sweep several running sessions at once, which is a much
+  // bigger action than the click implies — so the restart is opt-in. Declining
+  // still persists the assignment; those sessions move over on their next
+  // restart.
+  const handleAssignGroupAccount = async (groupId: string, accountId: string | null) => {
+    const live = liveSessionsAmong(await setGroupAccount(groupId, accountId));
+    if (live.length === 0) return;
+    const count = live.length === 1 ? '1 running session' : `${live.length} running sessions`;
+    setConfirmAction({
+      type: 'restartForAccountSwitch',
+      id: groupId,
+      sessionIds: live,
+      message: `${count} in this group ${live.length === 1 ? 'is' : 'are'} still on the previous `
+        + `account. Restart ${live.length === 1 ? 'it' : 'them'} now to apply the switch? `
+        + `Conversations resume where they left off. Skipping applies the switch on their next restart.`,
+    });
+  };
+
   const handleSessionContextMenu = (e: React.MouseEvent, sessionId: string, sessionName: string) => {
     e.preventDefault();
     const session = sessions.find(s => s.id === sessionId);
@@ -390,13 +443,15 @@ const App: React.FC = () => {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
         label: `${currentAccountId === null ? '✓ ' : '   '}Inherit account from group`,
-        onClick: () => updateSession(sessionId, { claudeAccountId: null }),
+        // Fire-and-forget: the menu closes on click and the store logs its own
+        // failures, so there's nothing for the caller to await.
+        onClick: () => { void handleAssignSessionAccount(sessionId, null); },
       });
       for (const acc of claudeAccounts) {
         const isCurrent = currentAccountId === acc.id;
         items.push({
           label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
-          onClick: () => updateSession(sessionId, { claudeAccountId: acc.id }),
+          onClick: () => { void handleAssignSessionAccount(sessionId, acc.id); },
         });
       }
     }
@@ -434,13 +489,15 @@ const App: React.FC = () => {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
         label: `${currentAccountId === null ? '✓ ' : '   '}Use default account`,
-        onClick: () => updateGroup(groupId, { claudeAccountId: null }),
+        // Fire-and-forget, as above — the restart prompt is raised from inside
+        // the handler once main reports which sessions moved.
+        onClick: () => { void handleAssignGroupAccount(groupId, null); },
       });
       for (const acc of claudeAccounts) {
         const isCurrent = currentAccountId === acc.id;
         items.push({
           label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
-          onClick: () => updateGroup(groupId, { claudeAccountId: acc.id }),
+          onClick: () => { void handleAssignGroupAccount(groupId, acc.id); },
         });
       }
     }
@@ -1437,12 +1494,17 @@ const App: React.FC = () => {
           >
             <p id="confirm-message">{confirmAction.message}</p>
             <div className="confirm-actions">
-              <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>Cancel</button>
+              <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>
+                {confirmAction.type === 'restartForAccountSwitch' ? 'Not now' : 'Cancel'}
+              </button>
               <button className="btn btn-danger" onClick={() => {
                 if (confirmAction.type === 'closeSession') doRemoveSession(confirmAction.id);
                 if (confirmAction.type === 'deleteGroup') doDeleteGroup(confirmAction.id);
+                if (confirmAction.type === 'restartForAccountSwitch') restartSessions(confirmAction.sessionIds ?? []);
                 setConfirmAction(null);
-              }}>Confirm</button>
+              }}>
+                {confirmAction.type === 'restartForAccountSwitch' ? 'Restart' : 'Confirm'}
+              </button>
             </div>
           </div>
         </div>

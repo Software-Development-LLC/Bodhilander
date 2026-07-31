@@ -122,6 +122,26 @@ export function useSessions() {
     }
   }, []);
 
+  /**
+   * Reassign a session's Claude account (BDHLNDR-31). Goes through the
+   * dedicated channel rather than updateSession because main has to carry the
+   * conversation transcript into the new account's config dir and tell us which
+   * ptys need restarting — the column write alone leaves a live session on the
+   * old account.
+   */
+  const setSessionAccount = useCallback(async (id: string, accountId: string | null): Promise<string[]> => {
+    try {
+      const { affectedSessionIds } = await window.electronAPI.assignAccountToSession(id, accountId);
+      setSessions(prev => prev.map(s =>
+        s.id === id ? { ...s, claudeAccountId: accountId } : s
+      ));
+      return affectedSessionIds;
+    } catch (error) {
+      console.error('Failed to assign account to session:', error);
+      return [];
+    }
+  }, []);
+
   const removeSession = useCallback(async (id: string) => {
     try {
       await window.electronAPI.deleteDbSession(id);
@@ -190,6 +210,7 @@ export function useSessions() {
     createSession,
     updateSession,
     updateSessionState,
+    setSessionAccount,
     removeSession,
     getSessionsByGroup,
     getStateCounts,
