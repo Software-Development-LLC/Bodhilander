@@ -186,6 +186,36 @@ describe('assignSessionAccount', () => {
     expect(storedUuid('s1')).toBeNull();
   });
 
+  test('refuses to build a transcript path from an unexpected id format', () => {
+    const dirA = addAccount('acct-a', true);
+    const dirB = addAccount('acct-b');
+    addGroup('g1');
+    // Nothing in the app writes an id like this — the guard exists so the
+    // path build never depends on that staying true.
+    addSession('s1', 'g1', { accountId: 'acct-a', claudeSessionId: '../../escape' });
+    writeTranscript(dirA, '-Users-x-repo', 'uuid-1');
+
+    accountSwitch.assignSessionAccount('s1', 'acct-b');
+
+    expect(fs.existsSync(path.join(tmp, 'escape.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(dirB, 'escape.jsonl'))).toBe(false);
+    // Nothing was carried, so the id is dropped and the respawn starts fresh.
+    expect(storedUuid('s1')).toBeNull();
+  });
+
+  test('an unreadable projects dir degrades to a fresh conversation', () => {
+    const dirA = addAccount('acct-a', true);
+    addAccount('acct-b');
+    addGroup('g1');
+    addSession('s1', 'g1', { accountId: 'acct-a', claudeSessionId: 'uuid-1' });
+    // projects/ as a file, not a directory — readdir fails with ENOTDIR, the
+    // "real environment problem" branch rather than the benign ENOENT one.
+    fs.writeFileSync(path.join(dirA, 'projects'), 'not a directory');
+
+    expect(() => accountSwitch.assignSessionAccount('s1', 'acct-b')).not.toThrow();
+    expect(storedUuid('s1')).toBeNull();
+  });
+
   test('leaves an existing transcript in the target dir untouched', () => {
     const dirA = addAccount('acct-a', true);
     const dirB = addAccount('acct-b');
