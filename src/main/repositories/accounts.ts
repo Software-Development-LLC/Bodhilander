@@ -1,18 +1,6 @@
 import { getDatabase } from '../database';
 import { ClaudeAccount } from '../../shared/types';
-
-function mapRow(row: any): ClaudeAccount {
-  return {
-    id: row.id,
-    label: row.label,
-    configDir: row.config_dir,
-    email: row.email ?? null,
-    color: row.color ?? '#888888',
-    isDefault: Boolean(row.is_default),
-    createdAt: new Date(row.created_at),
-    lastUsedAt: row.last_used_at ? new Date(row.last_used_at) : null,
-  };
-}
+import { mapAccountRow as mapRow } from './account-row';
 
 export function getAllAccounts(): ClaudeAccount[] {
   const db = getDatabase();
@@ -137,27 +125,5 @@ export function deleteAccount(id: string): void {
   tx();
 }
 
-/**
- * Resolve which Claude account a given session should launch under (BDHLNDR-31).
- * Fallback chain: session → group → default → null (legacy ~/.claude behavior).
- * Returns null if no accounts are configured, preserving pre-feature behavior.
- */
-export function resolveAccountForSession(sessionId: string): ClaudeAccount | null {
-  const db = getDatabase();
-
-  const row = db.prepare(`
-    SELECT
-      s.claude_account_id AS session_account_id,
-      g.claude_account_id AS group_account_id
-    FROM sessions s
-    LEFT JOIN groups g ON g.id = s.group_id
-    WHERE s.id = ?
-  `).get(sessionId) as { session_account_id: string | null; group_account_id: string | null } | undefined;
-
-  const candidateId = row?.session_account_id ?? row?.group_account_id ?? null;
-  if (candidateId) {
-    const account = getAccount(candidateId);
-    if (account) return account;
-  }
-  return getDefaultAccount();
-}
+// resolveAccountForSession() lives in ../account-resolver — it reads sessions
+// and groups as well as accounts, so it isn't this repository's to own.

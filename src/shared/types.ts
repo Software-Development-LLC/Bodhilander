@@ -220,6 +220,15 @@ export interface ClaudeAccount {
   lastUsedAt: Date | null;
 }
 
+/**
+ * Outcome of reassigning a Claude account to a session or group (BDHLNDR-31).
+ * CLAUDE_CONFIG_DIR is fixed when a pty spawns, so the listed sessions must be
+ * restarted before the switch takes effect on them.
+ */
+export interface AccountSwitchResult {
+  affectedSessionIds: string[];
+}
+
 export interface AppState {
   groups: Group[];
   sessions: Session[];

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -321,6 +321,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('accounts:update', id, updates),
   setDefaultAccount: (id: string): Promise<void> =>
     ipcRenderer.invoke('accounts:setDefault', id),
+  assignAccountToSession: (sessionId: string, accountId: string | null): Promise<AccountSwitchResult> =>
+    ipcRenderer.invoke('accounts:assignToSession', sessionId, accountId),
+  assignAccountToGroup: (groupId: string, accountId: string | null): Promise<AccountSwitchResult> =>
+    ipcRenderer.invoke('accounts:assignToGroup', groupId, accountId),
   onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => {
     const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; email: string | null }) => callback(data);
     ipcRenderer.on('accounts:login-completed', listener);

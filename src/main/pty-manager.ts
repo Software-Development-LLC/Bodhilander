@@ -25,7 +25,8 @@ import {
   setClaudeSessionId as storeClaudeSessionId,
   clearClaudeSessionId as clearStoredClaudeSessionId,
 } from './repositories/sessions';
-import { resolveAccountForSession, touchAccount } from './repositories/accounts';
+import { touchAccount } from './repositories/accounts';
+import { resolveAccountForSession } from './account-resolver';
 import { vaultEnvFor } from './key-vault';
 import { redactEnv } from './redact-env';
 import log from 'electron-log';

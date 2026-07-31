@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -157,6 +157,8 @@ interface ElectronAPI {
   deleteAccount: (id: string) => Promise<void>;
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }) => Promise<void>;
   setDefaultAccount: (id: string) => Promise<void>;
+  assignAccountToSession: (sessionId: string, accountId: string | null) => Promise<AccountSwitchResult>;
+  assignAccountToGroup: (groupId: string, accountId: string | null) => Promise<AccountSwitchResult>;
   onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => () => void;
   onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => () => void;
 

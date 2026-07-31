@@ -19,6 +19,7 @@ import * as chatEventsRepo from './repositories/chat-events';
 import { ChatParser } from './api/chat-parser';
 import * as accountsRepo from './repositories/accounts';
 import * as accountAuth from './account-auth';
+import * as accountSwitch from './account-switch';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
 import { StateMonitor } from './state-monitor';
@@ -793,6 +794,23 @@ safeHandle('accounts:update', (
 
 safeHandle('accounts:setDefault', (id: string) => {
   accountsRepo.setDefaultAccount(id);
+});
+
+// Assigning an account is routed through account-switch (not db:sessions:update)
+// so the conversation transcript follows the session into the new account's
+// config dir, and the renderer learns which ptys to respawn — CLAUDE_CONFIG_DIR
+// is fixed at spawn time, so a live session ignores the column write otherwise.
+safeHandle('accounts:assignToSession', (sessionId: string, accountId: string | null) => {
+  const result = accountSwitch.assignSessionAccount(sessionId, accountId);
+  getApiServer().broadcastSessionsUpdated();
+  return result;
+});
+
+safeHandle('accounts:assignToGroup', (groupId: string, accountId: string | null) => {
+  const result = accountSwitch.assignGroupAccount(groupId, accountId);
+  getApiServer().broadcastGroupsUpdated();
+  getApiServer().broadcastSessionsUpdated();
+  return result;
 });
 
 // Database IPC Handlers - Session Events (BDHLNDR-17)
