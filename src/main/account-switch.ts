@@ -108,8 +108,30 @@ function rehomeConversation(
   }
 }
 
+/**
+ * A conversation id we're willing to interpolate into a filesystem path.
+ *
+ * Today these are always crypto.randomUUID() output written by this app, so
+ * nothing in the current flow can produce a hostile value — but the id reaches
+ * us from a database column and is used to build a path, and that pairing
+ * shouldn't rest on an assumption about the writer. Rejecting separators and
+ * traversal makes the containment local and checkable.
+ */
+const PATH_SAFE_CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function isPathSafeConversationId(uuid: string): boolean {
+  return PATH_SAFE_CONVERSATION_ID.test(uuid) && !uuid.includes('..');
+}
+
 /** @returns true when the transcript is readable from the target config dir. */
 function carryTranscript(uuid: string, fromDir: string, toDir: string): boolean {
+  if (!isPathSafeConversationId(uuid)) {
+    // Not a shape we'd ever have written — refuse to build a path from it and
+    // let the caller drop the id, which restarts on a fresh conversation.
+    log.warn(`[Accounts] Refusing to carry conversation with unexpected id format: ${uuid}`);
+    return false;
+  }
+
   try {
     const source = findTranscript(fromDir, uuid);
     if (!source) return false;
@@ -137,8 +159,15 @@ function findTranscript(configDir: string, uuid: string): string | null {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(projects, { withFileTypes: true });
-  } catch {
-    return null; // No transcripts yet for this account.
+  } catch (err) {
+    // A missing projects/ dir is the ordinary "no transcripts yet" case and
+    // stays quiet. Anything else — permissions, I/O — is an environment
+    // problem, and silently reading it as "nothing to carry" would present a
+    // broken machine as a routine fresh conversation.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn(`[Accounts] Could not read ${projects} while carrying a conversation:`, err);
+    }
+    return null;
   }
 
   for (const entry of entries) {

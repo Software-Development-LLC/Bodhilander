@@ -1497,7 +1497,10 @@ const App: React.FC = () => {
               <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>
                 {confirmAction.type === 'restartForAccountSwitch' ? 'Not now' : 'Cancel'}
               </button>
-              <button className="btn btn-danger" onClick={() => {
+              {/* Closing a session or deleting a group destroys something; a
+                  restart to apply an account switch just re-runs it, so it
+                  shouldn't wear the danger styling that says otherwise. */}
+              <button className={`btn ${confirmAction.type === 'restartForAccountSwitch' ? 'btn-primary' : 'btn-danger'}`} onClick={() => {
                 if (confirmAction.type === 'closeSession') doRemoveSession(confirmAction.id);
                 if (confirmAction.type === 'deleteGroup') doDeleteGroup(confirmAction.id);
                 if (confirmAction.type === 'restartForAccountSwitch') restartSessions(confirmAction.sessionIds ?? []);
