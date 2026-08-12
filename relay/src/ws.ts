@@ -28,6 +28,8 @@ export interface AgentSocketData {
   nonce: string;
   authed: boolean;
   machineId: string | null;
+  /** Reaper for a socket that connects but never answers the challenge. */
+  authTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface ClientSocketData {
@@ -45,9 +47,12 @@ export interface WsGatewayContext {
   logger: Logger;
 }
 
+/** How long an agent socket may sit unauthenticated before it is closed. */
+export const AGENT_AUTH_TIMEOUT_MS = 30_000;
+
 /** Per-connection state for an agent (`server.upgrade(req, { data })`). */
 export function newAgentSocketData(): AgentSocketData {
-  return { role: 'agent', nonce: randomToken(32), authed: false, machineId: null };
+  return { role: 'agent', nonce: randomToken(32), authed: false, machineId: null, authTimer: null };
 }
 
 /** Per-connection state for an authenticated web client. */
@@ -69,7 +74,14 @@ export function createGateway(ctx: WsGatewayContext) {
   return {
     open(ws: ServerWebSocket<SocketData>) {
       if (ws.data.role === 'agent') {
-        send(ws, { type: 'challenge', nonce: ws.data.nonce });
+        const data = ws.data;
+        send(ws, { type: 'challenge', nonce: data.nonce });
+        // Don't let an unauthenticated socket linger: it costs a connection
+        // slot and nothing can ever be routed over it.
+        data.authTimer = setTimeout(() => {
+          data.authTimer = null;
+          if (!data.authed) ws.close(4401, 'auth timeout');
+        }, AGENT_AUTH_TIMEOUT_MS);
       }
       // Clients speak first (client:open), so nothing to send on open.
     },
@@ -88,7 +100,11 @@ export function createGateway(ctx: WsGatewayContext) {
 
     close(ws: ServerWebSocket<SocketData>) {
       if (ws.data.role === 'agent') {
-        const { machineId } = ws.data;
+        const { machineId, authTimer } = ws.data;
+        if (authTimer) {
+          clearTimeout(authTimer);
+          ws.data.authTimer = null;
+        }
         if (machineId && agents.get(machineId) === ws) {
           agents.delete(machineId);
           logger.info('agent offline', { machineId });
@@ -132,7 +148,20 @@ export function createGateway(ctx: WsGatewayContext) {
       }
       data.authed = true;
       data.machineId = machine.id;
+      if (data.authTimer) {
+        clearTimeout(data.authTimer);
+        data.authTimer = null;
+      }
+      // One live socket per machine. Publish the new socket BEFORE closing the
+      // old one: the close handler only touches `agents` when the map still
+      // points at the socket that closed, so this ordering guarantees it can't
+      // delete the live entry or announce a spurious `agent:offline` to clients.
+      const previous = agents.get(machine.id);
       agents.set(machine.id, ws);
+      if (previous && previous !== ws) {
+        logger.info('replacing an existing agent socket', { machineId: machine.id });
+        previous.close(4409, 'replaced by a newer connection');
+      }
       repos.touchMachine(machine.id);
       send(ws, { type: 'agent:ready', machineId: machine.id });
       logger.info('agent online', { machineId: machine.id });
@@ -145,16 +174,32 @@ export function createGateway(ctx: WsGatewayContext) {
       send(ws, { type: 'pong' });
       return;
     }
-    // Route an opaque frame back to a specific client.
+    // Route an opaque frame back to a specific client. The target must be bound
+    // to THIS agent's machine — without that check an agent could name any
+    // client id in the table and inject frames into someone else's channel.
     if (msg.type === 'to-client' && typeof msg.clientId === 'string') {
       const client = clients.get(msg.clientId);
-      if (client) send(client, { type: 'from-agent', payload: msg.payload });
+      if (client && (client.data as ClientSocketData).machineId === data.machineId) {
+        send(client, { type: 'from-agent', payload: msg.payload });
+      }
     }
   }
 
   function handleClient(ws: ServerWebSocket<SocketData>, data: ClientSocketData, msg: Record<string, unknown>) {
+    // Browser keepalive. Browsers can't send WS control frames from script, so
+    // an idle viewer looks dead to any intermediary; the client pings instead.
+    if (msg.type === 'ping') {
+      send(ws, { type: 'pong' });
+      return;
+    }
     // Open a channel to one of the user's machines.
     if (msg.type === 'client:open' && typeof msg.machineId === 'string') {
+      // One channel per socket. Re-opening would strand the agent's state for
+      // this client id and could re-point the socket at a different machine.
+      if (data.machineId) {
+        ws.close(4400, 'channel already open');
+        return;
+      }
       const machine = repos.getMachine(msg.machineId);
       if (!machine || machine.user_id !== data.userId) {
         ws.close(4403, 'not your machine');

@@ -25,12 +25,20 @@ function wsUrl(path: string): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${path}`;
 }
 
+/**
+ * Browser keepalive interval. Script can't send WebSocket control frames, so a
+ * viewer that is only reading produces no upstream traffic at all and looks
+ * idle to the relay and to anything between. Matches the agent's 30s ping.
+ */
+const PING_INTERVAL_MS = 30_000;
+
 export class RelayConnection {
   private ws: WebSocket | null = null;
   private key: CryptoKey | null = null;
   private clientKeys: ClientKeys | null = null;
   private sendCounter = 0;
   private recvCounter = -1;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
 
   onState: (s: ConnState, detail?: string) => void = () => {};
   onMessage: (m: Inner) => void = () => {};
@@ -52,8 +60,23 @@ export class RelayConnection {
       this.onState('handshaking');
     };
     ws.onmessage = (e) => void this.handle(JSON.parse(String(e.data)));
-    ws.onclose = () => this.onState('closed');
+    ws.onclose = () => {
+      this.stopPing();
+      this.onState('closed');
+    };
     ws.onerror = () => this.onState('error');
+    this.startPing();
+  }
+
+  private startPing(): void {
+    this.stopPing();
+    this.pingTimer = setInterval(() => this.send({ type: 'ping' }), PING_INTERVAL_MS);
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer === null) return;
+    clearInterval(this.pingTimer);
+    this.pingTimer = null;
   }
 
   private async handle(msg: Inner): Promise<void> {
@@ -109,6 +132,7 @@ export class RelayConnection {
     const ws = this.ws;
     this.ws = null;
     this.key = null;
+    this.stopPing();
     if (ws) {
       // Detach handlers first so this deliberate close doesn't surface as a
       // 'closed' state event (which the caller uses to schedule a reconnect).

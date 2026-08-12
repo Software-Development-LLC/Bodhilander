@@ -60,10 +60,10 @@ function connect(url: string, headers?: Record<string, string>) {
   return { ws, opened, closed, next };
 }
 
-async function registerMachine(repos: Repositories) {
+async function registerMachine(repos: Repositories, providerUserId = '1') {
   const kp = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as unknown as CryptoKeyPair;
   const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
-  const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', email: null, avatarUrl: null });
+  const user = repos.upsertGithubUser({ providerUserId, displayName: 'U', email: null, avatarUrl: null });
   const claim = repos.claimLinkCode(repos.createLinkCode('m', pub, new Uint8Array(32).fill(1), 600).code, user.id);
   const machineId = claim.ok ? claim.machine.id : '';
   const sign = async (m: Uint8Array) => new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, kp.privateKey, toArrayBuffer(m)));
@@ -219,6 +219,97 @@ describe('client ↔ agent brokering (M3)', () => {
       await client.opened;
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
       expect((await client.next()).type).toBe('agent:offline');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('an agent cannot push frames into another machine\'s client channel', async () => {
+    const repos = freshRepos();
+    const a = await registerMachine(repos, 'user-a');
+    const b = await registerMachine(repos, 'user-b');
+    const server = startServer(repos);
+    try {
+      const agentA = await onlineAgent(server.port!, a.pub, a.sign);
+      const agentB = await onlineAgent(server.port!, b.pub, b.sign);
+
+      const { token } = repos.createSession(b.userId, 3600);
+      const clientB = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await clientB.opened;
+      clientB.ws.send(JSON.stringify({ type: 'client:open', machineId: b.machineId }));
+      const clientId = (await agentB.next()).clientId;
+      expect((await clientB.next()).type).toBe('channel:open');
+
+      // Agent A names a client id that belongs to machine B's channel.
+      agentA.ws.send(JSON.stringify({ type: 'to-client', clientId, payload: 'injected' }));
+      // ...then B's own agent sends a legitimate frame. Both traverse the same
+      // server, so if the injection were routed it would arrive first.
+      agentB.ws.send(JSON.stringify({ type: 'to-client', clientId, payload: 'legitimate' }));
+
+      expect(await clientB.next()).toMatchObject({ type: 'from-agent', payload: 'legitimate' });
+
+      clientB.ws.close();
+      agentA.ws.close();
+      agentB.ws.close();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('a second client:open on the same socket is refused (4400)', async () => {
+    const repos = freshRepos();
+    const { pub, sign, machineId, userId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const agent = await onlineAgent(server.port!, pub, sign);
+      const { token } = repos.createSession(userId, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+      await agent.next();
+      expect((await client.next()).type).toBe('channel:open');
+
+      // Re-opening would strand the agent's state for this client id.
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+      expect((await client.closed).code).toBe(4400);
+
+      agent.ws.close();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('a client ping is answered with a pong (browser keepalive)', async () => {
+    const repos = freshRepos();
+    const { userId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { token } = repos.createSession(userId, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+
+      client.ws.send(JSON.stringify({ type: 'ping' }));
+      expect((await client.next()).type).toBe('pong');
+
+      client.ws.close();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('reconnecting an agent closes the socket it replaces', async () => {
+    const repos = freshRepos();
+    const { pub, sign } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const first = await onlineAgent(server.port!, pub, sign);
+      const second = await onlineAgent(server.port!, pub, sign);
+
+      // The stale socket is closed rather than silently dropped from the table.
+      expect((await first.closed).code).toBe(4409);
+
+      second.ws.close();
     } finally {
       server.stop(true);
     }
