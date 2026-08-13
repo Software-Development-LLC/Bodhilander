@@ -164,6 +164,9 @@ export type RedeemResult =
   | { ok: true; grant: MachineGrant; invite: ShareInvite }
   | { ok: false; reason: 'not_found' | 'expired' | 'already_used' | 'revoked' | 'wrong_account' | 'own_machine' };
 
+/** Thrown inside the redemption transaction to roll it back on a lost race. */
+class RedeemRaceError extends Error {}
+
 export function createRepositories(db: RelayDb, now: () => number = Date.now): Repositories {
   return {
     upsertGithubUser(profile) {
@@ -419,11 +422,18 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
 
       const ts = now();
       const grant = db.transaction(() => {
-        db.query("UPDATE share_invites SET status = 'redeemed', redeemed_by = ?, redeemed_at = ? WHERE id = ?").run(
-          user.id,
-          ts,
-          row.id,
-        );
+        // The `status = 'pending'` guard is repeated HERE, in SQL, rather than
+        // resting on the JS check above. That check is only safe because this
+        // method has no await and Bun cannot interleave two redemptions of the
+        // same code — which is a property of the runtime, not of the
+        // invariant. Enforced at the row, it holds regardless.
+        const claimed = db
+          .query(
+            `UPDATE share_invites SET status = 'redeemed', redeemed_by = ?, redeemed_at = ?
+              WHERE id = ? AND status = 'pending'`,
+          )
+          .run(user.id, ts, row.id);
+        if (Number(claimed.changes ?? 0) === 0) throw new RedeemRaceError();
         db.query(
           `INSERT INTO machine_grants
              (id, machine_id, grantee_user_id, invite_id, certificate, role, label, status,
@@ -431,9 +441,19 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
            VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending', ?, ?)`,
         ).run(grantId, row.machine_id, user.id, row.id, row.role, row.label, ts, row.grant_ttl_seconds);
         return db.query('SELECT * FROM machine_grants WHERE id = ?').get(grantId) as MachineGrant;
-      })();
+      });
 
-      return { ok: true, grant, invite: { ...row, status: 'redeemed', redeemed_by: user.id, redeemed_at: ts } };
+      let grantRow: MachineGrant;
+      try {
+        grantRow = grant();
+      } catch (err) {
+        // Lost the race: someone else redeemed this code first. Same answer
+        // they would have got a moment later.
+        if (err instanceof RedeemRaceError) return { ok: false, reason: 'already_used' };
+        throw err;
+      }
+
+      return { ok: true, grant: grantRow, invite: { ...row, status: 'redeemed', redeemed_by: user.id, redeemed_at: ts } };
     },
 
     getGrant(grantId) {

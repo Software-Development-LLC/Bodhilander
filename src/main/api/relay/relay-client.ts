@@ -37,13 +37,13 @@ import {
   GRANT_PREF,
 } from './grant-store';
 import { getInviteScope, recordInviteScope } from './grant-sql';
+import type { GrantRole } from './grants';
 import { getAllSessions } from '../../repositories/sessions';
 
 /** Session name for the approval prompt, or null if it has since gone. */
 function getSessionName(sessionId: string): string | null {
   return getAllSessions().find((s) => s.id === sessionId)?.name ?? null;
 }
-import type { GrantRole } from './grants';
 
 /** A grant as the relay describes it. Never authorization on its own. */
 export interface PendingGrant {

@@ -305,7 +305,14 @@ describe('client ↔ agent brokering (M3)', () => {
 
       // The agent checks a certificate against this; it is never authorization
       // on its own, which is why the field is named `principal`.
-      expect(await agent.nextOfType('client:open')).toMatchObject({ type: 'client:open', principal: { userId } });
+      // The handle specifically, not just the id: the owner's presence
+      // surfaces and approval prompt render it, and asserting only `userId`
+      // would pass whether or not it is sent — which is exactly how it went
+      // missing once already.
+      expect(await agent.nextOfType('client:open')).toMatchObject({
+        type: 'client:open',
+        principal: { userId, githubLogin: 'u', displayName: 'U' },
+      });
     } finally {
       server.stop(true);
     }

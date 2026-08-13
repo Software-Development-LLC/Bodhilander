@@ -388,6 +388,7 @@ export function createGateway(ctx: WsGatewayContext) {
       data.grantId = access.relation === 'grantee' ? access.grant.id : null;
       if (access.relation === 'grantee') repos.touchGrant(access.grant.id);
       clients.set(data.clientId, ws);
+      const principalUser = repos.getUser(data.userId);
       // `principal` is relay-ASSERTED, and named so no branch downstream reads
       // it as authorization. The agent treats it as a claim to check a
       // certificate against, never as a grant in itself.
@@ -401,7 +402,14 @@ export function createGateway(ctx: WsGatewayContext) {
       send(agent, {
         type: 'client:open',
         clientId: data.clientId,
-        principal: { userId: data.userId },
+        principal: {
+          userId: data.userId,
+          // The handle is what the approval prompt and the presence surfaces
+          // show. A display name is free text the account holder chooses, so
+          // it is carried only as a secondary label, never as the identity.
+          githubLogin: principalUser?.github_login ?? null,
+          displayName: principalUser?.display_name ?? null,
+        },
         payload: msg.payload,
       });
       send(ws, { type: 'channel:open', clientId: data.clientId });

@@ -17,7 +17,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import crypto from 'crypto';
 import { SessionTunnel } from '../session-tunnel';
-import type { TunnelDeps, TunnelSessionRow, TunnelGroupRow, TunnelStoredGrant } from '../session-tunnel';
+import type { Principal, TunnelDeps, TunnelSessionRow, TunnelGroupRow, TunnelStoredGrant } from '../session-tunnel';
 import { deriveSessionKey, sealJson, openJson, buildHandshakeProof } from '../e2e';
 import { COMMAND_CAPS } from '../grants';
 
@@ -43,7 +43,7 @@ interface Harness {
   /** The client public key most recently offered, for proof assertions. */
   lastClientPub: string | null;
   /** Client-side key material, so tests can read what the tunnel sealed. */
-  openChannel(clientId: string, opts?: { principal?: { userId: string }; certificate?: string }): Buffer | null;
+  openChannel(clientId: string, opts?: { principal?: Principal; certificate?: string }): Buffer | null;
   send(clientId: string, key: Buffer, n: number, obj: unknown): void;
   opened(clientId: string, key: Buffer): { type?: string; [k: string]: unknown }[];
 }
@@ -502,5 +502,126 @@ describe('the handshake proof still binds the ephemeral key to this machine', ()
       .map((m) => (m.payload as { agentX25519Pub: string }).agentX25519Pub);
     expect(agentKeys).toHaveLength(2);
     expect(agentKeys[0]).not.toBe(agentKeys[1]);
+  });
+});
+
+describe('presence', () => {
+  test('a guest appears only once they are actually watching something', () => {
+    // "dana-k is here" and "dana-k is looking at this terminal right now" are
+    // different claims. Only the second is useful to an owner deciding
+    // whether to keep typing.
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', {
+      principal: { userId: GUEST_ID, githubLogin: 'dana-k', displayName: 'Dana' },
+      certificate: mintCertificate(),
+    })!;
+
+    expect(h.tunnel.attachedGuests()).toHaveLength(1);
+    expect(h.tunnel.attachedGuests()[0]!.sessionIds).toEqual([]);
+
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    expect(h.tunnel.attachedGuests()[0]!.sessionIds).toEqual(['s1']);
+  });
+
+  test('presence carries the handle, which is what the owner is shown', () => {
+    const h = harness({ grantRow: storedGrant() });
+    h.openChannel('c1', {
+      principal: { userId: GUEST_ID, githubLogin: 'dana-k', displayName: 'Dana' },
+      certificate: mintCertificate(),
+    });
+    expect(h.tunnel.attachedGuests()[0]).toMatchObject({ login: 'dana-k', displayName: 'Dana', role: 'viewer' });
+  });
+
+  test('the owner is never listed as a guest', () => {
+    // Otherwise every owner would appear to be watching themselves.
+    const h = harness();
+    h.openChannel('c1', { principal: { userId: OWNER_ID } });
+    expect(h.tunnel.attachedGuests()).toEqual([]);
+  });
+
+  test('unsubscribing removes the session from presence', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    h.send('c1', key, 1, { type: 'terminal:unsubscribe', sessionId: 's1' });
+    expect(h.tunnel.attachedGuests()[0]!.sessionIds).toEqual([]);
+  });
+
+  test('disconnecting removes the guest entirely', () => {
+    // Detach is as load-bearing as attach: an owner who never sees someone
+    // leave cannot tell watching from watched-once.
+    const h = harness({ grantRow: storedGrant() });
+    h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() });
+    h.tunnel.closeClient('c1');
+    expect(h.tunnel.attachedGuests()).toEqual([]);
+  });
+
+  test('every presence transition notifies the owner surfaces', () => {
+    // Attach, subscribe, unsubscribe and detach must each push, or the badge
+    // goes stale and quietly lies about who is watching.
+    let notifications = 0;
+    const h = harness({ grantRow: storedGrant(), onPresenceChange: () => { notifications += 1; } });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    const afterAttach = notifications;
+    expect(afterAttach).toBeGreaterThan(0);
+
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    expect(notifications).toBeGreaterThan(afterAttach);
+    const afterSub = notifications;
+
+    h.send('c1', key, 1, { type: 'terminal:unsubscribe', sessionId: 's1' });
+    expect(notifications).toBeGreaterThan(afterSub);
+    const afterUnsub = notifications;
+
+    h.tunnel.closeClient('c1');
+    expect(notifications).toBeGreaterThan(afterUnsub);
+  });
+
+  test('an owner attaching does not notify the presence surfaces', () => {
+    let notifications = 0;
+    const h = harness({ onPresenceChange: () => { notifications += 1; } });
+    h.openChannel('c1', { principal: { userId: OWNER_ID } });
+    expect(notifications).toBe(0);
+  });
+});
+
+describe('revokeGrant', () => {
+  test('cuts every client holding that grant, not just one', () => {
+    // One person may have several browsers open under one grant. Missing one
+    // would leave a guest still watching a terminal the owner believes they
+    // have been removed from.
+    const h = harness({ grantRow: storedGrant() });
+    const k1 = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    const k2 = h.openChannel('c2', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', k1, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    h.send('c2', k2, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    expect(h.tunnel.attachedGuests()).toHaveLength(2);
+
+    h.tunnel.revokeGrant('grant-1');
+
+    expect(h.tunnel.attachedGuests().every((g) => g.sessionIds.length === 0)).toBe(true);
+    for (const [id, key] of [['c1', k1], ['c2', k2]] as const) {
+      const opened = h.opened(id, key);
+      expect(opened.some((m) => m.type === 'denied' && m.reason === 'revoked')).toBe(true);
+    }
+  });
+
+  test('leaves clients holding a different grant alone', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+
+    h.tunnel.revokeGrant('some-other-grant');
+
+    expect(h.tunnel.attachedGuests()[0]!.sessionIds).toEqual(['s1']);
+    expect(h.opened('c1', key).some((m) => m.type === 'denied')).toBe(false);
+  });
+
+  test('the owner is unaffected by a grant revocation', () => {
+    const h = harness();
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    h.tunnel.revokeGrant('grant-1');
+    h.send('c1', key, 0, { type: 'sessions:list' });
+    expect(h.opened('c1', key).some((m) => m.type === 'sessions')).toBe(true);
   });
 });
