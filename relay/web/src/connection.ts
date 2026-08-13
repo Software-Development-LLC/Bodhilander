@@ -15,7 +15,14 @@ import {
   type SealedFrame,
 } from './crypto';
 
-export type ConnState = 'connecting' | 'handshaking' | 'ready' | 'offline' | 'closed' | 'error';
+export type ConnState = 'connecting' | 'handshaking' | 'ready' | 'offline' | 'closed' | 'error' | 'denied';
+
+/**
+ * Why access ended. Distinct values because the copy differs and guessing
+ * tells people false stories — "Will revoked your access" when Will merely
+ * closed a terminal is socially loaded and untrue.
+ */
+export type DeniedReason = 'not_authorized' | 'revoked' | 'expired' | 'session_ended' | 'machine_unlinked';
 export interface Inner {
   type: string;
   [k: string]: unknown;
@@ -48,6 +55,12 @@ export class RelayConnection {
     private readonly machineId: string,
     /** The machine's Ed25519 pubkey (base64) as reported by /api/machines. */
     private readonly machineEd25519Pub: string,
+    /**
+     * A grant certificate, for a guest. Opaque here — the relay cannot read it
+     * and neither can we; the agent verifies its own signature and decides
+     * what it permits. Absent for the machine's owner.
+     */
+    private readonly certificate: string | null = null,
   ) {}
 
   connect(): void {
@@ -60,7 +73,14 @@ export class RelayConnection {
       // the timer to exist during a window where it can do nothing.
       this.startPing();
       this.clientKeys = await generateClientKeys();
-      this.send({ type: 'client:open', machineId: this.machineId, payload: { clientX25519Pub: this.clientKeys.pubB64 } });
+      this.send({
+        type: 'client:open',
+        machineId: this.machineId,
+        payload: {
+          clientX25519Pub: this.clientKeys.pubB64,
+          ...(this.certificate ? { certificate: this.certificate } : {}),
+        },
+      });
       this.onState('handshaking');
     };
     ws.onmessage = (e) => void this.handle(JSON.parse(String(e.data)));
@@ -84,6 +104,11 @@ export class RelayConnection {
 
   private async handle(msg: Inner): Promise<void> {
     if (msg.type === 'agent:offline') return this.onState('offline');
+    // The relay refuses to route a guest to an agent that does not enforce
+    // grants — an older desktop build would ignore the certificate entirely.
+    if (msg.type === 'share:unsupported') {
+      return this.onState('error', 'That machine is running an older version that cannot share sessions safely.');
+    }
     if (msg.type === 'channel:open') return; // relay ack
     if (msg.type !== 'from-agent') return;
 
@@ -108,12 +133,25 @@ export class RelayConnection {
       return;
     }
 
+    // An unsealed refusal, before any key exists. Only trusted to mean "you
+    // did not get in" — never to explain why, since nothing has authenticated
+    // it at this point.
+    if (payload?.type === 'denied' && !this.key) {
+      return this.onState('denied', 'not_authorized');
+    }
+
     // Sealed frame.
     const frame = payload as unknown as SealedFrame;
     if (!this.key || typeof frame?.n !== 'number' || frame.n <= this.recvCounter) return;
     try {
       const inner = await openJson<Inner>(this.key, frame);
       this.recvCounter = frame.n;
+      // A SEALED refusal is trustworthy: only the machine could have written
+      // it, so its reason can safely drive what the guest is told.
+      if (inner.type === 'denied') {
+        this.onState('denied', typeof inner.reason === 'string' ? inner.reason : 'revoked');
+        return;
+      }
       this.onMessage(inner);
     } catch {
       /* drop unauthenticatable frame */
