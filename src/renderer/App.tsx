@@ -442,6 +442,18 @@ const App: React.FC = () => {
       { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
     ];
 
+    // Sharing is entered PER SESSION, which is the whole shape of the feature —
+    // there is no "share my machine" anywhere. Only offered while remote
+    // hosting is actually connected: an invite minted against a relay we
+    // cannot reach would fail at the point the owner is trying to be helpful.
+    if (relayReady) {
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
+      items.push({
+        label: 'Share…',
+        onClick: () => setSharingSession({ id: sessionId, name: sessionName }),
+      });
+    }
+
     // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
     if (claudeAccounts.length > 0) {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
@@ -864,6 +876,8 @@ const App: React.FC = () => {
   const [pendingShares, setPendingShares] = useState<RelayPendingShare[]>([]);
   /** The session the share modal is open for, if any. */
   const [sharingSession, setSharingSession] = useState<{ id: string; name: string } | null>(null);
+  /** Whether sharing can be offered at all — linked, enabled and connected. */
+  const [relayReady, setRelayReady] = useState(false);
 
   /** Guests watching a given session right now. */
   const guestsBySession = useMemo(() => {
@@ -1026,6 +1040,7 @@ const App: React.FC = () => {
       setPendingOwner(s.pendingOwner);
       setAttachedGuests(s.attachedGuests ?? []);
       setPendingShares(s.pendingShares ?? []);
+      setRelayReady(s.enabled && s.linked && s.connected);
     };
     window.electronAPI
       .relayGetStatus()

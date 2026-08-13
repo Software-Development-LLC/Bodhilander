@@ -129,6 +129,8 @@ export interface Repositories {
   bindGrantCertificate(grantId: string, certificate: string, expiresAt: number): boolean;
   revokeGrant(grantId: string): boolean;
   touchGrant(grantId: string): void;
+  /** Grants the next purge will drop — so their live sockets can be cut first. */
+  listDeadShareGrants(): MachineGrant[];
   /** Expired or revoked grants and dead invites, dropped by the reaper. */
   purgeDeadShares(): number;
 }
@@ -494,6 +496,18 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
 
     touchGrant(grantId) {
       db.query('UPDATE machine_grants SET last_used_at = ? WHERE id = ?').run(now(), grantId);
+    },
+
+    listDeadShareGrants() {
+      // Read the rows the next purge will drop, so the caller can cut their
+      // live sockets first. Otherwise a grant whose TTL elapsed would keep
+      // streaming until something else noticed.
+      const ts = now();
+      return db
+        .query(
+          "SELECT * FROM machine_grants WHERE status = 'revoked' OR (expires_at IS NOT NULL AND expires_at <= ?)",
+        )
+        .all(ts) as MachineGrant[];
     },
 
     purgeDeadShares() {

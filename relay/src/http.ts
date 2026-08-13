@@ -348,8 +348,12 @@ export function createRouter(ctx: RelayContext) {
     const shared = [];
     for (const grant of repos.listGrantsForUser(user.id)) {
       // Only grants the agent has actually countersigned are usable; a pending
-      // one is a request the owner has not answered.
+      // one is a request the owner has not answered. The expiry check matters
+      // because the reaper runs every ten minutes — without it a lapsed grant
+      // would keep being listed, certificate and all, until it happened to be
+      // swept.
       if (grant.status !== 'active' || !grant.certificate) continue;
+      if (grant.expires_at !== null && grant.expires_at <= Date.now()) continue;
       const machine = repos.getMachine(grant.machine_id);
       if (!machine) continue;
       const owner = repos.getUser(machine.user_id);

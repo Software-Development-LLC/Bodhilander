@@ -75,6 +75,11 @@ function main(): void {
     try {
       repos.purgeExpiredSessions();
       const codes = repos.purgeExpiredLinkCodes();
+      // Cut any live socket BEFORE dropping its row. The explicit-revoke path
+      // does this via onGrantRevoked; a grant that merely reached its TTL
+      // deserves the same treatment, or the guest keeps a channel open to a
+      // grant that no longer exists.
+      for (const dead of repos.listDeadShareGrants()) gateway.notifyGrantRevoked(dead);
       // Revoked/expired grants and stale unredeemed invites. The desktop keeps
       // its own record, so nothing dropped here is the audit trail.
       const shares = repos.purgeDeadShares();

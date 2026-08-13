@@ -269,9 +269,31 @@ export class SessionTunnel {
 
   /** Run `send` for every client subscribed to `sessionId`. */
   private fanOut(sessionId: string, send: (clientId: string) => void): void {
+    const now = this.deps.now();
     for (const [clientId, s] of this.sessions) {
-      if (s.subs.has(sessionId)) send(clientId);
+      if (!s.subs.has(sessionId)) continue;
+      // Re-check the grant on every frame, not just at subscribe time.
+      // `permits()` gates INBOUND commands; without this an expired or revoked
+      // guest would keep RECEIVING live output for as long as their socket
+      // stayed open — the stream is the thing being protected, so the check
+      // belongs where the data leaves.
+      if (!permits(s.grant, 'terminal:subscribe', sessionId, now)) {
+        this.expireClient(clientId, s);
+        continue;
+      }
+      send(clientId);
     }
+  }
+
+  /** Stop streaming to a client whose grant has lapsed, and tell it why. */
+  private expireClient(clientId: string, s: ClientSession): void {
+    if (s.grant.role === 'owner') return;
+    const reason = s.grant.expiresAt <= this.deps.now() ? 'expired' : 'revoked';
+    s.subs.clear();
+    s.grant = DENY_ALL;
+    this.sealTo(clientId, { type: 'denied', reason });
+    this.deps.onPresenceChange?.();
+    this.deps.log.info('[Relay] stopped streaming to a lapsed guest', { clientId, reason });
   }
 
   private startListening(): void {

@@ -625,3 +625,89 @@ describe('revokeGrant', () => {
     expect(h.opened('c1', key).some((m) => m.type === 'sessions')).toBe(true);
   });
 });
+
+describe('a lapsed grant stops the stream, not just the commands', () => {
+  /** Drive the PTY data listener the tunnel registered. */
+  function harnessWithPty() {
+    let emit: ((e: { id: string; data: string }) => void) | null = null;
+    const h = harness({
+      grantRow: storedGrant(),
+      pty: {
+        subscribe: (handlers) => {
+          emit = handlers.data;
+          return () => { emit = null; };
+        },
+        write: () => {},
+        resize: () => {},
+        getSize: () => ({ cols: 80, rows: 24 }),
+        isLive: () => true,
+        ptyEpoch: () => 111,
+        getSerializedBuffer: async () => '',
+      },
+    });
+    return { h, emit: (data: string) => emit?.({ id: 's1', data }) };
+  }
+
+  test('output stops once the grant has expired', () => {
+    // permits() gates INBOUND commands. Without a check at fan-out, an expired
+    // guest keeps RECEIVING live terminal output for as long as their socket
+    // stays open — and the stream is the thing being protected.
+    let now = NOW;
+    const { h, emit } = harnessWithPty();
+    h.deps.now = () => now;
+
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+
+    emit('BEFORE');
+    expect(h.opened('c1', key).some((m) => m.data === 'BEFORE')).toBe(true);
+
+    now = NOW + 4_000_000; // past the certificate's expiry
+    emit('AFTER');
+
+    const seen = h.opened('c1', key);
+    expect(seen.some((m) => m.data === 'AFTER')).toBe(false);
+    // And they are told, rather than left watching a frozen screen.
+    expect(seen.some((m) => m.type === 'denied' && m.reason === 'expired')).toBe(true);
+  });
+
+  test('a revoked guest stops receiving output immediately', () => {
+    const { h, emit } = harnessWithPty();
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+
+    h.tunnel.revokeGrant('grant-1');
+    emit('AFTER REVOKE');
+
+    expect(h.opened('c1', key).some((m) => m.data === 'AFTER REVOKE')).toBe(false);
+  });
+
+  test('the owner keeps receiving output regardless of grant clocks', () => {
+    // ownerGrant() never expires; a bug that expired owners would take the
+    // machine away from its own user.
+    let now = NOW;
+    const { h, emit } = harnessWithPty();
+    h.deps.now = () => now;
+
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+
+    now = NOW + 10_000_000_000;
+    emit('STILL MINE');
+    expect(h.opened('c1', key).some((m) => m.data === 'STILL MINE')).toBe(true);
+  });
+
+  test('an expired guest disappears from presence', () => {
+    let now = NOW;
+    const { h, emit } = harnessWithPty();
+    h.deps.now = () => now;
+
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    expect(h.tunnel.attachedGuests()[0]!.sessionIds).toEqual(['s1']);
+
+    now = NOW + 4_000_000;
+    emit('tick');
+    expect(h.tunnel.attachedGuests()[0]!.sessionIds).toEqual([]);
+  });
+});
