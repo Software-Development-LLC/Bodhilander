@@ -10,8 +10,8 @@ import { toArrayBuffer } from './crypto';
 const logger = createLogger('error');
 const b64 = (b: Uint8Array) => Buffer.from(b).toString('base64');
 
-function startServer(repos: Repositories) {
-  const gateway = createGateway({ repos, logger });
+function startServer(repos: Repositories, authTimeoutMs?: number) {
+  const gateway = createGateway({ repos, logger, authTimeoutMs });
   return Bun.serve({
     port: 0,
     fetch(req, srv) {
@@ -149,6 +149,46 @@ describe('agent WebSocket handshake', () => {
       const garbage = b64(new Uint8Array(64).fill(1));
       c.ws.send(JSON.stringify({ type: 'agent:auth', ed25519Pub: b64(pub), signature: garbage }));
       expect((await c.closed).code).toBe(4401);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('a socket that never answers the challenge is closed when the timeout elapses', async () => {
+    // The reaper itself, not just the timer field: an unauthenticated socket
+    // holds a connection slot and nothing can ever be routed over it.
+    const repos = freshRepos();
+    const server = startServer(repos, 50);
+    try {
+      const c = connect(`ws://127.0.0.1:${server.port}/ws`);
+      await c.opened;
+      await c.next(); // challenge — then say nothing at all
+      expect((await c.closed).code).toBe(4401);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('answering the challenge disarms the reaper', async () => {
+    // The mirror of the test above: with a 50ms timeout, an authenticated
+    // socket that stays quiet well past it must still be alive. Without the
+    // clearTimeout in the auth path this fails.
+    const repos = freshRepos();
+    const { pub, sign, machineId } = await registerMachine(repos);
+    const server = startServer(repos, 50);
+    try {
+      const c = connect(`ws://127.0.0.1:${server.port}/ws`);
+      await c.opened;
+      const challenge = await c.next();
+      const sig = await sign(buildAgentAuthMessage(challenge.nonce));
+      c.ws.send(JSON.stringify({ type: 'agent:auth', ed25519Pub: b64(pub), signature: b64(sig) }));
+      expect(await c.next()).toMatchObject({ type: 'agent:ready', machineId });
+
+      // Prove liveness after the window rather than sleeping blind: a ping
+      // round-trip that completes can only happen on an open socket.
+      await Bun.sleep(120);
+      c.ws.send(JSON.stringify({ type: 'ping' }));
+      expect(await c.next()).toMatchObject({ type: 'pong' });
     } finally {
       server.stop(true);
     }
