@@ -37,6 +37,35 @@ export type ClaimResult =
   | { ok: true; machine: Machine }
   | { ok: false; reason: 'not_found' | 'expired' | 'already_used' };
 
+export interface MachineGrant {
+  id: string;
+  machine_id: string;
+  grantee_user_id: string;
+  invite_id: string | null;
+  /** Signed by the desktop; opaque here. NULL until the agent countersigns. */
+  certificate: string | null;
+  role: 'viewer' | 'operator';
+  label: string | null;
+  status: 'pending' | 'active' | 'revoked';
+  created_at: number;
+  bound_at: number | null;
+  expires_at: number | null;
+  revoked_at: number | null;
+  last_used_at: number | null;
+}
+
+/**
+ * How a user reaches a machine.
+ *
+ * `none` covers "no such machine" as well as "not yours" on purpose: telling
+ * the two apart would turn the socket into an oracle for which machine ids
+ * exist.
+ */
+export type MachineAccess =
+  | { relation: 'owner'; machine: Machine }
+  | { relation: 'grantee'; machine: Machine; grant: MachineGrant }
+  | { relation: 'none' };
+
 export interface Repositories {
   upsertGithubUser(profile: GithubProfile): User;
   getUser(id: string): User | null;
@@ -59,7 +88,19 @@ export interface Repositories {
   getMachine(id: string): Machine | null;
   findMachineByEd25519(ed25519: Uint8Array): Machine | null;
   touchMachine(id: string): void;
+
+  /**
+   * Whether `userId` may open a channel to `machineId`, and on what basis.
+   * Replaces the bare `machine.user_id !== userId` check — this answer only
+   * decides whether a socket is worth brokering; the agent re-derives every
+   * capability from the certificate it signed.
+   */
+  getMachineAccess(machineId: string, userId: string): MachineAccess;
 }
+// The grant write path (bind / revoke / touch / reap) lands with M5.2, where
+// invite redemption first creates a grant for it to act on. Adding it now
+// would put another unreachable method on this interface — the same defect
+// `purgeExpiredSessions` was before #154.
 
 export function createRepositories(db: RelayDb, now: () => number = Date.now): Repositories {
   return {
@@ -212,6 +253,26 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
 
     touchMachine(id) {
       db.query('UPDATE machines SET last_seen_at = ? WHERE id = ?').run(now(), id);
+    },
+
+    getMachineAccess(machineId, userId) {
+      const machine = this.getMachine(machineId);
+      if (!machine) return { relation: 'none' };
+      if (machine.user_id === userId) return { relation: 'owner', machine };
+
+      // Only an active, unexpired grant counts. A NULL expires_at means the
+      // agent has not bound a certificate yet, so there is nothing to present.
+      const grant = db
+        .query(
+          `SELECT * FROM machine_grants
+            WHERE machine_id = ? AND grantee_user_id = ? AND status = 'active'
+              AND certificate IS NOT NULL AND expires_at IS NOT NULL AND expires_at > ?
+            ORDER BY expires_at DESC LIMIT 1`,
+        )
+        .get(machineId, userId, now()) as MachineGrant | null;
+
+      if (!grant) return { relation: 'none' };
+      return { relation: 'grantee', machine, grant };
     },
   };
 }
