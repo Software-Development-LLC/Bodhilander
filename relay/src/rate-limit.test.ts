@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { clientIp, createRateLimiter } from './rate-limit';
+import { clientIp, createRateLimiter, MAX_WINDOWS } from './rate-limit';
 
 /** A limiter driven by a clock the test controls. */
 function fixedClock(start = 1_000_000) {
@@ -63,6 +63,86 @@ describe('createRateLimiter', () => {
     expect(limiter.check('old', 1, 10_000).allowed).toBe(true);
     // ...while 'fresh' is still being counted.
     expect(limiter.check('fresh', 1, 60_000).allowed).toBe(false);
+  });
+});
+
+describe('createRateLimiter memory bound', () => {
+  /** Enough past the ceiling to force at least one eviction pass. */
+  const EXTRA = 1_000;
+
+  /** Fill the limiter with distinct single-hit keys, as a flood would. */
+  function flood(limiter: ReturnType<typeof createRateLimiter>, count: number, prefix = 'flood') {
+    for (let i = 0; i < count; i++) limiter.check(`${prefix}:${i}`, 5, 60_000);
+  }
+
+  test('stays bounded no matter how many distinct keys arrive', () => {
+    const limiter = createRateLimiter(fixedClock().now);
+
+    flood(limiter, MAX_WINDOWS + EXTRA);
+
+    expect(limiter.size()).toBeLessThanOrEqual(MAX_WINDOWS);
+  });
+
+  test('a throttled window survives a flood of fresh keys', () => {
+    // The property that makes this not an LRU. If eviction dropped the oldest
+    // entry, an attacker could flush the window that is throttling them and
+    // start over with a clean bucket -- trading a memory bound for a
+    // rate-limit bypass.
+    const limiter = createRateLimiter(fixedClock().now);
+
+    for (let i = 0; i < 3; i++) limiter.check('victim', 3, 60_000);
+    expect(limiter.check('victim', 3, 60_000).allowed).toBe(false);
+
+    flood(limiter, MAX_WINDOWS + EXTRA);
+
+    expect(limiter.check('victim', 3, 60_000).allowed).toBe(false);
+  });
+
+  test('evicts idle windows rather than throttling ones', () => {
+    // An under-limit window is free to drop: its holder was going to be let
+    // through anyway, so forgetting it costs nothing.
+    const limiter = createRateLimiter(fixedClock().now);
+
+    limiter.check('idle', 5, 60_000); // 1 of 5 -- not throttling anyone
+    flood(limiter, MAX_WINDOWS + EXTRA);
+
+    expect(limiter.size()).toBeLessThanOrEqual(MAX_WINDOWS);
+    expect(limiter.check('idle', 5, 60_000).allowed).toBe(true);
+  });
+
+  test('expired windows are reclaimed before anything live is evicted', () => {
+    const clock = fixedClock();
+    const limiter = createRateLimiter(clock.now);
+
+    flood(limiter, MAX_WINDOWS, 'stale');
+    clock.advance(60_001); // every stale window has now elapsed
+
+    // A single fresh key should reclaim the whole expired generation.
+    limiter.check('fresh', 5, 60_000);
+
+    expect(limiter.size()).toBeLessThan(MAX_WINDOWS);
+  });
+
+  test('refuses rather than forgetting a limit when every window is throttling', () => {
+    // Reaching this needs a distributed flood that actually throttles
+    // MAX_WINDOWS distinct buckets. Refusing is the safe answer -- evicting
+    // instead would reset a limit that is doing its job -- and it clears at
+    // the next window boundary.
+    const clock = fixedClock();
+    const limiter = createRateLimiter(clock.now);
+
+    for (let i = 0; i < MAX_WINDOWS; i++) {
+      const key = `saturated:${i}`;
+      limiter.check(key, 1, 60_000); // one hit against a limit of one
+    }
+
+    const result = limiter.check('newcomer', 5, 60_000);
+    expect(result.allowed).toBe(false);
+    expect(result.allowed === false && result.retryAfter).toBe(60);
+
+    // Self-healing: once the windows elapse, the newcomer gets through.
+    clock.advance(60_001);
+    expect(limiter.check('newcomer', 5, 60_000).allowed).toBe(true);
   });
 });
 
