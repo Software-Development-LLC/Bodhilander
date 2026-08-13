@@ -287,7 +287,7 @@ describe('the capability gate is consulted by dispatch', () => {
     const refused = ['terminal:input', 'terminal:resize', 'session:create', 'group:create', 'dirs:list'];
     refused.forEach((type, i) => h.send('c1', key, i, { type, sessionId: 's1', data: 'x', name: 'n', groupId: 'g1' }));
 
-    const denials = h.opened('c1', key).filter((m) => m.type === 'denied');
+    const denials = h.opened('c1', key).filter((m) => m.type === 'command:denied');
     expect(denials.map((d) => d.command).sort()).toEqual([...refused].sort());
   });
 
@@ -310,7 +310,7 @@ describe('the capability gate is consulted by dispatch', () => {
     Object.keys(COMMAND_CAPS).forEach((type, i) =>
       h.send('c1', key, i, { type, sessionId: 's1', data: 'x', name: 'n', groupId: 'g1', path: '/' }),
     );
-    expect(h.opened('c1', key).filter((m) => m.type === 'denied')).toEqual([]);
+    expect(h.opened('c1', key).filter((m) => m.type === 'command:denied')).toEqual([]);
   });
 
   test('an unknown command is ignored, not executed', () => {
@@ -325,7 +325,7 @@ describe('the capability gate is consulted by dispatch', () => {
     const h = harness({ grantRow: storedGrant() });
     const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
     h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's2' });
-    expect(h.opened('c1', key).some((m) => m.type === 'denied' && m.command === 'terminal:subscribe')).toBe(true);
+    expect(h.opened('c1', key).some((m) => m.type === 'command:denied' && m.command === 'terminal:subscribe')).toBe(true);
   });
 });
 
@@ -715,5 +715,47 @@ describe('a lapsed grant stops the stream, not just the commands', () => {
     now = NOW + 4_000_000;
     emit('tick');
     expect(h.tunnel.attachedGuests()[0]!.sessionIds).toEqual([]);
+  });
+});
+
+describe('a refused command is not an ended session', () => {
+  // Found in production on beta.4: a guest sent one command their role does
+  // not allow, the tunnel replied `denied`, and the web client — which read
+  // every `denied` as terminal — told them the owner had revoked their access.
+  // One frame type was carrying two meanings.
+  test('refusing a command uses a distinct type from access-ended', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+
+    h.send('c1', key, 0, { type: 'terminal:input', sessionId: 's1', data: 'x' });
+
+    const seen = h.opened('c1', key);
+    expect(seen.some((m) => m.type === 'command:denied' && m.command === 'terminal:input')).toBe(true);
+    // The frame that means "you are out" must NOT be what a refusal produces.
+    expect(seen.some((m) => m.type === 'denied')).toBe(false);
+  });
+
+  test('the client keeps working after a refusal', () => {
+    // The guest stays connected and their grant is untouched — the refusal is
+    // about one command, not about them.
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+
+    h.send('c1', key, 0, { type: 'terminal:resize', sessionId: 's1', cols: 80, rows: 24 });
+    h.send('c1', key, 1, { type: 'sessions:list' });
+
+    expect(h.opened('c1', key).some((m) => m.type === 'sessions')).toBe(true);
+  });
+
+  test('losing access still uses the ended frame', () => {
+    // The two paths must stay distinguishable in the other direction too.
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+
+    h.tunnel.revokeGrant('grant-1');
+
+    const seen = h.opened('c1', key);
+    expect(seen.some((m) => m.type === 'denied' && m.reason === 'revoked')).toBe(true);
+    expect(seen.some((m) => m.type === 'command:denied')).toBe(false);
   });
 });

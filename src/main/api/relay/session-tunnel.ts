@@ -502,7 +502,12 @@ export class SessionTunnel {
 
     const sessionId = typeof inner.sessionId === 'string' ? inner.sessionId : null;
     if (!permits(s.grant, command, sessionId, this.deps.now())) {
-      this.sealTo(clientId, { type: 'denied', reason: 'not_permitted', command });
+      // A refused COMMAND is not an ended SESSION. These were one frame type
+      // once, and the guest client — reasonably — read every `denied` as "you
+      // are out", so a single unpermitted command told someone their access
+      // had been revoked. Separate types, separate meanings.
+      this.sealTo(clientId, { type: 'command:denied', reason: 'not_permitted', command });
+      this.deps.log.warn('[Relay] refused a command', { clientId, command, role: s.grant.role });
       return;
     }
     handler(clientId, s, inner);

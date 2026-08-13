@@ -23,6 +23,16 @@ export type ConnState = 'connecting' | 'handshaking' | 'ready' | 'offline' | 'cl
  * closed a terminal is socially loaded and untrue.
  */
 export type DeniedReason = 'not_authorized' | 'revoked' | 'expired' | 'session_ended' | 'machine_unlinked';
+
+/**
+ * The reasons that actually END access. Anything else on a `denied` frame is a
+ * refusal of one command, which must not be presented as losing access.
+ */
+const ENDING_REASONS: readonly string[] = ['not_authorized', 'revoked', 'expired', 'session_ended', 'machine_unlinked'];
+
+export function isEndingReason(reason: string): reason is DeniedReason {
+  return ENDING_REASONS.includes(reason);
+}
 export interface Inner {
   type: string;
   [k: string]: unknown;
@@ -50,6 +60,8 @@ export class RelayConnection {
   onState: (s: ConnState, detail?: string) => void = () => {};
   onMessage: (m: Inner) => void = () => {};
   onFingerprint: (fp: string, verified: boolean) => void = () => {};
+  /** One command was refused. Not an ended session — see `handle`. */
+  onCommandDenied: (command: string) => void = () => {};
 
   constructor(
     private readonly machineId: string,
@@ -148,8 +160,24 @@ export class RelayConnection {
       this.recvCounter = frame.n;
       // A SEALED refusal is trustworthy: only the machine could have written
       // it, so its reason can safely drive what the guest is told.
+      //
+      // But ONLY an access-ended reason ends the session. A refused single
+      // command is not an ended session, and treating every `denied` as
+      // terminal told people the owner had revoked them when they had merely
+      // sent one command their role does not allow. The reason is checked
+      // against the known ending set rather than trusted blindly, which also
+      // covers agents still sending the old shared frame type.
+      if (inner.type === 'command:denied') {
+        this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
+        return;
+      }
       if (inner.type === 'denied') {
-        this.onState('denied', typeof inner.reason === 'string' ? inner.reason : 'revoked');
+        const reason = typeof inner.reason === 'string' ? inner.reason : '';
+        if (isEndingReason(reason)) {
+          this.onState('denied', reason);
+        } else {
+          this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
+        }
         return;
       }
       this.onMessage(inner);
