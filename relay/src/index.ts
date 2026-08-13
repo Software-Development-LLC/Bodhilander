@@ -67,6 +67,10 @@ function main(): void {
       const codes = repos.purgeExpiredLinkCodes();
       rateLimiter.sweep();
       if (codes > 0) logger.debug('reaped expired link codes', { count: codes });
+      // Only non-zero when someone is holding MAX_WINDOWS buckets at their
+      // limit, so this is a deliberate-abuse signal rather than routine noise.
+      const refused = rateLimiter.drainSaturationRefusals();
+      if (refused > 0) logger.warn('rate limiter saturated', { refused, windows: rateLimiter.size() });
     } catch (err) {
       logger.error('reaper failed', { err: err instanceof Error ? err.message : String(err) });
     }

@@ -55,6 +55,10 @@ export class RelayConnection {
     const ws = new WebSocket(wsUrl('/ws/client'));
     this.ws = ws;
     ws.onopen = async () => {
+      // Armed here rather than in connect(): send() no-ops on a socket that
+      // isn't OPEN, so an early tick was harmless, but there is no reason for
+      // the timer to exist during a window where it can do nothing.
+      this.startPing();
       this.clientKeys = await generateClientKeys();
       this.send({ type: 'client:open', machineId: this.machineId, payload: { clientX25519Pub: this.clientKeys.pubB64 } });
       this.onState('handshaking');
@@ -65,7 +69,6 @@ export class RelayConnection {
       this.onState('closed');
     };
     ws.onerror = () => this.onState('error');
-    this.startPing();
   }
 
   private startPing(): void {

@@ -45,6 +45,12 @@ export type SocketData = AgentSocketData | ClientSocketData;
 export interface WsGatewayContext {
   repos: Repositories;
   logger: Logger;
+  /**
+   * Override the unauthenticated-agent reaper. Defaults to
+   * `AGENT_AUTH_TIMEOUT_MS`; tests shorten it so the close path can be
+   * asserted rather than only the timer plumbing.
+   */
+  authTimeoutMs?: number;
 }
 
 /** How long an agent socket may sit unauthenticated before it is closed. */
@@ -66,6 +72,7 @@ function send(ws: ServerWebSocket<SocketData>, obj: unknown): void {
 
 export function createGateway(ctx: WsGatewayContext) {
   const { repos, logger } = ctx;
+  const authTimeoutMs = ctx.authTimeoutMs ?? AGENT_AUTH_TIMEOUT_MS;
 
   // Live routing tables, one gateway per server.
   const agents = new Map<string, ServerWebSocket<SocketData>>(); // machineId -> agent socket
@@ -81,7 +88,7 @@ export function createGateway(ctx: WsGatewayContext) {
         data.authTimer = setTimeout(() => {
           data.authTimer = null;
           if (!data.authed) ws.close(4401, 'auth timeout');
-        }, AGENT_AUTH_TIMEOUT_MS);
+        }, authTimeoutMs);
       }
       // Clients speak first (client:open), so nothing to send on open.
     },
