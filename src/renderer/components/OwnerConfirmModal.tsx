@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import type { RelayStatus } from '../../shared/types';
-import './NamePromptModal.css';
 import './OwnerConfirmModal.css';
 
 /**
@@ -13,10 +12,16 @@ import './OwnerConfirmModal.css';
  * runs the relay name themselves the owner of someone's machine and inherit
  * every capability that follows. A person answers instead, once.
  *
- * The dismissive action is focused and the accepting one is not, because the
- * safe answer to an unexpected prompt is "no". There is no close affordance
- * for the same reason — dismissing this by accident would leave the machine
- * connected with the question unanswered.
+ * Built on native `<dialog>` + `showModal()` rather than a div with an overlay.
+ * That gives real modality — the browser makes the rest of the page inert and
+ * traps focus itself — instead of a hand-rolled Tab cycle that only looks like
+ * it does. Clicking the backdrop does not dismiss a modal dialog, which is the
+ * behaviour this prompt wants: it must be answered.
+ *
+ * The dismissive action holds focus and the accepting one does not, because
+ * the safe answer to an unexpected prompt is "no". `cancel` (Escape) is routed
+ * to rejection rather than allowed to close the dialog, so there is no way out
+ * that leaves the machine connected with the question unanswered.
  */
 
 export type PendingOwner = NonNullable<RelayStatus['pendingOwner']>;
@@ -28,90 +33,81 @@ interface OwnerConfirmModalProps {
 }
 
 export const OwnerConfirmModal: React.FC<OwnerConfirmModalProps> = ({ pending, onConfirm, onReject }) => {
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const rejectRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (pending) setTimeout(() => rejectRef.current?.focus(), 50);
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (pending) {
+      // showModal() throws InvalidStateError on an already-open dialog.
+      if (!dialog.open) dialog.showModal();
+      rejectRef.current?.focus();
+    } else if (dialog.open) {
+      dialog.close();
+    }
   }, [pending]);
 
-  const handleModalKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      // Escape is the safe answer, and it is the same as saying no — not a
-      // dismissal that would leave the machine reachable with this unresolved.
-      if (e.key === 'Escape') {
-        onReject();
-        return;
-      }
-      if (e.key === 'Tab') {
-        const modal = e.currentTarget as HTMLElement;
-        const focusable = modal.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-        if (focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
+  const handleCancel = useCallback(
+    (e: React.SyntheticEvent<HTMLDialogElement>) => {
+      // Escape would otherwise close the dialog and leave the question open
+      // with the machine still reachable. Treat it as the safe answer instead.
+      e.preventDefault();
+      onReject();
     },
     [onReject],
   );
 
   if (!pending) return null;
 
-  const name = pending.displayName?.trim() || pending.userId;
+  const trimmedName = pending.displayName?.trim();
+  // Deliberately not `??`: a display name that trims to empty must fall back
+  // to the id too, and `??` only catches null/undefined. Better an opaque id
+  // than a blank box that reads as a legitimately empty name.
+  const name = trimmedName ? trimmedName : pending.userId;
 
   return (
-    // No onClick on the overlay: this is not dismissible by clicking away.
-    <div className="modal-overlay">
-      <div
-        className="name-prompt-modal owner-confirm-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="owner-confirm-title"
-        aria-describedby="owner-confirm-body"
-        onKeyDown={handleModalKeyDown}
-      >
-        <h3 id="owner-confirm-title">{pending.isChange ? 'This machine changed hands' : 'Is this you?'}</h3>
+    <dialog
+      ref={dialogRef}
+      className="owner-confirm-modal"
+      aria-labelledby="owner-confirm-title"
+      aria-describedby="owner-confirm-body"
+      onCancel={handleCancel}
+    >
+      <h3 id="owner-confirm-title">{pending.isChange ? 'This machine changed hands' : 'Is this you?'}</h3>
 
-        <div id="owner-confirm-body">
-          <p className="owner-confirm-lede">
-            {pending.isChange
-              ? 'This machine is now linked to a different account:'
-              : 'This machine is now linked to:'}
-          </p>
+      <div id="owner-confirm-body">
+        <p className="owner-confirm-lede">
+          {pending.isChange ? 'This machine is now linked to a different account:' : 'This machine is now linked to:'}
+        </p>
 
-          <div className="owner-confirm-identity">
-            <span className="owner-confirm-name">{name}</span>
-            {pending.email && <span className="owner-confirm-email">{pending.email}</span>}
-          </div>
-
-          <p className="owner-confirm-note">
-            Confirming lets this account reach your terminals from a browser, and lets you share
-            individual sessions with other people. If you don&apos;t recognise it, say no — someone
-            else may have claimed this machine&apos;s link code.
-          </p>
-
-          {pending.isChange && (
-            <p className="owner-confirm-warning">
-              Any sessions you shared under the previous account will stop working.
-            </p>
-          )}
+        <div className="owner-confirm-identity">
+          <span className="owner-confirm-name">{name}</span>
+          {pending.email && <span className="owner-confirm-email">{pending.email}</span>}
         </div>
 
-        <div className="modal-buttons">
-          {/* Focused: the safe answer to an unexpected prompt is no. */}
-          <button ref={rejectRef} type="button" className="cancel-btn" onClick={onReject}>
-            No, that&apos;s not me
-          </button>
-          <button type="button" className="confirm-btn" onClick={() => onConfirm(pending.userId)}>
-            Yes, that&apos;s me
-          </button>
-        </div>
+        <p className="owner-confirm-note">
+          Confirming lets this account reach your terminals from a browser, and lets you share
+          individual sessions with other people. If you don&apos;t recognise it, say no — someone
+          else may have claimed this machine&apos;s link code.
+        </p>
+
+        {pending.isChange && (
+          <p className="owner-confirm-warning">
+            Any sessions you shared under the previous account will stop working.
+          </p>
+        )}
       </div>
-    </div>
+
+      <div className="owner-confirm-buttons">
+        {/* Focused: the safe answer to an unexpected prompt is no. */}
+        <button ref={rejectRef} type="button" className="owner-confirm-reject" onClick={onReject}>
+          No, that&apos;s not me
+        </button>
+        <button type="button" className="owner-confirm-accept" onClick={() => onConfirm(pending.userId)}>
+          Yes, that&apos;s me
+        </button>
+      </div>
+    </dialog>
   );
 };

@@ -540,6 +540,13 @@ export class SessionTunnel {
   /**
    * Revoke a live client's access without waiting for it to disconnect.
    * Returns to DENY_ALL rather than closing, so the guest is told why.
+   *
+   * The `ClientSession` deliberately stays in the map. It still holds the key
+   * the denial is sealed with, and the socket is still live — dropping it here
+   * would mean the guest's next frame arrived on an unknown client id and were
+   * silently ignored, which reads as a network fault rather than a decision.
+   * It keeps the shared PTY listener attached until the client actually
+   * disconnects; `subs` is cleared, so `fanOut` never calls back for it.
    */
   revokeClient(clientId: string, reason = 'revoked'): void {
     const s = this.sessions.get(clientId);

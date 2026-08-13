@@ -1,7 +1,25 @@
-/* Layered on NamePromptModal.css, which supplies the shell, buttons and overlay. */
+/* Native <dialog> + showModal(): the browser owns modality, focus trapping and
+   the backdrop, so there is no overlay div here and none is wanted. */
 
 .owner-confirm-modal {
   max-width: 460px;
+  padding: 20px 24px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d4d4d4;
+}
+
+.owner-confirm-modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.owner-confirm-modal h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
 }
 
 .owner-confirm-lede {
@@ -53,4 +71,45 @@
   background: rgba(232, 196, 138, 0.08);
   border-left: 2px solid #e8c48a;
   border-radius: 2px;
+}
+
+.owner-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.owner-confirm-buttons button {
+  padding: 7px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.owner-confirm-reject {
+  background: #3a3a3a;
+  border-color: #4a4a4a !important;
+  color: #d4d4d4;
+}
+
+.owner-confirm-reject:hover {
+  background: #454545;
+}
+
+/* Not btn-danger: confirming is the constructive answer, and colouring it as a
+   destructive one would push people toward the wrong button by reflex. */
+.owner-confirm-accept {
+  background: #0e639c;
+  color: #ffffff;
+}
+
+.owner-confirm-accept:hover {
+  background: #1177bb;
+}
+
+.owner-confirm-buttons button:focus-visible {
+  outline: 2px solid #69adff;
+  outline-offset: 2px;
 }

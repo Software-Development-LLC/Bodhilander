@@ -26,6 +26,20 @@ import { clearAllGrants, getOwnerUserId, setOwnerUserId, GRANT_PREF } from './gr
 
 const PREF_OWNER_USER_ID = GRANT_PREF.ownerUserId;
 
+/**
+ * Strip trailing slashes from an origin.
+ *
+ * Deliberately not `/\/+$/` — that pattern backtracks super-linearly, and
+ * while the only input here is the user's own configured relay URL, a scanner
+ * cannot know that and neither can the next person to reuse this. A linear
+ * scan is the same three lines and needs no argument.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  return value.slice(0, end);
+}
+
 /** The relay's claim about who owns this machine. A claim, never proof. */
 export interface AssertedOwner {
   userId: string;
@@ -73,7 +87,7 @@ export class RelayClient extends EventEmitter {
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
     defaultDeps(
-      () => this.relayUrl.replace(/\/+$/, ''),
+      () => stripTrailingSlashes(this.relayUrl),
       () => getPreference(PREF.machineId),
     ),
   );
@@ -86,7 +100,7 @@ export class RelayClient extends EventEmitter {
   }
 
   private get wsUrl(): string {
-    const origin = this.relayUrl.replace(/\/+$/, '');
+    const origin = stripTrailingSlashes(this.relayUrl);
     return `${origin.replace(/^http/, 'ws')}/ws`;
   }
 
@@ -144,9 +158,9 @@ export class RelayClient extends EventEmitter {
   }
 
   setRelayUrl(url: string): void {
-    const trimmed = url.trim().replace(/\/+$/, '');
+    const trimmed = stripTrailingSlashes(url.trim());
     if (!URL.canParse(trimmed)) throw new Error('Invalid relay URL');
-    const changed = trimmed !== this.relayUrl.replace(/\/+$/, '');
+    const changed = trimmed !== stripTrailingSlashes(this.relayUrl);
     setPreference(PREF.url, trimmed);
     if (changed) {
       // Certificates carry their relay origin in the signed bytes and are
@@ -201,7 +215,7 @@ export class RelayClient extends EventEmitter {
       buildLinkMessage(identity.ed25519Pub, identity.x25519Pub, name, issuedAt),
     ).toString('base64');
 
-    const res = await fetch(`${this.relayUrl.replace(/\/+$/, '')}/link`, {
+    const res = await fetch(`${stripTrailingSlashes(this.relayUrl)}/link`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({

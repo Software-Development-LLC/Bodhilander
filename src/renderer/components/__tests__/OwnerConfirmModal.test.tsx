@@ -9,11 +9,39 @@
  * Run with: bun test src/renderer/components/__tests__/OwnerConfirmModal.test.tsx
  */
 import React from 'react';
-import { describe, expect, test, afterEach } from 'bun:test';
+import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { OwnerConfirmModal, type PendingOwner } from '../OwnerConfirmModal';
 
-afterEach(cleanup);
+/**
+ * Which opener the component used. happy-dom implements both `show()` and
+ * `showModal()`, and only the latter makes the page inert and traps focus — so
+ * this records the choice rather than trusting that `open` became true.
+ */
+let modalCalls: string[] = [];
+const nativeShowModal = HTMLDialogElement.prototype.showModal;
+const nativeShow = HTMLDialogElement.prototype.show;
+
+beforeEach(() => {
+  modalCalls = [];
+  HTMLDialogElement.prototype.showModal = function patchedShowModal(this: HTMLDialogElement) {
+    modalCalls.push('showModal');
+    return nativeShowModal.call(this);
+  };
+  HTMLDialogElement.prototype.show = function patchedShow(this: HTMLDialogElement) {
+    modalCalls.push('show');
+    return nativeShow.call(this);
+  };
+});
+
+afterEach(() => {
+  HTMLDialogElement.prototype.showModal = nativeShowModal;
+  HTMLDialogElement.prototype.show = nativeShow;
+  cleanup();
+});
+
+/** The rendered dialog element. */
+const dialogEl = (): HTMLDialogElement => document.querySelector('dialog')!;
 
 const pending = (over: Partial<PendingOwner> = {}): PendingOwner => ({
   userId: 'user-123',
@@ -93,19 +121,21 @@ describe('answering', () => {
 
 describe('the safe answer is the easy one', () => {
   test('Escape rejects rather than dismissing', () => {
-    // Dismissing without answering would leave the machine connected with the
-    // question open, which is the state this modal exists to prevent.
+    // Native <dialog> would close on Escape and leave the question open with
+    // the machine still reachable, which is the state this modal exists to
+    // prevent. The cancel event is routed to rejection instead.
     const h = renderModal();
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    fireEvent(dialogEl(), new Event('cancel', { bubbles: false, cancelable: true }));
     expect(h.rejects()).toBe(1);
     expect(h.confirmed).toEqual([]);
   });
 
-  test('clicking the overlay does not dismiss it', () => {
+  test('clicking outside does not dismiss it', () => {
+    // showModal() makes the rest of the page inert and the backdrop
+    // non-dismissing; this pins that we did not reintroduce a click-away.
     const h = renderModal();
-    const overlay = screen.getByRole('dialog').parentElement!;
-    fireEvent.click(overlay);
-    expect(screen.queryByRole('dialog')).not.toBeNull();
+    fireEvent.click(document.body);
+    expect(dialogEl().open).toBe(true);
     expect(h.rejects()).toBe(0);
   });
 
@@ -114,10 +144,17 @@ describe('the safe answer is the easy one', () => {
     expect(screen.getAllByRole('button')).toHaveLength(2);
   });
 
-  test('the dialog is labelled and modal for assistive tech', () => {
+  test('it opens as a modal, not an inline dialog', () => {
+    // showModal() rather than show(): the latter renders in place, leaves the
+    // page interactive, and traps nothing.
     renderModal();
-    const dialog = screen.getByRole('dialog');
-    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialogEl().open).toBe(true);
+    expect(modalCalls).toEqual(['showModal']);
+  });
+
+  test('the dialog is labelled and described for assistive tech', () => {
+    renderModal();
+    const dialog = dialogEl();
     expect(dialog.getAttribute('aria-labelledby')).toBe('owner-confirm-title');
     expect(dialog.getAttribute('aria-describedby')).toBe('owner-confirm-body');
   });

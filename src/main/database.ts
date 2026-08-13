@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import { app } from 'electron';
 import log from 'electron-log';
+import { RELAY_SHARING_SCHEMA } from './api/relay/grant-sql';
 
 let db: Database.Database | null = null;
 export function getDatabase(): Database.Database {
@@ -366,50 +367,9 @@ function initializeTables(database: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_accounts_single_default
       ON claude_accounts(is_default) WHERE is_default = 1;
-
-    -- Session sharing (docs/designs/session-sharing.md §4). Created eagerly
-    -- rather than lazily like paired_devices: the relay tunnel consults
-    -- relay_grants on every client:open, and a table that only appears once
-    -- sharing is first used would make the deny path depend on setup order.
-    --
-    -- This desktop is the AUTHORITY. The relay stores an opaque certificate
-    -- and routes; the session list a grant actually covers exists only here,
-    -- and the status column here is what decides revocation — consulted at every open,
-    -- not just for live sockets.
-    CREATE TABLE IF NOT EXISTS relay_grants (
-      id TEXT PRIMARY KEY,
-      -- In the signed byte string and re-checked at dispatch: the relay URL is a
-      -- user-settable preference, so a certificate minted against relay A must
-      -- not verify on relay B, whose operator controls its own user ids.
-      relay_origin TEXT NOT NULL,
-      grantee_user_id TEXT NOT NULL,
-      grantee_login TEXT,
-      role TEXT NOT NULL CHECK(role IN ('viewer','operator')),
-      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','active','revoked')),
-      created_at INTEGER NOT NULL,
-      bound_at INTEGER,
-      expires_at INTEGER,
-      revoked_at INTEGER,
-      -- Revocation has to survive a disconnected agent: queued here and
-      -- flushed to the relay on reconnect.
-      revoke_pending INTEGER NOT NULL DEFAULT 0
-    );
-
-    -- A grant names sessions explicitly. There is no "share my machine".
-    CREATE TABLE IF NOT EXISTS relay_grant_sessions (
-      grant_id TEXT NOT NULL REFERENCES relay_grants(id) ON DELETE CASCADE,
-      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-      -- Binds the grant to the PTY INSTANCE, not the session row. sessions.id
-      -- survives stop/restart, so without this a share of "Auth refactor"
-      -- would follow the row into whatever it becomes weeks later. On restart
-      -- the entry goes stale, subscribe is denied, and the owner is re-asked.
-      pty_epoch INTEGER NOT NULL,
-      PRIMARY KEY(grant_id, session_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_relay_grants_status ON relay_grants(status);
-    CREATE INDEX IF NOT EXISTS idx_relay_grants_grantee ON relay_grants(grantee_user_id, status);
   `);
+
+  database.exec(RELAY_SHARING_SCHEMA);
 
   // Migration: Add working_dir column to groups if it doesn't exist
   const columns = database.prepare("PRAGMA table_info(groups)").all() as { name: string }[];

@@ -223,7 +223,10 @@ export function parseCertificate(cert: unknown): ParsedCertificate | null {
   // them to agree stops the cheap reject disagreeing with the real one.
   if (inner !== GRANT_VERSION) return null;
   if (!(MINTABLE_ROLES as readonly string[]).includes(role)) return null;
-  if (!/^\d{1,15}$/.test(issuedAt) || !/^\d{1,15}$/.test(expiresAt)) return null;
+  // 16 digits, matching Number.isSafeInteger's ceiling in the builder — the
+  // two must agree, or a timestamp the builder would happily emit could fail
+  // to parse. (It fails closed either way; this just removes the disagreement.)
+  if (!/^\d{1,16}$/.test(issuedAt) || !/^\d{1,16}$/.test(expiresAt)) return null;
   if (!grantId || !machineId || !relayOrigin || !granteeUserId) return null;
 
   const parts: GrantParts = {
