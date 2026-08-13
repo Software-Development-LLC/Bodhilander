@@ -259,6 +259,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   relayGenerateLinkCode: (machineName: string): Promise<{ code: string; expiresAt: number }> =>
     ipcRenderer.invoke('relay:generateLinkCode', machineName),
   relaySetKeepAwake: (on: boolean): Promise<RelayStatus> => ipcRenderer.invoke('relay:setKeepAwake', on),
+  relayGetPendingOwner: (): Promise<RelayStatus['pendingOwner']> => ipcRenderer.invoke('relay:getPendingOwner'),
+  relayConfirmOwner: (userId: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:confirmOwner', userId),
+  relayRejectOwner: (): Promise<RelayStatus> => ipcRenderer.invoke('relay:rejectOwner'),
   onRelayStatus: (callback: (status: RelayStatus) => void) => {
     const listener = (_: Electron.IpcRendererEvent, status: RelayStatus) => callback(status);
     ipcRenderer.on('relay:status', listener);

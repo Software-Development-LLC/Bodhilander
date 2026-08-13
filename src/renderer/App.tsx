@@ -3,6 +3,7 @@ import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
+import { OwnerConfirmModal, type PendingOwner } from './components/OwnerConfirmModal';
 import { SettingsModal, SettingsTab } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
@@ -989,6 +990,50 @@ const App: React.FC = () => {
     setIsResizing(true);
   }, []);
 
+  // Owner confirmation (session sharing §3). Lives here rather than in
+  // RemoteHostingSettings because it fires when the agent connects, which is
+  // usually nowhere near the Settings modal — and it must be answered before
+  // the machine can be shared from.
+  const [pendingOwner, setPendingOwner] = useState<PendingOwner | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI
+      .relayGetStatus()
+      .then((s) => {
+        if (!cancelled) setPendingOwner(s.pendingOwner);
+      })
+      .catch(() => {
+        /* relay off or unavailable — nothing to confirm */
+      });
+    const off = window.electronAPI.onRelayStatus((s) => setPendingOwner(s.pendingOwner));
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
+
+  const handleConfirmOwner = useCallback(async (userId: string) => {
+    try {
+      const status = await window.electronAPI.relayConfirmOwner(userId);
+      setPendingOwner(status.pendingOwner);
+    } catch {
+      // The pending owner changed underneath us (a reconnect asserting someone
+      // else). Clear it and let the next status push re-raise the question,
+      // rather than leaving a stale identity on screen to be confirmed.
+      setPendingOwner(null);
+    }
+  }, []);
+
+  const handleRejectOwner = useCallback(async () => {
+    try {
+      const status = await window.electronAPI.relayRejectOwner();
+      setPendingOwner(status.pendingOwner);
+    } catch {
+      setPendingOwner(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isResizing) return;
 
@@ -1414,6 +1459,14 @@ const App: React.FC = () => {
         />
       )}
 
+
+      {/* Binds this machine to a relay account. Rendered last so it sits above
+          anything else that happens to be open — it must be answered. */}
+      <OwnerConfirmModal
+        pending={pendingOwner}
+        onConfirm={handleConfirmOwner}
+        onReject={handleRejectOwner}
+      />
 
       {/* Name prompt modals */}
       <NamePromptModal

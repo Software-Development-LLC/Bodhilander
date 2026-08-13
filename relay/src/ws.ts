@@ -180,7 +180,18 @@ export function createGateway(ctx: WsGatewayContext) {
         previous.close(4409, 'replaced by a newer connection');
       }
       repos.touchMachine(machine.id);
-      send(ws, { type: 'agent:ready', machineId: machine.id });
+      // Who the relay says owns this machine. The desktop cannot learn its own
+      // relay user id from anywhere else, and this is an ASSERTION, not proof:
+      // a human confirms it once (design §3), because minting owner capability
+      // for whatever id an untrusted party named would hand the relay the keys.
+      const owner = repos.getUser(machine.user_id);
+      send(ws, {
+        type: 'agent:ready',
+        machineId: machine.id,
+        owner: owner
+          ? { userId: owner.id, displayName: owner.display_name, email: owner.primary_email }
+          : null,
+      });
       logger.info('agent online', { machineId: machine.id });
       return;
     }

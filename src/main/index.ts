@@ -1125,6 +1125,18 @@ safeHandle('relay:setKeepAwake', (on: boolean) => {
   return getRelayClient().getStatus();
 });
 
+safeHandle('relay:getPendingOwner', () => getRelayClient().getPendingOwner());
+
+safeHandle('relay:confirmOwner', (userId: string) => {
+  getRelayClient().confirmOwner(userId);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:rejectOwner', () => {
+  getRelayClient().rejectOwner();
+  return getRelayClient().getStatus();
+});
+
 // ============================================================================
 // Editor Integration IPC Handlers
 // ============================================================================

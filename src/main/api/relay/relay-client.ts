@@ -22,9 +22,16 @@ import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-i
 import { SessionTunnel, type Principal } from './session-tunnel';
 import { defaultDeps } from './session-tunnel-deps';
 import { CAP_GRANTS_V1 } from './grants';
-import { clearAllGrants, GRANT_PREF } from './grant-store';
+import { clearAllGrants, getOwnerUserId, setOwnerUserId, GRANT_PREF } from './grant-store';
 
 const PREF_OWNER_USER_ID = GRANT_PREF.ownerUserId;
+
+/** The relay's claim about who owns this machine. A claim, never proof. */
+export interface AssertedOwner {
+  userId: string;
+  displayName: string | null;
+  email: string | null;
+}
 
 export type { RelayStatus } from '../../../shared/types';
 
@@ -60,6 +67,8 @@ export class RelayClient extends EventEmitter {
   private reconnectAttempts = 0;
   /** OS "stay awake" assertion id while remote hosting is on (null = released). */
   private powerSaveBlockerId: number | null = null;
+  /** An owner id the relay asserted that no human has confirmed yet. */
+  private pendingOwner: AssertedOwner | null = null;
   /** Routes E2E terminal frames to/from web clients (M3). */
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
@@ -100,6 +109,10 @@ export class RelayClient extends EventEmitter {
       relayUrl: this.relayUrl,
       fingerprint: identityFingerprint(),
       keepAwake: this.keepAwake,
+      ownerUserId: getOwnerUserId(),
+      pendingOwner: this.pendingOwner
+        ? { ...this.pendingOwner, isChange: !!getOwnerUserId() }
+        : null,
     };
   }
 
@@ -278,6 +291,7 @@ export class RelayClient extends EventEmitter {
       clientId?: string;
       payload?: unknown;
       principal?: Principal;
+      owner?: AssertedOwner | null;
     };
     try {
       msg = JSON.parse(raw);
@@ -314,6 +328,7 @@ export class RelayClient extends EventEmitter {
       this.connected = true;
       this.reconnectAttempts = 0;
       if (msg.machineId) setPreference(PREF.machineId, msg.machineId);
+      this.noteAssertedOwner(msg.owner ?? null);
       this.startPing();
       log.info('[Relay] online', { machineId: msg.machineId });
       this.emitStatus();
@@ -373,6 +388,62 @@ export class RelayClient extends EventEmitter {
       }
       this.ws = null;
     }
+  }
+
+  // --- owner confirmation (design §3) ---
+
+  /**
+   * The relay has told us who it thinks owns this machine.
+   *
+   * Nothing is trusted here. `agent:ready` carries only a `machineId`, so the
+   * desktop has no independent way to learn its own relay user id — which
+   * means auto-accepting this would let whoever runs the relay name themselves
+   * the owner and acquire owner capability on a machine. A human confirms it
+   * once, and any later change needs a fresh confirmation.
+   */
+  private noteAssertedOwner(owner: AssertedOwner | null): void {
+    if (!owner?.userId) return;
+    const confirmed = getOwnerUserId();
+    if (confirmed === owner.userId) {
+      this.pendingOwner = null;
+      return;
+    }
+    this.pendingOwner = owner;
+    log.info('[Relay] awaiting owner confirmation', { changed: !!confirmed });
+    this.emit('owner-confirmation', { owner, isChange: !!confirmed });
+  }
+
+  /** The owner id awaiting a human decision, if any. */
+  getPendingOwner(): { owner: AssertedOwner; isChange: boolean } | null {
+    if (!this.pendingOwner) return null;
+    return { owner: this.pendingOwner, isChange: !!getOwnerUserId() };
+  }
+
+  /**
+   * The human said yes. Any grant minted under a previous owner is void — it
+   * names a user id from a relationship that no longer holds.
+   */
+  confirmOwner(userId: string): void {
+    if (!this.pendingOwner || this.pendingOwner.userId !== userId) {
+      throw new Error('no such owner confirmation is pending');
+    }
+    const previous = getOwnerUserId();
+    if (previous && previous !== userId) clearAllGrants();
+    setOwnerUserId(userId);
+    this.pendingOwner = null;
+    log.info('[Relay] owner confirmed');
+    this.emitStatus();
+  }
+
+  /**
+   * The human said no. Remote hosting goes off rather than merely dismissing:
+   * a machine linked to an account the owner does not recognise is a machine
+   * that should not be reachable while they work out why.
+   */
+  rejectOwner(): void {
+    this.pendingOwner = null;
+    log.warn('[Relay] owner confirmation rejected — disabling remote hosting');
+    this.disable();
   }
 
   /** Full shutdown for app quit. */

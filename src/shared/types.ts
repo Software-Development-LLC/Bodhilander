@@ -129,6 +129,14 @@ export interface RelayStatus {
   fingerprint: string | null;
   /** Keep this machine awake while remote hosting is on (so it stays reachable). */
   keepAwake: boolean;
+  /**
+   * The relay user id this machine's owner confirmed. Null until they have.
+   * Session sharing needs it: without a confirmed owner the agent cannot tell
+   * the owner apart from a guest.
+   */
+  ownerUserId: string | null;
+  /** An owner the relay asserted that is still waiting on a human decision. */
+  pendingOwner: { userId: string; displayName: string | null; email: string | null; isChange: boolean } | null;
 }
 
 /** Result of probing one provider CLI's availability (#97). */

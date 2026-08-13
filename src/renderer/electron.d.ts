@@ -103,6 +103,9 @@ interface ElectronAPI {
   relaySetUrl: (url: string) => Promise<RelayStatus>;
   relayGenerateLinkCode: (machineName: string) => Promise<{ code: string; expiresAt: number }>;
   relaySetKeepAwake: (on: boolean) => Promise<RelayStatus>;
+  relayGetPendingOwner: () => Promise<RelayStatus['pendingOwner']>;
+  relayConfirmOwner: (userId: string) => Promise<RelayStatus>;
+  relayRejectOwner: () => Promise<RelayStatus>;
   onRelayStatus: (callback: (status: RelayStatus) => void) => () => void;
 
   // Sound notifications
