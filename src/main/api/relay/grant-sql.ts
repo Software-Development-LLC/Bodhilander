@@ -61,6 +61,21 @@ export const RELAY_SHARING_SCHEMA = `
     PRIMARY KEY(grant_id, session_id)
   );
 
+  -- Which session an invite was offered for.
+  --
+  -- The relay deliberately never learns this: no session id reaches it, which
+  -- is what keeps guests structurally invisible to it. So the mapping has to
+  -- live here, and the approval prompt reads it to pre-fill what the owner
+  -- already chose when they created the link.
+  CREATE TABLE IF NOT EXISTS relay_share_invites (
+    invite_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    -- The PTY instance the owner was looking at when they offered the share.
+    pty_epoch INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('viewer','operator')),
+    created_at INTEGER NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_relay_grants_status ON relay_grants(status);
   CREATE INDEX IF NOT EXISTS idx_relay_grants_grantee ON relay_grants(grantee_user_id, status);
 `;
@@ -195,4 +210,26 @@ export function clearPendingRevocation(db: Db, grantId: string): void {
  */
 export function clearAllGrants(db: Db): void {
   db.prepare('DELETE FROM relay_grants').run();
+  db.prepare('DELETE FROM relay_share_invites').run();
+}
+
+export interface InviteScope {
+  sessionId: string;
+  ptyEpoch: number;
+  role: GrantRole;
+}
+
+/** Remember what an invite was offered for, so approval can pre-fill it. */
+export function recordInviteScope(db: Db, inviteId: string, scope: InviteScope, now: number): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO relay_share_invites (invite_id, session_id, pty_epoch, role, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(inviteId, scope.sessionId, scope.ptyEpoch, scope.role, now);
+}
+
+export function getInviteScope(db: Db, inviteId: string): InviteScope | null {
+  const row = db
+    .prepare('SELECT session_id, pty_epoch, role FROM relay_share_invites WHERE invite_id = ?')
+    .get(inviteId) as { session_id: string; pty_epoch: number; role: GrantRole } | undefined;
+  return row ? { sessionId: row.session_id, ptyEpoch: row.pty_epoch, role: row.role } : null;
 }

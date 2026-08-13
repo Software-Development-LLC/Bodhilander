@@ -12,7 +12,22 @@ import { createReconnectScheduler } from './reconnect';
 type SessionState = 'idle' | 'working' | 'waiting' | 'error' | 'stopped';
 interface RSession { id: string; name: string; state: SessionState; groupId: string; workingDir: string; provider: string; shellType: string; }
 interface RGroup { id: string; name: string; color: string; workingDir: string; parentId: string | null; }
-interface Machine { id: string; name: string; ed25519Pub: string; lastSeenAt: number | null; }
+interface Machine {
+  id: string;
+  name: string;
+  ed25519Pub: string;
+  lastSeenAt: number | null;
+  /** How you reach it. Guests get a certificate; owners get null. */
+  relation?: 'owner' | 'grantee';
+  /** Label by PERSON for a guest — "machine" is owner vocabulary. */
+  ownerName?: string | null;
+  grantId?: string | null;
+  role?: string | null;
+  certificate?: string | null;
+}
+
+/** True when the signed-in user is a guest on the machine they are viewing. */
+const isGuest = () => app.machine?.relation === 'grantee';
 
 // ---------------------------------------------------------------------------
 // Small DOM helpers
@@ -54,8 +69,30 @@ async function boot() {
   try {
     const cfg = (await api('/api/config').then((r) => (r.ok ? r.json() : {})).catch(() => ({}))) as { devLogin?: boolean };
     app.devLogin = !!cfg.devLogin;
+
+    const invite = inviteCodeFromPath();
     const me = await api('/api/me');
-    if (!me.ok) return renderSignIn();
+    if (!me.ok) {
+      // Stash the whole location before OAuth. The fragment carries the
+      // machine fingerprint and does NOT survive a redirect round trip, so
+      // without this the guest comes back unable to check provenance and we
+      // would have to either lie about it or nag them.
+      if (invite) sessionStorage.setItem(INVITE_STASH, location.pathname + location.hash);
+      return renderSignIn(!!invite);
+    }
+
+    // Back from OAuth on an invite link.
+    const stashed = sessionStorage.getItem(INVITE_STASH);
+    if (!invite && stashed) {
+      sessionStorage.removeItem(INVITE_STASH);
+      history.replaceState(null, '', stashed);
+      return boot();
+    }
+    if (invite) {
+      sessionStorage.removeItem(INVITE_STASH);
+      return renderRedeem(invite);
+    }
+
     const { machines } = await api('/api/machines').then((r) => r.json());
     renderApp(machines as Machine[]);
   } catch {
@@ -63,12 +100,120 @@ async function boot() {
   }
 }
 
-function renderSignIn() {
+// ---------------------------------------------------------------------------
+// Invite redemption (/i/:code)
+// ---------------------------------------------------------------------------
+
+const INVITE_STASH = 'bodhi.invite';
+
+function inviteCodeFromPath(): string | null {
+  const m = /^\/i\/([^/]+)\/?$/.exec(location.pathname);
+  return m ? decodeURIComponent(m[1]!) : null;
+}
+
+/** The fingerprint the sender put in the link, if any. */
+function invitedFingerprint(): string | null {
+  const m = /(?:^|&)fp=([^&]+)/.exec(location.hash.replace(/^#/, ''));
+  return m ? decodeURIComponent(m[1]!) : null;
+}
+
+/** Copy for each way an invite can fail. Never guesses. */
+const REDEEM_COPY: Record<string, { title: string; body: string }> = {
+  invite_not_found: { title: "That link doesn't work", body: 'Check you copied all of it, or ask for a new one.' },
+  invite_expired: { title: 'That link has expired', body: 'Ask for a new one — links stop working after a while on purpose.' },
+  invite_already_used: { title: 'That link has been used', body: 'Invite links work once. Ask for a new one.' },
+  invite_revoked: { title: 'That link was cancelled', body: 'Whoever sent it withdrew the invitation.' },
+  invite_wrong_account: {
+    title: "This link isn't for this account",
+    body: 'It was addressed to a specific GitHub account. Sign in as that account, or ask for a link addressed to you.',
+  },
+  invite_own_machine: { title: "That's your own machine", body: 'You already have full access to it — no invite needed.' },
+};
+
+async function renderRedeem(code: string): Promise<void> {
+  // A full-page screen, not a bottom sheet: `.sheet` is max-height:88dvh with
+  // no sticky footer, so on a small phone the primary action lands below the
+  // fold — on the one screen where the primary action is the entire point.
+  rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
+    <div class="logo">🤝</div><h1>Joining…</h1>
+    <div class="spinner" style="margin:18px auto"></div>
+  </div></div>`;
+
+  let res: Response;
+  try {
+    res = await api('/api/shares/redeem', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+  } catch {
+    rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
+      <div class="logo">📡</div><h1>Couldn't reach the server</h1>
+      <p>Check your connection and try again.</p>
+      <button class="btn" onclick="location.reload()">Try again</button>
+    </div></div>`;
+    return;
+  }
+
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    const copy = REDEEM_COPY[body.error ?? ''] ?? {
+      title: "That link didn't work",
+      body: 'Ask whoever sent it for a new one.',
+    };
+    rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
+      <div class="logo">🚫</div><h1>${esc(copy.title)}</h1>
+      <p>${esc(copy.body)}</p>
+      <a class="btn ghost" href="/">Go to my machines</a>
+    </div></div>`;
+    return;
+  }
+
+  history.replaceState(null, '', '/');
+  renderWaitingForApproval();
+}
+
+/**
+ * The most-travelled path in the whole feature, and the guest's entire first
+ * impression. It must say what is happening, that it is normal, and what to
+ * do — a spinner alone reads as broken.
+ */
+function renderWaitingForApproval(): void {
+  rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
+    <div class="logo">⏳</div>
+    <h1>Waiting to be let in…</h1>
+    <p>They'll get a prompt on their machine. Keep this page open — it'll update on its own.</p>
+    <div class="spinner" style="margin:18px auto"></div>
+    <button class="btn ghost" id="checkNow">Check now</button>
+  </div></div>`;
+  $('#checkNow')!.onclick = () => void pollForGrant(true);
+  void pollForGrant(false);
+}
+
+let waitTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Poll until the owner answers. Cheap, and stops the moment it resolves. */
+async function pollForGrant(immediate: boolean): Promise<void> {
+  if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
+  try {
+    const { machines } = (await api('/api/machines').then((r) => r.json())) as { machines: Machine[] };
+    if (machines.some((m) => m.relation === 'grantee')) return renderApp(machines);
+  } catch {
+    /* transient — keep waiting rather than declaring failure */
+  }
+  waitTimer = setTimeout(() => void pollForGrant(false), immediate ? 1500 : 4000);
+}
+
+function renderSignIn(fromInvite = false) {
   rootEl.innerHTML = `
     <div class="screen-center"><div class="card-center">
-      <div class="logo">🛰️</div>
-      <h1>Bodhilander Remote</h1>
-      <p>Reach your desktop's sessions from anywhere — end-to-end encrypted.</p>
+      <div class="logo">${fromInvite ? '🤝' : '🛰️'}</div>
+      <h1>${fromInvite ? "You've been invited" : 'Bodhilander Remote'}</h1>
+      <p>${
+        fromInvite
+          ? 'Sign in with GitHub to accept. The invitation may be addressed to a specific account.'
+          : "Reach your desktop's sessions from anywhere — end-to-end encrypted."
+      }</p>
       <a class="btn gh" href="/auth/github/login">Sign in with GitHub</a>
       ${app.devLogin ? '<button class="btn ghost" id="dev" style="margin-top:10px">Dev sign in</button>' : ''}
       ${new URLSearchParams(location.search).get('denied') === 'org' ? '<div class="banner err">Access is restricted to authorized members.</div>' : ''}
@@ -82,17 +227,32 @@ function renderSignIn() {
 function renderApp(machines: Machine[]) {
   app.machines = machines;
   if (!machines.length) {
+    // Two different empty states. Telling someone who was invited to a session
+    // to go and generate a link code in a desktop app they do not have is
+    // advice for a completely different person.
     rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
-      <div class="logo">🖥️</div><h1>No machines linked</h1>
-      <p>In the desktop app, open <b>Settings → Remote Hosting → Generate link code</b>, then enter the code here to link it.</p>
-      <button class="btn" id="linkBtn">Link a machine</button>
+      <div class="logo">🖥️</div><h1>Nothing here yet</h1>
+      <p>If someone shared a session with you, open the link they sent. If this is your own machine, open
+         <b>Settings → Remote Hosting → Generate link code</b> in the desktop app.</p>
+      <button class="btn" id="inviteBtn">Enter an invite code</button>
+      <button class="btn ghost" style="margin-top:10px" id="linkBtn">Link my own machine</button>
       <button class="btn ghost" style="margin-top:10px" onclick="location.reload()">Refresh</button>
     </div></div>`;
     $('#linkBtn')!.onclick = openLinkMachine;
+    // Posts to /api/shares/redeem, never /link/claim — the latter would
+    // attempt an ownership transfer, which is a completely different act.
+    $('#inviteBtn')!.onclick = () => {
+      const code = prompt('Enter the invite code you were sent');
+      if (code?.trim()) void renderRedeem(code.trim());
+    };
     return;
   }
   // Pick the last machine the user chose here, else the first. A machine
   // switcher (the pill) lets them change it or link another.
+  //
+  // A guest with exactly one grant should never see a picker: choosing
+  // between one thing is not a choice, and "machine" is owner vocabulary
+  // anyway — they were invited to a session by a person.
   const preferredId = localStorage.getItem('bodhi.machineId');
   app.machine = machines.find((m) => m.id === preferredId) ?? machines[0]!;
 
@@ -103,7 +263,11 @@ function renderApp(machines: Machine[]) {
         <div class="brand grow"><span class="logo">🛰️</span> <span>Bodhilander</span></div>
         <button class="iconbtn" id="theme" aria-label="Toggle light/dark theme">◐</button>
       </header>
-      <div style="padding:12px 16px 0"><button class="machine-pill" id="machineBtn"><span class="dot off" id="mdot"></span> <span>${esc(app.machine.name)}</span></button></div>
+      <div style="padding:12px 16px 0"><button class="machine-pill" id="machineBtn"><span class="dot off" id="mdot"></span> <span>${esc(
+        app.machine.relation === 'grantee' && app.machine.ownerName
+          ? `${app.machine.ownerName}'s ${app.machine.name}`
+          : app.machine.name,
+      )}</span></button></div>
       <div class="list-head"><h2>Sessions</h2><span class="attn-count hidden" id="attn"></span></div>
       <ul class="sessions" id="sessions"><li class="empty-note"><div class="spinner"></div><p style="margin-top:14px">Connecting securely…</p></li></ul>
       <button class="fab" id="fab" aria-label="New session">＋</button>
@@ -135,16 +299,84 @@ function renderApp(machines: Machine[]) {
   $('#fpBtn')!.onclick = openFp; $('#fpBtn2')!.onclick = openFp;
   $('#machineBtn')!.onclick = openMachineMenu;
   $('#back')!.onclick = () => history.back();
-  buildKeys();
-  setupCompose();
+  if (isGuest()) applyWatchOnly();
+  else { buildKeys(); setupCompose(); }
   connect();
+}
+
+/**
+ * Turn the terminal pane into an honest read-only surface.
+ *
+ * Watch-only is never expressed by absence alone. Removing the compose bar
+ * and leaving a blank gap reads as broken or as a feature that failed to
+ * load; a person needs to be told what they CAN do, not left to infer what
+ * they cannot.
+ */
+function applyWatchOnly(): void {
+  const compose = $('.compose');
+  if (compose) {
+    // Occupies the compose bar's place so an upgrade to typing swaps in
+    // without the layout jumping.
+    compose.className = 'compose watch-only';
+    compose.innerHTML = `
+      <div class="attn-banner hidden" id="attnBanner">✻ This session is waiting for a response</div>
+      <div class="watch-strip" role="status">
+        <span aria-hidden="true">👁</span>
+        <span>Watch only. You can read and scroll this session. You can't type into it.</span>
+      </div>`;
+  }
+
+  const screen = $('#screen');
+  if (!screen) return;
+  // Focusable and announced read-only, so a keyboard or screen-reader user
+  // reaches the content at all — the pane is the entire point of the page.
+  screen.setAttribute('tabindex', '0');
+  screen.setAttribute('role', 'document');
+  screen.setAttribute('aria-readonly', 'true');
+  screen.setAttribute('aria-label', 'Shared terminal output, read only');
+
+  // The existing scroll path is a touch-only touchmove handler, so without
+  // this a keyboard user cannot move through the scrollback at all.
+  screen.addEventListener('keydown', (e) => {
+    const ev = e as KeyboardEvent;
+    if (!term) return;
+    const page = Math.max(1, term.rows - 1);
+    if (ev.key === 'PageUp') { term.scrollLines(-page); ev.preventDefault(); }
+    else if (ev.key === 'PageDown') { term.scrollLines(page); ev.preventDefault(); }
+    else if (ev.key === 'Home') { term.scrollToTop(); ev.preventDefault(); }
+    else if (ev.key === 'End') { term.scrollToBottom(); ev.preventDefault(); }
+    else if (ev.key === 'ArrowUp') { term.scrollLines(-1); ev.preventDefault(); }
+    else if (ev.key === 'ArrowDown') { term.scrollLines(1); ev.preventDefault(); }
+  });
+}
+
+/**
+ * Tell a guest their view is wider than their screen, and whose screen it is
+ * sized for. Without this the horizontal cut-off reads as a rendering bug.
+ */
+function updateWideBanner(screenEl: HTMLElement): void {
+  const id = 'wideBanner';
+  const cols = term?.cols ?? 0;
+  const overflows = screenEl.scrollWidth > screenEl.clientWidth + 4;
+  let banner = document.getElementById(id);
+
+  if (!overflows || !cols) {
+    banner?.remove();
+    return;
+  }
+  if (!banner) {
+    banner = h('div', { id, class: 'wide-banner', role: 'status' });
+    screenEl.parentElement?.insertBefore(banner, screenEl);
+  }
+  const owner = app.machine?.ownerName;
+  banner.textContent = `Sized for ${owner ? `${owner}'s` : 'their'} screen (${cols} columns). Drag sideways to read.`;
 }
 
 // ---------------------------------------------------------------------------
 // Connection + presence
 // ---------------------------------------------------------------------------
 function connect() {
-  const conn = new RelayConnection(app.machine!.id, app.machine!.ed25519Pub);
+  const conn = new RelayConnection(app.machine!.id, app.machine!.ed25519Pub, app.machine!.certificate ?? null);
   app.conn = conn;
   conn.onFingerprint = (fp, ok) => { app.fp = fp; app.fpVerified = ok; };
   conn.onState = (s: ConnState, detail?: string) => onConnState(s, detail);
@@ -167,7 +399,37 @@ const reconnector = createReconnectScheduler({
   reconnect: () => { app.conn?.close(); connect(); },
 });
 
+/**
+ * Why access ended, in the guest's words.
+ *
+ * Distinct per reason on purpose: telling someone "Will revoked your access"
+ * when Will merely closed a terminal is a false and socially loaded story, and
+ * the agent already knows which one it was.
+ */
+const ENDED_COPY: Record<string, { icon: string; title: string; body: string }> = {
+  revoked: { icon: '🔒', title: 'Your access was ended', body: 'The person who shared this session stopped sharing it.' },
+  expired: { icon: '⌛', title: 'Your access expired', body: 'Shared access runs out on a timer. Ask for a new link if you still need it.' },
+  session_ended: { icon: '⏹', title: 'That session ended', body: 'The terminal you were watching was closed. Nothing was taken away from you.' },
+  machine_unlinked: { icon: '🔌', title: 'That machine was unlinked', body: 'It is no longer reachable through Bodhilander.' },
+  not_authorized: { icon: '🚫', title: "You're not in yet", body: 'This machine did not accept the invitation. Ask for a new link.' },
+};
+
+function renderEnded(reason: string): void {
+  const copy = ENDED_COPY[reason] ?? ENDED_COPY.revoked!;
+  stopPolling();
+  reconnector.cancel();
+  app.conn?.close();
+  app.conn = null;
+  rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
+    <div class="logo">${copy.icon}</div>
+    <h1>${esc(copy.title)}</h1>
+    <p>${esc(copy.body)}</p>
+    <a class="btn ghost" href="/">Go to my machines</a>
+  </div></div>`;
+}
+
 function onConnState(s: ConnState, detail?: string) {
+  if (s === 'denied') return renderEnded(detail ?? 'revoked');
   const dot = $('#mdot'); const list = $('#sessions');
   if (s === 'ready') {
     reconnector.cancel();
@@ -282,6 +544,10 @@ const isMobileView = () => matchMedia('(max-width:859px)').matches;
 // (the size comes back authoritatively via terminal:size). Only assert on real
 // changes to avoid reflow churn.
 function assertMobileSize() {
+  // A guest NEVER resizes the owner's PTY. Their phone must not reflow
+  // somebody else's terminal — the owner would watch their session jump
+  // around with no idea why. Guests read at true cell size and pan instead.
+  if (isGuest()) return;
   if (!term || !fitAddon || !isMobileView() || !app.activeId) return;
   const dims = fitAddon.proposeDimensions();
   if (!dims || !dims.cols || !dims.rows || !isFinite(dims.cols) || !isFinite(dims.rows)) return;
@@ -300,6 +566,22 @@ function scaleTerm() {
   const xtermEl = term?.element as HTMLElement | undefined;
   const screenEl = $<HTMLElement>('#screen');
   if (!xtermEl || !screenEl) return;
+
+  // Guests are never scaled. scaleTerm() CSS-downscales rather than reflows,
+  // so a 164-column desktop session shrinks to unreadable on a phone — and a
+  // guest cannot fix it, because they must not resize the owner's PTY. Render
+  // at true cell size and let them pan, with a banner that says why it's wide
+  // rather than leaving them to conclude the page is broken.
+  if (isGuest()) {
+    xtermEl.style.transform = '';
+    xtermEl.style.transformOrigin = '';
+    termScale = 1;
+    screenEl.classList.add('pan');
+    updateWideBanner(screenEl);
+    return;
+  }
+
+  screenEl.classList.remove('pan');
   if (!isMobileView()) { xtermEl.style.transform = ''; xtermEl.style.transformOrigin = ''; termScale = 1; return; }
   xtermEl.style.transformOrigin = 'top left';
   xtermEl.style.transform = 'none';

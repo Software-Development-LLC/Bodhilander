@@ -26,8 +26,16 @@ export function createWebClient(config: RelayConfig) {
 
     if (p === '/app/main.js') return new Response(jsFile, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
     if (p === '/app/main.css') return new Response(cssFile, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache' } });
-    // SPA shell at the root; deeper client routes aren't used yet.
-    if (p === '/') return new Response(indexFile, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    // SPA shell at the root, and for invite links.
+    //
+    // `/i/:code` is a client route: the code lives in the path so it can be
+    // sent in a message, and the fingerprint rides in the `#fp=` fragment,
+    // which never reaches this server at all. Serving the shell here lets the
+    // client read both — a redirect to `/` would discard the code, and the
+    // fragment would not survive it either.
+    if (p === '/' || p === '/i' || p.startsWith('/i/')) {
+      return new Response(indexFile, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }
 
     return null; // fall through to the API/auth/ws router
   };

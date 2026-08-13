@@ -47,6 +47,43 @@ export function buildAgentAuthMessage(nonce: string): Uint8Array {
  */
 export const CAP_GRANTS_V1 = 'grants:v1';
 
+/**
+ * Canonical message an agent signs to create a share invite.
+ *
+ * Signed rather than session-authenticated because invites originate on the
+ * **desktop**, not in a browser: only the machine can countersign a grant, so
+ * only the machine should be able to offer one. A stolen relay session cookie
+ * therefore cannot mint invites for a machine it does not hold the key to.
+ *
+ * `expectedGithubLogin` is included so the addressing cannot be stripped in
+ * transit — an open link is a materially different thing from an addressed
+ * one, and the relay must not be able to downgrade one into the other.
+ */
+export const SHARE_CREATE_VERSION = 'share-create:v1';
+
+export interface ShareCreateParts {
+  machineId: string;
+  /** Empty string for an open link. */
+  expectedGithubLogin: string;
+  role: string;
+  grantTtlSeconds: number;
+  inviteTtlSeconds: number;
+  issuedAt: number;
+}
+
+export function buildShareCreateMessage(p: ShareCreateParts): Uint8Array {
+  const line = [
+    SHARE_CREATE_VERSION,
+    p.machineId,
+    p.expectedGithubLogin,
+    p.role,
+    String(p.grantTtlSeconds),
+    String(p.inviteTtlSeconds),
+    String(p.issuedAt),
+  ].join('\n');
+  return new TextEncoder().encode(line);
+}
+
 // --- grant certificates (design §5) ---
 
 export const GRANT_VERSION = 'grant:v1';

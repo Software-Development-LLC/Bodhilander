@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -106,6 +106,17 @@ interface ElectronAPI {
   relayGetPendingOwner: () => Promise<RelayStatus['pendingOwner']>;
   relayConfirmOwner: (userId: string) => Promise<RelayStatus>;
   relayRejectOwner: () => Promise<RelayStatus>;
+  relayCreateShare: (input: {
+    sessionId: string;
+    expectedGithubLogin: string | null;
+    role: 'viewer' | 'operator';
+    grantTtlSeconds: number;
+    inviteTtlSeconds: number;
+  }) => Promise<{ code: string; url: string; expiresAt: number }>;
+  relayApproveShare: (grantId: string, sessionIds?: string[]) => Promise<RelayStatus>;
+  relayDenyShare: (grantId: string) => Promise<RelayStatus>;
+  relayRevokeShare: (grantId: string) => Promise<RelayStatus>;
+  relayListShares: () => Promise<RelayShare[]>;
   onRelayStatus: (callback: (status: RelayStatus) => void) => () => void;
 
   // Sound notifications

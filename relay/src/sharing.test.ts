@@ -132,8 +132,8 @@ interface Fixture {
 function freshFixture(): Fixture {
   const db = openDb(':memory:');
   const repos = createRepositories(db);
-  const owner = repos.upsertGithubUser({ providerUserId: '1', displayName: 'Owner', email: null, avatarUrl: null });
-  const guest = repos.upsertGithubUser({ providerUserId: '2', displayName: 'Guest', email: null, avatarUrl: null });
+  const owner = repos.upsertGithubUser({ providerUserId: '1', displayName: 'Owner', login: 'owner', email: null, avatarUrl: null });
+  const guest = repos.upsertGithubUser({ providerUserId: '2', displayName: 'Guest', login: 'guest', email: null, avatarUrl: null });
   const code = repos.createLinkCode('m', new Uint8Array(32).fill(7), new Uint8Array(32).fill(8), 600).code;
   const claim = repos.claimLinkCode(code, owner.id);
   return { db, repos, ownerId: owner.id, guestId: guest.id, machineId: claim.ok ? claim.machine.id : '' };
@@ -292,6 +292,278 @@ describe('getMachineAccess', () => {
     try {
       insertGrant(f, { grantee_user_id: f.ownerId });
       expect(f.repos.getMachineAccess(f.machineId, f.ownerId).relation).toBe('owner');
+    } finally {
+      f.db.close();
+    }
+  });
+});
+
+// --- invite lifecycle (M5.2) ---
+
+function guestUser(f: Fixture, login: string | null, providerUserId = '900') {
+  const u = f.repos.upsertGithubUser({
+    providerUserId,
+    displayName: 'Guest',
+    login: login ?? '',
+    email: null,
+    avatarUrl: null,
+  });
+  if (login === null) f.db.query('UPDATE users SET github_login = NULL WHERE id = ?').run(u.id);
+  return f.repos.getUser(u.id)!;
+}
+
+const inviteInput = (f: Fixture, over: Partial<Parameters<Repositories['createShareInvite']>[0]> = {}) => ({
+  machineId: f.machineId,
+  expectedGithubLogin: 'dana-k',
+  role: 'viewer' as const,
+  label: null,
+  grantTtlSeconds: 4 * 3600,
+  inviteTtlSeconds: 3600,
+  ...over,
+});
+
+describe('createShareInvite', () => {
+  test('returns the raw code once and stores only its hash', () => {
+    // Same discipline as link codes: a database leak must not yield a usable
+    // invite.
+    const f = freshFixture();
+    try {
+      const { invite, code } = f.repos.createShareInvite(inviteInput(f));
+      expect(code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+      expect(invite.code_hash).not.toBe(code);
+      const raw = f.db.query('SELECT * FROM share_invites WHERE id = ?').get(invite.id) as Record<string, unknown>;
+      expect(JSON.stringify(raw)).not.toContain(code);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('normalises the addressed login to lowercase', () => {
+    // GitHub logins compare case-insensitively; an invite for `Dana-K` must
+    // match a session for `dana-k`.
+    const f = freshFixture();
+    try {
+      const { invite } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: '  Dana-K  ' }));
+      expect(invite.expected_github_login).toBe('dana-k');
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('an empty login is an open link, not an invite addressed to nobody', () => {
+    const f = freshFixture();
+    try {
+      expect(f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: '   ' })).invite.expected_github_login).toBeNull();
+    } finally {
+      f.db.close();
+    }
+  });
+});
+
+describe('redeemShareInvite', () => {
+  test('an addressed invite redeemed by the named account creates a PENDING grant', () => {
+    // Pending, not active: redeeming is asking. Until the owner's agent
+    // countersigns, getMachineAccess will not honour it.
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f));
+      const guest = guestUser(f, 'dana-k');
+      const result = f.repos.redeemShareInvite(code, guest, crypto.randomUUID());
+
+      expect(result.ok).toBe(true);
+      expect(result.ok === true && result.grant.status).toBe('pending');
+      expect(result.ok === true && result.grant.certificate).toBeNull();
+      expect(f.repos.getMachineAccess(f.machineId, guest.id)).toEqual({ relation: 'none' });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('a different account cannot redeem an addressed invite', () => {
+    // The whole point of addressing: a leaked link is not a working link.
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f));
+      const result = f.repos.redeemShareInvite(code, guestUser(f, 'someone-else'), crypto.randomUUID());
+      expect(result).toEqual({ ok: false, reason: 'wrong_account' });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('login matching is case-insensitive', () => {
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: 'dana-k' }));
+      expect(f.repos.redeemShareInvite(code, guestUser(f, 'DANA-K'), crypto.randomUUID()).ok).toBe(true);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('a user with no stored login cannot satisfy an addressed invite', () => {
+    // Users predating migration 003 have a NULL login. A NULL must never read
+    // as "matches anything".
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f));
+      const result = f.repos.redeemShareInvite(code, guestUser(f, null), crypto.randomUUID());
+      expect(result).toEqual({ ok: false, reason: 'wrong_account' });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('an open link may be redeemed by anyone', () => {
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: null }));
+      expect(f.repos.redeemShareInvite(code, guestUser(f, 'anyone'), crypto.randomUUID()).ok).toBe(true);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('the machine owner cannot redeem their own invite', () => {
+    // It would create a grant that shadows ownership with something narrower.
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: null }));
+      const owner = f.repos.getUser(f.ownerId)!;
+      expect(f.repos.redeemShareInvite(code, owner, crypto.randomUUID())).toEqual({ ok: false, reason: 'own_machine' });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('a code cannot be redeemed twice', () => {
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: null }));
+      expect(f.repos.redeemShareInvite(code, guestUser(f, 'a', '901'), crypto.randomUUID()).ok).toBe(true);
+      expect(f.repos.redeemShareInvite(code, guestUser(f, 'b', '902'), crypto.randomUUID())).toEqual({
+        ok: false,
+        reason: 'already_used',
+      });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('a revoked invite is refused, and says so distinctly from expired', () => {
+    // Distinct reasons because the guest-facing copy differs.
+    const f = freshFixture();
+    try {
+      const { invite, code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: null }));
+      expect(f.repos.revokeShareInvite(f.machineId, invite.id)).toBe(true);
+      expect(f.repos.redeemShareInvite(code, guestUser(f, 'a'), crypto.randomUUID())).toEqual({
+        ok: false,
+        reason: 'revoked',
+      });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('an unknown code is not distinguishable from a wrong one', () => {
+    const f = freshFixture();
+    try {
+      expect(f.repos.redeemShareInvite('ZZZZ-ZZZZ', guestUser(f, 'a'), crypto.randomUUID())).toEqual({
+        ok: false,
+        reason: 'not_found',
+      });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('every attempt is counted, including failures', () => {
+    // Guessing should be visible rather than silent.
+    const f = freshFixture();
+    try {
+      const { invite, code } = f.repos.createShareInvite(inviteInput(f));
+      f.repos.redeemShareInvite(code, guestUser(f, 'wrong', '901'), crypto.randomUUID());
+      f.repos.redeemShareInvite(code, guestUser(f, 'also-wrong', '902'), crypto.randomUUID());
+      const row = f.db.query('SELECT attempt_count FROM share_invites WHERE id = ?').get(invite.id);
+      expect(row).toEqual({ attempt_count: 2 });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('revoking an invite belonging to another machine does nothing', () => {
+    const f = freshFixture();
+    try {
+      const { invite } = f.repos.createShareInvite(inviteInput(f));
+      expect(f.repos.revokeShareInvite(crypto.randomUUID(), invite.id)).toBe(false);
+    } finally {
+      f.db.close();
+    }
+  });
+});
+
+describe('binding a redeemed grant', () => {
+  function redeemed(f: Fixture) {
+    const { code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: null }));
+    const guest = guestUser(f, 'dana-k');
+    const result = f.repos.redeemShareInvite(code, guest, crypto.randomUUID());
+    if (!result.ok) throw new Error('redeem failed');
+    return { guest, grantId: result.grant.id };
+  }
+
+  test('binding a certificate makes the grantee reachable', () => {
+    const f = freshFixture();
+    try {
+      const { guest, grantId } = redeemed(f);
+      expect(f.repos.bindGrantCertificate(grantId, 'grant:v1.x.y', Date.now() + 3_600_000)).toBe(true);
+      expect(f.repos.getMachineAccess(f.machineId, guest.id).relation).toBe('grantee');
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('a grant cannot be bound twice', () => {
+    // A replayed share:bind must not swap the certificate under a live guest.
+    const f = freshFixture();
+    try {
+      const { grantId } = redeemed(f);
+      expect(f.repos.bindGrantCertificate(grantId, 'grant:v1.a.a', Date.now() + 3_600_000)).toBe(true);
+      expect(f.repos.bindGrantCertificate(grantId, 'grant:v1.b.b', Date.now() + 3_600_000)).toBe(false);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('a revoked grant cannot be resurrected by binding', () => {
+    const f = freshFixture();
+    try {
+      const { grantId } = redeemed(f);
+      expect(f.repos.revokeGrant(grantId)).toBe(true);
+      expect(f.repos.bindGrantCertificate(grantId, 'grant:v1.x.y', Date.now() + 3_600_000)).toBe(false);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('revoking ends access immediately', () => {
+    const f = freshFixture();
+    try {
+      const { guest, grantId } = redeemed(f);
+      f.repos.bindGrantCertificate(grantId, 'grant:v1.x.y', Date.now() + 3_600_000);
+      f.repos.revokeGrant(grantId);
+      expect(f.repos.getMachineAccess(f.machineId, guest.id)).toEqual({ relation: 'none' });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('purgeDeadShares drops revoked grants and stale unredeemed invites', () => {
+    const f = freshFixture();
+    try {
+      const { grantId } = redeemed(f);
+      f.repos.revokeGrant(grantId);
+      f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: null, inviteTtlSeconds: -1 }));
+      expect(f.repos.purgeDeadShares()).toBeGreaterThanOrEqual(2);
     } finally {
       f.db.close();
     }

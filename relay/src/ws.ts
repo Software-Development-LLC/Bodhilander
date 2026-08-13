@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from 'bun';
 import type { Logger } from './logger';
-import type { Repositories } from './repositories';
+import type { MachineGrant, Repositories } from './repositories';
 import { fromBase64, randomToken, verifyEd25519 } from './crypto';
 import { buildAgentAuthMessage, CAP_GRANTS_V1 } from './protocol';
 
@@ -44,6 +44,12 @@ export interface ClientSocketData {
   clientId: string;
   /** Set once the client has opened a channel to a machine. */
   machineId: string | null;
+  /**
+   * The grant this socket connected under, for guests. Null for the owner.
+   * Recorded so a revocation can find and cut the live socket rather than
+   * waiting for the guest to reconnect.
+   */
+  grantId: string | null;
 }
 
 export type SocketData = AgentSocketData | ClientSocketData;
@@ -69,7 +75,7 @@ export function newAgentSocketData(): AgentSocketData {
 
 /** Per-connection state for an authenticated web client. */
 export function newClientSocketData(userId: string): ClientSocketData {
-  return { role: 'client', userId, clientId: crypto.randomUUID(), machineId: null };
+  return { role: 'client', userId, clientId: crypto.randomUUID(), machineId: null, grantId: null };
 }
 
 function send(ws: ServerWebSocket<SocketData>, obj: unknown): void {
@@ -110,6 +116,10 @@ export function createGateway(ctx: WsGatewayContext) {
       if (ws.data.role === 'agent') return handleAgent(ws, ws.data, msg);
       return handleClient(ws, ws.data, msg);
     },
+
+    /** HTTP-side seams: a guest redeemed, or a grant was revoked over REST. */
+    notifyGrantRedeemed,
+    notifyGrantRevoked,
 
     close(ws: ServerWebSocket<SocketData>) {
       if (ws.data.role === 'agent') {
@@ -192,6 +202,12 @@ export function createGateway(ctx: WsGatewayContext) {
           ? { userId: owner.id, displayName: owner.display_name, email: owner.primary_email }
           : null,
       });
+      // Close the split-brain on every reconnect: the relay holds certificates
+      // and routes, the desktop holds the session lists and revocation status.
+      // Without this a relay volume loss leaves ghosts in the owner's settings,
+      // and a desktop reinstall leaves guests connecting to a DENY_ALL with no
+      // explanation.
+      sendShareSync(ws, machine.id);
       logger.info('agent online', { machineId: machine.id });
       return;
     }
@@ -210,7 +226,115 @@ export function createGateway(ctx: WsGatewayContext) {
       if (client && (client.data as ClientSocketData).machineId === data.machineId) {
         send(client, { type: 'from-agent', payload: msg.payload });
       }
+      return;
     }
+
+    if (!data.machineId) return;
+
+    // The owner approved: attach the countersigned certificate. Scoped to this
+    // agent's own machine, so an agent cannot bind a grant on someone else's.
+    if (msg.type === 'share:bind' && typeof msg.grantId === 'string' && typeof msg.certificate === 'string') {
+      const grant = repos.getGrant(msg.grantId);
+      if (!grant || grant.machine_id !== data.machineId) return;
+      const expiresAt = typeof msg.expiresAt === 'number' ? msg.expiresAt : 0;
+      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return;
+      if (repos.bindGrantCertificate(msg.grantId, msg.certificate, expiresAt)) {
+        logger.info('grant bound', { machineId: data.machineId, grantId: msg.grantId });
+      }
+      return;
+    }
+
+    // The owner said no, or the machine cannot honour it.
+    if (msg.type === 'share:deny' && typeof msg.grantId === 'string') {
+      const grant = repos.getGrant(msg.grantId);
+      if (!grant || grant.machine_id !== data.machineId) return;
+      repos.revokeGrant(msg.grantId);
+      kickGrant(msg.grantId, typeof msg.reason === 'string' ? msg.reason : 'denied');
+      logger.info('grant denied', { machineId: data.machineId, grantId: msg.grantId });
+      return;
+    }
+
+    // The desktop is the authority on revocation, so its list wins. Anything
+    // the relay still holds for this machine that the agent does not name is a
+    // ghost — from a relay restore, or a revocation queued while offline.
+    if (msg.type === 'share:reconcile' && Array.isArray(msg.activeGrantIds)) {
+      const live = new Set(msg.activeGrantIds.filter((id): id is string => typeof id === 'string'));
+      let dropped = 0;
+      for (const grant of repos.listGrantsForMachine(data.machineId)) {
+        if (live.has(grant.id)) continue;
+        repos.revokeGrant(grant.id);
+        kickGrant(grant.id, 'revoked');
+        dropped += 1;
+      }
+      if (dropped > 0) logger.info('reconciled away stale grants', { machineId: data.machineId, dropped });
+      return;
+    }
+
+    // Cut one live client without revoking its grant — used for pause and for
+    // ending a session the guest was watching.
+    if (msg.type === 'client:kick' && typeof msg.clientId === 'string') {
+      const client = clients.get(msg.clientId);
+      if (client && (client.data as ClientSocketData).machineId === data.machineId) {
+        client.close(4403, typeof msg.reason === 'string' ? msg.reason : 'ended');
+      }
+    }
+  }
+
+  /** Tell an agent about every grant the relay currently holds for its machine. */
+  function sendShareSync(agent: ServerWebSocket<SocketData>, machineId: string): void {
+    send(agent, { type: 'share:sync', grants: repos.listGrantsForMachine(machineId).map(wireGrant) });
+  }
+
+  /**
+   * A guest redeemed an invite. Wake the owner's agent if it is online; if it
+   * is not, `share:sync` on its next `agent:ready` carries the same pending
+   * grant, so nothing is lost by the owner being away.
+   */
+  function notifyGrantRedeemed(grant: MachineGrant): void {
+    const agent = agents.get(grant.machine_id);
+    if (!agent) return;
+    send(agent, { type: 'share:pending', grants: [wireGrant(grant)] });
+  }
+
+  /** A grant was revoked over HTTP — tell the agent and cut any live socket. */
+  function notifyGrantRevoked(grant: MachineGrant): void {
+    const agent = agents.get(grant.machine_id);
+    if (agent) send(agent, { type: 'grant:revoked', grantId: grant.id });
+    kickGrant(grant.id, 'revoked');
+  }
+
+  /** Close every client socket connected under `grantId`. */
+  function kickGrant(grantId: string, reason: string): void {
+    for (const client of clients.values()) {
+      if ((client.data as ClientSocketData).grantId === grantId) client.close(4403, reason);
+    }
+  }
+
+  /**
+   * A grant as the agent needs to see it. The certificate is omitted — the
+   * agent signed it and does not need it back, and echoing it would put a
+   * credential on a wire that does not need to carry one.
+   */
+  function wireGrant(g: MachineGrant) {
+    const grantee = repos.getUser(g.grantee_user_id);
+    return {
+      grantId: g.id,
+      status: g.status,
+      role: g.role,
+      label: g.label,
+      granteeUserId: g.grantee_user_id,
+      granteeLogin: grantee?.github_login ?? null,
+      granteeName: grantee?.display_name ?? null,
+      // So the desktop can recover which session it offered — the relay never
+      // learns that, by design.
+      inviteId: g.invite_id,
+      createdAt: g.created_at,
+      expiresAt: g.expires_at,
+      // What the invite promised. `expires_at` is NULL until we countersign,
+      // so this is the only thing the agent can size a certificate from at the
+      // moment the owner approves.
+      grantTtlSeconds: g.grant_ttl_seconds,
+    };
   }
 
   /** Whether the live agent socket for a machine enforces grant certificates. */
@@ -259,7 +383,12 @@ export function createGateway(ctx: WsGatewayContext) {
       }
 
       data.machineId = machine.id;
+      // Remember which grant let this socket in, so a revocation can cut it
+      // immediately instead of waiting for the guest to reconnect.
+      data.grantId = access.relation === 'grantee' ? access.grant.id : null;
+      if (access.relation === 'grantee') repos.touchGrant(access.grant.id);
       clients.set(data.clientId, ws);
+      const principalUser = repos.getUser(data.userId);
       // `principal` is relay-ASSERTED, and named so no branch downstream reads
       // it as authorization. The agent treats it as a claim to check a
       // certificate against, never as a grant in itself.
@@ -273,7 +402,14 @@ export function createGateway(ctx: WsGatewayContext) {
       send(agent, {
         type: 'client:open',
         clientId: data.clientId,
-        principal: { userId: data.userId },
+        principal: {
+          userId: data.userId,
+          // The handle is what the approval prompt and the presence surfaces
+          // show. A display name is free text the account holder chooses, so
+          // it is carried only as a secondary label, never as the identity.
+          githubLogin: principalUser?.github_login ?? null,
+          displayName: principalUser?.display_name ?? null,
+        },
         payload: msg.payload,
       });
       send(ws, { type: 'channel:open', clientId: data.clientId });

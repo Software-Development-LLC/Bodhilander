@@ -135,6 +135,14 @@ export interface TunnelDeps {
     warn(msg: string, meta?: unknown): void;
     error(msg: string, meta?: unknown): void;
   };
+  /**
+   * Called whenever the set of attached guests changes.
+   *
+   * Presence is a hard requirement, not a nicety: silent read access to a live
+   * terminal is the same class of harm as silent write access, so the owner
+   * must be able to see who is watching without going looking.
+   */
+  onPresenceChange?: () => void;
   /** The relay origin this agent is connected to, for certificate binding. */
   relayOrigin(): string;
   /** This machine's id as the relay knows it, or null before linking. */
@@ -145,6 +153,19 @@ export interface TunnelDeps {
 /** The relay-asserted identity of a connecting socket. Never authorization. */
 export interface Principal {
   userId: string;
+  githubLogin?: string | null;
+  displayName?: string | null;
+}
+
+/** One guest currently attached, as the owner's UI needs to see them. */
+export interface AttachedGuest {
+  clientId: string;
+  grantId: string | null;
+  role: string;
+  login: string | null;
+  displayName: string | null;
+  /** The sessions they are watching right now, not merely entitled to. */
+  sessionIds: string[];
 }
 
 interface ClientSession {
@@ -155,6 +176,8 @@ interface ClientSession {
   subs: Set<string>;
   /** What this client may do. Starts at DENY_ALL and is never widened later. */
   grant: Grant;
+  /** Who the relay says this is, for presence. Never authorization. */
+  principal: Principal | null;
 }
 
 /** Decrypted command from a web client (union of every message's fields). */
@@ -191,7 +214,9 @@ export class SessionTunnel {
     'groups:list': (clientId, s) => this.sendGroups(clientId, s),
     'terminal:subscribe': (clientId, s, inner) => void this.handleSubscribe(clientId, s, inner),
     'terminal:unsubscribe': (_clientId, s, inner) => {
-      if (typeof inner.sessionId === 'string') s.subs.delete(inner.sessionId);
+      if (typeof inner.sessionId === 'string' && s.subs.delete(inner.sessionId) && s.grant.role !== 'owner') {
+        this.deps.onPresenceChange?.();
+      }
     },
     'terminal:input': (_clientId, s, inner) => {
       if (typeof inner.sessionId === 'string' && typeof inner.data === 'string' && s.subs.has(inner.sessionId)) {
@@ -244,9 +269,37 @@ export class SessionTunnel {
 
   /** Run `send` for every client subscribed to `sessionId`. */
   private fanOut(sessionId: string, send: (clientId: string) => void): void {
+    const now = this.deps.now();
     for (const [clientId, s] of this.sessions) {
-      if (s.subs.has(sessionId)) send(clientId);
+      if (!s.subs.has(sessionId)) continue;
+      // Re-check the grant on every frame, not just at subscribe time.
+      // `permits()` gates INBOUND commands; without this an expired or revoked
+      // guest would keep RECEIVING live output for as long as their socket
+      // stayed open — the stream is the thing being protected, so the check
+      // belongs where the data leaves.
+      if (!permits(s.grant, 'terminal:subscribe', sessionId, now)) {
+        this.expireClient(clientId, s, now);
+        continue;
+      }
+      send(clientId);
     }
+  }
+
+  /** Stop streaming to a client whose grant has lapsed, and tell it why. */
+  private expireClient(clientId: string, s: ClientSession, now: number): void {
+    if (s.grant.role === 'owner') return;
+    // Do NOT infer the reason from the timestamp alone: DENY_ALL carries
+    // `expiresAt: 0`, so a revoked client would be told its access "expired" —
+    // a different and misleading story. A grant that still holds capabilities
+    // and has run out of clock genuinely expired; one stripped of them was
+    // taken away.
+    const ranOut = s.grant.caps.length > 0 && s.grant.expiresAt <= now;
+    const reason = ranOut ? 'expired' : 'revoked';
+    s.subs.clear();
+    s.grant = DENY_ALL;
+    this.sealTo(clientId, { type: 'denied', reason });
+    this.deps.onPresenceChange?.();
+    this.deps.log.info('[Relay] stopped streaming to a lapsed guest', { clientId, reason });
   }
 
   private startListening(): void {
@@ -301,7 +354,14 @@ export class SessionTunnel {
       const key = deriveSessionKey(sharedSecret);
       const signature = this.deps.identity.sign(buildHandshakeProof(clientX25519Pub, ephemeralPubB64)).toString('base64');
 
-      const session: ClientSession = { key, sendCounter: 0, recvCounter: -1, subs: new Set(), grant };
+      const session: ClientSession = {
+        key,
+        sendCounter: 0,
+        recvCounter: -1,
+        subs: new Set(),
+        grant,
+        principal: principal ?? null,
+      };
       this.sessions.set(clientId, session);
       this.startListening();
 
@@ -318,6 +378,7 @@ export class SessionTunnel {
       // its own scope back.
       if (grant.role === 'owner') this.sendSessions(clientId, session);
       this.deps.log.info('[Relay] client channel opened', { clientId, role: grant.role });
+      if (grant.role !== 'owner') this.deps.onPresenceChange?.();
     } catch (err) {
       this.deps.log.error('[Relay] tunnel open failed:', err instanceof Error ? err.message : err);
     }
@@ -468,6 +529,7 @@ export class SessionTunnel {
     if (typeof inner.sessionId !== 'string') return;
     const sessionId = inner.sessionId;
     s.subs.add(sessionId);
+    if (s.grant.role !== 'owner') this.deps.onPresenceChange?.();
     // Tell the viewer the PTY's current size so it renders TUIs correctly.
     const size = this.deps.pty.getSize(sessionId);
     this.sealTo(clientId, { type: 'terminal:size', sessionId, cols: size.cols, rows: size.rows });
@@ -528,8 +590,12 @@ export class SessionTunnel {
 
   /** A web client disconnected — drop its state. */
   closeClient(clientId: string): void {
+    const was = this.sessions.get(clientId);
     if (!this.sessions.delete(clientId)) return;
     this.stopListeningIfIdle();
+    // Detach is as load-bearing as attach: an owner who never sees someone
+    // leave cannot tell watching from watched-once.
+    if (was && was.grant.role !== 'owner') this.deps.onPresenceChange?.();
   }
 
   /** Tear down every client (agent WebSocket dropped). */
@@ -548,11 +614,26 @@ export class SessionTunnel {
    * It keeps the shared PTY listener attached until the client actually
    * disconnects; `subs` is cleared, so `fanOut` never calls back for it.
    */
+  /**
+   * Revoke every live client holding `grantId`.
+   *
+   * Keyed by grant rather than by client because one person may have several
+   * browsers open under one grant, and revoking has to reach all of them —
+   * missing one would leave a guest still watching a terminal the owner
+   * believes they have been removed from.
+   */
+  revokeGrant(grantId: string, reason = 'revoked'): void {
+    for (const [clientId, s] of this.sessions) {
+      if (s.grant.grantId === grantId) this.revokeClient(clientId, reason);
+    }
+  }
+
   revokeClient(clientId: string, reason = 'revoked'): void {
     const s = this.sessions.get(clientId);
     if (!s) return;
     s.grant = DENY_ALL;
     s.subs.clear();
+    this.deps.onPresenceChange?.();
     // Sealed: an unsealed "your access ended" is forgeable by the relay, which
     // turns a revocation notice into a clean phishing lever.
     this.sealTo(clientId, { type: 'denied', reason });
@@ -599,6 +680,30 @@ export class SessionTunnel {
         parentId: g.parentId,
       }));
     this.sealTo(clientId, { type: 'groups', groups });
+  }
+
+  /**
+   * Guests currently attached, for the owner's presence surfaces.
+   *
+   * Reports what each guest is actually WATCHING (`subs`), not merely what
+   * they could watch — "dana-k is here" and "dana-k is looking at this
+   * terminal right now" are different claims and the second is the one that
+   * matters.
+   */
+  attachedGuests(): AttachedGuest[] {
+    const out: AttachedGuest[] = [];
+    for (const [clientId, s] of this.sessions) {
+      if (s.grant.role === 'owner') continue;
+      out.push({
+        clientId,
+        grantId: s.grant.grantId,
+        role: s.grant.role,
+        login: s.principal?.githubLogin ?? null,
+        displayName: s.principal?.displayName ?? null,
+        sessionIds: [...s.subs],
+      });
+    }
+    return out;
   }
 
   private sealTo(clientId: string, obj: unknown): void {
