@@ -144,6 +144,52 @@ describe('createRateLimiter memory bound', () => {
     clock.advance(60_001);
     expect(limiter.check('newcomer', 5, 60_000).allowed).toBe(true);
   });
+
+  test('a held saturation does not re-scan the map on every request', () => {
+    // Without the short-circuit, each request for an unseen key re-scans the
+    // whole map twice and evicts nothing, so reaching saturation would also
+    // buy an attacker a CPU amplification on the route for as long as they
+    // hold it. Measured by iteration count rather than wall clock: the clock
+    // is only read once per check(), so a limiter that keeps scanning still
+    // has to walk MAX_WINDOWS entries per call, and 2_000 such calls would be
+    // ~10^8 map steps. This completes in milliseconds when short-circuited.
+    const clock = fixedClock();
+    const limiter = createRateLimiter(clock.now);
+
+    for (let i = 0; i < MAX_WINDOWS; i++) limiter.check(`saturated:${i}`, 1, 60_000);
+    expect(limiter.check('probe', 5, 60_000).allowed).toBe(false); // enters saturation
+
+    for (let i = 0; i < 2_000; i++) {
+      expect(limiter.check(`newcomer:${i}`, 5, 60_000).allowed).toBe(false);
+    }
+
+    // Still correct after all that, and still self-heals on the boundary.
+    expect(limiter.size()).toBe(MAX_WINDOWS);
+    clock.advance(60_001);
+    expect(limiter.check('after', 5, 60_000).allowed).toBe(true);
+  });
+
+  test('saturation refusals are counted and drain to zero', () => {
+    // The branch is otherwise silent, and it is the signal that someone is
+    // deliberately saturating the limiter.
+    const limiter = createRateLimiter(fixedClock().now);
+    expect(limiter.drainSaturationRefusals()).toBe(0);
+
+    for (let i = 0; i < MAX_WINDOWS; i++) limiter.check(`saturated:${i}`, 1, 60_000);
+    for (let i = 0; i < 3; i++) limiter.check(`newcomer:${i}`, 5, 60_000);
+
+    expect(limiter.drainSaturationRefusals()).toBe(3);
+    expect(limiter.drainSaturationRefusals()).toBe(0); // drained
+  });
+
+  test('an ordinary refusal is not counted as saturation', () => {
+    const limiter = createRateLimiter(fixedClock().now);
+
+    limiter.check('a', 1, 60_000);
+    expect(limiter.check('a', 1, 60_000).allowed).toBe(false); // over its limit
+
+    expect(limiter.drainSaturationRefusals()).toBe(0);
+  });
 });
 
 describe('clientIp', () => {

@@ -17,6 +17,13 @@ export interface RateLimiter {
   sweep(): void;
   /** Windows currently tracked. Bounded by `MAX_WINDOWS`. */
   size(): number;
+  /**
+   * Refusals caused by the limiter being saturated, since the last call.
+   * Reads and resets. Non-zero means someone is deliberately holding
+   * `MAX_WINDOWS` distinct buckets at their limit, which is worth an ops
+   * signal — otherwise that branch is silent.
+   */
+  drainSaturationRefusals(): number;
 }
 
 interface Window {
@@ -37,11 +44,32 @@ interface Window {
  */
 export const MAX_WINDOWS = 50_000;
 
-/** Windows dropped per eviction pass, so this is not an O(n) scan per request. */
+/**
+ * Windows dropped per eviction pass, so the O(n) scan is amortised across many
+ * requests rather than paid on each one. This holds while there is anything
+ * idle to evict; the fully-saturated case is handled by `saturatedUntil`
+ * below, which skips the scan entirely instead of repeating it.
+ */
 const EVICT_BATCH = Math.ceil(MAX_WINDOWS / 10);
 
 export function createRateLimiter(now: () => number = Date.now): RateLimiter {
   const windows = new Map<string, Window>();
+
+  /**
+   * While the map is full of throttling windows, the timestamp at which the
+   * first of them frees up — before then, `makeRoom` cannot possibly succeed
+   * and is skipped.
+   *
+   * This is sound rather than a guess: `count` only ever increases and
+   * `resetAt` never moves, so a throttling window cannot become evictable, and
+   * no window is added while we are refusing. The earliest `resetAt` is
+   * therefore exactly the first moment the answer can change. Zero when not
+   * saturated.
+   */
+  let saturatedUntil = 0;
+
+  /** Refusals caused by saturation, drained by the reaper for logging. */
+  let saturationRefusals = 0;
 
   /**
    * Try to get below `MAX_WINDOWS`. Returns whether there is now room.
@@ -55,10 +83,21 @@ export function createRateLimiter(now: () => number = Date.now): RateLimiter {
    * someone is never dropped to make room.
    */
   function makeRoom(ts: number): boolean {
+    // Saturated and nothing has expired yet: refuse without touching the map.
+    // Without this, every request for an unseen key would re-scan the whole
+    // map twice and evict nothing, letting an attacker who reaches saturation
+    // also burn CPU on the route for as long as they hold it there.
+    if (ts < saturatedUntil) return false;
+
+    let earliest = Infinity;
     for (const [key, window] of windows) {
       if (window.resetAt <= ts) windows.delete(key);
+      else if (window.resetAt < earliest) earliest = window.resetAt;
     }
-    if (windows.size < MAX_WINDOWS) return true;
+    if (windows.size < MAX_WINDOWS) {
+      saturatedUntil = 0;
+      return true;
+    }
 
     let evicted = 0;
     for (const [key, window] of windows) {
@@ -66,7 +105,13 @@ export function createRateLimiter(now: () => number = Date.now): RateLimiter {
       windows.delete(key);
       if (++evicted >= EVICT_BATCH) break;
     }
-    return windows.size < MAX_WINDOWS;
+    if (windows.size < MAX_WINDOWS) {
+      saturatedUntil = 0;
+      return true;
+    }
+
+    saturatedUntil = earliest;
+    return false;
   }
 
   return {
@@ -89,6 +134,7 @@ export function createRateLimiter(now: () => number = Date.now): RateLimiter {
         // distributed flood to reach. Refusing is the right answer here:
         // forgetting a window instead would reset a limit that is doing its
         // job, and this clears itself at the next window boundary.
+        saturationRefusals += 1;
         return { allowed: false, retryAfter: Math.max(1, Math.ceil(windowMs / 1000)) };
       }
 
@@ -105,6 +151,12 @@ export function createRateLimiter(now: () => number = Date.now): RateLimiter {
 
     size() {
       return windows.size;
+    },
+
+    drainSaturationRefusals() {
+      const n = saturationRefusals;
+      saturationRefusals = 0;
+      return n;
     },
   };
 }
