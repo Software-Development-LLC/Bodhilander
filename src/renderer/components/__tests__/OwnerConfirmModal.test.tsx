@@ -85,6 +85,13 @@ describe('rendering', () => {
     expect(screen.getByText('user-123')).toBeTruthy();
   });
 
+  test('falls back for a whitespace-only display name too', () => {
+    // `??` alone would not catch this — the account box would render blank and
+    // read as a legitimately empty name rather than an unknown one.
+    renderModal({ pending: pending({ displayName: '   ' }) });
+    expect(screen.getByText('user-123')).toBeTruthy();
+  });
+
   test('an owner change is framed as a change, and warns about existing shares', () => {
     renderModal({ pending: pending({ isChange: true }) });
     expect(screen.getByText(/changed hands/i)).toBeTruthy();

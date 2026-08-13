@@ -60,11 +60,12 @@ export const OwnerConfirmModal: React.FC<OwnerConfirmModalProps> = ({ pending, o
 
   if (!pending) return null;
 
-  const trimmedName = pending.displayName?.trim();
-  // Deliberately not `??`: a display name that trims to empty must fall back
-  // to the id too, and `??` only catches null/undefined. Better an opaque id
-  // than a blank box that reads as a legitimately empty name.
-  const name = trimmedName ? trimmedName : pending.userId;
+  // The emptiness test is explicit rather than a `||` or a `x ? x : y`,
+  // because the fallback has to cover BOTH a missing display name and one that
+  // trims to nothing — `??` alone would let a whitespace-only name through and
+  // render a blank box that reads as a legitimately empty name.
+  const trimmedName = pending.displayName?.trim() ?? '';
+  const name = trimmedName.length > 0 ? trimmedName : pending.userId;
 
   return (
     <dialog
