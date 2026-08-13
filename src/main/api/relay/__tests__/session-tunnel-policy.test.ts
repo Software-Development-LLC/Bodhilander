@@ -1,0 +1,506 @@
+/**
+ * Deny-path tests for the tunnel's authorization gate.
+ *
+ * These are the tests the DI refactor exists for — and note what is NOT here:
+ * no `mock.module()` at all. `session-tunnel.ts` imports nothing from
+ * Electron, so its dependencies are supplied as plain fakes. bun's
+ * `mock.module()` is process-wide, so stubbing `ptyManager` to reach this code
+ * would have broken `pty-manager.test.ts` depending on which file loaded
+ * first; the refactor removes the need rather than working around it.
+ *
+ * What is deliberately NOT faked is `dispatch()` itself. Testing an extracted
+ * policy module proves the table is right but not that the tunnel consults it,
+ * and "the gate exists but nothing calls it" is precisely the bug class this
+ * feature must not ship.
+ */
+
+import { beforeEach, describe, expect, test } from 'bun:test';
+import crypto from 'crypto';
+import { SessionTunnel } from '../session-tunnel';
+import type { TunnelDeps, TunnelSessionRow, TunnelGroupRow, TunnelStoredGrant } from '../session-tunnel';
+import { deriveSessionKey, sealJson, openJson, buildHandshakeProof } from '../e2e';
+import { COMMAND_CAPS } from '../grants';
+
+type SessionTunnelType = InstanceType<typeof SessionTunnel>;
+
+const MACHINE_ID = 'machine-1';
+const RELAY_ORIGIN = 'https://relay.example.com';
+const OWNER_ID = 'owner-user';
+const GUEST_ID = 'guest-user';
+const NOW = 1_800_000_000_000;
+
+// The machine identity the fake identity port serves.
+const machineKeys = crypto.generateKeyPairSync('ed25519');
+const MACHINE_PUB_B64 = Buffer.from(
+  (machineKeys.publicKey.export({ format: 'jwk' }) as { x: string }).x,
+  'base64url',
+).toString('base64');
+
+interface Harness {
+  tunnel: SessionTunnelType;
+  sent: { clientId: string; payload: unknown }[];
+  deps: TunnelDeps;
+  /** The client public key most recently offered, for proof assertions. */
+  lastClientPub: string | null;
+  /** Client-side key material, so tests can read what the tunnel sealed. */
+  openChannel(clientId: string, opts?: { principal?: { userId: string }; certificate?: string }): Buffer | null;
+  send(clientId: string, key: Buffer, n: number, obj: unknown): void;
+  opened(clientId: string, key: Buffer): { type?: string; [k: string]: unknown }[];
+}
+
+const SESSIONS: TunnelSessionRow[] = [
+  { id: 's1', name: 'Shared', state: 'idle', groupId: 'g1', workingDir: '/home/will/secret-project' },
+  { id: 's2', name: 'Private', state: 'idle', groupId: 'g2', workingDir: '/home/will/other' },
+];
+const GROUPS: TunnelGroupRow[] = [
+  { id: 'g1', name: 'One', color: '#fff', workingDir: '/home/will/secret-project', parentId: null },
+  { id: 'g2', name: 'Two', color: '#000', workingDir: '/home/will/other', parentId: null },
+];
+
+function harness(over: Partial<TunnelDeps> & { grantRow?: TunnelStoredGrant | null } = {}): Harness {
+  const sent: { clientId: string; payload: unknown }[] = [];
+  const epochs = new Map<string, number>([
+    ['s1', 111],
+    ['s2', 222],
+  ]);
+  let latched = false;
+
+  const deps: TunnelDeps = {
+    pty: {
+      subscribe: () => () => {},
+      write: () => {},
+      resize: () => {},
+      getSize: () => ({ cols: 80, rows: 24 }),
+      isLive: (id) => epochs.has(id),
+      ptyEpoch: (id) => epochs.get(id) ?? null,
+      getSerializedBuffer: async () => 'OWNER SCROLLBACK',
+    },
+    sessions: { getAll: () => SESSIONS },
+    groups: { getAll: () => GROUPS },
+    grants: {
+      get: () => over.grantRow ?? null,
+      ownerUserId: () => OWNER_ID,
+      enforced: () => latched,
+      latch: () => {
+        latched = true;
+      },
+    },
+    remote: { createSession: () => {}, createGroup: () => {} },
+    identity: {
+      ed25519Pub: () => MACHINE_PUB_B64,
+      sign: (message) => crypto.sign(null, Buffer.from(message), machineKeys.privateKey),
+    },
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    relayOrigin: () => RELAY_ORIGIN,
+    machineId: () => MACHINE_ID,
+    now: () => NOW,
+    ...over,
+  };
+
+  const tunnel = new SessionTunnel((clientId, payload) => sent.push({ clientId, payload }), deps);
+
+  const h: Harness = {
+    tunnel,
+    sent,
+    deps,
+    lastClientPub: null,
+    openChannel(clientId, opts = {}) {
+      const clientKeys = crypto.generateKeyPairSync('x25519');
+      const pubB64 = Buffer.from(
+        (clientKeys.publicKey.export({ format: 'jwk' }) as { x: string }).x,
+        'base64url',
+      ).toString('base64');
+      h.lastClientPub = pubB64;
+      const payload: Record<string, unknown> = { clientX25519Pub: pubB64 };
+      if (opts.certificate !== undefined) payload.certificate = opts.certificate;
+      tunnel.open(clientId, payload, opts.principal);
+
+      const handshake = sent.find(
+        (m) => m.clientId === clientId && (m.payload as { type?: string })?.type === 'handshake',
+      );
+      if (!handshake) return null;
+      const hp = handshake.payload as { agentX25519Pub: string };
+      const agentPub = crypto.createPublicKey({
+        key: { kty: 'OKP', crv: 'X25519', x: Buffer.from(hp.agentX25519Pub, 'base64').toString('base64url') },
+        format: 'jwk',
+      });
+      const shared = crypto.diffieHellman({ privateKey: clientKeys.privateKey, publicKey: agentPub });
+      return deriveSessionKey(shared);
+    },
+    send(clientId, key, n, obj) {
+      tunnel.frame(clientId, sealJson(key, n, obj));
+    },
+    opened(clientId, key) {
+      return sent
+        .filter((m) => m.clientId === clientId && (m.payload as { ct?: string })?.ct)
+        .map((m) => {
+          try {
+            return openJson(key, m.payload as never) as { type?: string };
+          } catch {
+            return { type: '__unreadable__' };
+          }
+        });
+    },
+  };
+  return h;
+}
+
+/** Mint a certificate the way the desktop would. */
+function mintCertificate(over: Record<string, unknown> = {}): string {
+  const parts = {
+    grantId: 'grant-1',
+    machineId: MACHINE_ID,
+    relayOrigin: RELAY_ORIGIN,
+    granteeUserId: GUEST_ID,
+    role: 'viewer',
+    issuedAt: NOW - 1000,
+    expiresAt: NOW + 3_600_000,
+    ...over,
+  };
+  const payload = new TextEncoder().encode(
+    [
+      'grant:v1',
+      parts.grantId,
+      parts.machineId,
+      parts.relayOrigin,
+      parts.granteeUserId,
+      parts.role,
+      String(parts.issuedAt),
+      String(parts.expiresAt),
+    ].join('\n'),
+  );
+  const sig = crypto.sign(null, Buffer.from(payload), machineKeys.privateKey);
+  return `grant:v1.${Buffer.from(payload).toString('base64url')}.${sig.toString('base64url')}`;
+}
+
+const storedGrant = (over: Partial<TunnelStoredGrant> = {}): TunnelStoredGrant => ({
+  id: 'grant-1',
+  granteeUserId: GUEST_ID,
+  role: 'viewer',
+  status: 'active',
+  sessions: [{ sessionId: 's1', ptyEpoch: 111 }],
+  ...over,
+});
+
+describe('who gets a channel at all', () => {
+  test('the confirmed owner does', () => {
+    const h = harness();
+    expect(h.openChannel('c1', { principal: { userId: OWNER_ID } })).not.toBeNull();
+  });
+
+  test('a stranger with no certificate does not', () => {
+    const h = harness();
+    expect(h.openChannel('c1', { principal: { userId: 'nobody' } })).toBeNull();
+    expect(h.sent[0]!.payload).toEqual({ type: 'denied', reason: 'not_authorized' });
+  });
+
+  test('a stranger presenting a certificate for an unknown grant does not', () => {
+    // A valid signature is not enough — the certificate would be a bearer
+    // token otherwise. Our own table is the authority on whether it exists.
+    const h = harness({ grantRow: null });
+    expect(h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })).toBeNull();
+  });
+
+  test('a revoked grant is refused even though the certificate still verifies', () => {
+    const h = harness({ grantRow: storedGrant({ status: 'revoked' }) });
+    expect(h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })).toBeNull();
+  });
+
+  test('a certificate replayed onto another principal is refused', () => {
+    const h = harness({ grantRow: storedGrant() });
+    expect(h.openChannel('c1', { principal: { userId: 'someone-else' }, certificate: mintCertificate() })).toBeNull();
+  });
+
+  test('a certificate minted against another relay is refused', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const cert = mintCertificate({ relayOrigin: 'https://evil.example.com' });
+    expect(h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: cert })).toBeNull();
+  });
+
+  test('a valid grant whose sessions have all been restarted is refused', () => {
+    // pty_epoch binds a share to the PTY INSTANCE. sessions.id survives
+    // stop/restart, so without this a share of one session would follow the
+    // row into whatever it becomes weeks later.
+    const h = harness({ grantRow: storedGrant({ sessions: [{ sessionId: 's1', ptyEpoch: 999 }] }) });
+    expect(h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })).toBeNull();
+  });
+
+  test('a valid guest certificate does get a channel', () => {
+    const h = harness({ grantRow: storedGrant() });
+    expect(h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })).not.toBeNull();
+  });
+
+  test('a duplicate client:open is refused rather than re-keyed', () => {
+    const h = harness();
+    expect(h.openChannel('c1', { principal: { userId: OWNER_ID } })).not.toBeNull();
+    const before = h.sent.length;
+    h.tunnel.open('c1', { clientX25519Pub: 'AAAA' }, { userId: OWNER_ID });
+    expect(h.sent.length).toBe(before);
+  });
+});
+
+describe('the unconfirmed-owner fallback and its latch', () => {
+  test('before the owner id is confirmed, a client is treated as the owner', () => {
+    // Pre-sharing behaviour: the relay only routes a machine's own owner here
+    // unless a grant exists, so this must not lock people out on upgrade.
+    const h = harness({ grants: { get: () => null, ownerUserId: () => null, enforced: () => false, latch: () => {} } });
+    const key = h.openChannel('c1', { principal: { userId: 'whoever' } });
+    expect(key).not.toBeNull();
+    h.send('c1', key!, 0, { type: 'dirs:list', path: '/' });
+    expect(h.opened('c1', key!).some((m) => m.type === 'denied')).toBe(false);
+  });
+
+  test('once enforcement is latched, that fallback is gone for good', () => {
+    const h = harness({
+      grants: { get: () => null, ownerUserId: () => null, enforced: () => true, latch: () => {} },
+    });
+    expect(h.openChannel('c1', { principal: { userId: 'whoever' } })).toBeNull();
+  });
+
+  test('enforcing one certificate latches it', () => {
+    // The latch closes the moment sharing is genuinely in use, which is what
+    // makes the beta window safe — not a deletion date.
+    let latched = false;
+    const h = harness({
+      grantRow: storedGrant(),
+      grants: {
+        get: () => storedGrant(),
+        ownerUserId: () => null,
+        enforced: () => latched,
+        latch: () => {
+          latched = true;
+        },
+      },
+    });
+    expect(h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })).not.toBeNull();
+    expect(latched).toBe(true);
+    // And now the fallback is closed for the next client.
+    expect(h.openChannel('c2', { principal: { userId: 'whoever' } })).toBeNull();
+  });
+});
+
+describe('the capability gate is consulted by dispatch', () => {
+  test('a viewer is refused every command it lacks the capability for', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+
+    const refused = ['terminal:input', 'terminal:resize', 'session:create', 'group:create', 'dirs:list'];
+    refused.forEach((type, i) => h.send('c1', key, i, { type, sessionId: 's1', data: 'x', name: 'n', groupId: 'g1' }));
+
+    const denials = h.opened('c1', key).filter((m) => m.type === 'denied');
+    expect(denials.map((d) => d.command).sort()).toEqual([...refused].sort());
+  });
+
+  test('a viewer typing does not reach the PTY', () => {
+    // The denial must be a refusal, not merely a missing reply.
+    const writes: string[] = [];
+    const h = harness({ grantRow: storedGrant() });
+    h.deps.pty.write = (id, data) => writes.push(`${id}:${data}`);
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    h.send('c1', key, 1, { type: 'terminal:input', sessionId: 's1', data: 'rm -rf /\r' });
+
+    expect(writes).toEqual([]);
+  });
+
+  test('the owner may run every command in the table', () => {
+    const h = harness();
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    Object.keys(COMMAND_CAPS).forEach((type, i) =>
+      h.send('c1', key, i, { type, sessionId: 's1', data: 'x', name: 'n', groupId: 'g1', path: '/' }),
+    );
+    expect(h.opened('c1', key).filter((m) => m.type === 'denied')).toEqual([]);
+  });
+
+  test('an unknown command is ignored, not executed', () => {
+    const h = harness();
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    const before = h.sent.length;
+    h.send('c1', key, 0, { type: 'shell:exec', data: 'whoami' });
+    expect(h.sent.length).toBe(before);
+  });
+
+  test('scope is per session — a guest cannot reach one it was not given', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's2' });
+    expect(h.opened('c1', key).some((m) => m.type === 'denied' && m.command === 'terminal:subscribe')).toBe(true);
+  });
+});
+
+describe('scoped disclosure', () => {
+  test('a guest sees only its own sessions, without working directories', () => {
+    // A path is a disclosure about the machine — usernames, client names,
+    // directory layout — and a guest has no use for one.
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'sessions:list' });
+
+    const msg = h.opened('c1', key).find((m) => m.type === 'sessions') as { sessions: Record<string, unknown>[] };
+    expect(msg.sessions.map((s) => s.id)).toEqual(['s1']);
+    expect(msg.sessions[0]).not.toHaveProperty('workingDir');
+    expect(JSON.stringify(msg)).not.toContain('secret-project');
+  });
+
+  test('a guest only learns about groups containing a session it can see', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'groups:list' });
+
+    const msg = h.opened('c1', key).find((m) => m.type === 'groups') as { groups: Record<string, unknown>[] };
+    expect(msg.groups.map((g) => g.id)).toEqual(['g1']);
+    expect(msg.groups[0]).not.toHaveProperty('workingDir');
+  });
+
+  test('the owner still gets everything, paths included', () => {
+    const h = harness();
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    h.send('c1', key, 0, { type: 'sessions:list' });
+
+    const msg = h.opened('c1', key).find((m) => m.type === 'sessions') as { sessions: Record<string, unknown>[] };
+    expect(msg.sessions.map((s) => s.id)).toEqual(['s1', 's2']);
+    expect(msg.sessions[0]!.workingDir).toBe('/home/will/secret-project');
+  });
+
+  test('a guest is not sent an unprompted session list on open', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    expect(h.opened('c1', key).some((m) => m.type === 'sessions')).toBe(false);
+  });
+
+  test('a guest gets no scrollback, only a marker', async () => {
+    // Replaying history would hand over everything typed before the decision
+    // to share was made.
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const output = h.opened('c1', key).filter((m) => m.type === 'terminal:output');
+    expect(output).toHaveLength(1);
+    expect(String(output[0]!.data)).toContain('shared from here');
+    expect(JSON.stringify(output)).not.toContain('OWNER SCROLLBACK');
+  });
+
+  test('the owner does get scrollback', async () => {
+    const h = harness();
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const output = h.opened('c1', key).filter((m) => m.type === 'terminal:output');
+    expect(output.map((o) => o.data).join('')).toContain('OWNER SCROLLBACK');
+  });
+});
+
+describe('revocation of a live client', () => {
+  test('drops it to DENY_ALL and tells it, sealed', () => {
+    const h = harness({ grantRow: storedGrant() });
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+
+    h.tunnel.revokeClient('c1');
+
+    // The notice is sealed: an unsealed "your access ended" is forgeable by
+    // the relay, which turns a revocation into a clean phishing lever.
+    const opened = h.opened('c1', key);
+    expect(opened.some((m) => m.type === 'denied' && m.reason === 'revoked')).toBe(true);
+    expect(opened.some((m) => m.type === '__unreadable__')).toBe(false);
+
+    // And nothing works afterwards.
+    h.send('c1', key, 1, { type: 'sessions:list' });
+    const after = h.opened('c1', key).filter((m) => m.type === 'sessions');
+    expect(after).toHaveLength(0);
+  });
+});
+
+describe('PTY listener lifecycle', () => {
+  let attached = 0;
+
+  beforeEach(() => {
+    attached = 0;
+  });
+
+  test('one listener set for the whole tunnel, released when the last client goes', () => {
+    const h = harness({
+      pty: {
+        subscribe: () => {
+          attached += 1;
+          return () => {
+            attached -= 1;
+          };
+        },
+        write: () => {},
+        resize: () => {},
+        getSize: () => ({ cols: 80, rows: 24 }),
+        isLive: () => true,
+        ptyEpoch: () => 111,
+        getSerializedBuffer: async () => '',
+      },
+    });
+
+    h.openChannel('c1', { principal: { userId: OWNER_ID } });
+    h.openChannel('c2', { principal: { userId: OWNER_ID } });
+    expect(attached).toBe(1);
+
+    h.tunnel.closeClient('c1');
+    expect(attached).toBe(1);
+    h.tunnel.closeClient('c2');
+    expect(attached).toBe(0);
+  });
+
+  test('a refused client never attaches listeners', () => {
+    const h = harness({
+      grants: { get: () => null, ownerUserId: () => OWNER_ID, enforced: () => false, latch: () => {} },
+      pty: {
+        subscribe: () => {
+          attached += 1;
+          return () => {
+            attached -= 1;
+          };
+        },
+        write: () => {},
+        resize: () => {},
+        getSize: () => ({ cols: 80, rows: 24 }),
+        isLive: () => true,
+        ptyEpoch: () => 111,
+        getSerializedBuffer: async () => '',
+      },
+    });
+
+    h.openChannel('c1', { principal: { userId: 'nobody' } });
+    expect(attached).toBe(0);
+  });
+});
+
+describe('the handshake proof still binds the ephemeral key to this machine', () => {
+  test('the signature verifies over both public keys', () => {
+    // Authorization changed in this milestone; the M5.0 replay fix must not
+    // have been disturbed by it.
+    const h = harness();
+    h.openChannel('c1', { principal: { userId: OWNER_ID } });
+    const hs = h.sent.find((m) => (m.payload as { type?: string })?.type === 'handshake')!.payload as {
+      agentX25519Pub: string;
+      ed25519Pub: string;
+      signature: string;
+    };
+
+    expect(hs.ed25519Pub).toBe(MACHINE_PUB_B64);
+    const proof = buildHandshakeProof(h.lastClientPub!, hs.agentX25519Pub);
+    expect(
+      crypto.verify(null, Buffer.from(proof), machineKeys.publicKey, Buffer.from(hs.signature, 'base64')),
+    ).toBe(true);
+  });
+
+  test('the agent key is fresh per channel, so a recorded channel cannot be replayed', () => {
+    const h = harness();
+    h.openChannel('c1', { principal: { userId: OWNER_ID } });
+    h.openChannel('c2', { principal: { userId: OWNER_ID } });
+    const agentKeys = h.sent
+      .filter((m) => (m.payload as { type?: string })?.type === 'handshake')
+      .map((m) => (m.payload as { agentX25519Pub: string }).agentX25519Pub);
+    expect(agentKeys).toHaveLength(2);
+    expect(agentKeys[0]).not.toBe(agentKeys[1]);
+  });
+});

@@ -19,7 +19,12 @@ import log from 'electron-log';
 import { getPreference, setPreference, deletePreference } from '../../repositories/preferences';
 import type { RelayStatus } from '../../../shared/types';
 import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-identity';
-import { SessionTunnel } from './session-tunnel';
+import { SessionTunnel, type Principal } from './session-tunnel';
+import { defaultDeps } from './session-tunnel-deps';
+import { CAP_GRANTS_V1 } from './grants';
+import { clearAllGrants, GRANT_PREF } from './grant-store';
+
+const PREF_OWNER_USER_ID = GRANT_PREF.ownerUserId;
 
 export type { RelayStatus } from '../../../shared/types';
 
@@ -56,7 +61,13 @@ export class RelayClient extends EventEmitter {
   /** OS "stay awake" assertion id while remote hosting is on (null = released). */
   private powerSaveBlockerId: number | null = null;
   /** Routes E2E terminal frames to/from web clients (M3). */
-  private readonly tunnel = new SessionTunnel((clientId, payload) => this.send({ type: 'to-client', clientId, payload }));
+  private readonly tunnel = new SessionTunnel(
+    (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
+    defaultDeps(
+      () => this.relayUrl.replace(/\/+$/, ''),
+      () => getPreference(PREF.machineId),
+    ),
+  );
 
   /** Origin of the relay, e.g. `https://relay.example.com`. */
   get relayUrl(): string {
@@ -122,7 +133,17 @@ export class RelayClient extends EventEmitter {
   setRelayUrl(url: string): void {
     const trimmed = url.trim().replace(/\/+$/, '');
     if (!URL.canParse(trimmed)) throw new Error('Invalid relay URL');
+    const changed = trimmed !== this.relayUrl.replace(/\/+$/, '');
     setPreference(PREF.url, trimmed);
+    if (changed) {
+      // Certificates carry their relay origin in the signed bytes and are
+      // checked against it at dispatch, so every existing grant is now
+      // unusable. Keeping the rows would leave ghosts in the owner's settings
+      // that can never be honoured. The user ids came from the old relay too.
+      clearAllGrants();
+      deletePreference(PREF_OWNER_USER_ID);
+      log.info('[Relay] relay URL changed — cleared grants and the confirmed owner id');
+    }
     this.emitStatus();
     if (this.enabled) this.reconnectNow();
   }
@@ -250,7 +271,14 @@ export class RelayClient extends EventEmitter {
   }
 
   private async handleMessage(raw: string): Promise<void> {
-    let msg: { type?: string; nonce?: string; machineId?: string; clientId?: string; payload?: unknown };
+    let msg: {
+      type?: string;
+      nonce?: string;
+      machineId?: string;
+      clientId?: string;
+      payload?: unknown;
+      principal?: Principal;
+    };
     try {
       msg = JSON.parse(raw);
     } catch {
@@ -259,7 +287,7 @@ export class RelayClient extends EventEmitter {
 
     // M3 brokering: the relay routes web-client frames to us by client id.
     if (msg.clientId) {
-      if (msg.type === 'client:open') this.tunnel.open(msg.clientId, msg.payload);
+      if (msg.type === 'client:open') this.tunnel.open(msg.clientId, msg.payload, msg.principal);
       else if (msg.type === 'from-client') this.tunnel.frame(msg.clientId, msg.payload);
       else if (msg.type === 'client:closed') this.tunnel.closeClient(msg.clientId);
       return;
@@ -269,7 +297,11 @@ export class RelayClient extends EventEmitter {
       try {
         const signature = signWithIdentity(buildAgentAuthMessage(msg.nonce)).toString('base64');
         const identity = ensureIdentity();
-        this.send({ type: 'agent:auth', ed25519Pub: identity.ed25519Pub, signature });
+        // Tell the relay this build enforces grant certificates. It refuses to
+        // route a guest to any machine that has not said so, because an older
+        // build ignores the certificate entirely and would hand that guest
+        // every command.
+        this.send({ type: 'agent:auth', ed25519Pub: identity.ed25519Pub, signature, caps: [CAP_GRANTS_V1] });
       } catch (err) {
         log.error('[Relay] failed to answer challenge:', err instanceof Error ? err.message : err);
         this.ws?.close();
