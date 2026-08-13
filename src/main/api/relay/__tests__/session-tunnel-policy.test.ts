@@ -688,7 +688,6 @@ describe('a lapsed grant stops the stream, not just the commands', () => {
     expect(seen.some((m) => m.type === 'denied' && m.reason === 'expired')).toBe(false);
   });
 
-
   test('the owner keeps receiving output regardless of grant clocks', () => {
     // ownerGrant() never expires; a bug that expired owners would take the
     // machine away from its own user.
