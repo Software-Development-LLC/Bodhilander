@@ -57,7 +57,10 @@ function signWithFixtureKey(payload: Uint8Array): Uint8Array {
 }
 
 function mint(overrides: Partial<GrantParts> = {}): string {
-  const parts = { ...VEC.parts, ...overrides };
+  return mintWith({ ...VEC.parts, ...overrides });
+}
+
+function mintWith(parts: GrantParts): string {
   const payload = buildGrantMessage(parts);
   return formatCertificate(payload, signWithFixtureKey(payload));
 }
@@ -158,6 +161,29 @@ describe('parseCertificate', () => {
     for (const bad of ['', 'grant:v1', 'grant:v1.a', 'a.b.c.d', 'grant:v2.a.b', null, 42, {}]) {
       expect(parseCertificate(bad)).toBeNull();
     }
+  });
+
+  test('returns null rather than throwing on a timestamp past MAX_SAFE_INTEGER', () => {
+    // 16 digits admits 9999999999999999, which is not a safe integer. The
+    // builder rejects it by throwing, and this function's contract is to
+    // return null on hostile input — so the parser applies the same
+    // safe-integer rule itself rather than reaching the builder's check.
+    const payload = VEC.payload
+      .replace(String(VEC.parts.issuedAt), '9999999999999999')
+      .replace(String(VEC.parts.expiresAt), '9999999999999999');
+    const b64 = Buffer.from(payload, 'utf8').toString('base64url');
+    let result: unknown;
+    expect(() => {
+      result = parseCertificate(`grant:v1.${b64}.${VEC.signatureB64url}`);
+    }).not.toThrow();
+    expect(result).toBeNull();
+  });
+
+  test('accepts a 16-digit timestamp that IS a safe integer', () => {
+    // The bound is the safe-integer ceiling, not the digit count.
+    const safe16 = 9007199254740991; // Number.MAX_SAFE_INTEGER, 16 digits
+    const parts = { ...VEC.parts, issuedAt: 1, expiresAt: safe16 };
+    expect(parseCertificate(mintWith(parts))!.parts.expiresAt).toBe(safe16);
   });
 
   test('rejects a signature that is not 64 bytes', () => {

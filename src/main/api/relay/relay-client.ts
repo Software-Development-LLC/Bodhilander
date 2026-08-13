@@ -29,10 +29,13 @@ const PREF_OWNER_USER_ID = GRANT_PREF.ownerUserId;
 /**
  * Strip trailing slashes from an origin.
  *
- * Deliberately not `/\/+$/` — that pattern backtracks super-linearly, and
- * while the only input here is the user's own configured relay URL, a scanner
- * cannot know that and neither can the next person to reuse this. A linear
- * scan is the same three lines and needs no argument.
+ * This replaced `/\/+$/`, which Sonar reports as a super-linear backtracking
+ * risk. To be accurate about it: a single-character-class `+` anchored at the
+ * end has no catastrophic-backtracking exposure, so the scanner overstates the
+ * original — and the only input here is the user's own configured relay URL
+ * anyway. It was changed because a linear scan is the same three lines, needs
+ * no argument from anyone reading it later, and does not leave a hotspot to be
+ * re-reviewed on every future PR that touches this file.
  */
 function stripTrailingSlashes(value: string): string {
   let end = value.length;

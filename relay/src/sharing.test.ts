@@ -86,6 +86,21 @@ describe('parseCertificate rejects malformed input', () => {
     expect(parseCertificate(`grant:v1.${b64}.${VEC.signatureB64url}`)).toBeNull();
   });
 
+  test('a timestamp past MAX_SAFE_INTEGER returns null rather than throwing', () => {
+    // The digit count alone cannot express the bound: 16 digits admits
+    // 9999999999999999, which is not a safe integer, and handing that to the
+    // builder would throw — on a function contracted to return null.
+    const payload = VEC.payload
+      .replace(String(VEC.parts.issuedAt), '9999999999999999')
+      .replace(String(VEC.parts.expiresAt), '9999999999999999');
+    const b64 = Buffer.from(payload, 'utf8').toString('base64url');
+    let result: unknown;
+    expect(() => {
+      result = parseCertificate(`grant:v1.${b64}.${VEC.signatureB64url}`);
+    }).not.toThrow();
+    expect(result).toBeNull();
+  });
+
   test('owner is not accepted as a certificate role', () => {
     const b64 = Buffer.from(VEC.payload.replace('\nviewer\n', '\nowner\n'), 'utf8').toString('base64url');
     expect(parseCertificate(`grant:v1.${b64}.${VEC.signatureB64url}`)).toBeNull();

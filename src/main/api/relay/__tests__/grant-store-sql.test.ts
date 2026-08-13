@@ -14,7 +14,17 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type DatabaseCtor from 'better-sqlite3';
-import { RELAY_SHARING_SCHEMA, insertGrant, type GrantInsert } from '../grant-sql';
+import {
+  RELAY_SHARING_SCHEMA,
+  clearAllGrants,
+  clearPendingRevocation,
+  getGrant,
+  insertGrant,
+  listGrants,
+  pendingRevocations,
+  revokeGrant,
+  type GrantInsert,
+} from '../grant-sql';
 
 /**
  * An in-memory database with the real sharing schema on top of a stub
@@ -175,6 +185,153 @@ describe('insertGrant', () => {
       insertGrant(db, request(), NOW, EXPIRES);
       insertGrant(db, request({ grantId: 'grant-2' }), NOW, EXPIRES);
       expect(db.prepare('SELECT COUNT(*) AS n FROM relay_grants').get()).toEqual({ n: 2 });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('reading grants back', () => {
+  test('getGrant hydrates the row and its session scope', () => {
+    const db = freshDb();
+    try {
+      insertGrant(
+        db,
+        request({
+          sessions: [
+            { sessionId: 's1', ptyEpoch: 111 },
+            { sessionId: 's2', ptyEpoch: 222 },
+          ],
+        }),
+        NOW,
+        EXPIRES,
+      );
+      const grant = getGrant(db, 'grant-1')!;
+      expect(grant).toMatchObject({
+        id: 'grant-1',
+        relayOrigin: 'https://relay.example.com',
+        granteeUserId: 'guest-1',
+        granteeLogin: 'dana-k',
+        role: 'viewer',
+        status: 'active',
+        revokePending: false,
+      });
+      expect([...grant.sessions].sort((a, b) => a.sessionId.localeCompare(b.sessionId))).toEqual([
+        { sessionId: 's1', ptyEpoch: 111 },
+        { sessionId: 's2', ptyEpoch: 222 },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('getGrant returns null for an id that does not exist', () => {
+    const db = freshDb();
+    try {
+      expect(getGrant(db, 'nope')).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  test('listGrants returns every grant, each with its own scope', () => {
+    // Scope must not bleed between grants — that is the failure the missing
+    // UNIQUE(machine, grantee) makes possible if hydration is wrong.
+    const db = freshDb();
+    try {
+      insertGrant(db, request(), NOW, EXPIRES);
+      insertGrant(db, request({ grantId: 'grant-2', sessions: [{ sessionId: 's2', ptyEpoch: 222 }] }), NOW, EXPIRES);
+      const byId = Object.fromEntries(listGrants(db).map((g) => [g.id, g.sessions.map((s) => s.sessionId)]));
+      expect(byId).toEqual({ 'grant-1': ['s1'], 'grant-2': ['s2'] });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('revocation', () => {
+  test('revokeGrant marks it revoked and queues the relay side', () => {
+    // Local status is the authority, so this takes effect at the next
+    // client:open whether or not the relay ever hears about it.
+    const db = freshDb();
+    try {
+      insertGrant(db, request(), NOW, EXPIRES);
+      expect(revokeGrant(db, 'grant-1', NOW + 5)).toBe(true);
+      const grant = getGrant(db, 'grant-1')!;
+      expect(grant.status).toBe('revoked');
+      expect(grant.revokePending).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('revoking twice reports no change the second time', () => {
+    // Otherwise a repeated revoke would re-queue a relay notification for a
+    // grant that is already gone.
+    const db = freshDb();
+    try {
+      insertGrant(db, request(), NOW, EXPIRES);
+      expect(revokeGrant(db, 'grant-1', NOW + 5)).toBe(true);
+      expect(revokeGrant(db, 'grant-1', NOW + 6)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('revoking an unknown grant reports no change', () => {
+    const db = freshDb();
+    try {
+      expect(revokeGrant(db, 'nope', NOW)).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('pending revocations are listed until explicitly cleared', () => {
+    // The queue is what makes revoking while the agent is offline honest
+    // rather than a lie.
+    const db = freshDb();
+    try {
+      insertGrant(db, request(), NOW, EXPIRES);
+      insertGrant(db, request({ grantId: 'grant-2' }), NOW, EXPIRES);
+      expect(pendingRevocations(db)).toEqual([]);
+
+      revokeGrant(db, 'grant-1', NOW + 5);
+      revokeGrant(db, 'grant-2', NOW + 5);
+      expect(pendingRevocations(db).sort()).toEqual(['grant-1', 'grant-2']);
+
+      clearPendingRevocation(db, 'grant-1');
+      expect(pendingRevocations(db)).toEqual(['grant-2']);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('clearing the queue does not un-revoke the grant', () => {
+    // Flushing to the relay must not resurrect access.
+    const db = freshDb();
+    try {
+      insertGrant(db, request(), NOW, EXPIRES);
+      revokeGrant(db, 'grant-1', NOW + 5);
+      clearPendingRevocation(db, 'grant-1');
+      expect(getGrant(db, 'grant-1')!.status).toBe('revoked');
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('clearAllGrants', () => {
+  test('removes every grant and its scope', () => {
+    // Called on a relayUrl change and on re-link: certificates are bound to a
+    // relay origin, so keeping rows would leave un-honourable ghosts.
+    const db = freshDb();
+    try {
+      insertGrant(db, request(), NOW, EXPIRES);
+      insertGrant(db, request({ grantId: 'grant-2' }), NOW, EXPIRES);
+      clearAllGrants(db);
+      expect(listGrants(db)).toEqual([]);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM relay_grant_sessions').get()).toEqual({ n: 0 });
     } finally {
       db.close();
     }

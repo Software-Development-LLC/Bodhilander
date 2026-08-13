@@ -161,10 +161,14 @@ export function parseCertificate(cert: unknown): ParsedCertificate | null {
   // them to agree means the cheap reject can't disagree with the real one.
   if (inner !== GRANT_VERSION) return null;
   if (!(MINTABLE_ROLES as readonly string[]).includes(role)) return null;
-  // 16 digits, matching Number.isSafeInteger's ceiling in the builder — the
-  // two must agree, or a timestamp the builder would happily emit could fail
-  // to parse. (It fails closed either way; this just removes the disagreement.)
+  // Digits, then the SAME safe-integer test the builder applies, so what
+  // parses and what can be built are one rule rather than two that have to be
+  // kept in agreement. A digit-count alone cannot express it: 16 digits admits
+  // 9999999999999999, which is past Number.MAX_SAFE_INTEGER, and handing that
+  // to the builder below would THROW — on a path documented to return null
+  // rather than throw, for hostile input.
   if (!/^\d{1,16}$/.test(issuedAt) || !/^\d{1,16}$/.test(expiresAt)) return null;
+  if (!Number.isSafeInteger(Number(issuedAt)) || !Number.isSafeInteger(Number(expiresAt))) return null;
   if (!grantId || !machineId || !relayOrigin || !granteeUserId) return null;
 
   const parts: GrantParts = {
@@ -180,7 +184,17 @@ export function parseCertificate(cert: unknown): ParsedCertificate | null {
   // Re-serialising must reproduce the input byte for byte. Anything the parse
   // above tolerated but the builder wouldn't emit dies here, so there is
   // exactly one byte string per set of parts.
-  const rebuilt = buildGrantMessage(parts);
+  // Wrapped: this function's contract is to return null on hostile input,
+  // never to throw. The checks above should make the builder's own
+  // validation unreachable, and that is exactly why it must not be load-
+  // bearing — a future field rule added to only one of them would
+  // otherwise turn a rejection into an exception.
+  let rebuilt: Uint8Array;
+  try {
+    rebuilt = buildGrantMessage(parts);
+  } catch {
+    return null;
+  }
   if (rebuilt.length !== payload.length) return null;
   for (let i = 0; i < rebuilt.length; i++) if (rebuilt[i] !== payload[i]) return null;
 

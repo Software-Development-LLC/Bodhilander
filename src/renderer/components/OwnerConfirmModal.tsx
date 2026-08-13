@@ -38,14 +38,13 @@ export const OwnerConfirmModal: React.FC<OwnerConfirmModalProps> = ({ pending, o
 
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (pending) {
-      // showModal() throws InvalidStateError on an already-open dialog.
-      if (!dialog.open) dialog.showModal();
-      rejectRef.current?.focus();
-    } else if (dialog.open) {
-      dialog.close();
-    }
+    // No close() branch: the component returns null whenever `pending` is
+    // falsy, so React unmounts the <dialog> in the same commit and the ref is
+    // already null here. Closing is what unmounting does.
+    if (!dialog || !pending) return;
+    // showModal() throws InvalidStateError on an already-open dialog.
+    if (!dialog.open) dialog.showModal();
+    rejectRef.current?.focus();
   }, [pending]);
 
   const handleCancel = useCallback(
