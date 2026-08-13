@@ -22,16 +22,20 @@ export type ConnState = 'connecting' | 'handshaking' | 'ready' | 'offline' | 'cl
  * tells people false stories — "Will revoked your access" when Will merely
  * closed a terminal is socially loaded and untrue.
  */
-export type DeniedReason = 'not_authorized' | 'revoked' | 'expired' | 'session_ended' | 'machine_unlinked';
-
 /**
  * The reasons that actually END access. Anything else on a `denied` frame is a
  * refusal of one command, which must not be presented as losing access.
+ *
+ * The union is derived from this array rather than written twice, so the two
+ * cannot drift — a reason added to one and not the other is the shape of the
+ * bug this whole file is fixing.
  */
-const ENDING_REASONS: readonly string[] = ['not_authorized', 'revoked', 'expired', 'session_ended', 'machine_unlinked'];
+export const ENDING_REASONS = ['not_authorized', 'revoked', 'expired', 'session_ended', 'machine_unlinked'] as const;
+
+export type DeniedReason = (typeof ENDING_REASONS)[number];
 
 export function isEndingReason(reason: string): reason is DeniedReason {
-  return ENDING_REASONS.includes(reason);
+  return (ENDING_REASONS as readonly string[]).includes(reason);
 }
 export interface Inner {
   type: string;
@@ -172,9 +176,15 @@ export class RelayConnection {
         return;
       }
       if (inner.type === 'denied') {
-        const reason = typeof inner.reason === 'string' ? inner.reason : '';
-        if (isEndingReason(reason)) {
-          this.onState('denied', reason);
+        // A `denied` with NO reason ends the session. Failing the other way
+        // would swallow a genuine access-ended notice from any sender that
+        // omits the field — silence is the worse error here, because the
+        // guest would sit watching a channel that is already closed.
+        // A reason that is present but not an ending one is a command
+        // refusal, which is the legacy frame this fix exists for.
+        const reason = typeof inner.reason === 'string' ? inner.reason : null;
+        if (reason === null || isEndingReason(reason)) {
+          this.onState('denied', reason ?? 'revoked');
         } else {
           this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
         }
