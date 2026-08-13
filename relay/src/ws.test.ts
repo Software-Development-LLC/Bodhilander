@@ -57,7 +57,20 @@ function connect(url: string, headers?: Record<string, string>) {
       if (m) res(m);
       else waiters.push(res);
     });
-  return { ws, opened, closed, next };
+  /**
+   * Skip forward to the next message of `type`.
+   *
+   * Position-independent on purpose: the relay gains notifications over time
+   * (share:sync now follows agent:ready), and a test that asserts "the third
+   * message" breaks on every one of them for no real reason.
+   */
+  const nextOfType = async (type: string) => {
+    for (;;) {
+      const m = await next();
+      if (m?.type === type) return m;
+    }
+  };
+  return { ws, opened, closed, next, nextOfType };
 }
 
 async function registerMachine(repos: Repositories, providerUserId = '1') {
@@ -84,7 +97,7 @@ async function onlineAgent(
   const auth: Record<string, unknown> = { type: 'agent:auth', ed25519Pub: b64(pub), signature: b64(sig) };
   if (caps) auth.caps = caps;
   c.ws.send(JSON.stringify(auth));
-  await c.next(); // agent:ready
+  await c.nextOfType('agent:ready');
   return c;
 }
 
@@ -140,7 +153,7 @@ describe('agent WebSocket handshake', () => {
       expect(machine.last_seen_at).toBeGreaterThan(0);
 
       c.ws.send(JSON.stringify({ type: 'ping' }));
-      expect((await c.next()).type).toBe('pong');
+      expect((await c.nextOfType('pong')).type).toBe('pong');
 
       c.ws.close();
     } finally {
@@ -218,7 +231,7 @@ describe('agent WebSocket handshake', () => {
       // round-trip that completes can only happen on an open socket.
       await Bun.sleep(120);
       c.ws.send(JSON.stringify({ type: 'ping' }));
-      expect(await c.next()).toMatchObject({ type: 'pong' });
+      expect(await c.nextOfType('pong')).toMatchObject({ type: 'pong' });
     } finally {
       server.stop(true);
     }
@@ -238,20 +251,20 @@ describe('client ↔ agent brokering (M3)', () => {
 
       // Open the channel; a handshake payload rides along.
       client.ws.send(JSON.stringify({ type: 'client:open', machineId, payload: 'handshake-hello' }));
-      const onAgent = await agent.next();
+      const onAgent = await agent.nextOfType('client:open');
       expect(onAgent.type).toBe('client:open');
       expect(onAgent.payload).toBe('handshake-hello');
       const clientId = onAgent.clientId;
-      expect((await client.next()).type).toBe('channel:open');
+      expect((await client.nextOfType('channel:open')).type).toBe('channel:open');
 
       // agent → client
       agent.ws.send(JSON.stringify({ type: 'to-client', clientId, payload: 'from-server' }));
-      const fromAgent = await client.next();
+      const fromAgent = await client.nextOfType('from-agent');
       expect(fromAgent).toMatchObject({ type: 'from-agent', payload: 'from-server' });
 
       // client → agent
       client.ws.send(JSON.stringify({ type: 'to-agent', payload: 'from-browser' }));
-      const fromClient = await agent.next();
+      const fromClient = await agent.nextOfType('from-client');
       expect(fromClient).toMatchObject({ type: 'from-client', clientId, payload: 'from-browser' });
 
       client.ws.close();
@@ -292,7 +305,7 @@ describe('client ↔ agent brokering (M3)', () => {
 
       // The agent checks a certificate against this; it is never authorization
       // on its own, which is why the field is named `principal`.
-      expect(await agent.next()).toMatchObject({ type: 'client:open', principal: { userId } });
+      expect(await agent.nextOfType('client:open')).toMatchObject({ type: 'client:open', principal: { userId } });
     } finally {
       server.stop(true);
     }
@@ -311,8 +324,8 @@ describe('client ↔ agent brokering (M3)', () => {
       await client.opened;
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
 
-      expect(await agent.next()).toMatchObject({ type: 'client:open', principal: { userId: guest.id } });
-      expect((await client.next()).type).toBe('channel:open');
+      expect(await agent.nextOfType('client:open')).toMatchObject({ type: 'client:open', principal: { userId: guest.id } });
+      expect((await client.nextOfType('channel:open')).type).toBe('channel:open');
     } finally {
       db.close();
       server.stop(true);
@@ -337,7 +350,7 @@ describe('client ↔ agent brokering (M3)', () => {
       await client.opened;
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
 
-      expect((await client.next()).type).toBe('share:unsupported');
+      expect((await client.nextOfType('share:unsupported')).type).toBe('share:unsupported');
 
       // And prove by ordering that nothing reached the agent: a later frame
       // from the owner must be the FIRST thing the agent sees.
@@ -348,7 +361,7 @@ describe('client ↔ agent brokering (M3)', () => {
       });
       await ownerClient.opened;
       ownerClient.ws.send(JSON.stringify({ type: 'client:open', machineId }));
-      expect(await agent.next()).toMatchObject({ type: 'client:open', principal: { userId: owner } });
+      expect(await agent.nextOfType('client:open')).toMatchObject({ type: 'client:open', principal: { userId: owner } });
     } finally {
       db.close();
       server.stop(true);
@@ -367,7 +380,7 @@ describe('client ↔ agent brokering (M3)', () => {
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
       await client.opened;
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
-      expect((await client.next()).type).toBe('channel:open');
+      expect((await client.nextOfType('channel:open')).type).toBe('channel:open');
     } finally {
       server.stop(true);
     }
@@ -402,7 +415,7 @@ describe('client ↔ agent brokering (M3)', () => {
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
       await client.opened;
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
-      expect((await client.next()).type).toBe('agent:offline');
+      expect((await client.nextOfType('agent:offline')).type).toBe('agent:offline');
     } finally {
       db.close();
       server.stop(true);
@@ -418,7 +431,7 @@ describe('client ↔ agent brokering (M3)', () => {
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
       await client.opened;
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
-      expect((await client.next()).type).toBe('agent:offline');
+      expect((await client.nextOfType('agent:offline')).type).toBe('agent:offline');
     } finally {
       server.stop(true);
     }
@@ -437,8 +450,8 @@ describe('client ↔ agent brokering (M3)', () => {
       const clientB = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
       await clientB.opened;
       clientB.ws.send(JSON.stringify({ type: 'client:open', machineId: b.machineId }));
-      const clientId = (await agentB.next()).clientId;
-      expect((await clientB.next()).type).toBe('channel:open');
+      const clientId = (await agentB.nextOfType('client:open')).clientId;
+      expect((await clientB.nextOfType('channel:open')).type).toBe('channel:open');
 
       // Agent A names a client id that belongs to machine B's channel.
       agentA.ws.send(JSON.stringify({ type: 'to-client', clientId, payload: 'injected' }));
@@ -527,6 +540,268 @@ describe('client ↔ agent brokering (M3)', () => {
       ]);
       expect(outcome).toBe('closed');
     } finally {
+      server.stop(true);
+    }
+  });
+});
+
+describe('share:* messages (M5.2)', () => {
+  /** An agent online for `machineId`, plus a guest with a pending grant on it. */
+  async function shared(port: number, db: ReturnType<typeof openDb>, repos: Repositories, m: Awaited<ReturnType<typeof registerMachine>>) {
+    const agent = await onlineAgent(port, m.pub, m.sign, ['grants:v1']);
+    const guest = repos.upsertGithubUser({
+      providerUserId: '999',
+      displayName: 'Dana',
+      login: 'dana-k',
+      email: null,
+      avatarUrl: null,
+    });
+    const { code } = repos.createShareInvite({
+      machineId: m.machineId,
+      expectedGithubLogin: 'dana-k',
+      role: 'viewer',
+      label: null,
+      grantTtlSeconds: 3600,
+      inviteTtlSeconds: 3600,
+    });
+    const redeem = repos.redeemShareInvite(code, guest, crypto.randomUUID());
+    if (!redeem.ok) throw new Error('redeem failed');
+    void db;
+    return { agent, guest, grantId: redeem.grant.id };
+  }
+
+  test('agent:ready is followed by share:sync carrying the machine grants', async () => {
+    // Closes the split-brain on every reconnect: without it a relay restore
+    // leaves ghosts in the owner's settings and a desktop reinstall leaves
+    // guests connecting to a DENY_ALL with no explanation.
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { agent, grantId } = await shared(server.port!, db, repos, m);
+      // Reconnect and read the sync.
+      agent.ws.close();
+      const again = await onlineAgent(server.port!, m.pub, m.sign, ['grants:v1']);
+      const sync = await again.nextOfType('share:sync');
+      expect(sync.grants.map((g: { grantId: string }) => g.grantId)).toEqual([grantId]);
+      expect(sync.grants[0]).toMatchObject({ status: 'pending', role: 'viewer', granteeLogin: 'dana-k' });
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('share:sync never carries the certificate back to the agent', async () => {
+    // The agent signed it. Echoing it would put a credential on a wire that
+    // does not need to carry one.
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { grantId } = await shared(server.port!, db, repos, m);
+      repos.bindGrantCertificate(grantId, 'grant:v1.SECRET.SECRET', Date.now() + 3_600_000);
+      const again = await onlineAgent(server.port!, m.pub, m.sign, ['grants:v1']);
+      const sync = await again.nextOfType('share:sync');
+      expect(JSON.stringify(sync)).not.toContain('SECRET');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('share:bind activates the grant so the guest becomes reachable', async () => {
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { agent, guest, grantId } = await shared(server.port!, db, repos, m);
+      expect(repos.getMachineAccess(m.machineId, guest.id)).toEqual({ relation: 'none' });
+
+      agent.ws.send(
+        JSON.stringify({ type: 'share:bind', grantId, certificate: 'grant:v1.a.b', expiresAt: Date.now() + 3_600_000 }),
+      );
+      await Bun.sleep(30);
+      expect(repos.getMachineAccess(m.machineId, guest.id).relation).toBe('grantee');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('an agent cannot bind a grant belonging to another machine', async () => {
+    const { db, repos } = freshReposWithDb();
+    const a = await registerMachine(repos, 'user-a');
+    const b = await registerMachine(repos, 'user-b');
+    const server = startServer(repos);
+    try {
+      const { guest, grantId } = await shared(server.port!, db, repos, b);
+      const agentA = await onlineAgent(server.port!, a.pub, a.sign, ['grants:v1']);
+
+      agentA.ws.send(
+        JSON.stringify({ type: 'share:bind', grantId, certificate: 'grant:v1.a.b', expiresAt: Date.now() + 3_600_000 }),
+      );
+      await Bun.sleep(30);
+      expect(repos.getMachineAccess(b.machineId, guest.id)).toEqual({ relation: 'none' });
+      expect(repos.getGrant(grantId)!.status).toBe('pending');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('share:bind with an already-elapsed expiry is refused', async () => {
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { agent, grantId } = await shared(server.port!, db, repos, m);
+      agent.ws.send(JSON.stringify({ type: 'share:bind', grantId, certificate: 'grant:v1.a.b', expiresAt: 1 }));
+      await Bun.sleep(30);
+      expect(repos.getGrant(grantId)!.status).toBe('pending');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('share:deny revokes the grant', async () => {
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { agent, grantId } = await shared(server.port!, db, repos, m);
+      agent.ws.send(JSON.stringify({ type: 'share:deny', grantId, reason: 'declined' }));
+      await Bun.sleep(30);
+      expect(repos.getGrant(grantId)!.status).toBe('revoked');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('share:reconcile revokes grants the desktop no longer knows about', async () => {
+    // The desktop is the authority on revocation. Anything the relay still
+    // holds that the agent does not name is a ghost — a relay restore, or a
+    // revocation queued while the agent was offline.
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { agent, grantId } = await shared(server.port!, db, repos, m);
+      repos.bindGrantCertificate(grantId, 'grant:v1.a.b', Date.now() + 3_600_000);
+
+      agent.ws.send(JSON.stringify({ type: 'share:reconcile', activeGrantIds: [] }));
+      await Bun.sleep(30);
+      expect(repos.getGrant(grantId)!.status).toBe('revoked');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('share:reconcile keeps grants the desktop still names', async () => {
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { agent, grantId } = await shared(server.port!, db, repos, m);
+      agent.ws.send(JSON.stringify({ type: 'share:reconcile', activeGrantIds: [grantId] }));
+      await Bun.sleep(30);
+      expect(repos.getGrant(grantId)!.status).toBe('pending');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('reconcile cannot reach another machine grants', async () => {
+    const { db, repos } = freshReposWithDb();
+    const a = await registerMachine(repos, 'user-a');
+    const b = await registerMachine(repos, 'user-b');
+    const server = startServer(repos);
+    try {
+      const { grantId } = await shared(server.port!, db, repos, b);
+      const agentA = await onlineAgent(server.port!, a.pub, a.sign, ['grants:v1']);
+      agentA.ws.send(JSON.stringify({ type: 'share:reconcile', activeGrantIds: [] }));
+      await Bun.sleep(30);
+      expect(repos.getGrant(grantId)!.status).toBe('pending');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('revoking over HTTP cuts the guest socket immediately', async () => {
+    // Revocation must not wait for the guest to reconnect.
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const gateway = createGateway({ repos, logger });
+    const server = Bun.serve({
+      port: 0,
+      fetch(req, srv) {
+        const path = new URL(req.url).pathname;
+        if (path === '/ws') return srv.upgrade(req, { data: newAgentSocketData() }) ? undefined : new Response('x', { status: 426 });
+        const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
+        const user = token ? repos.getUserBySessionToken(token) : null;
+        if (!user) return new Response('unauthorized', { status: 401 });
+        return srv.upgrade(req, { data: newClientSocketData(user.id) }) ? undefined : new Response('x', { status: 426 });
+      },
+      websocket: gateway,
+    });
+    try {
+      const { grantId, guest } = await shared(server.port!, db, repos, m);
+      repos.bindGrantCertificate(grantId, 'grant:v1.a.b', Date.now() + 3_600_000);
+
+      const { token } = repos.createSession(guest.id, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId: m.machineId }));
+      await client.nextOfType('channel:open');
+
+      gateway.notifyGrantRevoked(repos.getGrant(grantId)!);
+      expect((await client.closed).code).toBe(4403);
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('a redemption wakes the owner agent with share:pending', async () => {
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const gateway = createGateway({ repos, logger });
+    const server = Bun.serve({
+      port: 0,
+      fetch(req, srv) {
+        return srv.upgrade(req, { data: newAgentSocketData() }) ? undefined : new Response('x', { status: 426 });
+      },
+      websocket: gateway,
+    });
+    try {
+      const agent = await onlineAgent(server.port!, m.pub, m.sign, ['grants:v1']);
+      const guest = repos.upsertGithubUser({
+        providerUserId: '999',
+        displayName: 'Dana',
+        login: 'dana-k',
+        email: null,
+        avatarUrl: null,
+      });
+      const { code } = repos.createShareInvite({
+        machineId: m.machineId,
+        expectedGithubLogin: null,
+        role: 'viewer',
+        label: null,
+        grantTtlSeconds: 3600,
+        inviteTtlSeconds: 3600,
+      });
+      const redeem = repos.redeemShareInvite(code, guest, crypto.randomUUID());
+      if (!redeem.ok) throw new Error('redeem failed');
+
+      gateway.notifyGrantRedeemed(redeem.grant);
+      const pending = await agent.nextOfType('share:pending');
+      expect(pending.grants[0]).toMatchObject({ grantId: redeem.grant.id, granteeLogin: 'dana-k', status: 'pending' });
+    } finally {
+      db.close();
       server.stop(true);
     }
   });

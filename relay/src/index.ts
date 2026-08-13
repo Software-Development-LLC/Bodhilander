@@ -31,8 +31,18 @@ function main(): void {
 
   const repos = createRepositories(db);
   const rateLimiter = createRateLimiter();
-  const route = createRouter({ config, logger, repos, rateLimiter });
+  // The gateway is built first so the router can call into it. HTTP and
+  // WebSocket are separate surfaces; these two callbacks are the only seam
+  // between them, rather than a shared mutable table either side can corrupt.
   const gateway = createGateway({ repos, logger });
+  const route = createRouter({
+    config,
+    logger,
+    repos,
+    rateLimiter,
+    onGrantRedeemed: (grant) => gateway.notifyGrantRedeemed(grant),
+    onGrantRevoked: (grant) => gateway.notifyGrantRevoked(grant),
+  });
 
   const server = Bun.serve({
     port: config.port,
@@ -65,6 +75,10 @@ function main(): void {
     try {
       repos.purgeExpiredSessions();
       const codes = repos.purgeExpiredLinkCodes();
+      // Revoked/expired grants and stale unredeemed invites. The desktop keeps
+      // its own record, so nothing dropped here is the audit trail.
+      const shares = repos.purgeDeadShares();
+      if (shares > 0) logger.debug('reaped dead shares', { count: shares });
       rateLimiter.sweep();
       if (codes > 0) logger.debug('reaped expired link codes', { count: codes });
       // Only non-zero when someone is holding MAX_WINDOWS buckets at their
