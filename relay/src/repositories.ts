@@ -61,6 +61,8 @@ export interface MachineGrant {
   expires_at: number | null;
   revoked_at: number | null;
   last_used_at: number | null;
+  /** Carried from the invite so the agent can size the certificate it mints. */
+  grant_ttl_seconds: number | null;
 }
 
 /**
@@ -424,9 +426,10 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
         );
         db.query(
           `INSERT INTO machine_grants
-             (id, machine_id, grantee_user_id, invite_id, certificate, role, label, status, created_at)
-           VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending', ?)`,
-        ).run(grantId, row.machine_id, user.id, row.id, row.role, row.label, ts);
+             (id, machine_id, grantee_user_id, invite_id, certificate, role, label, status,
+              created_at, grant_ttl_seconds)
+           VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending', ?, ?)`,
+        ).run(grantId, row.machine_id, user.id, row.id, row.role, row.label, ts, row.grant_ttl_seconds);
         return db.query('SELECT * FROM machine_grants WHERE id = ?').get(grantId) as MachineGrant;
       })();
 

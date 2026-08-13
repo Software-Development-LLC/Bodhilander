@@ -327,6 +327,10 @@ export function createGateway(ctx: WsGatewayContext) {
       granteeName: grantee?.display_name ?? null,
       createdAt: g.created_at,
       expiresAt: g.expires_at,
+      // What the invite promised. `expires_at` is NULL until we countersign,
+      // so this is the only thing the agent can size a certificate from at the
+      // moment the owner approves.
+      grantTtlSeconds: g.grant_ttl_seconds,
     };
   }
 

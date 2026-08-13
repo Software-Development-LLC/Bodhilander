@@ -22,7 +22,42 @@ import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-i
 import { SessionTunnel, type Principal } from './session-tunnel';
 import { defaultDeps } from './session-tunnel-deps';
 import { CAP_GRANTS_V1 } from './grants';
-import { clearAllGrants, getOwnerUserId, setOwnerUserId, GRANT_PREF } from './grant-store';
+import { ptyManager } from '../../pty-manager';
+import {
+  clearAllGrants,
+  clearPendingRevocation,
+  getGrant,
+  getOwnerUserId,
+  listGrants,
+  mintGrant,
+  pendingRevocations,
+  revokeGrant as revokeGrantLocally,
+  setOwnerUserId,
+  GRANT_PREF,
+} from './grant-store';
+import type { GrantRole } from './grants';
+
+/** A grant as the relay describes it. Never authorization on its own. */
+export interface PendingGrant {
+  grantId: string;
+  status: 'pending' | 'active' | 'revoked';
+  role: GrantRole;
+  label: string | null;
+  granteeUserId: string;
+  granteeLogin: string | null;
+  granteeName: string | null;
+  createdAt: number;
+  expiresAt: number | null;
+  /**
+   * The lifetime the invite promised. `expiresAt` is NULL until we
+   * countersign, so this is the only thing available at the moment of
+   * approval — which is the moment it is needed.
+   */
+  grantTtlSeconds: number | null;
+}
+
+/** Fallback when the relay did not state one. Deliberately short. */
+const DEFAULT_GRANT_TTL_SECONDS = 4 * 60 * 60;
 
 const PREF_OWNER_USER_ID = GRANT_PREF.ownerUserId;
 
@@ -86,6 +121,8 @@ export class RelayClient extends EventEmitter {
   private powerSaveBlockerId: number | null = null;
   /** An owner id the relay asserted that no human has confirmed yet. */
   private pendingOwner: AssertedOwner | null = null;
+  /** Share requests waiting on the owner, keyed by grant id. */
+  private readonly pendingGrants = new Map<string, PendingGrant>();
   /** Routes E2E terminal frames to/from web clients (M3). */
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
@@ -309,6 +346,8 @@ export class RelayClient extends EventEmitter {
       payload?: unknown;
       principal?: Principal;
       owner?: AssertedOwner | null;
+      grants?: PendingGrant[];
+      grantId?: string;
     };
     try {
       msg = JSON.parse(raw);
@@ -337,6 +376,27 @@ export class RelayClient extends EventEmitter {
         log.error('[Relay] failed to answer challenge:', err instanceof Error ? err.message : err);
         this.ws?.close();
       }
+      return;
+    }
+
+    // A guest redeemed an invite, or we just reconnected and the relay is
+    // telling us everything it holds.
+    if (msg.type === 'share:pending' && msg.grants) {
+      this.notePendingGrants(msg.grants);
+      return;
+    }
+    if (msg.type === 'share:sync' && msg.grants) {
+      this.reconcileGrants(msg.grants);
+      return;
+    }
+    // Revoked elsewhere — by the owner on another device, or by the guest
+    // handing access back.
+    if (msg.type === 'grant:revoked' && msg.grantId) {
+      revokeGrantLocally(msg.grantId);
+      clearPendingRevocation(msg.grantId);
+      this.pendingGrants.delete(msg.grantId);
+      this.tunnel.revokeGrant(msg.grantId, 'revoked');
+      this.emit('grants-changed');
       return;
     }
 
@@ -405,6 +465,122 @@ export class RelayClient extends EventEmitter {
       }
       this.ws = null;
     }
+  }
+
+  // --- sharing (M5.2) ---
+
+  /** Grants the relay says exist that this machine has not answered yet. */
+  getPendingGrants(): PendingGrant[] {
+    return [...this.pendingGrants.values()];
+  }
+
+  private notePendingGrants(grants: PendingGrant[]): void {
+    let added = false;
+    for (const g of grants) {
+      if (g.status !== 'pending') continue;
+      // Already answered on this machine — a duplicate share:pending after a
+      // reconnect must not re-prompt the owner for something they decided.
+      if (getGrant(g.grantId)) continue;
+      if (this.pendingGrants.has(g.grantId)) continue;
+      this.pendingGrants.set(g.grantId, g);
+      added = true;
+      this.emit('join-request', g);
+    }
+    if (added) this.emit('grants-changed');
+  }
+
+  /**
+   * Reconcile against what the relay says it holds, then assert our own view.
+   *
+   * Local status is the authority on revocation, so this is not a merge: we
+   * take the relay's list of *pending* requests (which only it can know about),
+   * flush anything we revoked while offline, and then tell it the set of
+   * grants we still consider live. Anything else it holds for this machine is
+   * a ghost — from a relay restore, or from a revocation it never heard.
+   */
+  private reconcileGrants(relayGrants: PendingGrant[]): void {
+    this.pendingGrants.clear();
+    this.notePendingGrants(relayGrants);
+
+    // Revocations queued while we were offline. Sending share:reconcile below
+    // would already drop them, but an explicit revoke is clearer in the
+    // relay's logs and does not depend on the reconcile arriving.
+    for (const grantId of pendingRevocations()) {
+      this.send({ type: 'share:deny', grantId, reason: 'revoked' });
+      clearPendingRevocation(grantId);
+    }
+
+    const active = listGrants()
+      .filter((g) => g.status === 'active')
+      .map((g) => g.id);
+    this.send({ type: 'share:reconcile', activeGrantIds: active });
+    this.emit('grants-changed');
+  }
+
+  /**
+   * The owner approved a request. Mint a certificate over the sessions they
+   * chose and hand it to the relay.
+   *
+   * `ptyEpoch` is captured HERE, at the moment of consent, not at connection
+   * time — the grant is for the terminal the owner was looking at, and
+   * `sessions.id` survives a restart into something else entirely.
+   */
+  approveGrant(grantId: string, sessionIds: string[]): void {
+    const pending = this.pendingGrants.get(grantId);
+    if (!pending) throw new Error('no such pending share request');
+    if (sessionIds.length === 0) throw new Error('a share must name at least one session');
+
+    const machineId = getPreference(PREF.machineId);
+    if (!machineId) throw new Error('this machine is not linked');
+
+    const sessions = sessionIds.map((sessionId) => {
+      const ptyEpoch = ptyManager.getSession(sessionId)?.spawnedAt;
+      if (ptyEpoch === undefined) throw new Error(`session ${sessionId} is not running`);
+      return { sessionId, ptyEpoch };
+    });
+
+    // From the invite the owner created, not from `expiresAt` — that is NULL
+    // until we countersign, which is exactly the moment we are in now.
+    const ttlSeconds = pending.grantTtlSeconds ?? DEFAULT_GRANT_TTL_SECONDS;
+    const { certificate, grant } = mintGrant({
+      grantId,
+      machineId,
+      relayOrigin: stripTrailingSlashes(this.relayUrl),
+      granteeUserId: pending.granteeUserId,
+      granteeLogin: pending.granteeLogin,
+      role: pending.role,
+      sessions,
+      ttlSeconds,
+    });
+
+    this.send({ type: 'share:bind', grantId, certificate, expiresAt: grant.expiresAt });
+    this.pendingGrants.delete(grantId);
+    log.info('[Relay] share approved', { grantId, sessions: sessions.length });
+    this.emit('grants-changed');
+  }
+
+  /** The owner said no. Nothing is minted, so there is nothing to revoke. */
+  denyGrant(grantId: string, reason = 'declined'): void {
+    this.pendingGrants.delete(grantId);
+    this.send({ type: 'share:deny', grantId, reason });
+    log.info('[Relay] share denied', { grantId });
+    this.emit('grants-changed');
+  }
+
+  /**
+   * End an active grant. Local status is the authority, so this takes effect
+   * at the guest's next `client:open` whether or not the relay ever hears —
+   * and the queue makes revoking while disconnected honest rather than a lie.
+   */
+  revokeGrant(grantId: string): void {
+    revokeGrantLocally(grantId);
+    this.tunnel.revokeGrant(grantId, 'revoked');
+    if (this.connected) {
+      this.send({ type: 'share:deny', grantId, reason: 'revoked' });
+      clearPendingRevocation(grantId);
+    }
+    log.info('[Relay] grant revoked', { grantId, queued: !this.connected });
+    this.emit('grants-changed');
   }
 
   // --- owner confirmation (design §3) ---

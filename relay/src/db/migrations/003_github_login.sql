@@ -21,6 +21,15 @@
 
 ALTER TABLE users ADD COLUMN github_login TEXT;
 
+-- How long the grant should last once the owner approves it, carried over
+-- from the invite at redemption.
+--
+-- `machine_grants.expires_at` is NULL until the agent countersigns, so without
+-- this the agent has nothing to compute a certificate lifetime from at the
+-- moment of approval — the one moment it needs it. Copied rather than joined
+-- because the invite is deletable and the grant must outlive it.
+ALTER TABLE machine_grants ADD COLUMN grant_ttl_seconds INTEGER;
+
 -- Case-insensitive, because GitHub logins are compared that way and an invite
 -- addressed to `Dana-K` must match a session for `dana-k`.
 CREATE INDEX IF NOT EXISTS idx_users_github_login ON users(github_login COLLATE NOCASE);

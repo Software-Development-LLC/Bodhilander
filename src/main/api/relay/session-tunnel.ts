@@ -548,6 +548,20 @@ export class SessionTunnel {
    * It keeps the shared PTY listener attached until the client actually
    * disconnects; `subs` is cleared, so `fanOut` never calls back for it.
    */
+  /**
+   * Revoke every live client holding `grantId`.
+   *
+   * Keyed by grant rather than by client because one person may have several
+   * browsers open under one grant, and revoking has to reach all of them —
+   * missing one would leave a guest still watching a terminal the owner
+   * believes they have been removed from.
+   */
+  revokeGrant(grantId: string, reason = 'revoked'): void {
+    for (const [clientId, s] of this.sessions) {
+      if (s.grant.grantId === grantId) this.revokeClient(clientId, reason);
+    }
+  }
+
   revokeClient(clientId: string, reason = 'revoked'): void {
     const s = this.sessions.get(clientId);
     if (!s) return;
