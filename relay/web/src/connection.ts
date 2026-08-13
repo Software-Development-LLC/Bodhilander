@@ -22,7 +22,21 @@ export type ConnState = 'connecting' | 'handshaking' | 'ready' | 'offline' | 'cl
  * tells people false stories — "Will revoked your access" when Will merely
  * closed a terminal is socially loaded and untrue.
  */
-export type DeniedReason = 'not_authorized' | 'revoked' | 'expired' | 'session_ended' | 'machine_unlinked';
+/**
+ * The reasons that actually END access. Anything else on a `denied` frame is a
+ * refusal of one command, which must not be presented as losing access.
+ *
+ * The union is derived from this array rather than written twice, so the two
+ * cannot drift — a reason added to one and not the other is the shape of the
+ * bug this whole file is fixing.
+ */
+export const ENDING_REASONS = ['not_authorized', 'revoked', 'expired', 'session_ended', 'machine_unlinked'] as const;
+
+export type DeniedReason = (typeof ENDING_REASONS)[number];
+
+export function isEndingReason(reason: string): reason is DeniedReason {
+  return (ENDING_REASONS as readonly string[]).includes(reason);
+}
 export interface Inner {
   type: string;
   [k: string]: unknown;
@@ -50,6 +64,8 @@ export class RelayConnection {
   onState: (s: ConnState, detail?: string) => void = () => {};
   onMessage: (m: Inner) => void = () => {};
   onFingerprint: (fp: string, verified: boolean) => void = () => {};
+  /** One command was refused. Not an ended session — see `handle`. */
+  onCommandDenied: (command: string) => void = () => {};
 
   constructor(
     private readonly machineId: string,
@@ -148,8 +164,30 @@ export class RelayConnection {
       this.recvCounter = frame.n;
       // A SEALED refusal is trustworthy: only the machine could have written
       // it, so its reason can safely drive what the guest is told.
+      //
+      // But ONLY an access-ended reason ends the session. A refused single
+      // command is not an ended session, and treating every `denied` as
+      // terminal told people the owner had revoked them when they had merely
+      // sent one command their role does not allow. The reason is checked
+      // against the known ending set rather than trusted blindly, which also
+      // covers agents still sending the old shared frame type.
+      if (inner.type === 'command:denied') {
+        this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
+        return;
+      }
       if (inner.type === 'denied') {
-        this.onState('denied', typeof inner.reason === 'string' ? inner.reason : 'revoked');
+        // A `denied` with NO reason ends the session. Failing the other way
+        // would swallow a genuine access-ended notice from any sender that
+        // omits the field — silence is the worse error here, because the
+        // guest would sit watching a channel that is already closed.
+        // A reason that is present but not an ending one is a command
+        // refusal, which is the legacy frame this fix exists for.
+        const reason = typeof inner.reason === 'string' ? inner.reason : null;
+        if (reason === null || isEndingReason(reason)) {
+          this.onState('denied', reason ?? 'revoked');
+        } else {
+          this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
+        }
         return;
       }
       this.onMessage(inner);

@@ -381,6 +381,11 @@ function connect() {
   conn.onFingerprint = (fp, ok) => { app.fp = fp; app.fpVerified = ok; };
   conn.onState = (s: ConnState, detail?: string) => onConnState(s, detail);
   conn.onMessage = (m) => onAgentMessage(m);
+  // A refused command is a fact about that command, not about your access.
+  conn.onCommandDenied = (command) => {
+    // eslint-disable-next-line no-console
+    console.warn('[relay] command refused by the machine:', command || '(unknown)');
+  };
   conn.connect();
 }
 
@@ -415,7 +420,15 @@ const ENDED_COPY: Record<string, { icon: string; title: string; body: string }> 
 };
 
 function renderEnded(reason: string): void {
-  const copy = ENDED_COPY[reason] ?? ENDED_COPY.revoked!;
+  // Fall back to a statement of fact, NOT to "they revoked you". Guessing a
+  // cause we do not know puts a false and socially loaded story in front of
+  // someone — the exact failure this enum exists to prevent.
+  const copy =
+    ENDED_COPY[reason] ?? {
+      icon: '🔌',
+      title: 'This session ended',
+      body: "The connection to that machine closed. Ask whoever shared it if you still need access.",
+    };
   stopPolling();
   reconnector.cancel();
   app.conn?.close();
