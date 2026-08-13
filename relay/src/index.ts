@@ -5,6 +5,19 @@ import { createLogger } from './logger';
 import { createRepositories } from './repositories';
 import { createGateway, newAgentSocketData, newClientSocketData } from './ws';
 import { parseCookies, SESSION_COOKIE } from './auth/cookies';
+import { createRateLimiter } from './rate-limit';
+
+/** How often expired sessions / link codes / rate-limit windows are swept. */
+const REAP_INTERVAL_MS = 10 * 60 * 1000;
+
+/**
+ * Largest frame the relay will forward. Deliberately generous: desktop agents
+ * update on their own schedule, and builds before scrollback chunking landed
+ * seal an entire serialized buffer into ONE frame (megabytes on a busy
+ * session). Lowering this would silently break history replay for clients no
+ * relay-side change can fix — revisit once those builds have aged out.
+ */
+const MAX_WS_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 function main(): void {
   const { config, warnings } = loadConfig();
@@ -17,11 +30,13 @@ function main(): void {
   logger.info('database ready', { path: config.dbPath });
 
   const repos = createRepositories(db);
-  const route = createRouter({ config, logger, repos });
+  const rateLimiter = createRateLimiter();
+  const route = createRouter({ config, logger, repos, rateLimiter });
   const gateway = createGateway({ repos, logger });
 
   const server = Bun.serve({
     port: config.port,
+    maxRequestBodySize: 1024 * 1024,
     fetch(req, srv) {
       const url = new URL(req.url);
       // Agents connect at /ws and authenticate with an Ed25519-signed nonce.
@@ -38,10 +53,25 @@ function main(): void {
         if (srv.upgrade(req, { data: newClientSocketData(user.id) })) return undefined;
         return new Response('expected a websocket upgrade', { status: 426 });
       }
-      return route(req);
+      return route(req, srv.requestIP(req)?.address ?? null);
     },
-    websocket: gateway,
+    websocket: { ...gateway, maxPayloadLength: MAX_WS_PAYLOAD_BYTES },
   });
+
+  // Nothing purged expired sessions or link codes before — `purgeExpiredSessions`
+  // was on the repository interface but had no caller, so both tables grew
+  // without bound. `unref` so a pending tick can't hold shutdown open.
+  const reaper = setInterval(() => {
+    try {
+      repos.purgeExpiredSessions();
+      const codes = repos.purgeExpiredLinkCodes();
+      rateLimiter.sweep();
+      if (codes > 0) logger.debug('reaped expired link codes', { count: codes });
+    } catch (err) {
+      logger.error('reaper failed', { err: err instanceof Error ? err.message : String(err) });
+    }
+  }, REAP_INTERVAL_MS);
+  reaper.unref();
 
   logger.info('relay listening', {
     port: server.port,
@@ -53,6 +83,7 @@ function main(): void {
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
+    clearInterval(reaper);
     logger.info('shutdown requested', { signal });
     // Stop accepting connections, then drain. `true` closes active sockets so
     // keep-alive connections can't hold the process open past the timeout.

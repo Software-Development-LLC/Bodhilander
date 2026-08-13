@@ -20,6 +20,7 @@ import {
 } from './auth/cookies';
 import { createDevRoutes } from './dev';
 import { createWebClient } from './web';
+import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
 
 /**
  * HTTP surface of the relay (M2), as a `fetch`-style handler for `Bun.serve`.
@@ -41,12 +42,22 @@ export interface RelayContext {
   repos: Repositories;
   /** Injectable for tests; defaults to global fetch (used for GitHub calls). */
   fetchImpl?: typeof fetch;
+  /** Injectable so the caller can sweep it from the reaper; defaults to a fresh one. */
+  rateLimiter?: RateLimiter;
 }
 
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
+/** Abuse limits on the two routes that mint or consume a secret. */
+const RATE_WINDOW_MS = 10 * 60 * 1000;
+const LINK_PER_IP = 10;
+const LINK_PER_KEY = 5;
+/** Tighter: this is where a link code would be guessed at. */
+const CLAIM_PER_IP = 20;
+
 export function createRouter(ctx: RelayContext) {
   const { config, logger, repos } = ctx;
+  const limiter = ctx.rateLimiter ?? createRateLimiter();
   const version = pkg.version ?? '0.0.0';
   const secure = config.isProduction || config.trustProxy;
 
@@ -69,7 +80,22 @@ export function createRouter(ctx: RelayContext) {
     return token ? repos.getUserBySessionToken(token) : null;
   }
 
-  return async function route(req: Request): Promise<Response> {
+  /**
+   * Charge one hit against `bucket` for this caller. Returns a 429 when the
+   * window is exhausted, otherwise null. Fails OPEN when no address can be
+   * resolved — bucketing every anonymous caller together would turn one abuser
+   * into a global outage.
+   */
+  function limited(req: Request, peerIp: string | null, bucket: string, limit: number): Response | null {
+    const ip = clientIp(req, peerIp, config.trustProxy);
+    if (!ip) return null;
+    const result = limiter.check(`${bucket}:${ip}`, limit, RATE_WINDOW_MS);
+    if (result.allowed) return null;
+    logger.warn('rate limited', { bucket, path: new URL(req.url).pathname });
+    return json({ error: 'rate_limited' }, 429, { 'retry-after': String(result.retryAfter) });
+  }
+
+  return async function route(req: Request, peerIp: string | null = null): Promise<Response> {
     const url = new URL(req.url);
     const { pathname } = url;
     const method = req.method;
@@ -125,11 +151,11 @@ export function createRouter(ctx: RelayContext) {
       }
 
       if (pathname === '/link' && method === 'POST') {
-        return handleLink(req);
+        return limited(req, peerIp, 'link', LINK_PER_IP) ?? (await handleLink(req));
       }
 
       if (pathname === '/link/claim' && method === 'POST') {
-        return handleClaim(req);
+        return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
       }
 
       return json({ error: 'not_found' }, 404);
@@ -220,6 +246,15 @@ export function createRouter(ctx: RelayContext) {
     const verified = await verifyEd25519(edBytes, sigBytes, message);
     if (!verified) return json({ error: 'bad_signature' }, 401);
 
+    // Charged only after the signature verifies, so nobody can exhaust someone
+    // else's budget by naming their key. Bounds the unclaimed rows one keypair
+    // can accumulate, independent of how many addresses it comes from.
+    const perKey = limiter.check(`link:key:${ed25519Pub}`, LINK_PER_KEY, RATE_WINDOW_MS);
+    if (!perKey.allowed) {
+      logger.warn('rate limited', { bucket: 'link:key' });
+      return json({ error: 'rate_limited' }, 429, { 'retry-after': String(perKey.retryAfter) });
+    }
+
     const { code, expiresAt } = repos.createLinkCode(machineName, edBytes, xBytes, config.linkCodeTtlSeconds);
     logger.info('link code issued', { machineName });
     return json({ code, expiresAt });
@@ -271,9 +306,9 @@ async function readJson(req: Request): Promise<unknown | null> {
   }
 }
 
-function json(body: unknown, status = 200): Response {
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...extraHeaders },
   });
 }

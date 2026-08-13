@@ -204,6 +204,73 @@ describe('router: /link + /link/claim (end to end)', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('router: rate limiting', () => {
+  const { config } = loadConfig({});
+  const PEER = '198.51.100.4';
+
+  const claim = (route: ReturnType<typeof createRouter>, peerIp: string | null) =>
+    route(
+      new Request('http://relay.test/link/claim', { method: 'POST', body: JSON.stringify({ code: 'K7Q2-9F3D' }) }),
+      peerIp,
+    );
+
+  test('a caller guessing link codes is cut off with 429 and a Retry-After', async () => {
+    const route = createRouter({ config, logger, repos: freshRepos() });
+
+    // Unauthenticated claims 401 all day; the limiter is what stops the guessing.
+    for (let i = 0; i < 20; i++) {
+      expect((await claim(route, PEER)).status).toBe(401);
+    }
+
+    const blocked = await claim(route, PEER);
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  test('one caller being limited does not affect another address', async () => {
+    const route = createRouter({ config, logger, repos: freshRepos() });
+    for (let i = 0; i < 21; i++) await claim(route, PEER);
+
+    expect((await claim(route, '203.0.113.9')).status).toBe(401);
+  });
+
+  test('a keypair is capped across addresses, so rotating IPs does not help', async () => {
+    const repos = freshRepos();
+    const route = createRouter({ config, logger, repos });
+    const { pub, sign } = await ed25519Keypair();
+
+    const linkOnce = async (from: string) => {
+      const issuedAt = Date.now();
+      const ed25519Pub = b64(pub);
+      const x25519Pub = b64(new Uint8Array(32).fill(3));
+      const signature = b64(
+        await sign(buildLinkMessage({ ed25519PubB64: ed25519Pub, x25519PubB64: x25519Pub, machineName: 'm', issuedAt })),
+      );
+      return route(
+        new Request('http://relay.test/link', {
+          method: 'POST',
+          body: JSON.stringify({ machineName: 'm', ed25519Pub, x25519Pub, issuedAt, signature }),
+        }),
+        from,
+      );
+    };
+
+    for (let i = 0; i < 5; i++) {
+      expect((await linkOnce(`198.51.100.${i}`)).status).toBe(200);
+    }
+    // Sixth attempt from yet another address: the per-key budget is spent.
+    expect((await linkOnce('198.51.100.99')).status).toBe(429);
+  });
+
+  test('fails open when no address can be resolved', async () => {
+    const route = createRouter({ config, logger, repos: freshRepos() });
+
+    for (let i = 0; i < 25; i++) {
+      expect((await claim(route, null)).status).toBe(401);
+    }
+  });
+});
+
 describe('router: GitHub OAuth', () => {
   // `membership`: 'active' → member, 'none' → 404 (not a member), undefined → org not checked.
   function makeMockFetch(membership?: 'active' | 'none') {

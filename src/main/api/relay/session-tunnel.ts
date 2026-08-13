@@ -21,8 +21,16 @@ import { ptyManager } from '../../pty-manager';
 import { getAllSessions } from '../../repositories/sessions';
 import { getAllGroups } from '../../repositories/groups';
 import { createRemoteSession, createRemoteGroup } from './remote-sessions';
-import { deriveSharedSecret, ensureIdentity, signWithIdentity } from './relay-identity';
-import { deriveSessionKey, sealJson, openJson, buildHandshakeProof, type SealedFrame } from './e2e';
+import { ensureIdentity, signWithIdentity } from './relay-identity';
+import {
+  deriveEphemeral,
+  deriveSessionKey,
+  sealJson,
+  openJson,
+  buildHandshakeProof,
+  type SealedFrame,
+} from './e2e';
+import { chunkText } from './chunking';
 import { sanitizeSize } from './terminal-size';
 
 /** Expand a leading `~` to the user's home directory. */
@@ -39,9 +47,6 @@ interface ClientSession {
   recvCounter: number;
   /** Session ids this client is streaming. */
   subs: Set<string>;
-  onData: (e: { id: string; data: string }) => void;
-  onExit: (e: { id: string; exitCode: number }) => void;
-  onResize: (e: { id: string; cols: number; rows: number }) => void;
 }
 
 /** Decrypted command from a web client (union of every message's fields). */
@@ -62,9 +67,58 @@ interface ClientFrame {
 
 export class SessionTunnel {
   private readonly sessions = new Map<string, ClientSession>();
+  /** Whether the shared PTY listeners below are currently attached. */
+  private listening = false;
 
   /** `route` sends an outbound payload to a client id via the relay. */
   constructor(private readonly route: (clientId: string, payload: unknown) => void) {}
+
+  // One listener per PTY event for the whole tunnel, fanned out to subscribed
+  // clients. Previously each client attached its own three, which leaked a set
+  // per duplicate `client:open` and tripped EventEmitter's default max of 10
+  // listeners once a handful of viewers were connected.
+  private readonly onPtyData = (e: { id: string; data: string }): void => {
+    this.fanOut(e.id, (clientId) => this.sealTo(clientId, { type: 'terminal:output', sessionId: e.id, data: e.data }));
+  };
+
+  private readonly onPtyExit = (e: { id: string; exitCode: number }): void => {
+    this.fanOut(e.id, (clientId) =>
+      this.sealTo(clientId, { type: 'terminal:exit', sessionId: e.id, exitCode: e.exitCode }),
+    );
+  };
+
+  // Dynamic sizing: when the PTY is resized (by any viewer), tell subscribed
+  // clients the new size so they re-render at it.
+  private readonly onPtyResize = (e: { id: string; cols: number; rows: number }): void => {
+    this.fanOut(e.id, (clientId) =>
+      this.sealTo(clientId, { type: 'terminal:size', sessionId: e.id, cols: e.cols, rows: e.rows }),
+    );
+  };
+
+  /** Run `send` for every client subscribed to `sessionId`. */
+  private fanOut(sessionId: string, send: (clientId: string) => void): void {
+    for (const [clientId, s] of this.sessions) {
+      if (s.subs.has(sessionId)) send(clientId);
+    }
+  }
+
+  /** Attach the shared PTY listeners once, on the first connected client. */
+  private startListening(): void {
+    if (this.listening) return;
+    ptyManager.on('data', this.onPtyData);
+    ptyManager.on('exit', this.onPtyExit);
+    ptyManager.on('resize', this.onPtyResize);
+    this.listening = true;
+  }
+
+  /** Release them again once the last client goes away. */
+  private stopListeningIfIdle(): void {
+    if (!this.listening || this.sessions.size > 0) return;
+    ptyManager.off('data', this.onPtyData);
+    ptyManager.off('exit', this.onPtyExit);
+    ptyManager.off('resize', this.onPtyResize);
+    this.listening = false;
+  }
 
   /** A web client opened a channel — complete the E2E handshake. */
   open(clientId: string, payload: unknown): void {
@@ -72,35 +126,33 @@ export class SessionTunnel {
       const clientX25519Pub = (payload as { clientX25519Pub?: unknown })?.clientX25519Pub;
       if (typeof clientX25519Pub !== 'string') return;
 
-      const shared = deriveSharedSecret(new Uint8Array(Buffer.from(clientX25519Pub, 'base64')));
-      const key = deriveSessionKey(shared);
+      // The relay mints a fresh client id per socket, so a repeat means a
+      // client sent `client:open` twice. Refuse rather than replace: replacing
+      // would orphan the first channel's state and hand a second key to the
+      // same id.
+      if (this.sessions.has(clientId)) {
+        log.warn('[Relay] ignoring duplicate client:open', { clientId });
+        return;
+      }
+
+      // A per-channel ephemeral keypair (see e2e.ts) — never the machine's
+      // long-lived X25519 key, which would make this exchange replayable.
+      const { sharedSecret, ephemeralPubB64 } = deriveEphemeral(
+        new Uint8Array(Buffer.from(clientX25519Pub, 'base64')),
+      );
+      const key = deriveSessionKey(sharedSecret);
       const identity = ensureIdentity();
-      const signature = signWithIdentity(buildHandshakeProof(clientX25519Pub, identity.x25519Pub)).toString('base64');
+      const signature = signWithIdentity(buildHandshakeProof(clientX25519Pub, ephemeralPubB64)).toString('base64');
 
-      const onData = (e: { id: string; data: string }) => {
-        const s = this.sessions.get(clientId);
-        if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:output', sessionId: e.id, data: e.data });
-      };
-      const onExit = (e: { id: string; exitCode: number }) => {
-        const s = this.sessions.get(clientId);
-        if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:exit', sessionId: e.id, exitCode: e.exitCode });
-      };
-      // Dynamic sizing: when the PTY is resized (by this or any other viewer),
-      // tell subscribed clients the new size so they re-render at it.
-      const onResize = (e: { id: string; cols: number; rows: number }) => {
-        const s = this.sessions.get(clientId);
-        if (s?.subs.has(e.id)) this.sealTo(clientId, { type: 'terminal:size', sessionId: e.id, cols: e.cols, rows: e.rows });
-      };
-      ptyManager.on('data', onData);
-      ptyManager.on('exit', onExit);
-      ptyManager.on('resize', onResize);
-      this.sessions.set(clientId, { key, sendCounter: 0, recvCounter: -1, subs: new Set(), onData, onExit, onResize });
+      this.sessions.set(clientId, { key, sendCounter: 0, recvCounter: -1, subs: new Set() });
+      this.startListening();
 
-      // Unsealed handshake reply: client verifies `signature` against the
-      // machine's known Ed25519 pubkey, then derives the same session key.
+      // Unsealed handshake reply: the client verifies `signature` against the
+      // machine's known Ed25519 pubkey — which is what binds this throwaway
+      // X25519 key to this machine — then derives the same session key.
       this.route(clientId, {
         type: 'handshake',
-        agentX25519Pub: identity.x25519Pub,
+        agentX25519Pub: ephemeralPubB64,
         ed25519Pub: identity.ed25519Pub,
         signature,
       });
@@ -201,9 +253,13 @@ export class SessionTunnel {
     this.sealTo(clientId, { type: 'terminal:size', sessionId, cols: size.cols, rows: size.rows });
     // Replay history as RENDERED TEXT (reflow-safe) so a phone can resize the
     // shared terminal without the scrollback garbling. Then live output streams.
+    // Chunked so a long scrollback can't put a multi-megabyte frame on the wire
+    // (xterm.js carries parser state across writes, so splitting is safe).
     const history = await ptyManager.getSerializedBuffer(sessionId);
-    if (s.subs.has(sessionId)) {
-      this.sealTo(clientId, { type: 'terminal:output', sessionId, data: history });
+    for (const data of chunkText(history)) {
+      // Re-check every chunk: the client may unsubscribe or drop mid-replay.
+      if (!s.subs.has(sessionId) || this.sessions.get(clientId) !== s) return;
+      this.sealTo(clientId, { type: 'terminal:output', sessionId, data });
     }
   }
 
@@ -237,14 +293,10 @@ export class SessionTunnel {
     }
   }
 
-  /** A web client disconnected — drop its state and PTY listeners. */
+  /** A web client disconnected — drop its state. */
   closeClient(clientId: string): void {
-    const s = this.sessions.get(clientId);
-    if (!s) return;
-    ptyManager.off('data', s.onData);
-    ptyManager.off('exit', s.onExit);
-    ptyManager.off('resize', s.onResize);
-    this.sessions.delete(clientId);
+    if (!this.sessions.delete(clientId)) return;
+    this.stopListeningIfIdle();
   }
 
   /** Tear down every client (agent WebSocket dropped). */

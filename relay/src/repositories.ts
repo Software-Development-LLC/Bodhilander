@@ -53,6 +53,7 @@ export interface Repositories {
     ttlSeconds: number,
   ): { code: string; expiresAt: number };
   claimLinkCode(code: string, userId: string): ClaimResult;
+  purgeExpiredLinkCodes(): number;
 
   listMachines(userId: string): Machine[];
   getMachine(id: string): Machine | null;
@@ -184,6 +185,15 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
       })();
 
       return { ok: true, machine };
+    },
+
+    purgeExpiredLinkCodes() {
+      // Only unclaimed rows: a completed code is the audit trail of a link and
+      // is kept. Nothing deleted these before, so they accumulated forever.
+      const result = db
+        .query("DELETE FROM link_codes WHERE status = 'pending' AND expires_at <= ?")
+        .run(now());
+      return Number(result.changes ?? 0);
     },
 
     listMachines(userId) {

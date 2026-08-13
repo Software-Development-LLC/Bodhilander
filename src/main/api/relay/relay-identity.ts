@@ -2,11 +2,17 @@
  * Relay machine identity (remote hosting, Slice B).
  *
  * A machine's identity is an Ed25519 keypair (proves who it is) plus an X25519
- * keypair (future end-to-end key agreement with a web client). The raw public
- * keys are non-secret and live as plaintext preferences; the private keys are
- * encrypted with Electron `safeStorage` (OS keychain) and persisted as base64
- * blobs in the `preferences` table — the exact pattern used by `key-vault.ts`.
- * Plaintext private keys never touch the DB, logs, or the renderer.
+ * keypair registered with the relay at link time. The raw public keys are
+ * non-secret and live as plaintext preferences; the private keys are encrypted
+ * with Electron `safeStorage` (OS keychain) and persisted as base64 blobs in
+ * the `preferences` table — the exact pattern used by `key-vault.ts`. Plaintext
+ * private keys never touch the DB, logs, or the renderer.
+ *
+ * NOTE: the X25519 keypair here is only the machine's registered identity key
+ * (`machines.x25519_pubkey`). Terminal channels do NOT use it — each one runs
+ * ECDH against a throwaway keypair instead (`e2e.ts` `deriveEphemeral`), so a
+ * recorded channel can't be replayed into a fresh one. Reintroducing a
+ * long-lived ECDH here would undo that.
  */
 
 import crypto from 'crypto';
@@ -101,30 +107,6 @@ export function signWithIdentity(message: Uint8Array): Buffer {
     format: 'jwk',
   });
   return crypto.sign(null, Buffer.from(message), key);
-}
-
-/**
- * X25519 ECDH: derive the raw shared secret between this machine's X25519 key
- * and a peer's raw 32-byte X25519 public key. The private key never leaves this
- * module. Used to establish the E2E session key with a web client (see e2e.ts).
- */
-export function deriveSharedSecret(peerX25519PubRaw: Uint8Array): Buffer {
-  const xPubB64 = getPreference(PREF.x25519Pub);
-  const encPriv = getPreference(PREF.x25519Priv);
-  if (!xPubB64 || !encPriv) throw new Error('no relay identity for key agreement');
-  if (!vaultAvailable()) throw new Error('secure storage unavailable; cannot access X25519 key');
-  if (peerX25519PubRaw.length !== 32) throw new Error('peer X25519 public key must be 32 bytes');
-
-  const privB64url = safeStorage.decryptString(Buffer.from(encPriv, 'base64'));
-  const privateKey = crypto.createPrivateKey({
-    key: { kty: 'OKP', crv: 'X25519', x: Buffer.from(xPubB64, 'base64').toString('base64url'), d: privB64url },
-    format: 'jwk',
-  });
-  const publicKey = crypto.createPublicKey({
-    key: { kty: 'OKP', crv: 'X25519', x: Buffer.from(peerX25519PubRaw).toString('base64url') },
-    format: 'jwk',
-  });
-  return crypto.diffieHellman({ privateKey, publicKey });
 }
 
 /**
