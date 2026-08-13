@@ -63,7 +63,7 @@ function connect(url: string, headers?: Record<string, string>) {
 async function registerMachine(repos: Repositories, providerUserId = '1') {
   const kp = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as unknown as CryptoKeyPair;
   const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
-  const user = repos.upsertGithubUser({ providerUserId, displayName: 'U', email: null, avatarUrl: null });
+  const user = repos.upsertGithubUser({ providerUserId, displayName: 'U', login: 'u', email: null, avatarUrl: null });
   const claim = repos.claimLinkCode(repos.createLinkCode('m', pub, new Uint8Array(32).fill(1), 600).code, user.id);
   const machineId = claim.ok ? claim.machine.id : '';
   const sign = async (m: Uint8Array) => new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, kp.privateKey, toArrayBuffer(m)));
@@ -268,7 +268,7 @@ describe('client ↔ agent brokering (M3)', () => {
     try {
       await onlineAgent(server.port!, pub, sign);
       // A different user, not the machine owner.
-      const other = repos.upsertGithubUser({ providerUserId: '999', displayName: 'Other', email: null, avatarUrl: null });
+      const other = repos.upsertGithubUser({ providerUserId: '999', displayName: 'Other', login: 'other', email: null, avatarUrl: null });
       const { token } = repos.createSession(other.id, 3600);
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
       await client.opened;
@@ -304,7 +304,7 @@ describe('client ↔ agent brokering (M3)', () => {
     const server = startServer(repos);
     try {
       const agent = await onlineAgent(server.port!, pub, sign, ['grants:v1']);
-      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', email: null, avatarUrl: null });
+      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', login: 'g', email: null, avatarUrl: null });
       seedGrant(db, machineId, guest.id);
       const { token } = repos.createSession(guest.id, 3600);
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
@@ -330,7 +330,7 @@ describe('client ↔ agent brokering (M3)', () => {
     const server = startServer(repos);
     try {
       const agent = await onlineAgent(server.port!, pub, sign); // no caps — an old build
-      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', email: null, avatarUrl: null });
+      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', login: 'g', email: null, avatarUrl: null });
       seedGrant(db, machineId, guest.id);
       const { token } = repos.createSession(guest.id, 3600);
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
@@ -396,7 +396,7 @@ describe('client ↔ agent brokering (M3)', () => {
 
       // The claim left nothing behind: with no authenticated agent, a guest
       // gets agent:offline rather than a channel.
-      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', email: null, avatarUrl: null });
+      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', login: 'g', email: null, avatarUrl: null });
       seedGrant(db, machineId, guest.id);
       const { token } = repos.createSession(guest.id, 3600);
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });

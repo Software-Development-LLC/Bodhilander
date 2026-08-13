@@ -14,6 +14,13 @@ export interface User {
   primary_email: string | null;
   avatar_url: string | null;
   created_at: number;
+  /**
+   * The GitHub handle. Distinct from `display_name`, which prefers the
+   * profile's free-text name — sharing needs an identifier the account holder
+   * cannot set to impersonate someone the owner trusts. NULL for users who
+   * have not signed in since migration 003.
+   */
+  github_login: string | null;
 }
 
 export interface Machine {
@@ -29,6 +36,8 @@ export interface Machine {
 export interface GithubProfile {
   providerUserId: string;
   displayName: string;
+  /** The handle, e.g. `dana-k`. */
+  login: string;
   email: string | null;
   avatarUrl: string | null;
 }
@@ -96,11 +105,62 @@ export interface Repositories {
    * capability from the certificate it signed.
    */
   getMachineAccess(machineId: string, userId: string): MachineAccess;
+
+  // --- sharing (M5.2) ---
+
+  createShareInvite(input: CreateShareInviteInput): { invite: ShareInvite; code: string };
+  listShareInvites(machineId: string): ShareInvite[];
+  revokeShareInvite(machineId: string, inviteId: string): boolean;
+  /**
+   * Redeem a code, creating a pending grant for `userId`.
+   *
+   * The grant is created here but carries no certificate: until the owner's
+   * agent countersigns it, `getMachineAccess` will not honour it. Redeeming is
+   * asking, not entering.
+   */
+  redeemShareInvite(code: string, user: User, grantId: string): RedeemResult;
+
+  getGrant(grantId: string): MachineGrant | null;
+  listGrantsForMachine(machineId: string): MachineGrant[];
+  listGrantsForUser(userId: string): MachineGrant[];
+  /** Attach the agent's countersigned certificate and activate the grant. */
+  bindGrantCertificate(grantId: string, certificate: string, expiresAt: number): boolean;
+  revokeGrant(grantId: string): boolean;
+  touchGrant(grantId: string): void;
+  /** Expired or revoked grants and dead invites, dropped by the reaper. */
+  purgeDeadShares(): number;
 }
-// The grant write path (bind / revoke / touch / reap) lands with M5.2, where
-// invite redemption first creates a grant for it to act on. Adding it now
-// would put another unreachable method on this interface — the same defect
-// `purgeExpiredSessions` was before #154.
+
+export interface ShareInvite {
+  id: string;
+  machine_id: string;
+  code_hash: string;
+  expected_github_login: string | null;
+  role: 'viewer' | 'operator';
+  label: string | null;
+  grant_ttl_seconds: number;
+  status: 'pending' | 'redeemed' | 'revoked';
+  redeemed_by: string | null;
+  redeemed_at: number | null;
+  attempt_count: number;
+  created_at: number;
+  expires_at: number;
+}
+
+export interface CreateShareInviteInput {
+  machineId: string;
+  /** NULL is an open link; a login binds redemption to that account. */
+  expectedGithubLogin: string | null;
+  role: 'viewer' | 'operator';
+  label: string | null;
+  grantTtlSeconds: number;
+  /** How long the *invite* is valid, distinct from the grant it produces. */
+  inviteTtlSeconds: number;
+}
+
+export type RedeemResult =
+  | { ok: true; grant: MachineGrant; invite: ShareInvite }
+  | { ok: false; reason: 'not_found' | 'expired' | 'already_used' | 'revoked' | 'wrong_account' | 'own_machine' };
 
 export function createRepositories(db: RelayDb, now: () => number = Date.now): Repositories {
   return {
@@ -111,12 +171,9 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
 
       if (existing) {
         // Refresh mutable profile fields on each login.
-        db.query('UPDATE users SET display_name = ?, primary_email = ?, avatar_url = ? WHERE id = ?').run(
-          profile.displayName,
-          profile.email,
-          profile.avatarUrl,
-          existing.user_id,
-        );
+        db.query(
+          'UPDATE users SET display_name = ?, primary_email = ?, avatar_url = ?, github_login = ? WHERE id = ?',
+        ).run(profile.displayName, profile.email, profile.avatarUrl, profile.login, existing.user_id);
         return this.getUser(existing.user_id)!;
       }
 
@@ -126,11 +183,13 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
         primary_email: profile.email,
         avatar_url: profile.avatarUrl,
         created_at: now(),
+        github_login: profile.login,
       };
       db.transaction(() => {
         db.query(
-          'INSERT INTO users (id, display_name, primary_email, avatar_url, created_at) VALUES (?, ?, ?, ?, ?)',
-        ).run(user.id, user.display_name, user.primary_email, user.avatar_url, user.created_at);
+          `INSERT INTO users (id, display_name, primary_email, avatar_url, created_at, github_login)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).run(user.id, user.display_name, user.primary_email, user.avatar_url, user.created_at, user.github_login);
         db.query(
           'INSERT INTO oauth_identities (provider, provider_user_id, user_id, created_at) VALUES (?, ?, ?, ?)',
         ).run('github', profile.providerUserId, user.id, user.created_at);
@@ -273,6 +332,159 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
 
       if (!grant) return { relation: 'none' };
       return { relation: 'grantee', machine, grant };
+    },
+
+    createShareInvite(input) {
+      const code = generateLinkCode();
+      const createdAt = now();
+      const invite: ShareInvite = {
+        id: crypto.randomUUID(),
+        machine_id: input.machineId,
+        code_hash: sha256Hex(code),
+        // Stored lowercased so the case-insensitive comparison at redemption
+        // is a plain equality check rather than a per-row COLLATE.
+        expected_github_login: input.expectedGithubLogin?.trim().toLowerCase() || null,
+        role: input.role,
+        label: input.label,
+        grant_ttl_seconds: input.grantTtlSeconds,
+        status: 'pending',
+        redeemed_by: null,
+        redeemed_at: null,
+        attempt_count: 0,
+        created_at: createdAt,
+        expires_at: createdAt + input.inviteTtlSeconds * 1000,
+      };
+      db.query(
+        `INSERT INTO share_invites
+           (id, machine_id, code_hash, expected_github_login, role, label, grant_ttl_seconds,
+            status, attempt_count, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
+      ).run(
+        invite.id,
+        invite.machine_id,
+        invite.code_hash,
+        invite.expected_github_login,
+        invite.role,
+        invite.label,
+        invite.grant_ttl_seconds,
+        invite.created_at,
+        invite.expires_at,
+      );
+      // The raw code is returned once and never persisted — only its hash is.
+      return { invite, code };
+    },
+
+    listShareInvites(machineId) {
+      return db
+        .query('SELECT * FROM share_invites WHERE machine_id = ? ORDER BY created_at DESC')
+        .all(machineId) as ShareInvite[];
+    },
+
+    revokeShareInvite(machineId, inviteId) {
+      // Scoped by machine so an invite id alone is not enough to revoke
+      // someone else's invite.
+      const result = db
+        .query("UPDATE share_invites SET status = 'revoked' WHERE id = ? AND machine_id = ? AND status = 'pending'")
+        .run(inviteId, machineId);
+      return Number(result.changes ?? 0) > 0;
+    },
+
+    redeemShareInvite(code, user, grantId) {
+      const row = db.query('SELECT * FROM share_invites WHERE code_hash = ?').get(sha256Hex(code)) as
+        | ShareInvite
+        | null;
+      if (!row) return { ok: false, reason: 'not_found' };
+
+      // Count the attempt whatever the outcome, so guessing is visible.
+      db.query('UPDATE share_invites SET attempt_count = attempt_count + 1 WHERE id = ?').run(row.id);
+
+      if (row.status === 'revoked') return { ok: false, reason: 'revoked' };
+      if (row.status === 'redeemed') return { ok: false, reason: 'already_used' };
+      if (row.expires_at <= now()) return { ok: false, reason: 'expired' };
+
+      const machine = this.getMachine(row.machine_id);
+      if (!machine) return { ok: false, reason: 'not_found' };
+      // Redeeming your own machine's invite would create a grant that shadows
+      // ownership with something narrower. Nothing good comes of it.
+      if (machine.user_id === user.id) return { ok: false, reason: 'own_machine' };
+
+      if (row.expected_github_login) {
+        // A NULL login can never match: a user who has not signed in since
+        // migration 003 must not silently satisfy an addressed invite.
+        const login = user.github_login?.trim().toLowerCase();
+        if (!login || login !== row.expected_github_login) return { ok: false, reason: 'wrong_account' };
+      }
+
+      const ts = now();
+      const grant = db.transaction(() => {
+        db.query("UPDATE share_invites SET status = 'redeemed', redeemed_by = ?, redeemed_at = ? WHERE id = ?").run(
+          user.id,
+          ts,
+          row.id,
+        );
+        db.query(
+          `INSERT INTO machine_grants
+             (id, machine_id, grantee_user_id, invite_id, certificate, role, label, status, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?, ?, 'pending', ?)`,
+        ).run(grantId, row.machine_id, user.id, row.id, row.role, row.label, ts);
+        return db.query('SELECT * FROM machine_grants WHERE id = ?').get(grantId) as MachineGrant;
+      })();
+
+      return { ok: true, grant, invite: { ...row, status: 'redeemed', redeemed_by: user.id, redeemed_at: ts } };
+    },
+
+    getGrant(grantId) {
+      return (db.query('SELECT * FROM machine_grants WHERE id = ?').get(grantId) as MachineGrant | null) ?? null;
+    },
+
+    listGrantsForMachine(machineId) {
+      return db
+        .query("SELECT * FROM machine_grants WHERE machine_id = ? AND status != 'revoked' ORDER BY created_at DESC")
+        .all(machineId) as MachineGrant[];
+    },
+
+    listGrantsForUser(userId) {
+      return db
+        .query("SELECT * FROM machine_grants WHERE grantee_user_id = ? AND status != 'revoked' ORDER BY created_at DESC")
+        .all(userId) as MachineGrant[];
+    },
+
+    bindGrantCertificate(grantId, certificate, expiresAt) {
+      // Only a pending grant may be bound. Re-binding an active one would let
+      // a replayed `share:bind` swap the certificate under a live guest, and
+      // re-binding a revoked one would resurrect it.
+      const result = db
+        .query(
+          `UPDATE machine_grants SET certificate = ?, expires_at = ?, status = 'active', bound_at = ?
+            WHERE id = ? AND status = 'pending'`,
+        )
+        .run(certificate, expiresAt, now(), grantId);
+      return Number(result.changes ?? 0) > 0;
+    },
+
+    revokeGrant(grantId) {
+      const result = db
+        .query("UPDATE machine_grants SET status = 'revoked', revoked_at = ? WHERE id = ? AND status != 'revoked'")
+        .run(now(), grantId);
+      return Number(result.changes ?? 0) > 0;
+    },
+
+    touchGrant(grantId) {
+      db.query('UPDATE machine_grants SET last_used_at = ? WHERE id = ?').run(now(), grantId);
+    },
+
+    purgeDeadShares() {
+      // Revoked grants go too: the DESKTOP is the authority on revocation and
+      // keeps its own record, so nothing here is the audit trail. Redeemed
+      // invites are kept while their grant lives, via the FK.
+      const ts = now();
+      const grants = db
+        .query("DELETE FROM machine_grants WHERE status = 'revoked' OR (expires_at IS NOT NULL AND expires_at <= ?)")
+        .run(ts);
+      const invites = db
+        .query("DELETE FROM share_invites WHERE status != 'redeemed' AND expires_at <= ?")
+        .run(ts);
+      return Number(grants.changes ?? 0) + Number(invites.changes ?? 0);
     },
   };
 }

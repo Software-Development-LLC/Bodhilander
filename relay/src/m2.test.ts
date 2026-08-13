@@ -60,8 +60,8 @@ describe('crypto', () => {
 describe('repositories: users & sessions', () => {
   test('upsertGithubUser creates once, then refreshes profile on repeat', () => {
     const repos = freshRepos();
-    const a = repos.upsertGithubUser({ providerUserId: '42', displayName: 'Octo', email: 'o@gh.com', avatarUrl: null });
-    const b = repos.upsertGithubUser({ providerUserId: '42', displayName: 'Octo Renamed', email: 'o@gh.com', avatarUrl: 'x' });
+    const a = repos.upsertGithubUser({ providerUserId: '42', displayName: 'Octo', login: 'octo', email: 'o@gh.com', avatarUrl: null });
+    const b = repos.upsertGithubUser({ providerUserId: '42', displayName: 'Octo Renamed', login: 'octorenamed', email: 'o@gh.com', avatarUrl: 'x' });
     expect(b.id).toBe(a.id); // same identity → same user
     expect(b.display_name).toBe('Octo Renamed');
   });
@@ -69,7 +69,7 @@ describe('repositories: users & sessions', () => {
   test('session lifecycle: create → resolve → expire → delete', () => {
     let clock = 1_000_000;
     const repos = createRepositories(openDb(':memory:'), () => clock);
-    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', email: null, avatarUrl: null });
+    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', login: 'u', email: null, avatarUrl: null });
 
     const { token } = repos.createSession(user.id, 60);
     expect(repos.getUserBySessionToken(token)?.id).toBe(user.id);
@@ -91,7 +91,7 @@ describe('repositories: link codes & machines', () => {
 
   test('claim binds a pending code to a machine and lists it', () => {
     const repos = freshRepos();
-    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', email: null, avatarUrl: null });
+    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', login: 'u', email: null, avatarUrl: null });
     const { code } = repos.createLinkCode('Will-MBP', ed, x, 600);
 
     const result = repos.claimLinkCode(code, user.id);
@@ -102,7 +102,7 @@ describe('repositories: link codes & machines', () => {
 
   test('a code cannot be claimed twice', () => {
     const repos = freshRepos();
-    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', email: null, avatarUrl: null });
+    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', login: 'u', email: null, avatarUrl: null });
     const { code } = repos.createLinkCode('m', ed, x, 600);
     expect(repos.claimLinkCode(code, user.id).ok).toBe(true);
     const again = repos.claimLinkCode(code, user.id);
@@ -112,7 +112,7 @@ describe('repositories: link codes & machines', () => {
   test('expired and unknown codes are rejected', () => {
     let clock = 1_000_000;
     const repos = createRepositories(openDb(':memory:'), () => clock);
-    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', email: null, avatarUrl: null });
+    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', login: 'u', email: null, avatarUrl: null });
     const { code } = repos.createLinkCode('m', ed, x, 1);
     clock += 2_000;
     expect(repos.claimLinkCode(code, user.id)).toEqual({ ok: false, reason: 'expired' });
@@ -121,8 +121,8 @@ describe('repositories: link codes & machines', () => {
 
   test('re-linking the same ed25519 identity rebinds instead of duplicating', () => {
     const repos = freshRepos();
-    const u1 = repos.upsertGithubUser({ providerUserId: '1', displayName: 'A', email: null, avatarUrl: null });
-    const u2 = repos.upsertGithubUser({ providerUserId: '2', displayName: 'B', email: null, avatarUrl: null });
+    const u1 = repos.upsertGithubUser({ providerUserId: '1', displayName: 'A', login: 'a', email: null, avatarUrl: null });
+    const u2 = repos.upsertGithubUser({ providerUserId: '2', displayName: 'B', login: 'b', email: null, avatarUrl: null });
     repos.claimLinkCode(repos.createLinkCode('m', ed, x, 600).code, u1.id);
     repos.claimLinkCode(repos.createLinkCode('m-renamed', ed, x, 600).code, u2.id);
     expect(repos.listMachines(u1.id)).toHaveLength(0); // moved off u1
@@ -148,7 +148,7 @@ describe('router: /link + /link/claim (end to end)', () => {
   test('a valid signed request yields a code; a user claims it and sees the machine', async () => {
     const repos = freshRepos();
     const route = createRouter({ config, logger, repos });
-    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', email: null, avatarUrl: null });
+    const user = repos.upsertGithubUser({ providerUserId: '1', displayName: 'U', login: 'u', email: null, avatarUrl: null });
     const { token } = repos.createSession(user.id, 3600);
 
     const linkRes = await route(

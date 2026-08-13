@@ -99,6 +99,10 @@ export async function exchangeCodeForProfile(
   return {
     providerUserId: String(user.id),
     displayName: user.name?.trim() || user.login,
+    // The handle itself, kept separately from displayName. Sharing needs an
+    // identifier the account holder cannot choose to impersonate someone else
+    // with, and `name` is free text.
+    login: user.login,
     email: email ?? null,
     avatarUrl: user.avatar_url,
   };
