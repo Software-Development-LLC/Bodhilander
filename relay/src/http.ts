@@ -1,9 +1,9 @@
 import pkg from '../package.json';
 import type { RelayConfig } from './config';
 import type { Logger } from './logger';
-import type { Machine, Repositories, User } from './repositories';
+import type { Machine, MachineGrant, Repositories, ShareInvite, User } from './repositories';
 import { fromBase64, randomToken, verifyEd25519 } from './crypto';
-import { buildLinkMessage, LINK_MAX_SKEW_MS } from './protocol';
+import { buildLinkMessage, buildShareCreateMessage, LINK_MAX_SKEW_MS, MINTABLE_ROLES } from './protocol';
 import {
   buildAuthorizeUrl,
   exchangeCodeForProfile,
@@ -35,6 +35,12 @@ import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
  *   GET  /api/machines                — user's linked machines (session)
  *   POST /link                        — agent registers a machine (Ed25519-signed)
  *   POST /link/claim                  — user claims a link code (session)
+ *   POST /api/machines/:id/shares     — owner mints an invite (Ed25519-signed)
+ *   GET  /api/machines/:id/shares     — owner lists invites + grants (session)
+ *   DEL  /api/machines/:id/shares/:id — owner revokes an invite (session)
+ *   POST /api/shares/redeem           — guest redeems a code (session)
+ *   GET  /api/shares                  — guest lists their grants (session)
+ *   DEL  /api/shares/:grantId         — owner OR grantee ends a grant (session)
  */
 export interface RelayContext {
   config: RelayConfig;
@@ -44,6 +50,14 @@ export interface RelayContext {
   fetchImpl?: typeof fetch;
   /** Injectable so the caller can sweep it from the reaper; defaults to a fresh one. */
   rateLimiter?: RateLimiter;
+  /**
+   * Called when a guest redeems an invite, so the gateway can wake the owner's
+   * agent. HTTP and WebSocket are separate surfaces; this is the seam between
+   * them rather than a shared mutable table.
+   */
+  onGrantRedeemed?: (grant: MachineGrant) => void;
+  /** Called when a grant is revoked over HTTP, so live sockets can be cut. */
+  onGrantRevoked?: (grant: MachineGrant) => void;
 }
 
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
@@ -54,9 +68,19 @@ const LINK_PER_IP = 10;
 const LINK_PER_KEY = 5;
 /** Tighter: this is where a link code would be guessed at. */
 const CLAIM_PER_IP = 20;
+/** Minting invites is cheap for an owner and pointless to do in bulk. */
+const SHARE_PER_IP = 20;
+
+/**
+ * Ceilings on what an invite may ask for. The desktop offers far shorter
+ * defaults; these exist so a malformed or hostile request cannot produce a
+ * grant that outlives any reasonable session.
+ */
+const MAX_GRANT_TTL_SECONDS = 24 * 60 * 60;
+const MAX_INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function createRouter(ctx: RelayContext) {
-  const { config, logger, repos } = ctx;
+  const { config, logger, repos, onGrantRedeemed, onGrantRevoked } = ctx;
   const limiter = ctx.rateLimiter ?? createRateLimiter();
   const version = pkg.version ?? '0.0.0';
   const secure = config.isProduction || config.trustProxy;
@@ -147,7 +171,7 @@ export function createRouter(ctx: RelayContext) {
       if (pathname === '/api/machines' && method === 'GET') {
         const user = currentUser(req);
         if (!user) return json({ error: 'unauthorized' }, 401);
-        return json({ machines: repos.listMachines(user.id).map(publicMachine) });
+        return json({ machines: machinesFor(user) });
       }
 
       if (pathname === '/link' && method === 'POST') {
@@ -157,6 +181,31 @@ export function createRouter(ctx: RelayContext) {
       if (pathname === '/link/claim' && method === 'POST') {
         return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
       }
+
+      // --- sharing (M5.2) ---
+
+      const shares = matchMachineShares(pathname);
+      if (shares) {
+        if (method === 'POST' && !shares.inviteId) {
+          return limited(req, peerIp, 'share', SHARE_PER_IP) ?? (await handleCreateShare(req, shares.machineId));
+        }
+        if (method === 'GET' && !shares.inviteId) return handleListShares(req, shares.machineId);
+        if (method === 'DELETE' && shares.inviteId) {
+          return handleRevokeInvite(req, shares.machineId, shares.inviteId);
+        }
+      }
+
+      if (pathname === '/api/shares' && method === 'GET') {
+        return handleListMyShares(req);
+      }
+
+      if (pathname === '/api/shares/redeem' && method === 'POST') {
+        // Code-guessing surface, same as /link/claim.
+        return limited(req, peerIp, 'redeem', CLAIM_PER_IP) ?? (await handleRedeem(req));
+      }
+
+      const grantId = matchShareGrant(pathname);
+      if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
 
       return json({ error: 'not_found' }, 404);
     } catch (err) {
@@ -276,6 +325,236 @@ export function createRouter(ctx: RelayContext) {
     logger.info('machine linked', { userId: user.id, machineId: result.machine.id });
     return json({ machine: publicMachine(result.machine) });
   }
+
+  // --- sharing (M5.2) ---
+
+  /**
+   * Every machine this user can reach, owned and shared-with, in one list.
+   *
+   * A guest's entry carries the certificate it must present. The relay holds
+   * that blob but cannot read it — and cannot mint one, which is the whole
+   * point of the agent countersigning.
+   */
+  function machinesFor(user: User) {
+    const owned = repos.listMachines(user.id).map((m) => ({
+      ...publicMachine(m),
+      relation: 'owner' as const,
+      ownerName: null as string | null,
+      grantId: null as string | null,
+      role: null as string | null,
+      certificate: null as string | null,
+    }));
+
+    const shared = [];
+    for (const grant of repos.listGrantsForUser(user.id)) {
+      // Only grants the agent has actually countersigned are usable; a pending
+      // one is a request the owner has not answered.
+      if (grant.status !== 'active' || !grant.certificate) continue;
+      const machine = repos.getMachine(grant.machine_id);
+      if (!machine) continue;
+      const owner = repos.getUser(machine.user_id);
+      shared.push({
+        ...publicMachine(machine),
+        relation: 'grantee' as const,
+        // Label by person: "machine" is owner vocabulary.
+        ownerName: owner?.display_name ?? null,
+        grantId: grant.id,
+        role: grant.role,
+        certificate: grant.certificate,
+      });
+    }
+    return [...owned, ...shared];
+  }
+
+  /**
+   * Create an invite. Ed25519-signed by the machine, not session-authenticated:
+   * only the machine can countersign a grant, so only the machine may offer
+   * one — a stolen session cookie cannot mint invites.
+   */
+  async function handleCreateShare(req: Request, machineId: string): Promise<Response> {
+    const body = await readJson(req);
+    if (!body) return json({ error: 'invalid_json' }, 400);
+
+    const { expectedGithubLogin, role, grantTtlSeconds, inviteTtlSeconds, issuedAt, signature, label } =
+      body as Record<string, unknown>;
+
+    if (
+      typeof role !== 'string' ||
+      typeof grantTtlSeconds !== 'number' ||
+      typeof inviteTtlSeconds !== 'number' ||
+      typeof issuedAt !== 'number' ||
+      typeof signature !== 'string' ||
+      (expectedGithubLogin !== null && typeof expectedGithubLogin !== 'string') ||
+      (label !== undefined && label !== null && typeof label !== 'string')
+    ) {
+      return json({ error: 'invalid_request' }, 400);
+    }
+    if (!(MINTABLE_ROLES as readonly string[]).includes(role)) return json({ error: 'invalid_role' }, 400);
+    if (grantTtlSeconds <= 0 || grantTtlSeconds > MAX_GRANT_TTL_SECONDS) return json({ error: 'invalid_ttl' }, 400);
+    if (inviteTtlSeconds <= 0 || inviteTtlSeconds > MAX_INVITE_TTL_SECONDS) return json({ error: 'invalid_ttl' }, 400);
+    if (Math.abs(Date.now() - issuedAt) > LINK_MAX_SKEW_MS) return json({ error: 'stale_request' }, 400);
+
+    const machine = repos.getMachine(machineId);
+    if (!machine) return json({ error: 'not_found' }, 404);
+
+    const sigBytes = fromBase64(signature);
+    if (!sigBytes) return json({ error: 'invalid_request' }, 400);
+    const message = buildShareCreateMessage({
+      machineId,
+      expectedGithubLogin: expectedGithubLogin ?? '',
+      role,
+      grantTtlSeconds,
+      inviteTtlSeconds,
+      issuedAt,
+    });
+    if (!(await verifyEd25519(new Uint8Array(machine.ed25519_pubkey), sigBytes, message))) {
+      return json({ error: 'bad_signature' }, 401);
+    }
+
+    const { invite, code } = repos.createShareInvite({
+      machineId,
+      expectedGithubLogin: (expectedGithubLogin as string | null) ?? null,
+      role: role as 'viewer' | 'operator',
+      label: (label as string | undefined) ?? null,
+      grantTtlSeconds,
+      inviteTtlSeconds,
+    });
+
+    logger.info('share invite created', { machineId, addressed: !!invite.expected_github_login });
+    // The CODE only — never a URL. If the relay authored the invite link it
+    // could put its own fingerprint in the `#fp=` fragment and serve the
+    // matching key, making the guest's three-way check agree perfectly and
+    // manufacturing a false "verified". The desktop composes the URL locally.
+    return json({ inviteId: invite.id, code, expiresAt: invite.expires_at });
+  }
+
+  function handleListShares(req: Request, machineId: string): Response {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    const machine = repos.getMachine(machineId);
+    if (!machine || machine.user_id !== user.id) return json({ error: 'not_found' }, 404);
+    return json({
+      invites: repos.listShareInvites(machineId).map(publicInvite),
+      grants: repos.listGrantsForMachine(machineId).map((g) => publicGrant(g, repos.getUser(g.grantee_user_id))),
+    });
+  }
+
+  function handleRevokeInvite(req: Request, machineId: string, inviteId: string): Response {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    const machine = repos.getMachine(machineId);
+    if (!machine || machine.user_id !== user.id) return json({ error: 'not_found' }, 404);
+    if (!repos.revokeShareInvite(machineId, inviteId)) return json({ error: 'not_found' }, 404);
+    return new Response(null, { status: 204 });
+  }
+
+  function handleListMyShares(req: Request): Response {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    const grants = repos.listGrantsForUser(user.id).map((g) => {
+      const machine = repos.getMachine(g.machine_id);
+      const owner = machine ? repos.getUser(machine.user_id) : null;
+      return {
+        ...publicGrant(g, user),
+        machineId: g.machine_id,
+        machineName: machine?.name ?? null,
+        ownerName: owner?.display_name ?? null,
+      };
+    });
+    return json({ grants });
+  }
+
+  async function handleRedeem(req: Request): Promise<Response> {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+
+    const body = await readJson(req);
+    const code = body && typeof (body as Record<string, unknown>).code === 'string' ? (body as { code: string }).code : null;
+    if (!code) return json({ error: 'invalid_request' }, 400);
+
+    // The desktop generates grant ids so a reused one cannot silently hand one
+    // grant's holder another grant's sessions — but redemption happens here,
+    // before the desktop is involved. A UUID minted here is still opaque to
+    // the guest, and the agent refuses any grantId absent from its own table,
+    // so a collision fails closed rather than widening anything.
+    const result = repos.redeemShareInvite(code, user, crypto.randomUUID());
+    if (!result.ok) {
+      const status = result.reason === 'not_found' ? 404 : 409;
+      return json({ error: `invite_${result.reason}` }, status);
+    }
+
+    logger.info('share invite redeemed', { machineId: result.grant.machine_id, grantId: result.grant.id });
+    onGrantRedeemed?.(result.grant);
+    // Pending, deliberately: the guest is waiting on the owner, and the client
+    // must render that rather than a broken terminal.
+    return json({ grant: publicGrant(result.grant, user), status: 'pending' });
+  }
+
+  function handleRevokeGrant(req: Request, grantId: string): Response {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    const grant = repos.getGrant(grantId);
+    if (!grant) return json({ error: 'not_found' }, 404);
+
+    const machine = repos.getMachine(grant.machine_id);
+    const isOwner = !!machine && machine.user_id === user.id;
+    const isGrantee = grant.grantee_user_id === user.id;
+    // A grantee may hand access back; anyone else gets the same answer as a
+    // grant that does not exist.
+    if (!isOwner && !isGrantee) return json({ error: 'not_found' }, 404);
+
+    repos.revokeGrant(grantId);
+    logger.info('grant revoked', { grantId, by: isOwner ? 'owner' : 'grantee' });
+    onGrantRevoked?.(grant);
+    return new Response(null, { status: 204 });
+  }
+}
+
+/** `/api/machines/:machineId/shares[/:inviteId]` */
+function matchMachineShares(pathname: string): { machineId: string; inviteId: string | null } | null {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts.length < 4 || parts[0] !== 'api' || parts[1] !== 'machines' || parts[3] !== 'shares') return null;
+  if (parts.length > 5) return null;
+  return { machineId: parts[2]!, inviteId: parts[4] ?? null };
+}
+
+/** `/api/shares/:grantId`, excluding the fixed sub-routes. */
+function matchShareGrant(pathname: string): string | null {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== 'api' || parts[1] !== 'shares') return null;
+  const id = parts[2]!;
+  return id === 'redeem' ? null : id;
+}
+
+function publicInvite(i: ShareInvite) {
+  return {
+    id: i.id,
+    expectedGithubLogin: i.expected_github_login,
+    role: i.role,
+    label: i.label,
+    status: i.status,
+    attemptCount: i.attempt_count,
+    createdAt: i.created_at,
+    expiresAt: i.expires_at,
+    grantTtlSeconds: i.grant_ttl_seconds,
+    // No code, and no hash: neither is useful to a client and the hash is a
+    // guessing target.
+  };
+}
+
+function publicGrant(g: MachineGrant, grantee: User | null) {
+  return {
+    id: g.id,
+    role: g.role,
+    status: g.status,
+    label: g.label,
+    granteeName: grantee?.display_name ?? null,
+    granteeLogin: grantee?.github_login ?? null,
+    createdAt: g.created_at,
+    boundAt: g.bound_at,
+    expiresAt: g.expires_at,
+    lastUsedAt: g.last_used_at,
+  };
 }
 
 function publicUser(user: User) {
