@@ -17,12 +17,13 @@ import { powerSaveBlocker } from 'electron';
 import { WebSocket } from 'ws';
 import log from 'electron-log';
 import { getPreference, setPreference, deletePreference } from '../../repositories/preferences';
-import type { RelayStatus } from '../../../shared/types';
+import type { RelayShare, RelayStatus } from '../../../shared/types';
 import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-identity';
 import { SessionTunnel, type Principal } from './session-tunnel';
 import { defaultDeps } from './session-tunnel-deps';
-import { CAP_GRANTS_V1 } from './grants';
+import { CAP_GRANTS_V1, buildShareCreateMessage } from './grants';
 import { ptyManager } from '../../pty-manager';
+import { getDatabase } from '../../database';
 import {
   clearAllGrants,
   clearPendingRevocation,
@@ -35,6 +36,13 @@ import {
   setOwnerUserId,
   GRANT_PREF,
 } from './grant-store';
+import { getInviteScope, recordInviteScope } from './grant-sql';
+import { getAllSessions } from '../../repositories/sessions';
+
+/** Session name for the approval prompt, or null if it has since gone. */
+function getSessionName(sessionId: string): string | null {
+  return getAllSessions().find((s) => s.id === sessionId)?.name ?? null;
+}
 import type { GrantRole } from './grants';
 
 /** A grant as the relay describes it. Never authorization on its own. */
@@ -46,6 +54,8 @@ export interface PendingGrant {
   granteeUserId: string;
   granteeLogin: string | null;
   granteeName: string | null;
+  /** The invite it came from, so we can recover the session it was offered for. */
+  inviteId: string | null;
   createdAt: number;
   expiresAt: number | null;
   /**
@@ -126,10 +136,15 @@ export class RelayClient extends EventEmitter {
   /** Routes E2E terminal frames to/from web clients (M3). */
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
-    defaultDeps(
-      () => stripTrailingSlashes(this.relayUrl),
-      () => getPreference(PREF.machineId),
-    ),
+    {
+      ...defaultDeps(
+        () => stripTrailingSlashes(this.relayUrl),
+        () => getPreference(PREF.machineId),
+      ),
+      // Presence changes are status changes: the owner's surfaces are driven
+      // off the same push everything else uses.
+      onPresenceChange: () => this.emitStatus(),
+    },
   );
 
   /** Origin of the relay, e.g. `https://relay.example.com`. */
@@ -167,6 +182,19 @@ export class RelayClient extends EventEmitter {
       pendingOwner: this.pendingOwner
         ? { ...this.pendingOwner, isChange: !!getOwnerUserId() }
         : null,
+      attachedGuests: this.tunnel.attachedGuests(),
+      pendingShares: this.getPendingGrants().map((g) => {
+        const scope = g.inviteId ? getInviteScope(getDatabase(), g.inviteId) : null;
+        return {
+          grantId: g.grantId,
+          role: g.role,
+          granteeLogin: g.granteeLogin,
+          granteeName: g.granteeName,
+          createdAt: g.createdAt,
+          sessionId: scope?.sessionId ?? null,
+          sessionName: scope ? (getSessionName(scope.sessionId) ?? null) : null,
+        };
+      }),
     };
   }
 
@@ -469,6 +497,91 @@ export class RelayClient extends EventEmitter {
 
   // --- sharing (M5.2) ---
 
+  /**
+   * Offer a share of one session, returning the link to send.
+   *
+   * **The URL is composed here, never by the relay.** If the relay authored it,
+   * it could put its own fingerprint in the `#fp=` fragment and serve the
+   * matching public key, so the guest's three-way check would agree perfectly
+   * and manufacture a false "verified". The relay only ever returns the code.
+   */
+  async createShareInvite(input: {
+    sessionId: string;
+    expectedGithubLogin: string | null;
+    role: GrantRole;
+    grantTtlSeconds: number;
+    inviteTtlSeconds: number;
+  }): Promise<{ code: string; url: string; expiresAt: number }> {
+    const machineId = getPreference(PREF.machineId);
+    if (!machineId) throw new Error('this machine is not linked');
+
+    // Capture the PTY instance now, so the approval prompt later refers to the
+    // terminal the owner actually meant rather than whatever the row became.
+    const ptyEpoch = ptyManager.getSession(input.sessionId)?.spawnedAt;
+    if (ptyEpoch === undefined) throw new Error('that session is not running');
+
+    const issuedAt = Date.now();
+    const origin = stripTrailingSlashes(this.relayUrl);
+    const signature = signWithIdentity(
+      buildShareCreateMessage({
+        machineId,
+        expectedGithubLogin: input.expectedGithubLogin ?? '',
+        role: input.role,
+        grantTtlSeconds: input.grantTtlSeconds,
+        inviteTtlSeconds: input.inviteTtlSeconds,
+        issuedAt,
+      }),
+    ).toString('base64');
+
+    const res = await fetch(`${origin}/api/machines/${machineId}/shares`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        expectedGithubLogin: input.expectedGithubLogin,
+        role: input.role,
+        grantTtlSeconds: input.grantTtlSeconds,
+        inviteTtlSeconds: input.inviteTtlSeconds,
+        issuedAt,
+        signature,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`relay rejected the share request (${res.status})${detail ? `: ${detail}` : ''}`);
+    }
+    const body = (await res.json()) as { inviteId: string; code: string; expiresAt: number };
+
+    recordInviteScope(
+      getDatabase(),
+      body.inviteId,
+      { sessionId: input.sessionId, ptyEpoch, role: input.role },
+      issuedAt,
+    );
+
+    const fingerprint = identityFingerprint();
+    // The fragment never reaches the relay — that is what makes it usable as
+    // out-of-band provenance for the machine the guest is about to trust.
+    const url = `${origin}/i/${body.code}${fingerprint ? `#fp=${encodeURIComponent(fingerprint)}` : ''}`;
+    log.info('[Relay] share invite created', { addressed: !!input.expectedGithubLogin });
+    return { code: body.code, url, expiresAt: body.expiresAt };
+  }
+
+  /** Every grant this machine has issued, for the owner's settings list. */
+  listShares(): RelayShare[] {
+    return listGrants().map((g) => ({
+      grantId: g.id,
+      role: g.role,
+      status: g.status,
+      granteeLogin: g.granteeLogin,
+      createdAt: g.createdAt,
+      expiresAt: g.expiresAt,
+      // Surfaced so the UI can say "Revoked — takes effect when this machine
+      // reconnects" rather than implying it already has.
+      revokePending: g.revokePending,
+      sessionIds: g.sessions.map((x) => x.sessionId),
+    }));
+  }
+
   /** Grants the relay says exist that this machine has not answered yet. */
   getPendingGrants(): PendingGrant[] {
     return [...this.pendingGrants.values()];
@@ -525,15 +638,19 @@ export class RelayClient extends EventEmitter {
    * time — the grant is for the terminal the owner was looking at, and
    * `sessions.id` survives a restart into something else entirely.
    */
-  approveGrant(grantId: string, sessionIds: string[]): void {
+  approveGrant(grantId: string, sessionIds?: string[]): void {
     const pending = this.pendingGrants.get(grantId);
     if (!pending) throw new Error('no such pending share request');
-    if (sessionIds.length === 0) throw new Error('a share must name at least one session');
+    // Default to the session the invite was offered for. The relay never knew
+    // it — no session id ever reaches it — so this comes from our own table.
+    const scope = pending.inviteId ? getInviteScope(getDatabase(), pending.inviteId) : null;
+    const chosen = sessionIds?.length ? sessionIds : scope ? [scope.sessionId] : [];
+    if (chosen.length === 0) throw new Error('a share must name at least one session');
 
     const machineId = getPreference(PREF.machineId);
     if (!machineId) throw new Error('this machine is not linked');
 
-    const sessions = sessionIds.map((sessionId) => {
+    const sessions = chosen.map((sessionId) => {
       const ptyEpoch = ptyManager.getSession(sessionId)?.spawnedAt;
       if (ptyEpoch === undefined) throw new Error(`session ${sessionId} is not running`);
       return { sessionId, ptyEpoch };

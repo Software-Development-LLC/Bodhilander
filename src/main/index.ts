@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -483,6 +483,38 @@ function createWindow(): void {
   }, 1500); // Defer 1.5s to prioritize UI rendering
 
   // Relay status forwarding
+  // A guest is asking to join. This deliberately bypasses shouldNotify(),
+  // which suppresses notifications precisely when the owner is at their desk —
+  // the opposite of what a consent prompt needs. It also fires an OS
+  // notification, because a renderer modal in a minimised window is invisible
+  // and the request would simply expire unanswered.
+  getRelayClient().on('join-request', (grant: { granteeLogin: string | null; granteeName: string | null }) => {
+    const who = grant.granteeLogin ? `@${grant.granteeLogin}` : (grant.granteeName ?? 'Someone');
+    try {
+      const notification = new Notification({
+        title: 'Someone wants to watch a session',
+        body: `${who} is asking to join. Open Bodhilander to decide.`,
+        silent: false,
+      });
+      // The codebase has no notification action buttons, so the click restores
+      // and focuses instead — otherwise the prompt stays unreachable.
+      notification.on('click', () => {
+        if (mainWindow) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      });
+      notification.show();
+    } catch (e) {
+      log.warn('[Relay] could not raise a join-request notification:', (e as Error).message);
+    }
+  });
+
+  getRelayClient().on('grants-changed', () => {
+    mainWindow?.webContents.send('relay:status', getRelayClient().getStatus());
+  });
+
   getRelayClient().on('status', (status) => {
     mainWindow?.webContents.send('relay:status', status);
   });
@@ -1136,6 +1168,36 @@ safeHandle('relay:rejectOwner', () => {
   getRelayClient().rejectOwner();
   return getRelayClient().getStatus();
 });
+
+// --- session sharing (M5.2) ---
+
+safeHandle(
+  'relay:createShare',
+  async (input: {
+    sessionId: string;
+    expectedGithubLogin: string | null;
+    role: 'viewer' | 'operator';
+    grantTtlSeconds: number;
+    inviteTtlSeconds: number;
+  }) => getRelayClient().createShareInvite(input),
+);
+
+safeHandle('relay:approveShare', (grantId: string, sessionIds?: string[]) => {
+  getRelayClient().approveGrant(grantId, sessionIds);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:denyShare', (grantId: string) => {
+  getRelayClient().denyGrant(grantId);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:revokeShare', (grantId: string) => {
+  getRelayClient().revokeGrant(grantId);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:listShares', () => getRelayClient().listShares());
 
 // ============================================================================
 // Editor Integration IPC Handlers

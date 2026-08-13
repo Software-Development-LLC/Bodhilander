@@ -73,6 +73,35 @@ export const COMMAND_CAPS: Readonly<Record<string, Cap>> = Object.freeze({
   'dirs:list': 'browse',
 });
 
+/**
+ * Canonical message the agent signs to create a share invite. Mirrors
+ * `relay/src/protocol.ts`; both sides must produce identical bytes.
+ */
+export const SHARE_CREATE_VERSION = 'share-create:v1';
+
+export interface ShareCreateParts {
+  machineId: string;
+  /** Empty string for an open link. */
+  expectedGithubLogin: string;
+  role: string;
+  grantTtlSeconds: number;
+  inviteTtlSeconds: number;
+  issuedAt: number;
+}
+
+export function buildShareCreateMessage(p: ShareCreateParts): Uint8Array {
+  const line = [
+    SHARE_CREATE_VERSION,
+    p.machineId,
+    p.expectedGithubLogin,
+    p.role,
+    String(p.grantTtlSeconds),
+    String(p.inviteTtlSeconds),
+    String(p.issuedAt),
+  ].join('\n');
+  return new TextEncoder().encode(line);
+}
+
 export interface GrantParts {
   grantId: string;
   machineId: string;

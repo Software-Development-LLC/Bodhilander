@@ -325,6 +325,9 @@ export function createGateway(ctx: WsGatewayContext) {
       granteeUserId: g.grantee_user_id,
       granteeLogin: grantee?.github_login ?? null,
       granteeName: grantee?.display_name ?? null,
+      // So the desktop can recover which session it offered — the relay never
+      // learns that, by design.
+      inviteId: g.invite_id,
       createdAt: g.created_at,
       expiresAt: g.expires_at,
       // What the invite promised. `expires_at` is NULL until we countersign,

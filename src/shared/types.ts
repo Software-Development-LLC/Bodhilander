@@ -137,6 +137,50 @@ export interface RelayStatus {
   ownerUserId: string | null;
   /** An owner the relay asserted that is still waiting on a human decision. */
   pendingOwner: { userId: string; displayName: string | null; email: string | null; isChange: boolean } | null;
+  /**
+   * Guests attached right now, and what each is watching.
+   *
+   * Presence is a hard requirement of session sharing: silent read access to a
+   * live terminal is the same class of harm as silent write access.
+   */
+  attachedGuests: RelayAttachedGuest[];
+  /** Share requests waiting on this machine's owner to answer. */
+  pendingShares: RelayPendingShare[];
+}
+
+export interface RelayAttachedGuest {
+  clientId: string;
+  grantId: string | null;
+  role: string;
+  login: string | null;
+  displayName: string | null;
+  /** Sessions they are watching right now, not merely entitled to. */
+  sessionIds: string[];
+}
+
+/** An active or revoked share, as the owner's settings list shows it. */
+export interface RelayShare {
+  grantId: string;
+  role: string;
+  status: 'pending' | 'active' | 'revoked';
+  granteeLogin: string | null;
+  createdAt: number;
+  expiresAt: number | null;
+  /** True while a revocation is queued for a relay we could not reach. */
+  revokePending: boolean;
+  sessionIds: string[];
+}
+
+export interface RelayPendingShare {
+  grantId: string;
+  role: string;
+  /** The immutable handle. Shown instead of a display name, which is free text. */
+  granteeLogin: string | null;
+  granteeName: string | null;
+  createdAt: number;
+  /** The session the invite was offered for, if this machine still knows it. */
+  sessionId: string | null;
+  sessionName: string | null;
 }
 
 /** Result of probing one provider CLI's availability (#97). */

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -262,6 +262,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   relayGetPendingOwner: (): Promise<RelayStatus['pendingOwner']> => ipcRenderer.invoke('relay:getPendingOwner'),
   relayConfirmOwner: (userId: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:confirmOwner', userId),
   relayRejectOwner: (): Promise<RelayStatus> => ipcRenderer.invoke('relay:rejectOwner'),
+  relayCreateShare: (input: {
+    sessionId: string;
+    expectedGithubLogin: string | null;
+    role: 'viewer' | 'operator';
+    grantTtlSeconds: number;
+    inviteTtlSeconds: number;
+  }): Promise<{ code: string; url: string; expiresAt: number }> => ipcRenderer.invoke('relay:createShare', input),
+  relayApproveShare: (grantId: string, sessionIds?: string[]): Promise<RelayStatus> =>
+    ipcRenderer.invoke('relay:approveShare', grantId, sessionIds),
+  relayDenyShare: (grantId: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:denyShare', grantId),
+  relayRevokeShare: (grantId: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:revokeShare', grantId),
+  relayListShares: (): Promise<RelayShare[]> => ipcRenderer.invoke('relay:listShares'),
   onRelayStatus: (callback: (status: RelayStatus) => void) => {
     const listener = (_: Electron.IpcRendererEvent, status: RelayStatus) => callback(status);
     ipcRenderer.on('relay:status', listener);
