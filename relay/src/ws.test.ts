@@ -71,18 +71,48 @@ async function registerMachine(repos: Repositories, providerUserId = '1') {
 }
 
 /** Connect an agent and drive it through the handshake to `agent:ready`. */
-async function onlineAgent(port: number, pub: Uint8Array, sign: (m: Uint8Array) => Promise<Uint8Array>) {
+async function onlineAgent(
+  port: number,
+  pub: Uint8Array,
+  sign: (m: Uint8Array) => Promise<Uint8Array>,
+  caps?: string[],
+) {
   const c = connect(`ws://127.0.0.1:${port}/ws`);
   await c.opened;
   const challenge = await c.next();
   const sig = await sign(buildAgentAuthMessage(challenge.nonce));
-  c.ws.send(JSON.stringify({ type: 'agent:auth', ed25519Pub: b64(pub), signature: b64(sig) }));
+  const auth: Record<string, unknown> = { type: 'agent:auth', ed25519Pub: b64(pub), signature: b64(sig) };
+  if (caps) auth.caps = caps;
+  c.ws.send(JSON.stringify(auth));
   await c.next(); // agent:ready
   return c;
 }
 
 function freshRepos() {
   return createRepositories(openDb(':memory:'));
+}
+
+/** Repos plus the raw db, for tests that need to seed a grant directly. */
+function freshReposWithDb() {
+  const db = openDb(':memory:');
+  return { db, repos: createRepositories(db) };
+}
+
+/**
+ * Give `userId` an active, countersigned grant on `machineId`.
+ *
+ * Written with SQL rather than a repository method on purpose: the grant write
+ * path arrives with M5.2 (invite redemption is what creates one), and adding
+ * it now would leave an unreachable method on the interface.
+ */
+function seedGrant(db: ReturnType<typeof openDb>, machineId: string, granteeUserId: string): string {
+  const id = crypto.randomUUID();
+  db.query(
+    `INSERT INTO machine_grants
+       (id, machine_id, grantee_user_id, certificate, role, status, created_at, expires_at)
+     VALUES (?, ?, ?, ?, 'viewer', 'active', ?, ?)`,
+  ).run(id, machineId, granteeUserId, 'grant:v1.x.y', Date.now(), Date.now() + 3_600_000);
+  return id;
 }
 
 describe('agent WebSocket handshake', () => {
@@ -245,6 +275,136 @@ describe('client ↔ agent brokering (M3)', () => {
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
       expect((await client.closed).code).toBe(4403);
     } finally {
+      server.stop(true);
+    }
+  });
+
+  test('client:open carries a relay-asserted principal', async () => {
+    const repos = freshRepos();
+    const { pub, sign, machineId, userId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const agent = await onlineAgent(server.port!, pub, sign, ['grants:v1']);
+      const { token } = repos.createSession(userId, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+
+      // The agent checks a certificate against this; it is never authorization
+      // on its own, which is why the field is named `principal`.
+      expect(await agent.next()).toMatchObject({ type: 'client:open', principal: { userId } });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('a grantee reaches a machine they do not own when the agent enforces grants', async () => {
+    const { db, repos } = freshReposWithDb();
+    const { pub, sign, machineId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const agent = await onlineAgent(server.port!, pub, sign, ['grants:v1']);
+      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', email: null, avatarUrl: null });
+      seedGrant(db, machineId, guest.id);
+      const { token } = repos.createSession(guest.id, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+
+      expect(await agent.next()).toMatchObject({ type: 'client:open', principal: { userId: guest.id } });
+      expect((await client.next()).type).toBe('channel:open');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('a grantee is refused when the live agent has not advertised grants:v1', async () => {
+    // The version-skew guard. A desktop build older than grant enforcement
+    // reads only `clientX25519Pub` from this payload and ignores the rest, so
+    // routing a guest to it would hand over every command on a machine whose
+    // owner never opted into sharing. The relay redeploys independently of
+    // shipped Electron builds, so this is the normal case for a while.
+    const { db, repos } = freshReposWithDb();
+    const { pub, sign, machineId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const agent = await onlineAgent(server.port!, pub, sign); // no caps — an old build
+      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', email: null, avatarUrl: null });
+      seedGrant(db, machineId, guest.id);
+      const { token } = repos.createSession(guest.id, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+
+      expect((await client.next()).type).toBe('share:unsupported');
+
+      // And prove by ordering that nothing reached the agent: a later frame
+      // from the owner must be the FIRST thing the agent sees.
+      const owner = repos.getMachine(machineId)!.user_id;
+      const ownerToken = repos.createSession(owner, 3600).token;
+      const ownerClient = connect(`ws://127.0.0.1:${server.port}/ws/client`, {
+        cookie: `bdl_session=${ownerToken}`,
+      });
+      await ownerClient.opened;
+      ownerClient.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+      expect(await agent.next()).toMatchObject({ type: 'client:open', principal: { userId: owner } });
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('the owner still connects to an agent that has not advertised grants:v1', async () => {
+    // The gate is for guests only — it must not lock owners out of their own
+    // machine while agents are still updating.
+    const repos = freshRepos();
+    const { pub, sign, machineId, userId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      await onlineAgent(server.port!, pub, sign); // no caps
+      const { token } = repos.createSession(userId, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+      expect((await client.next()).type).toBe('channel:open');
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('caps are only believed after the signature checks out', async () => {
+    // An unauthenticated socket must not be able to claim grants:v1 for a
+    // machine it does not control.
+    const { db, repos } = freshReposWithDb();
+    const { pub, machineId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const c = connect(`ws://127.0.0.1:${server.port}/ws`);
+      await c.opened;
+      await c.next(); // challenge
+      // Claim caps with a bad signature: the socket is closed, not trusted.
+      c.ws.send(
+        JSON.stringify({
+          type: 'agent:auth',
+          ed25519Pub: b64(pub),
+          signature: b64(new Uint8Array(64).fill(1)),
+          caps: ['grants:v1'],
+        }),
+      );
+      expect((await c.closed).code).toBe(4401);
+
+      // The claim left nothing behind: with no authenticated agent, a guest
+      // gets agent:offline rather than a channel.
+      const guest = repos.upsertGithubUser({ providerUserId: '999', displayName: 'G', email: null, avatarUrl: null });
+      seedGrant(db, machineId, guest.id);
+      const { token } = repos.createSession(guest.id, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+      expect((await client.next()).type).toBe('agent:offline');
+    } finally {
+      db.close();
       server.stop(true);
     }
   });

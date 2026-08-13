@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import { app } from 'electron';
 import log from 'electron-log';
+import { RELAY_SHARING_SCHEMA } from './api/relay/grant-sql';
 
 let db: Database.Database | null = null;
 export function getDatabase(): Database.Database {
@@ -367,6 +368,8 @@ function initializeTables(database: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_accounts_single_default
       ON claude_accounts(is_default) WHERE is_default = 1;
   `);
+
+  database.exec(RELAY_SHARING_SCHEMA);
 
   // Migration: Add working_dir column to groups if it doesn't exist
   const columns = database.prepare("PRAGMA table_info(groups)").all() as { name: string }[];

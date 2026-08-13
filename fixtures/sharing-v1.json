@@ -1,0 +1,63 @@
+{
+  "_note": [
+    "Cross-tree fixture for session sharing (docs/designs/session-sharing.md §5, §6).",
+    "The certificate builders and the capability policy are hand-duplicated across the relay",
+    "and the desktop agent, so each tree asserts itself against THIS file independently.",
+    "A drift on either side fails that side's own suite rather than surfacing as a guest who",
+    "silently has the wrong capabilities. Do not regenerate the vector to make a test pass:",
+    "if the payload no longer matches, the wire format changed and that is the finding."
+  ],
+
+  "certificate": {
+    "_note": [
+      "Fixed vector. The signed message is the payload bytes verbatim -- the certificate's",
+      "first segment is base64url of exactly what was signed, so there is no canonical-JSON",
+      "question. 'grant:v1' appears twice on purpose: the outer prefix is a cheap reject and",
+      "the inner line is covered by the signature, so the outer cannot be changed alone.",
+      "The private key is here so any tree can re-sign and prove its builder round-trips."
+    ],
+    "ed25519PubB64": "M+n8M9TgFJkdYOW09JQCf2XQeazKQpDitU/EmNx22Fw=",
+    "ed25519PrivB64url": "kyxRUXIjEzjV-jnJf6EqrAceij5-m9HvVRJIlJGyIZg",
+    "parts": {
+      "grantId": "7f3a1c92-5b4e-4d18-9a20-6c1e8f0b3d47",
+      "machineId": "c2b8a4e0-1d76-4f39-8e55-9a3b7c0d2f61",
+      "relayOrigin": "https://relay.example.com",
+      "granteeUserId": "d91e6b73-2a08-4c5f-b134-7e50f9a6c882",
+      "role": "viewer",
+      "issuedAt": 1760000000000,
+      "expiresAt": 1760014400000
+    },
+    "payload": "grant:v1\n7f3a1c92-5b4e-4d18-9a20-6c1e8f0b3d47\nc2b8a4e0-1d76-4f39-8e55-9a3b7c0d2f61\nhttps://relay.example.com\nd91e6b73-2a08-4c5f-b134-7e50f9a6c882\nviewer\n1760000000000\n1760014400000",
+    "payloadB64url": "Z3JhbnQ6djEKN2YzYTFjOTItNWI0ZS00ZDE4LTlhMjAtNmMxZThmMGIzZDQ3CmMyYjhhNGUwLTFkNzYtNGYzOS04ZTU1LTlhM2I3YzBkMmY2MQpodHRwczovL3JlbGF5LmV4YW1wbGUuY29tCmQ5MWU2YjczLTJhMDgtNGM1Zi1iMTM0LTdlNTBmOWE2Yzg4Mgp2aWV3ZXIKMTc2MDAwMDAwMDAwMAoxNzYwMDE0NDAwMDAw",
+    "signatureB64url": "xINoFOrJmE64iKEUDCsYEGL6JSpBOPOLl8KucZy8RFktvWqwxgcOmcn5IBXLgd-ejm6Aj44cMzuGkvNHiHZYAw",
+    "certificate": "grant:v1.Z3JhbnQ6djEKN2YzYTFjOTItNWI0ZS00ZDE4LTlhMjAtNmMxZThmMGIzZDQ3CmMyYjhhNGUwLTFkNzYtNGYzOS04ZTU1LTlhM2I3YzBkMmY2MQpodHRwczovL3JlbGF5LmV4YW1wbGUuY29tCmQ5MWU2YjczLTJhMDgtNGM1Zi1iMTM0LTdlNTBmOWE2Yzg4Mgp2aWV3ZXIKMTc2MDAwMDAwMDAwMAoxNzYwMDE0NDAwMDAw.xINoFOrJmE64iKEUDCsYEGL6JSpBOPOLl8KucZy8RFktvWqwxgcOmcn5IBXLgd-ejm6Aj44cMzuGkvNHiHZYAw"
+  },
+
+  "policy": {
+    "_note": [
+      "The certificate format will not drift; this will, the moment 'operator' becomes",
+      "reachable. 'owner' is NOT a certificate role -- there is deliberately no persisted",
+      "owner certificate (§3), so it never appears in mintableRoles.",
+      "'create' and 'browse' belong to no guest role, which is what keeps session:create,",
+      "group:create and dirs:list unreachable for any guest, ever (a v1 non-goal)."
+    ],
+    "caps": ["view", "list", "input", "resize", "create", "browse"],
+    "roleCaps": {
+      "owner": ["view", "list", "input", "resize", "create", "browse"],
+      "operator": ["view", "list", "input"],
+      "viewer": ["view", "list"]
+    },
+    "mintableRoles": ["viewer", "operator"],
+    "commandCaps": {
+      "sessions:list": "list",
+      "groups:list": "list",
+      "terminal:subscribe": "view",
+      "terminal:unsubscribe": "view",
+      "terminal:input": "input",
+      "terminal:resize": "resize",
+      "session:create": "create",
+      "group:create": "create",
+      "dirs:list": "browse"
+    }
+  }
+}

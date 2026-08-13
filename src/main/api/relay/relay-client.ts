@@ -19,7 +19,36 @@ import log from 'electron-log';
 import { getPreference, setPreference, deletePreference } from '../../repositories/preferences';
 import type { RelayStatus } from '../../../shared/types';
 import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-identity';
-import { SessionTunnel } from './session-tunnel';
+import { SessionTunnel, type Principal } from './session-tunnel';
+import { defaultDeps } from './session-tunnel-deps';
+import { CAP_GRANTS_V1 } from './grants';
+import { clearAllGrants, getOwnerUserId, setOwnerUserId, GRANT_PREF } from './grant-store';
+
+const PREF_OWNER_USER_ID = GRANT_PREF.ownerUserId;
+
+/**
+ * Strip trailing slashes from an origin.
+ *
+ * This replaced `/\/+$/`, which Sonar reports as a super-linear backtracking
+ * risk. To be accurate about it: a single-character-class `+` anchored at the
+ * end has no catastrophic-backtracking exposure, so the scanner overstates the
+ * original — and the only input here is the user's own configured relay URL
+ * anyway. It was changed because a linear scan is the same three lines, needs
+ * no argument from anyone reading it later, and does not leave a hotspot to be
+ * re-reviewed on every future PR that touches this file.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* '/' */) end -= 1;
+  return value.slice(0, end);
+}
+
+/** The relay's claim about who owns this machine. A claim, never proof. */
+export interface AssertedOwner {
+  userId: string;
+  displayName: string | null;
+  email: string | null;
+}
 
 export type { RelayStatus } from '../../../shared/types';
 
@@ -55,8 +84,16 @@ export class RelayClient extends EventEmitter {
   private reconnectAttempts = 0;
   /** OS "stay awake" assertion id while remote hosting is on (null = released). */
   private powerSaveBlockerId: number | null = null;
+  /** An owner id the relay asserted that no human has confirmed yet. */
+  private pendingOwner: AssertedOwner | null = null;
   /** Routes E2E terminal frames to/from web clients (M3). */
-  private readonly tunnel = new SessionTunnel((clientId, payload) => this.send({ type: 'to-client', clientId, payload }));
+  private readonly tunnel = new SessionTunnel(
+    (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
+    defaultDeps(
+      () => stripTrailingSlashes(this.relayUrl),
+      () => getPreference(PREF.machineId),
+    ),
+  );
 
   /** Origin of the relay, e.g. `https://relay.example.com`. */
   get relayUrl(): string {
@@ -66,7 +103,7 @@ export class RelayClient extends EventEmitter {
   }
 
   private get wsUrl(): string {
-    const origin = this.relayUrl.replace(/\/+$/, '');
+    const origin = stripTrailingSlashes(this.relayUrl);
     return `${origin.replace(/^http/, 'ws')}/ws`;
   }
 
@@ -89,6 +126,10 @@ export class RelayClient extends EventEmitter {
       relayUrl: this.relayUrl,
       fingerprint: identityFingerprint(),
       keepAwake: this.keepAwake,
+      ownerUserId: getOwnerUserId(),
+      pendingOwner: this.pendingOwner
+        ? { ...this.pendingOwner, isChange: !!getOwnerUserId() }
+        : null,
     };
   }
 
@@ -120,9 +161,19 @@ export class RelayClient extends EventEmitter {
   }
 
   setRelayUrl(url: string): void {
-    const trimmed = url.trim().replace(/\/+$/, '');
+    const trimmed = stripTrailingSlashes(url.trim());
     if (!URL.canParse(trimmed)) throw new Error('Invalid relay URL');
+    const changed = trimmed !== stripTrailingSlashes(this.relayUrl);
     setPreference(PREF.url, trimmed);
+    if (changed) {
+      // Certificates carry their relay origin in the signed bytes and are
+      // checked against it at dispatch, so every existing grant is now
+      // unusable. Keeping the rows would leave ghosts in the owner's settings
+      // that can never be honoured. The user ids came from the old relay too.
+      clearAllGrants();
+      deletePreference(PREF_OWNER_USER_ID);
+      log.info('[Relay] relay URL changed — cleared grants and the confirmed owner id');
+    }
     this.emitStatus();
     if (this.enabled) this.reconnectNow();
   }
@@ -167,7 +218,7 @@ export class RelayClient extends EventEmitter {
       buildLinkMessage(identity.ed25519Pub, identity.x25519Pub, name, issuedAt),
     ).toString('base64');
 
-    const res = await fetch(`${this.relayUrl.replace(/\/+$/, '')}/link`, {
+    const res = await fetch(`${stripTrailingSlashes(this.relayUrl)}/link`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -250,7 +301,15 @@ export class RelayClient extends EventEmitter {
   }
 
   private async handleMessage(raw: string): Promise<void> {
-    let msg: { type?: string; nonce?: string; machineId?: string; clientId?: string; payload?: unknown };
+    let msg: {
+      type?: string;
+      nonce?: string;
+      machineId?: string;
+      clientId?: string;
+      payload?: unknown;
+      principal?: Principal;
+      owner?: AssertedOwner | null;
+    };
     try {
       msg = JSON.parse(raw);
     } catch {
@@ -259,7 +318,7 @@ export class RelayClient extends EventEmitter {
 
     // M3 brokering: the relay routes web-client frames to us by client id.
     if (msg.clientId) {
-      if (msg.type === 'client:open') this.tunnel.open(msg.clientId, msg.payload);
+      if (msg.type === 'client:open') this.tunnel.open(msg.clientId, msg.payload, msg.principal);
       else if (msg.type === 'from-client') this.tunnel.frame(msg.clientId, msg.payload);
       else if (msg.type === 'client:closed') this.tunnel.closeClient(msg.clientId);
       return;
@@ -269,7 +328,11 @@ export class RelayClient extends EventEmitter {
       try {
         const signature = signWithIdentity(buildAgentAuthMessage(msg.nonce)).toString('base64');
         const identity = ensureIdentity();
-        this.send({ type: 'agent:auth', ed25519Pub: identity.ed25519Pub, signature });
+        // Tell the relay this build enforces grant certificates. It refuses to
+        // route a guest to any machine that has not said so, because an older
+        // build ignores the certificate entirely and would hand that guest
+        // every command.
+        this.send({ type: 'agent:auth', ed25519Pub: identity.ed25519Pub, signature, caps: [CAP_GRANTS_V1] });
       } catch (err) {
         log.error('[Relay] failed to answer challenge:', err instanceof Error ? err.message : err);
         this.ws?.close();
@@ -282,6 +345,7 @@ export class RelayClient extends EventEmitter {
       this.connected = true;
       this.reconnectAttempts = 0;
       if (msg.machineId) setPreference(PREF.machineId, msg.machineId);
+      this.noteAssertedOwner(msg.owner ?? null);
       this.startPing();
       log.info('[Relay] online', { machineId: msg.machineId });
       this.emitStatus();
@@ -341,6 +405,62 @@ export class RelayClient extends EventEmitter {
       }
       this.ws = null;
     }
+  }
+
+  // --- owner confirmation (design §3) ---
+
+  /**
+   * The relay has told us who it thinks owns this machine.
+   *
+   * Nothing is trusted here. `agent:ready` carries only a `machineId`, so the
+   * desktop has no independent way to learn its own relay user id — which
+   * means auto-accepting this would let whoever runs the relay name themselves
+   * the owner and acquire owner capability on a machine. A human confirms it
+   * once, and any later change needs a fresh confirmation.
+   */
+  private noteAssertedOwner(owner: AssertedOwner | null): void {
+    if (!owner?.userId) return;
+    const confirmed = getOwnerUserId();
+    if (confirmed === owner.userId) {
+      this.pendingOwner = null;
+      return;
+    }
+    this.pendingOwner = owner;
+    log.info('[Relay] awaiting owner confirmation', { changed: !!confirmed });
+    this.emit('owner-confirmation', { owner, isChange: !!confirmed });
+  }
+
+  /** The owner id awaiting a human decision, if any. */
+  getPendingOwner(): { owner: AssertedOwner; isChange: boolean } | null {
+    if (!this.pendingOwner) return null;
+    return { owner: this.pendingOwner, isChange: !!getOwnerUserId() };
+  }
+
+  /**
+   * The human said yes. Any grant minted under a previous owner is void — it
+   * names a user id from a relationship that no longer holds.
+   */
+  confirmOwner(userId: string): void {
+    if (!this.pendingOwner || this.pendingOwner.userId !== userId) {
+      throw new Error('no such owner confirmation is pending');
+    }
+    const previous = getOwnerUserId();
+    if (previous && previous !== userId) clearAllGrants();
+    setOwnerUserId(userId);
+    this.pendingOwner = null;
+    log.info('[Relay] owner confirmed');
+    this.emitStatus();
+  }
+
+  /**
+   * The human said no. Remote hosting goes off rather than merely dismissing:
+   * a machine linked to an account the owner does not recognise is a machine
+   * that should not be reachable while they work out why.
+   */
+  rejectOwner(): void {
+    this.pendingOwner = null;
+    log.warn('[Relay] owner confirmation rejected — disabling remote hosting');
+    this.disable();
   }
 
   /** Full shutdown for app quit. */

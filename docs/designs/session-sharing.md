@@ -275,6 +275,12 @@ drift; the policy will, the moment `operator` lands.
 | client→relay | `client:open` payload gains optional `certificate` |
 | agent→client | `{type:'denied', reason}` — **sealed** whenever a key exists |
 
+> **Narrowed in M5.1:** `principal` ships as `{ userId }` alone. The GitHub login is fetched
+> during OAuth and discarded (`displayName` prefers the profile name over the handle), so
+> `githubLogin` / `githubId` need a column and an auth change. They arrive with M5.2, which
+> is where the approval modal and addressed invites first read them — shipping two
+> permanently-null fields would only invite a downstream branch that never fires.
+
 `principal` is relay-asserted and named so that no branch reads it as authorization.
 `share:sync` + `share:reconcile` close the split-brain: the relay holds the certificate and
 routes, the desktop holds the session list and revocation status, and without reconciliation
@@ -310,12 +316,18 @@ purely to clear the Sonar gate.
 
 ```ts
 export const ROLE_CAPS = Object.freeze({
-  owner:    new Set(['view', 'list', 'input', 'resize', 'create', 'browse']),
-  operator: new Set(['view', 'list', 'input']),
-  viewer:   new Set(['view', 'list']),
+  owner:    Object.freeze<Cap[]>(['view', 'list', 'input', 'resize', 'create', 'browse']),
+  operator: Object.freeze<Cap[]>(['view', 'list', 'input']),
+  viewer:   Object.freeze<Cap[]>(['view', 'list']),
 });
 // 'create' and 'browse' appear in no guest role, and mintGrant() refuses to emit them.
 ```
+
+> **Corrected in M5.1:** this was originally written with `new Set(...)`.
+> `Object.freeze` does **not** protect a Set — its contents live in internal slots, so a
+> frozen Set still accepts `.add()`. Because `grantFrom` hands `ROLE_CAPS[role]` straight
+> into a live grant, one line could have widened the policy globally for every grant issued
+> afterwards. Frozen arrays actually throw. The same applies to a grant's session scope.
 
 Concretely in `session-tunnel.ts`:
 
@@ -452,7 +464,7 @@ carrying meaning; use `--muted`. 44×44 minimum on every new control.
 | M | Scope | Estimate |
 | --- | --- | --- |
 | **M5.0** | **Harden, no sharing.** Ephemeral per-channel X25519 (§1.1) · `to-client` machine binding · duplicate-`clientId` and duplicate-`client:open` guards · agent socket replacement · tunnel-level PTY listeners · chunked history frames · browser keepalive · rate limiting keyed on the trusted `X-Forwarded-For` hop · session/link-code reapers. **Done** — `fix/relay-hardening-m5.0`. | 3–4 d |
-| **M5.1** | **Grants plumbing, owner-only.** 002 migration · `getMachineAccess` · cert mint/verify · capability advertisement + latch (§3) · owner-id confirmation modal · `SessionTunnel` DI refactor · command table · policy + cert fixtures · scoped disclosure. | 4–5 d |
+| **M5.1** | **Grants plumbing, owner-only.** 002 migration · `getMachineAccess` · cert mint/verify · capability advertisement + latch (§3) · owner-id confirmation modal · `SessionTunnel` DI refactor · command table · policy + cert fixtures · scoped disclosure. **Done** — `feature/relay-grants-m5.1`. | 4–5 d |
 | **M5.2** | **Watch-only guest.** Addressed invites · approval + notification · full presence set · guest surfaces incl. waiting/ending states and sizing · `share:sync`/`reconcile`. | 5–7 d |
 | **M5.3** | **Watch and type.** High-friction consent · typing attribution · pause · re-mint path. | 3–4 d |
 | **M5.4** | Desktop-authoritative audit log · expiry hygiene (T-5min warnings, Extend) · a11y sweep · quotas. | 2–3 d |
