@@ -2,7 +2,7 @@ import type { ServerWebSocket } from 'bun';
 import type { Logger } from './logger';
 import type { Repositories } from './repositories';
 import { fromBase64, randomToken, verifyEd25519 } from './crypto';
-import { buildAgentAuthMessage } from './protocol';
+import { buildAgentAuthMessage, CAP_GRANTS_V1 } from './protocol';
 
 /**
  * WebSocket gateway.
@@ -30,6 +30,12 @@ export interface AgentSocketData {
   machineId: string | null;
   /** Reaper for a socket that connects but never answers the challenge. */
   authTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * What this agent build says it understands, from `agent:auth`. Empty for
+   * any build that predates capability advertisement — which is the case this
+   * exists to handle.
+   */
+  caps: readonly string[];
 }
 
 export interface ClientSocketData {
@@ -58,7 +64,7 @@ export const AGENT_AUTH_TIMEOUT_MS = 30_000;
 
 /** Per-connection state for an agent (`server.upgrade(req, { data })`). */
 export function newAgentSocketData(): AgentSocketData {
-  return { role: 'agent', nonce: randomToken(32), authed: false, machineId: null, authTimer: null };
+  return { role: 'agent', nonce: randomToken(32), authed: false, machineId: null, authTimer: null, caps: [] };
 }
 
 /** Per-connection state for an authenticated web client. */
@@ -155,6 +161,10 @@ export function createGateway(ctx: WsGatewayContext) {
       }
       data.authed = true;
       data.machineId = machine.id;
+      // Advertised capabilities. Only strings, and only after the signature
+      // has proven who is speaking — an unauthenticated socket must not be
+      // able to claim `grants:v1` for a machine it does not control.
+      data.caps = Array.isArray(msg.caps) ? msg.caps.filter((c): c is string => typeof c === 'string') : [];
       if (data.authTimer) {
         clearTimeout(data.authTimer);
         data.authTimer = null;
@@ -192,6 +202,12 @@ export function createGateway(ctx: WsGatewayContext) {
     }
   }
 
+  /** Whether the live agent socket for a machine enforces grant certificates. */
+  function agentSupportsGrants(agent: ServerWebSocket<SocketData>): boolean {
+    const data = agent.data;
+    return data.role === 'agent' && data.caps.includes(CAP_GRANTS_V1);
+  }
+
   function handleClient(ws: ServerWebSocket<SocketData>, data: ClientSocketData, msg: Record<string, unknown>) {
     // Browser keepalive. Browsers can't send WS control frames from script, so
     // an idle viewer looks dead to any intermediary; the client pings instead.
@@ -207,20 +223,48 @@ export function createGateway(ctx: WsGatewayContext) {
         ws.close(4400, 'channel already open');
         return;
       }
-      const machine = repos.getMachine(msg.machineId);
-      if (!machine || machine.user_id !== data.userId) {
+      const access = repos.getMachineAccess(msg.machineId, data.userId);
+      if (access.relation === 'none') {
         ws.close(4403, 'not your machine');
         return;
       }
+      const machine = access.machine;
       const agent = agents.get(machine.id);
       if (!agent) {
         send(ws, { type: 'agent:offline' });
         return;
       }
+
+      // Version skew is a hard requirement, not an open question. A desktop
+      // build that predates grant enforcement reads only `clientX25519Pub`
+      // from this payload and ignores everything else — so handing it a guest
+      // would grant that guest every command, on a machine whose owner never
+      // opted into sharing. The relay redeploys independently of shipped
+      // Electron builds, so this will genuinely happen; refuse instead.
+      if (access.relation === 'grantee' && !agentSupportsGrants(agent)) {
+        logger.warn('refusing a guest channel to an agent without grant support', { machineId: machine.id });
+        send(ws, { type: 'share:unsupported' });
+        return;
+      }
+
       data.machineId = machine.id;
       clients.set(data.clientId, ws);
-      // Hand the agent the new client + whatever opaque handshake payload rode along.
-      send(agent, { type: 'client:open', clientId: data.clientId, payload: msg.payload });
+      // `principal` is relay-ASSERTED, and named so no branch downstream reads
+      // it as authorization. The agent treats it as a claim to check a
+      // certificate against, never as a grant in itself.
+      //
+      // `userId` only, for now: the GitHub login is fetched during OAuth and
+      // discarded (`displayName` prefers the profile name), so persisting it
+      // needs a column and an auth change. That lands with M5.2, alongside the
+      // approval modal and addressed invites that actually read it — a field
+      // that is always null now would just invite a downstream branch that
+      // never fires.
+      send(agent, {
+        type: 'client:open',
+        clientId: data.clientId,
+        principal: { userId: data.userId },
+        payload: msg.payload,
+      });
       send(ws, { type: 'channel:open', clientId: data.clientId });
       return;
     }
