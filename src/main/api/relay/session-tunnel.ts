@@ -278,7 +278,7 @@ export class SessionTunnel {
       // stayed open — the stream is the thing being protected, so the check
       // belongs where the data leaves.
       if (!permits(s.grant, 'terminal:subscribe', sessionId, now)) {
-        this.expireClient(clientId, s);
+        this.expireClient(clientId, s, now);
         continue;
       }
       send(clientId);
@@ -286,9 +286,15 @@ export class SessionTunnel {
   }
 
   /** Stop streaming to a client whose grant has lapsed, and tell it why. */
-  private expireClient(clientId: string, s: ClientSession): void {
+  private expireClient(clientId: string, s: ClientSession, now: number): void {
     if (s.grant.role === 'owner') return;
-    const reason = s.grant.expiresAt <= this.deps.now() ? 'expired' : 'revoked';
+    // Do NOT infer the reason from the timestamp alone: DENY_ALL carries
+    // `expiresAt: 0`, so a revoked client would be told its access "expired" —
+    // a different and misleading story. A grant that still holds capabilities
+    // and has run out of clock genuinely expired; one stripped of them was
+    // taken away.
+    const ranOut = s.grant.caps.length > 0 && s.grant.expiresAt <= now;
+    const reason = ranOut ? 'expired' : 'revoked';
     s.subs.clear();
     s.grant = DENY_ALL;
     this.sealTo(clientId, { type: 'denied', reason });

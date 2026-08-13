@@ -167,7 +167,11 @@ export type RedeemResult =
   | { ok: false; reason: 'not_found' | 'expired' | 'already_used' | 'revoked' | 'wrong_account' | 'own_machine' };
 
 /** Thrown inside the redemption transaction to roll it back on a lost race. */
-class RedeemRaceError extends Error {}
+class RedeemRaceError extends Error {
+  // Named so it is identifiable in a stack trace or a log line, not just via
+  // `instanceof` at the one place that catches it today.
+  override name = 'RedeemRaceError';
+}
 
 export function createRepositories(db: RelayDb, now: () => number = Date.now): Repositories {
   return {

@@ -679,8 +679,15 @@ describe('a lapsed grant stops the stream, not just the commands', () => {
     h.tunnel.revokeGrant('grant-1');
     emit('AFTER REVOKE');
 
-    expect(h.opened('c1', key).some((m) => m.data === 'AFTER REVOKE')).toBe(false);
+    const seen = h.opened('c1', key);
+    expect(seen.some((m) => m.data === 'AFTER REVOKE')).toBe(false);
+    // The REASON matters, not just the silence: DENY_ALL carries expiresAt 0,
+    // so a naive timestamp check would tell a revoked guest their access
+    // "expired" — a different and misleading story.
+    expect(seen.some((m) => m.type === 'denied' && m.reason === 'revoked')).toBe(true);
+    expect(seen.some((m) => m.type === 'denied' && m.reason === 'expired')).toBe(false);
   });
+
 
   test('the owner keeps receiving output regardless of grant clocks', () => {
     // ownerGrant() never expires; a bug that expired owners would take the
