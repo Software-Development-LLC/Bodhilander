@@ -908,7 +908,7 @@ const App: React.FC = () => {
     isSearching, effectiveAccountForSession, editingSessionId, editingSessionName,
     handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
-    handleRemoveSession,, guestsBySession]);
+    handleRemoveSession, guestsBySession]);
 
   const getContextShortcuts = useCallback(() => {
     if (sidebarFocused) {

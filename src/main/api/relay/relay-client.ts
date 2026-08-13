@@ -407,26 +407,7 @@ export class RelayClient extends EventEmitter {
       return;
     }
 
-    // A guest redeemed an invite, or we just reconnected and the relay is
-    // telling us everything it holds.
-    if (msg.type === 'share:pending' && msg.grants) {
-      this.notePendingGrants(msg.grants);
-      return;
-    }
-    if (msg.type === 'share:sync' && msg.grants) {
-      this.reconcileGrants(msg.grants);
-      return;
-    }
-    // Revoked elsewhere — by the owner on another device, or by the guest
-    // handing access back.
-    if (msg.type === 'grant:revoked' && msg.grantId) {
-      revokeGrantLocally(msg.grantId);
-      clearPendingRevocation(msg.grantId);
-      this.pendingGrants.delete(msg.grantId);
-      this.tunnel.revokeGrant(msg.grantId, 'revoked');
-      this.emit('grants-changed');
-      return;
-    }
+    if (this.handleShareMessage(msg)) return;
 
     if (msg.type === 'agent:ready') {
       this.connecting = false;
@@ -498,6 +479,36 @@ export class RelayClient extends EventEmitter {
   // --- sharing (M5.2) ---
 
   /**
+   * The relay's sharing messages. Split out of `handleMessage` so that method
+   * stays one dispatch rather than a growing pile of branches.
+   *
+   * Returns whether the message was one of ours.
+   */
+  private handleShareMessage(msg: { type?: string; grants?: PendingGrant[]; grantId?: string }): boolean {
+    // A guest redeemed an invite, or we just reconnected and the relay is
+    // telling us everything it holds.
+    if (msg.type === 'share:pending' && msg.grants) {
+      this.notePendingGrants(msg.grants);
+      return true;
+    }
+    if (msg.type === 'share:sync' && msg.grants) {
+      this.reconcileGrants(msg.grants);
+      return true;
+    }
+    // Revoked elsewhere — by the owner on another device, or by the guest
+    // handing access back.
+    if (msg.type === 'grant:revoked' && msg.grantId) {
+      revokeGrantLocally(msg.grantId);
+      clearPendingRevocation(msg.grantId);
+      this.pendingGrants.delete(msg.grantId);
+      this.tunnel.revokeGrant(msg.grantId, 'revoked');
+      this.emit('grants-changed');
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Offer a share of one session, returning the link to send.
    *
    * **The URL is composed here, never by the relay.** If the relay authored it,
@@ -547,7 +558,8 @@ export class RelayClient extends EventEmitter {
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      throw new Error(`relay rejected the share request (${res.status})${detail ? `: ${detail}` : ''}`);
+      const suffix = detail ? `: ${detail}` : '';
+      throw new Error(`relay rejected the share request (${res.status})${suffix}`);
     }
     const body = (await res.json()) as { inviteId: string; code: string; expiresAt: number };
 
@@ -561,7 +573,8 @@ export class RelayClient extends EventEmitter {
     const fingerprint = identityFingerprint();
     // The fragment never reaches the relay — that is what makes it usable as
     // out-of-band provenance for the machine the guest is about to trust.
-    const url = `${origin}/i/${body.code}${fingerprint ? `#fp=${encodeURIComponent(fingerprint)}` : ''}`;
+    const fragment = fingerprint ? `#fp=${encodeURIComponent(fingerprint)}` : '';
+    const url = `${origin}/i/${body.code}${fragment}`;
     log.info('[Relay] share invite created', { addressed: !!input.expectedGithubLogin });
     return { code: body.code, url, expiresAt: body.expiresAt };
   }
@@ -644,7 +657,8 @@ export class RelayClient extends EventEmitter {
     // Default to the session the invite was offered for. The relay never knew
     // it — no session id ever reaches it — so this comes from our own table.
     const scope = pending.inviteId ? getInviteScope(getDatabase(), pending.inviteId) : null;
-    const chosen = sessionIds?.length ? sessionIds : scope ? [scope.sessionId] : [];
+    const fromInvite = scope ? [scope.sessionId] : [];
+    const chosen = sessionIds?.length ? sessionIds : fromInvite;
     if (chosen.length === 0) throw new Error('a share must name at least one session');
 
     const machineId = getPreference(PREF.machineId);

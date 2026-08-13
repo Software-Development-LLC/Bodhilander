@@ -105,7 +105,11 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({ sessionId,
 
   if (!sessionId) return null;
 
-  const canSubmit = openLink || login.trim().length > 0;
+  // Not `??`: these are booleans, and `??` would short-circuit on `false`
+  // rather than falling through to the handle check. Written as a branch so
+  // the intent is explicit either way.
+  const hasLogin = login.trim().length > 0;
+  const canSubmit = openLink ? true : hasLogin;
 
   return (
     <dialog
@@ -177,20 +181,16 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({ sessionId,
             <legend className="share-field-label">What can they do?</legend>
             <label className="share-radio">
               <input type="radio" checked readOnly />
-              <span>
-                <strong>Watch</strong>
-                <em>They see this session&apos;s live output. They can&apos;t type.</em>
-              </span>
+              <strong>Watch</strong>
+              <em>They see this session&apos;s live output. They can&apos;t type.</em>
             </label>
             {/* Shown disabled rather than hidden: the absence of a control is
                 not an explanation, and this is a materially heavier decision
                 than the one above. */}
             <label className="share-radio share-radio-disabled">
               <input type="radio" disabled />
-              <span>
-                <strong>Watch and type</strong>
-                <em>Not available yet — it hands over your whole environment, so it needs its own consent step.</em>
-              </span>
+              <strong>Watch and type</strong>
+              <em>Not available yet — it hands over your whole environment, so it needs its own consent step.</em>
             </label>
           </fieldset>
 

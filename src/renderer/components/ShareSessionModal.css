@@ -80,10 +80,14 @@
   cursor: pointer;
 }
 
+/* Grid rather than nested wrappers: the label's text has to sit shallow
+   enough for accessibility tooling to find it (S6853). */
 .share-radio {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: start;
   padding: 10px;
   margin-bottom: 6px;
   background: #1e1e1e;
@@ -91,10 +95,9 @@
   border-radius: 4px;
 }
 
-.share-radio span {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.share-radio input {
+  grid-row: 1 / span 2;
+  margin-top: 2px;
 }
 
 .share-radio strong {
