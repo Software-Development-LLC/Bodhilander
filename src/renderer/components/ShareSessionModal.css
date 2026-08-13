@@ -1,0 +1,237 @@
+/* Native <dialog> + showModal(): the browser owns modality and focus trapping. */
+
+.share-session-modal {
+  max-width: 480px;
+  padding: 20px 24px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d4d4d4;
+}
+
+.share-session-modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.share-session-modal h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.share-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0 0 18px 0;
+}
+
+.share-field-label {
+  display: block;
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b8b8b8;
+}
+
+.share-login-row {
+  display: flex;
+  align-items: center;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+}
+
+.share-at {
+  padding: 0 4px 0 10px;
+  color: #777;
+  font-size: 14px;
+}
+
+.share-login {
+  flex: 1;
+  padding: 9px 10px 9px 2px;
+  background: transparent;
+  border: none;
+  color: #d4d4d4;
+  font-size: 14px;
+  outline: none;
+}
+
+.share-login:disabled {
+  color: #666;
+}
+
+.share-hint {
+  margin: 6px 0 0 0;
+  font-size: 11px;
+  color: #8a8a8a;
+}
+
+.share-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #b8b8b8;
+  cursor: pointer;
+}
+
+.share-radio {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  margin-bottom: 6px;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+}
+
+.share-radio span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.share-radio strong {
+  font-size: 13px;
+  color: #e0e0e0;
+  font-weight: 600;
+}
+
+.share-radio em {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #9a9a9a;
+}
+
+.share-radio-disabled {
+  opacity: 0.55;
+}
+
+.share-ttl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #b8b8b8;
+}
+
+.share-ttl-row select {
+  padding: 5px 8px;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.share-ttl-row .share-hint {
+  margin: 0;
+}
+
+.share-url {
+  width: 100%;
+  padding: 9px 10px;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-family: monospace;
+  font-size: 12px;
+  outline: none;
+}
+
+.share-code {
+  margin: 10px 0 0 0;
+  font-size: 12px;
+  color: #9a9a9a;
+}
+
+.share-code strong {
+  font-family: monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: #e0e0e0;
+}
+
+/* The link is the credential. This is not decoration. */
+.share-warning {
+  margin: 14px 0 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #e8c48a;
+  background: rgba(232, 196, 138, 0.08);
+  border-left: 2px solid #e8c48a;
+  border-radius: 2px;
+}
+
+.share-note {
+  margin: 10px 0 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #9a9a9a;
+}
+
+.share-error {
+  margin: 0 0 12px 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #f48771;
+  background: rgba(244, 135, 113, 0.08);
+  border-left: 2px solid #f48771;
+  border-radius: 2px;
+}
+
+.share-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.share-buttons button {
+  padding: 7px 14px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.share-secondary {
+  background: #3a3a3a;
+  border-color: #4a4a4a !important;
+  color: #d4d4d4;
+}
+
+.share-secondary:hover {
+  background: #454545;
+}
+
+.share-primary {
+  background: #0e639c;
+  color: #ffffff;
+}
+
+.share-primary:hover:not(:disabled) {
+  background: #1177bb;
+}
+
+.share-buttons button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.share-buttons button:focus-visible {
+  outline: 2px solid #69adff;
+  outline-offset: 2px;
+}

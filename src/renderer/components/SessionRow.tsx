@@ -11,6 +11,17 @@ interface SessionRowProps {
   dropPosition: string | null;
   draggable: boolean;
   account: ClaudeAccount | null;
+  /**
+   * Guests watching this session right now.
+   *
+   * Presence at a glance answers "is anyone looking at this?" without the
+   * owner having to go and check — which is the whole point: silent read
+   * access to a live terminal is the same class of harm as silent write
+   * access.
+   */
+  watchingCount?: number;
+  /** Handles for the tooltip, so the badge names people rather than a number. */
+  watchingNames?: string[];
 
   isEditing: boolean;
   editingName: string;
@@ -46,6 +57,7 @@ function accountTitle(account: ClaudeAccount, session: Session): string {
  */
 export const SessionRow: React.FC<SessionRowProps> = ({
   session, isActive, isFocused, isDragging, dropPosition, draggable, account,
+  watchingCount, watchingNames,
   isEditing, editingName, onEditingNameChange, onStartEdit, onFinishEdit, onCancelEdit,
   onSelect, onContextMenu, onDragStart, onDragEnd, onDragOver, onDrop, onClose,
 }) => {
@@ -109,6 +121,21 @@ export const SessionRow: React.FC<SessionRowProps> = ({
           )}
           <span className="session-info">
             <span className="session-name">{session.name}</span>
+            {!!watchingCount && watchingCount > 0 && (
+              // A glyph AND a count: an eye alone does not say how many, and a
+              // number alone does not say what it counts.
+              <span
+                className="session-watching"
+                title={
+                  watchingNames?.length
+                    ? `Watching now: ${watchingNames.join(', ')}`
+                    : `${watchingCount} watching now`
+                }
+                aria-label={`${watchingCount} watching now`}
+              >
+                👁 {watchingCount}
+              </span>
+            )}
             <SessionStatsBadge sessionId={session.id} />
           </span>
           {showProvider && (

@@ -4,6 +4,8 @@ import TerminalHeader from './components/TerminalHeader';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
 import { OwnerConfirmModal, type PendingOwner } from './components/OwnerConfirmModal';
+import { ShareSessionModal } from './components/ShareSessionModal';
+import { GuestJoinRequestModal } from './components/GuestJoinRequestModal';
 import { SettingsModal, SettingsTab } from './components/SettingsModal';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
@@ -13,6 +15,7 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { ClaudeAccount, Session } from '../shared/types';
+import type { RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
@@ -854,6 +857,27 @@ const App: React.FC = () => {
 
   // Wiring for one session row. Hoisted out of the JSX so the per-row callbacks
   // are not nested five closures deep inside the group/sub-group maps.
+  const [pendingOwner, setPendingOwner] = useState<PendingOwner | null>(null);
+  /** Guests attached right now — the presence surfaces read this. */
+  const [attachedGuests, setAttachedGuests] = useState<RelayAttachedGuest[]>([]);
+  /** Share requests waiting on an answer. */
+  const [pendingShares, setPendingShares] = useState<RelayPendingShare[]>([]);
+  /** The session the share modal is open for, if any. */
+  const [sharingSession, setSharingSession] = useState<{ id: string; name: string } | null>(null);
+
+  /** Guests watching a given session right now. */
+  const guestsBySession = useMemo(() => {
+    const map = new Map<string, RelayAttachedGuest[]>();
+    for (const guest of attachedGuests) {
+      for (const sessionId of guest.sessionIds) {
+        const list = map.get(sessionId);
+        if (list) list.push(guest);
+        else map.set(sessionId, [guest]);
+      }
+    }
+    return map;
+  }, [attachedGuests]);
+
   const sessionRowProps = useCallback((session: Session, groupId: string) => ({
     session,
     isActive: session.id === activeSessionId,
@@ -864,6 +888,8 @@ const App: React.FC = () => {
       : null,
     draggable: !isSearching,
     account: effectiveAccountForSession(session.id),
+    watchingCount: guestsBySession.get(session.id)?.length ?? 0,
+    watchingNames: guestsBySession.get(session.id)?.map((g) => (g.login ? `@${g.login}` : (g.displayName ?? 'someone'))),
     isEditing: editingSessionId === session.id,
     editingName: editingSessionName,
     onEditingNameChange: setEditingSessionName,
@@ -882,8 +908,7 @@ const App: React.FC = () => {
     isSearching, effectiveAccountForSession, editingSessionId, editingSessionName,
     handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
-    handleRemoveSession,
-  ]);
+    handleRemoveSession,, guestsBySession]);
 
   const getContextShortcuts = useCallback(() => {
     if (sidebarFocused) {
@@ -994,23 +1019,47 @@ const App: React.FC = () => {
   // RemoteHostingSettings because it fires when the agent connects, which is
   // usually nowhere near the Settings modal — and it must be answered before
   // the machine can be shared from.
-  const [pendingOwner, setPendingOwner] = useState<PendingOwner | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const apply = (s: RelayStatus) => {
+      setPendingOwner(s.pendingOwner);
+      setAttachedGuests(s.attachedGuests ?? []);
+      setPendingShares(s.pendingShares ?? []);
+    };
     window.electronAPI
       .relayGetStatus()
       .then((s) => {
-        if (!cancelled) setPendingOwner(s.pendingOwner);
+        if (!cancelled) apply(s);
       })
       .catch(() => {
-        /* relay off or unavailable — nothing to confirm */
+        /* relay off or unavailable — nothing to show */
       });
-    const off = window.electronAPI.onRelayStatus((s) => setPendingOwner(s.pendingOwner));
+    const off = window.electronAPI.onRelayStatus(apply);
     return () => {
       cancelled = true;
       off();
     };
+  }, []);
+
+  const handleApproveShare = useCallback(async (grantId: string) => {
+    try {
+      const status = await window.electronAPI.relayApproveShare(grantId);
+      setPendingShares(status.pendingShares ?? []);
+    } catch {
+      // The request went away underneath us (expired, or revoked elsewhere).
+      // Drop it rather than leaving a prompt that can no longer be answered.
+      setPendingShares((prev) => prev.filter((p) => p.grantId !== grantId));
+    }
+  }, []);
+
+  const handleDenyShare = useCallback(async (grantId: string) => {
+    try {
+      const status = await window.electronAPI.relayDenyShare(grantId);
+      setPendingShares(status.pendingShares ?? []);
+    } catch {
+      setPendingShares((prev) => prev.filter((p) => p.grantId !== grantId));
+    }
   }, []);
 
   const handleConfirmOwner = useCallback(async (userId: string) => {
@@ -1466,6 +1515,20 @@ const App: React.FC = () => {
         pending={pendingOwner}
         onConfirm={handleConfirmOwner}
         onReject={handleRejectOwner}
+      />
+
+      {/* One at a time: two people asking at once is rare, and stacking
+          consent prompts invites answering the wrong one. */}
+      <GuestJoinRequestModal
+        request={pendingShares[0] ?? null}
+        onApprove={handleApproveShare}
+        onDeny={handleDenyShare}
+      />
+
+      <ShareSessionModal
+        sessionId={sharingSession?.id ?? null}
+        sessionName={sharingSession?.name ?? ''}
+        onClose={() => setSharingSession(null)}
       />
 
       {/* Name prompt modals */}
