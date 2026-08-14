@@ -162,6 +162,30 @@ describe('SessionRow', () => {
     expect(dot.getAttribute('aria-label')).toBe('Account: Work');
   });
 
+  test('an unapplied switch is marked on the row, not folded into the dot', () => {
+    // Decline the "restart 5 sessions?" prompt after a group switch and the
+    // sidebar is the only thing that speaks for the four sessions whose headers
+    // are display:none. It used to recolour to the assignment immediately while
+    // every pty went on billing the old login (#165).
+    renderRow({
+      account: { id: 'a1', label: 'Work', email: 'w@x.test', color: '#61afef' },
+      pendingSwitch: { target: { id: 'a2', label: 'Personal', email: 'p@x.test', color: '#98c379' } },
+    });
+
+    const dot = document.querySelector('.session-account-dot') as HTMLElement;
+    expect(dot.getAttribute('title')).toContain('Claude account: Work (w@x.test)');
+    expect(dot.getAttribute('title')).toContain('assigned to Personal (p@x.test), restart to apply');
+    expect(dot.getAttribute('aria-label')).toContain('restart to apply');
+    expect(document.querySelector('.session-account-pending')).toBeTruthy();
+  });
+
+  test('no pending marker when the pty is on the account it is assigned to', () => {
+    renderRow({ account: { id: 'a1', label: 'Work', email: null, color: '#61afef' } });
+    expect(document.querySelector('.session-account-pending')).toBeNull();
+    expect(document.querySelector('.session-account-dot')!.getAttribute('title'))
+      .not.toContain('restart to apply');
+  });
+
   test('the provider badge shows only for non-default providers', () => {
     renderRow();
     expect(document.querySelector('.session-provider-badge')).toBeNull();

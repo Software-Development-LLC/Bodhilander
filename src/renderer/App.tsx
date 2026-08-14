@@ -14,8 +14,9 @@ import { GroupColorPicker } from './components/GroupColorPicker';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
+import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
 import { ClaudeAccount, Session } from '../shared/types';
-import type { RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
+import type { LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
@@ -37,6 +38,83 @@ function chevronTitle(collapsed: boolean, filtering: boolean): string {
 function chevronAriaLabel(collapsed: boolean, filtering: boolean, kind: 'group' | 'sub-group'): string {
   if (filtering) return `${kind} expanded while filtering`;
   return collapsed ? `Expand ${kind}` : `Collapse ${kind}`;
+}
+
+/**
+ * How an account is named in a context menu (#165).
+ *
+ * The label alone does not say which login an account is: two accounts both
+ * called "Work" are indistinguishable in the menu, and after a login the email
+ * is the only thing that tells them apart. Accounts that never wrote an email
+ * — the normal case on macOS, where Claude Code keeps its tokens in the
+ * Keychain rather than in the config dir — say so, so a blank tail can never be
+ * read as "this one has no second account behind it".
+ *
+ * MenuItem.label is a string, so the swatch that carries colour elsewhere
+ * cannot come along; label + email identifies the account without it, which is
+ * the accessible baseline the swatch was never allowed to be responsible for.
+ */
+export function accountMenuLabel(acc: ClaudeAccount, isCurrent: boolean): string {
+  return `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"`
+    + (acc.email ? ` — ${acc.email}` : ' — not yet logged in')
+    + (acc.isDefault ? ' (default)' : '');
+}
+
+/**
+ * Everything the session header's account indicator needs, resolved (#165).
+ *
+ * Two questions that look like one and are not: the session → group → default
+ * chain answers "what will this session run under", the live binding published
+ * by PtyManager answers "what is it running under right now". CLAUDE_CONFIG_DIR
+ * is baked into a pty at spawn, so the two diverge the moment an account is
+ * switched on a live session and stay diverged until it respawns. Presenting
+ * the first as if it were the second is exactly what made #164's first symptom
+ * look like nothing had happened — every surface agreed with the user's pick
+ * while the old account went on being billed.
+ *
+ * Returns null when there is nothing to disclose: no accounts registered at
+ * all, or a session that is not a Claude session (a plain shell, or codex/grok,
+ * which main deliberately never publishes a binding for). The header then keeps
+ * its pre-accounts look rather than growing an empty slot.
+ *
+ * Pure and exported so the resolution can be pinned by tests without standing
+ * up the whole App tree.
+ */
+export function resolveAccountIndicator(args: {
+  session: Session;
+  accounts: ClaudeAccount[];
+  /** The live binding for this session, or undefined when no pty is running. */
+  binding: LiveAccountBinding | undefined;
+  /** Result of the session → group → default chain. */
+  assignedAccount: ClaudeAccount | null;
+  onApplySwitch: () => void;
+}): SessionAccountIndicatorProps | null {
+  const { session, accounts, binding, assignedAccount, onApplySwitch } = args;
+  if (session.shellType !== 'claude' || session.provider !== 'claude') return null;
+  // No accounts registered is the pre-accounts look, and it stays that way —
+  // unless a pty is running under an account id, which by then can only be one
+  // the user deleted out from under it. That is precisely when naming the live
+  // account matters: the process is alive, still billing a login whose config
+  // dir has been removed, and an empty header would say nothing at all.
+  if (accounts.length === 0 && !binding?.accountId) return null;
+
+  // Join by id rather than snapshotting the account onto the binding, so a
+  // rename or a recolour shows up without waiting for the pty to respawn.
+  const live = binding?.accountId
+    ? accounts.find(a => a.id === binding.accountId) ?? null
+    : null;
+
+  return {
+    liveAccount: live,
+    assignedAccount,
+    // Presence in the map IS the pty: main deletes the entry on exit. Reading
+    // session.state instead would call a session "running" through the whole
+    // restart window, when there is no pty and no account in use.
+    isRunning: !!binding,
+    liveAccountUnknown: !!binding?.accountId && !live,
+    isOverride: session.claudeAccountId !== null,
+    onApplySwitch,
+  };
 }
 
 const App: React.FC = () => {
@@ -92,6 +170,9 @@ const App: React.FC = () => {
   // a Settings tab, so App needs to be able to open Settings straight to it.
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('general');
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  // Which account each running pty ACTUALLY spawned under (#165), keyed by
+  // session id. Absent id = no pty running for that session.
+  const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
   // True when the running build is itself a beta (version contains -beta.).
   // Shows a BETA pill in the sidebar so opt-in testers know what they're on
   // (BDHLNDR-32).
@@ -247,6 +328,39 @@ const App: React.FC = () => {
     }
   }, [settingsOpen]);
 
+  /**
+   * Track the account every running pty is actually bound to (#165).
+   *
+   * Both halves are load-bearing. The push event is what keeps this honest
+   * through a respawn the renderer never asked for — the BDHLNDR-9
+   * resume-failure fallback replaces a pty silently, by design, and would
+   * otherwise leave the header naming an account that died with the old
+   * process. The one-shot query is what makes a renderer that mounted after
+   * the ptys were already running (a reload, a crash recovery) correct
+   * immediately rather than only after the next spawn or exit.
+   *
+   * Last-writer-wins per session id, so the two cannot fight: the query runs
+   * once, at mount, and every later write is an event about one session.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI.getLiveAccounts()
+      .then(map => { if (!cancelled) setLiveAccounts(map); })
+      .catch(err => console.error('Failed to load live account bindings:', err));
+    const off = window.electronAPI.onPtyLiveAccount((sessionId, binding) => {
+      setLiveAccounts(prev => {
+        const next = { ...prev };
+        if (binding) next[sessionId] = binding;
+        else delete next[sessionId];
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
+
   // Determine once at mount whether the running app build is a beta —
   // controls the BETA pill shown in the sidebar header (BDHLNDR-32).
   useEffect(() => {
@@ -399,14 +513,59 @@ const App: React.FC = () => {
    * the user restarts by hand. Main has already carried the conversation
    * transcript over, so the relaunch resumes where the old account left off.
    */
-  const restartSessions = (sessionIds: string[]) => {
+  const restartSessions = useCallback((sessionIds: string[]) => {
     if (sessionIds.length === 0) return;
     setRestartKeys(prev => {
       const next = { ...prev };
       for (const id of sessionIds) next[id] = (next[id] ?? 0) + 1;
       return next;
     });
-  };
+  }, []);
+
+  /**
+   * The header account indicator for one session (#165).
+   *
+   * Sits here rather than beside effectiveAccountForSession because it needs
+   * restartSessions, which is declared just above: a `const` referenced from a
+   * dependency array is evaluated at render time, so the order is not cosmetic.
+   */
+  const accountIndicatorFor = useCallback((session: Session): SessionAccountIndicatorProps | null => (
+    resolveAccountIndicator({
+      session,
+      accounts: claudeAccounts,
+      binding: liveAccounts[session.id],
+      assignedAccount: effectiveAccountForSession(session.id),
+      // A switch the user points at directly restarts outright — the same rule
+      // handleAssignSessionAccount follows. Only a group-wide sweep, which can
+      // take several sessions down at once, asks first.
+      onApplySwitch: () => restartSessions([session.id]),
+    })
+  ), [claudeAccounts, liveAccounts, effectiveAccountForSession, restartSessions]);
+
+  /**
+   * What the sidebar row says about a session's account (#165).
+   *
+   * Derived from the same resolution the header uses, so the two surfaces
+   * cannot contradict each other. They used to: decline the "restart 5
+   * sessions?" prompt after a group switch and every row recoloured to the new
+   * account immediately while all five ptys kept billing the old one — the
+   * exact lie this feature exists to stop telling, and on the four sessions the
+   * user cannot see (inactive headers are display:none) the sidebar is the only
+   * thing saying anything at all.
+   */
+  const sidebarAccountFor = useCallback((session: Session): {
+    account: ClaudeAccount | null;
+    pendingSwitch: { target: ClaudeAccount | null } | null;
+  } => {
+    const indicator = accountIndicatorFor(session);
+    // Non-Claude sessions and the pre-accounts look keep the old behaviour:
+    // there is no live binding to prefer, so the assignment is all there is.
+    if (!indicator) return { account: effectiveAccountForSession(session.id), pendingSwitch: null };
+    return {
+      account: indicator.isRunning ? indicator.liveAccount : indicator.assignedAccount,
+      pendingSwitch: isSwitchPending(indicator) ? { target: indicator.assignedAccount } : null,
+    };
+  }, [accountIndicatorFor, effectiveAccountForSession]);
 
   // Switching one session's account restarts it outright: the user pointed at
   // that session and picked an account, so the restart is the thing they asked
@@ -464,9 +623,8 @@ const App: React.FC = () => {
         onClick: () => { void handleAssignSessionAccount(sessionId, null); },
       });
       for (const acc of claudeAccounts) {
-        const isCurrent = currentAccountId === acc.id;
         items.push({
-          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
+          label: accountMenuLabel(acc, currentAccountId === acc.id),
           onClick: () => { void handleAssignSessionAccount(sessionId, acc.id); },
         });
       }
@@ -510,9 +668,8 @@ const App: React.FC = () => {
         onClick: () => { void handleAssignGroupAccount(groupId, null); },
       });
       for (const acc of claudeAccounts) {
-        const isCurrent = currentAccountId === acc.id;
         items.push({
-          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
+          label: accountMenuLabel(acc, currentAccountId === acc.id),
           onClick: () => { void handleAssignGroupAccount(groupId, acc.id); },
         });
       }
@@ -901,7 +1058,7 @@ const App: React.FC = () => {
       ? dropTarget.position
       : null,
     draggable: !isSearching,
-    account: effectiveAccountForSession(session.id),
+    ...sidebarAccountFor(session),
     watchingCount: guestsBySession.get(session.id)?.length ?? 0,
     watchingNames: guestsBySession.get(session.id)?.map((g) => (g.login ? `@${g.login}` : (g.displayName ?? 'someone'))),
     isEditing: editingSessionId === session.id,
@@ -919,7 +1076,7 @@ const App: React.FC = () => {
     onClose: () => handleRemoveSession(session.id),
   }), [
     activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
-    isSearching, effectiveAccountForSession, editingSessionId, editingSessionName,
+    isSearching, sidebarAccountFor, editingSessionId, editingSessionName,
     handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
     handleRemoveSession, guestsBySession]);
@@ -1451,6 +1608,7 @@ const App: React.FC = () => {
             >
               <TerminalHeader
                 session={session}
+                account={accountIndicatorFor(session)}
                 onRename={(name) => {
                   updateSession(session.id, { name });
                 }}

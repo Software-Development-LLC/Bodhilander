@@ -67,6 +67,19 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const lastPasteTimeRef = useRef<number>(0);
   const prevSessionStateRef = useRef<string | undefined>(sessionState);
   const [isRunning, setIsRunning] = useState(!isStopped);
+  /**
+   * A restart or retry is between "killed the pty" and "spawned its
+   * replacement" (#164).
+   *
+   * Waiting for the process to really die replaced a 100ms flash with a wait
+   * as long as Claude Code takes to exit, and the stopped view — "Session
+   * stopped", with a Start button — is the wrong thing to show for seconds of
+   * it. It reads as a failed restart, and its Start button spawns a pty with no
+   * kill and no ordering, which is precisely the create-before-death race this
+   * whole change removes. So the in-between gets its own view, with no button
+   * to press.
+   */
+  const [restarting, setRestarting] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
   // Launch-failure hint from main (provider CLI missing or broken): shown as
@@ -88,6 +101,28 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // says nothing about which content view is showing.
   const isActiveRef = useRef(isActive);
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
+
+  // Whether this component is still on screen (#164). The restart/retry paths
+  // now await the pty's real death, so their continuation runs at a moment no
+  // effect scope covers — closing the session mid-restart must not flip a
+  // torn-down terminal back to "running" and respawn the pty behind it. This is
+  // component lifetime, distinct from the per-run `mounted` flag inside the
+  // xterm effect, which only guards that effect's own async work.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  // Stop is a decision the user can take DURING a restart's kill window, and
+  // that window is now as long as the process takes to die (#164). The [isStopped]
+  // effect below can't carry it: it sets isRunning to false, which it already
+  // is mid-restart, so React re-renders nothing and the restart's continuation
+  // goes on to spawn a replacement the user just asked not to exist. Worse, a
+  // second Stop click changes no prop, so that effect never fires again. The
+  // ref lets the continuation read the prop as of the moment it resumes.
+  const isStoppedRef = useRef(isStopped);
+  useEffect(() => { isStoppedRef.current = isStopped; }, [isStopped]);
 
   // Fit the xterm renderer to the current container size AND propagate the new
   // cols/rows to the PTY (BDHLNDR-12). Kept as a single source of truth so the
@@ -197,23 +232,68 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     setIsRunning(!isStopped);
   }, [isStopped]);
 
-  // Handle restart: cycle isRunning off then on to kill PTY and start fresh
+  /**
+   * Restart: kill the pty, wait for it to actually be dead, then spawn again.
+   *
+   * This used to be a fixed 100ms timer (#164). Claude Code takes far longer
+   * than that to exit, so the replacement pty was inserted under this session
+   * id while the old one was still dying — and the old process's exit then
+   * landed on its own replacement. Depending on the exit code that either
+   * orphaned the new pty (main dropped it from its map, so every keystroke and
+   * every byte of output was silently discarded and the switch looked like a
+   * no-op) or ran the BDHLNDR-9 resume-failure fallback against it, which
+   * cleared the stored conversation UUID and started the user over on a blank
+   * conversation. 'pty:kill' is an invoke handle now and main resolves it on
+   * the process's real exit, so the respawn is ordered after the death instead
+   * of guessing at how long one takes.
+   *
+   * Deliberately NOT keyed on isActive: this effect kills a pty, and re-running
+   * it because the user clicked a different session in the sidebar would
+   * restart every session that has ever been restarted, every time focus moved.
+   * The focus follow-up reads isActiveRef so it still only steals focus for the
+   * session actually on screen.
+   */
   useEffect(() => {
-    if (restartKey > 0) {
-      setIsRunning(false);
-      const timer = setTimeout(() => {
-        setError(null);
-        setIsRunning(true);
-        // Focus terminal after restart is complete (wait for terminal to be created)
-        setTimeout(() => {
-          if (isActive && xtermRef.current) {
-            xtermRef.current.focus();
-          }
-        }, 200);
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [restartKey, isActive]);
+    if (restartKey === 0) return;
+
+    let cancelled = false;
+    let focusTimer: number | undefined;
+
+    setIsRunning(false);
+    setRestarting(true);
+
+    void (async () => {
+      try {
+        await window.electronAPI.killSession(sessionId);
+      } catch (err) {
+        // safeHandle re-throws into the renderer now, so a kill can fail here.
+        // A session left stopped is worse than one restarted over a pty that
+        // may still be draining — main coalesces per id, so the respawn's own
+        // kill still waits on whatever teardown is in flight.
+        console.warn('Kill before restart failed; restarting anyway:', err);
+      }
+      if (cancelled || !isMountedRef.current) return;
+      setRestarting(false);
+      // The user pressed Stop while we were waiting for the old pty to die.
+      // The kill they wanted has already happened; finishing the restart would
+      // hand them back a running session they explicitly asked to end.
+      if (isStoppedRef.current) return;
+      setError(null);
+      setIsRunning(true);
+      // Focus after the replacement terminal has had a frame to be created.
+      focusTimer = window.setTimeout(() => {
+        if (isActiveRef.current && xtermRef.current) {
+          xtermRef.current.focus();
+        }
+      }, 200);
+    })();
+
+    return () => {
+      cancelled = true;
+      setRestarting(false);
+      if (focusTimer !== undefined) clearTimeout(focusTimer);
+    };
+  }, [restartKey, sessionId]);
 
   // Listen for focus-terminal event to focus this terminal
   useEffect(() => {
@@ -607,7 +687,13 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       window.removeEventListener('focus', handleResize);
       resizeObserver.disconnect();
       cleanupPtyData();
-      window.electronAPI.killSession(sessionId);
+      // killSession is an invoke handle now (#164) and safeHandle re-throws, so
+      // an unswallowed rejection here would surface as an unhandled rejection
+      // during teardown — reported by window.onunhandledrejection with no
+      // context and nothing the user can act on. Silent on purpose: a cleanup
+      // has no UI left to report into, and the restart path above logs the same
+      // failure at the point where it still means something.
+      void window.electronAPI.killSession(sessionId).catch(() => {});
 
       // Dispose the WebGL addon explicitly before term.dispose() so its internal
       // RenderService is still valid. Letting term.dispose() cascade into the
@@ -638,24 +724,55 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     };
   }, [sessionId, cwd, launchClaude, isRunning, handleResize, pasteFromClipboard]);
 
+  /**
+   * Start a stopped session — and, like every other respawn path, only once
+   * whatever pty this id had is gone (#164).
+   *
+   * Stop's own kill comes from the xterm effect's cleanup, which is
+   * fire-and-forget, so nothing used to order it against the create that a
+   * Start issues next. Killing again is free when there is nothing to kill:
+   * main resolves immediately for an unknown id, and joins the teardown
+   * already in flight when there is one.
+   */
   const handleStart = () => {
     setError(null);
     setInstallHint(null);
     setInstallSucceeded(false);
-    setIsRunning(true);
-    onStart?.();
+    void (async () => {
+      try {
+        await window.electronAPI.killSession(sessionId);
+      } catch (err) {
+        console.warn('Kill before start failed; starting anyway:', err);
+      }
+      if (!isMountedRef.current) return;
+      setIsRunning(true);
+      onStart?.();
+    })();
   };
 
+  // Same ordering rule as the restart effect (#164): the old pty has to be gone
+  // before a replacement is spawned under the same session id, or the dying
+  // process's exit lands on its successor. The 100ms guess this replaces was
+  // the shorter of the two windows, since a retry usually follows a launch that
+  // already failed — but "usually already dead" is not an ordering guarantee.
   const handleRetry = () => {
     setError(null);
     setInstallHint(null);
     setInstallSucceeded(false);
     setIsRunning(false);
-    // Small delay then restart
-    setTimeout(() => {
+    setRestarting(true);
+    void (async () => {
+      try {
+        await window.electronAPI.killSession(sessionId);
+      } catch (err) {
+        console.warn('Kill before retry failed; retrying anyway:', err);
+      }
+      if (!isMountedRef.current) return;
+      setRestarting(false);
+      if (isStoppedRef.current) return;
       setIsRunning(true);
       onStart?.();
-    }, 100);
+    })();
   };
 
   // Launch-failure banner + install modal, shared by the running and stopped
@@ -729,6 +846,21 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         <div className="error-actions">
           <button onClick={handleRetry}>Retry</button>
         </div>
+      </div>
+    );
+  }
+
+  // Ordered before the stopped view on purpose: both are "no terminal on
+  // screen", but only one of them is waiting for something, and only one of
+  // them should offer a button that spawns a pty (#164).
+  if (restarting) {
+    return (
+      <div className="terminal-stopped terminal-restarting" role="status">
+        {installHintUi}
+        <p>Waiting for the session to exit…</p>
+        <p className="terminal-restarting-detail">
+          It will start again on its own. Claude Code can take a few seconds to shut down.
+        </p>
       </div>
     );
   }

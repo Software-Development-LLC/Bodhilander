@@ -7,7 +7,12 @@
  * - failure signatures surviving a chatty startup (dedicated launch buffer)
  *   and pty chunk splits,
  * - createInstallSession's deferred emission, prime flush, and
- *   exit-before-prime flush.
+ *   exit-before-prime flush,
+ * - pty identity (#164): a superseded pty's late exit/output must not touch
+ *   the replacement bound to its id, kill() settles off the real exit and
+ *   coalesces per id, and the silent resume-failure respawn inherits the last
+ *   known size instead of dropping back to 80x24,
+ * - live-account publication (#165) for a provider without account support.
  *
  * Run with: bun test src/main/__tests__
  */
@@ -19,6 +24,8 @@ interface FakePty {
   pid: number;
   spawnFile: string;
   spawnArgs: string[];
+  /** Options node-pty was spawned with — the initial cols/rows live here (#164). */
+  spawnOpts: { cols: number; rows: number };
   dataCb: ((data: string) => void) | null;
   exitCb: ((event: { exitCode: number }) => void) | null;
   onData(cb: (data: string) => void): void;
@@ -30,11 +37,12 @@ interface FakePty {
 
 const spawned: FakePty[] = [];
 
-function fakeSpawn(file: string, args: string[]): FakePty {
+function fakeSpawn(file: string, args: string[], opts: { cols: number; rows: number }): FakePty {
   const p: FakePty = {
     pid: 1000 + spawned.length,
     spawnFile: file,
     spawnArgs: args,
+    spawnOpts: opts,
     dataCb: null,
     exitCb: null,
     onData(cb) { p.dataCb = cb; },
@@ -263,6 +271,197 @@ describe('resize (dynamic sizing)', () => {
     manager.on('resize', (e) => events.push(e));
     manager.resize('does-not-exist', 100, 40);
     expect(events).toEqual([]);
+  });
+});
+
+describe('pty identity (#164)', () => {
+  /**
+   * The restart shape that lost conversations: kill the pty, spawn a
+   * replacement under the SAME id, and only then let the old process die.
+   * `neutraliseKill` stops the fake dying synchronously so the test controls
+   * when the late exit lands — which is the whole point of the scenario.
+   */
+  function killThenRespawn(manager: InstanceType<typeof PtyManager>, id = 'session-1') {
+    createAgentSession(manager, id);
+    const first = spawned[0];
+    first.kill = () => {};
+    const killed = manager.kill(id);
+    manager.createSession(id, cwd, true, 'codex');
+    return { first, second: spawned[1], killed };
+  }
+
+  test('a late zero-code exit from a killed pty leaves its replacement alone', async () => {
+    const manager = new PtyManager();
+    const exits: Array<{ id: string; exitCode: number }> = [];
+    manager.on('exit', (e: { id: string; exitCode: number }) => exits.push(e));
+
+    const { first, second, killed } = killThenRespawn(manager);
+    first.exitCb!({ exitCode: 0 });
+
+    const live = manager.getSession('session-1');
+    expect(live).toBeDefined();
+    expect(live!.pty).toBe(second as unknown as typeof live.pty);
+    expect(exits).toEqual([]);
+    expect(spawned.length).toBe(2);
+    // Resolves off the real exit, not a timer — no clock is advanced here.
+    await killed;
+  });
+
+  test('a late non-zero exit from a killed pty neither respawns nor emits exit', async () => {
+    const manager = new PtyManager();
+    const exits: Array<{ id: string; exitCode: number }> = [];
+    manager.on('exit', (e: { id: string; exitCode: number }) => exits.push(e));
+
+    const { first, second, killed } = killThenRespawn(manager);
+    // Non-zero inside the resume-failure window is the branch that used to
+    // clear the replacement's conversation UUID and spawn a third pty.
+    first.exitCb!({ exitCode: 1 });
+
+    expect(spawned.length).toBe(2);
+    expect(manager.getSession('session-1')!.pty).toBe(second as unknown as never);
+    expect(exits).toEqual([]);
+    await killed;
+  });
+
+  test('stale output from a superseded pty never reaches its replacement', async () => {
+    const manager = new PtyManager();
+    const events: Array<{ id: string; data: string }> = [];
+    manager.on('data', (e: { id: string; data: string }) => events.push(e));
+
+    const { first, killed } = killThenRespawn(manager);
+    first.dataCb!('STALE-BYTES');
+
+    expect(events.some(e => e.data.includes('STALE-BYTES'))).toBe(false);
+    expect(manager.getBuffer('session-1')).not.toContain('STALE-BYTES');
+
+    first.exitCb!({ exitCode: 0 });
+    await killed;
+  });
+
+  test('kill() coalesces so a second caller waits on the same exit', async () => {
+    const manager = new PtyManager();
+    createAgentSession(manager);
+    const first = spawned[0];
+    first.kill = () => {};
+
+    // The renderer's restart kills from both the effect cleanup and the
+    // restart effect; the second caller must join the first teardown rather
+    // than see an empty map and conclude the process is already gone.
+    const a = manager.kill('session-1');
+    const b = manager.kill('session-1');
+
+    let settled = 0;
+    void a.then(() => { settled++; });
+    void b.then(() => { settled++; });
+
+    first.exitCb!({ exitCode: 0 });
+    await Promise.all([a, b]);
+    expect(settled).toBe(2);
+  });
+
+  test('the resume-failure respawn keeps the last known size', () => {
+    const manager = new PtyManager();
+    const exits: unknown[] = [];
+    manager.on('exit', (e) => exits.push(e));
+    createAgentSession(manager);
+    manager.resize('session-1', 120, 40);
+
+    // Only claude declares capabilities.resume, and reaching for it here would
+    // drag in the real sessions repo + account resolver this file may not mock.
+    // Flipping the flag on the live session reaches the same branch.
+    const live = manager.getSession('session-1')! as unknown as { resumeAttempted: boolean };
+    live.resumeAttempted = true;
+
+    spawned[0].exitCb!({ exitCode: 1 });
+
+    expect(spawned.length).toBe(2);
+    expect(spawned[1].spawnOpts.cols).toBe(120);
+    expect(spawned[1].spawnOpts.rows).toBe(40);
+    expect(manager.getSize('session-1')).toEqual({ cols: 120, rows: 40 });
+    // The fallback is deliberately silent — the renderer must not see a stop.
+    expect(exits).toEqual([]);
+  });
+
+  test('a second create for a live session id is refused instead of orphaning the first pty', () => {
+    const manager = new PtyManager();
+    createAgentSession(manager);
+
+    // Overwriting the map entry left the displaced Claude Code running with
+    // nothing holding a handle to it: the identity guard swallows its exit and
+    // drops its output, so it would leak silently for the life of the app.
+    expect(() => manager.createSession('session-1', cwd, true, 'codex')).toThrow(/already has a running pty/);
+    expect(spawned.length).toBe(1);
+    expect(manager.getSession('session-1')!.pty).toBe(spawned[0] as unknown as never);
+  });
+
+  test('a resume failure keeps the conversation when its transcript was staged', () => {
+    const manager = new PtyManager();
+    const exits: Array<{ id: string; exitCode: number }> = [];
+    manager.on('exit', (e: { id: string; exitCode: number }) => exits.push(e));
+    createAgentSession(manager);
+
+    // Same reach-in as the size test above: only claude declares
+    // capabilities.accounts, and launching it here would drag in the real
+    // sessions repo and account resolver this file deliberately does not mock.
+    const live = manager.getSession('session-1')! as unknown as {
+      resumeAttempted: boolean;
+      transcriptStaged: string;
+    };
+    live.resumeAttempted = true;
+    live.transcriptStaged = 'carried';
+
+    spawned[0].exitCb!({ exitCode: 1 });
+
+    // The transcript is demonstrably in the dir this pty launched under, so the
+    // non-zero exit is evidence of something else — a bad key, a broken MCP
+    // entry, a shell rc — and must not cost the user their conversation id.
+    expect(spawned.length).toBe(1);
+    expect(exits).toEqual([{ id: 'session-1', exitCode: 1 }]);
+  });
+
+  test('a resume failure whose transcript is nowhere still respawns fresh', () => {
+    const manager = new PtyManager();
+    const exits: unknown[] = [];
+    manager.on('exit', (e) => exits.push(e));
+    createAgentSession(manager);
+
+    const live = manager.getSession('session-1')! as unknown as {
+      resumeAttempted: boolean;
+      transcriptStaged: string;
+    };
+    live.resumeAttempted = true;
+    live.transcriptStaged = 'missing';
+
+    spawned[0].exitCb!({ exitCode: 1 });
+
+    // Searched every known config dir and found nothing: the stored id really
+    // is unusable, and BDHLNDR-9's silent restart is the recovery.
+    expect(spawned.length).toBe(2);
+    expect(exits).toEqual([]);
+  });
+
+  test('createSession honours an explicit initial size', () => {
+    const manager = new PtyManager();
+    manager.createSession('s2', cwd, true, 'codex', { cols: 100, rows: 30 });
+
+    expect(spawned[0].spawnOpts.cols).toBe(100);
+    expect(spawned[0].spawnOpts.rows).toBe(30);
+    expect(manager.getSize('s2')).toEqual({ cols: 100, rows: 30 });
+  });
+});
+
+describe('live account bindings (#165)', () => {
+  test('no binding is published for a provider without account support', () => {
+    const manager = new PtyManager();
+    const bindings: Array<{ id: string; binding: unknown }> = [];
+    manager.on('liveAccount', (e: { id: string; binding: unknown }) => bindings.push(e));
+
+    manager.createSession('session-1', cwd, true, 'codex');
+
+    // codex never reads CLAUDE_CONFIG_DIR, so "running under ~/.claude" would
+    // be a lie rather than a default.
+    expect(manager.getLiveAccounts()).toEqual({});
+    expect(bindings).toEqual([{ id: 'session-1', binding: null }]);
   });
 });
 

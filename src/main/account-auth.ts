@@ -37,6 +37,14 @@ interface LoginFlow {
 
 const activeFlows = new Map<string, LoginFlow>();
 
+/**
+ * Swatch colours handed to new accounts, in order (#165). The same family the
+ * sidebar offers for groups, so the two kinds of dot look like one system.
+ */
+const ACCOUNT_COLORS = [
+  '#61afef', '#98c379', '#c678dd', '#e5c07b', '#56b6c2', '#e06c75',
+];
+
 export interface StartLoginResult {
   account: ClaudeAccount;
   ptyId: string;
@@ -67,11 +75,22 @@ export async function startLoginFlow(
   // stay synchronous — no await between them — so two overlapping
   // startLoginFlow calls can't both observe "no accounts yet" and both
   // become the default.
-  const isFirst = accountsRepo.getAllAccounts().length === 0;
+  const existing = accountsRepo.getAllAccounts();
+  const isFirst = existing.length === 0;
   const account = accountsRepo.createAccount({
     id: accountId,
     label,
     configDir,
+    // Give the swatch something to say (#165). Every account used to take the
+    // repository's #888888 fallback, because nothing ever passed a colour and
+    // no UI can change one — so the dot the header, the sidebar and the
+    // accounts panel all draw was the same grey on every row, occupying space
+    // in a header where space is scarce and identifying nothing. Cycling the
+    // palette by account count keeps consecutive logins distinct, which is the
+    // case that matters; the label still carries the identity on its own, so
+    // this is decoration that has finally earned its place rather than a
+    // channel anything depends on.
+    color: ACCOUNT_COLORS[existing.length % ACCOUNT_COLORS.length],
     isDefault: isFirst,
   });
 

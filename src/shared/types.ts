@@ -281,6 +281,47 @@ export interface AccountSwitchResult {
   affectedSessionIds: string[];
 }
 
+/**
+ * The Claude account a RUNNING pty actually launched under (#165).
+ *
+ * CLAUDE_CONFIG_DIR is baked into the pty when it spawns (PtyManager's
+ * buildAgentSpawn), so `Session.claudeAccountId` — and the group/default chain
+ * behind it — describes what a session WILL run under, never what it IS
+ * running under. The two disagree from the moment an account is switched until
+ * the pty respawns, and #164 made that gap invisible: switching a live session
+ * looked like a no-op while the old account kept being billed. This is the
+ * spawn-time truth, published so the UI can name the account actually in use.
+ */
+export interface LiveAccountBinding {
+  /**
+   * Registered account the pty spawned under, or null when it spawned with no
+   * CLAUDE_CONFIG_DIR at all — the legacy ~/.claude login that predates
+   * accounts (BDHLNDR-31). Consumers join this against the accounts list for
+   * label/email/color rather than reading a snapshot, so a rename shows up
+   * without waiting for a respawn.
+   */
+  accountId: string | null;
+  /**
+   * The config dir that actually reached the CLI. claude_accounts.config_dir is
+   * UNIQUE in the schema, so this still identifies the login even if the row
+   * was renamed or deleted after the pty spawned.
+   */
+  configDir: string;
+  /**
+   * Wall-clock spawn time (ms) of the pty this binding describes. Changes on
+   * every respawn — including the silent resume-failure respawn — so a viewer
+   * can tell "same pty, account renamed" from "new pty, new account".
+   */
+  spawnedAt: number;
+}
+
+/**
+ * Live account bindings for every session with a running agent pty, keyed by
+ * session id (#165). A session absent from the map has no pty running under
+ * any account: nothing is being billed for it right now.
+ */
+export type LiveAccountBindings = Record<string, LiveAccountBinding>;
+
 export interface AppState {
   groups: Group[];
   sessions: Session[];

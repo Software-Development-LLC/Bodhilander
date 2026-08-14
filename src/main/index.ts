@@ -602,6 +602,13 @@ function createWindow(): void {
     }
   });
 
+  // Live account changes (#165): which account a pty ACTUALLY spawned under.
+  // The DB assignment can't answer that — CLAUDE_CONFIG_DIR is fixed at spawn —
+  // so the header would otherwise report a switch that has not happened yet.
+  ptyManager.on('liveAccount', ({ id, binding }) => {
+    mainWindow?.webContents.send('pty:live-account', id, binding);
+  });
+
   // PTY state detection forwarding
   ptyManager.on('stateChange', (event) => {
     mainWindow?.webContents.send('state:change', event);
@@ -720,9 +727,15 @@ safeOn('pty:resize', (id: string, cols: number, rows: number) => {
   ptyManager.resize(id, cols, rows);
 });
 
-safeOn('pty:kill', (id: string) => {
-  ptyManager.kill(id);
-});
+// Awaited (#164): the renderer restarts a session by killing the pty and
+// re-creating one under the SAME id. Fire-and-forget made that a race the
+// dying pty always won — its exit landed on the replacement. safeHandle
+// re-throws, so the renderer catches.
+safeHandle('pty:kill', (id: string) => ptyManager.kill(id));
+
+// Which account each running pty actually launched under (#165). The renderer
+// seeds its map from this on mount, then follows 'pty:live-account'.
+safeHandle('pty:get-live-accounts', () => ptyManager.getLiveAccounts());
 
 // Prime a deferred-emission pty (BDHLNDR-33): flushes any buffered scrollback
 // as a single 'data' event then unlocks live emission. Used by the Terminal

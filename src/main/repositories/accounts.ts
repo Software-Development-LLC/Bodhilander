@@ -114,13 +114,28 @@ export function touchAccount(id: string): void {
  * Delete an account and NULL out any sessions/groups that referred to it.
  * SQLite ALTER TABLE can't add a real FK, so we enforce SET NULL semantics here.
  * Caller is responsible for removing the on-disk config directory.
+ *
+ * Deleting the default promotes the oldest survivor in its place (#165).
+ * Without that, registered accounts and no default is a reachable state, and it
+ * reads as an account setup that quietly stopped working: every session with no
+ * override falls back to the legacy ~/.claude login, and the header can name
+ * neither a live account nor an assigned one — so the user is told their
+ * account was removed and offered nothing to move to.
  */
 export function deleteAccount(id: string): void {
   const db = getDatabase();
   const tx = db.transaction(() => {
+    const wasDefault = db.prepare('SELECT is_default FROM claude_accounts WHERE id = ?').get(id) as
+      { is_default: number } | undefined;
     db.prepare('UPDATE sessions SET claude_account_id = NULL WHERE claude_account_id = ?').run(id);
     db.prepare('UPDATE groups SET claude_account_id = NULL WHERE claude_account_id = ?').run(id);
     db.prepare('DELETE FROM claude_accounts WHERE id = ?').run(id);
+    if (wasDefault?.is_default) {
+      db.prepare(`
+        UPDATE claude_accounts SET is_default = 1
+        WHERE id = (SELECT id FROM claude_accounts ORDER BY created_at ASC LIMIT 1)
+      `).run();
+    }
   });
   tx();
 }

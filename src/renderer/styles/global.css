@@ -681,7 +681,8 @@ body {
 }
 
 /* Account badge — small colored dot shown on sessions when Claude accounts
- * are registered (BDHLNDR-31). Color matches the assigned account. */
+ * are registered (BDHLNDR-31). Colour matches the account the pty is RUNNING
+ * under, not the row it is assigned to (#165). */
 .session-account-dot {
   flex: 0 0 auto;
   width: 8px;
@@ -689,6 +690,16 @@ body {
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.15);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
+}
+
+/* An assignment that has not reached the pty yet. Sits next to the dot rather
+   than tinting it: accounts are all created the same grey, so a colour change
+   would have nothing to change from. */
+.session-account-pending {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--color-waiting);
 }
 
 /* BETA pill shown in the sidebar header when the running build is a beta
@@ -1114,9 +1125,68 @@ body {
   color: #555;
 }
 
+/* Active-account indicator in the session header (#165). Shared chrome, so it
+   lives here beside the other .header-* rules rather than in a component
+   stylesheet, and it uses the design tokens above as new code should.
+
+   Unlike .header-stats, which is short fixed-format numbers, this carries
+   user-supplied text of any length — a long label plus a long email is easily
+   400px. `flex-shrink: 0` on that pushed .header-actions past the right edge,
+   and body { overflow: hidden } then simply clipped the Restart/Stop/Close
+   buttons off the window with no scroll to reach them. So it shrinks, capped,
+   and the chip's own ellipsis (which needs the min-width: 0 chain to engage)
+   takes the hit instead of the controls.
+
+   .is-idle carries no visual treatment on purpose. It used to be opacity: 0.7,
+   which dropped 11px secondary text to about 2:1 against this surface —
+   unreadable in exactly the state a user opens to find out what a session will
+   start on. What distinguishes idle from running is the chip's own wording
+   (announced as text, not just a title) and the state dot at the other end of
+   the same header. */
+.header-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+}
+
+/* The assignment that has not reached the pty yet. */
+.header-account-pending {
+  font-size: var(--font-size-xs);
+  color: var(--color-waiting);
+  white-space: nowrap;
+}
+
+.header-account-apply {
+  background: none;
+  border: 1px solid var(--color-border-control);
+  color: var(--color-text-muted);
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.header-account-apply:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.header-account-apply:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Last to give way: these are the only controls a session has, and the header
+   has no overflow of its own to reach them through (#165). */
 .header-actions {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .header-action {

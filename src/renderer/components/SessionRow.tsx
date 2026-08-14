@@ -10,7 +10,21 @@ interface SessionRowProps {
   /** 'before' | 'after' when this row is the current drop target. */
   dropPosition: string | null;
   draggable: boolean;
+  /**
+   * The account this row reports. While a pty is running that is the account
+   * it ACTUALLY spawned under, not the database assignment (#165) — the two
+   * differ for as long as a switch goes unapplied.
+   */
   account: ClaudeAccount | null;
+  /**
+   * Set when the session is assigned to an account it is not running under —
+   * `target` being where a restart would take it (null = the default login).
+   * The sidebar is the only place a non-active session's account is visible at
+   * all, inactive headers being display:none, so a group switch the user
+   * declined to restart would otherwise show four sessions as moved while all
+   * four kept billing the old login.
+   */
+  pendingSwitch?: { target: ClaudeAccount | null } | null;
   /**
    * Guests watching this session right now.
    *
@@ -39,10 +53,19 @@ interface SessionRowProps {
   onClose: () => void;
 }
 
-function accountTitle(account: ClaudeAccount, session: Session): string {
-  const email = account.email ? ` (${account.email})` : '';
+function nameOf(account: ClaudeAccount | null): string {
+  if (!account) return 'the default login';
+  return account.email ? `${account.label} (${account.email})` : account.label;
+}
+
+function accountTitle(
+  account: ClaudeAccount,
+  session: Session,
+  pending: { target: ClaudeAccount | null } | null,
+): string {
   const scope = session.claudeAccountId ? ' — session override' : ' — inherited';
-  return `Claude account: ${account.label}${email}${scope}`;
+  const suffix = pending ? `; assigned to ${nameOf(pending.target)}, restart to apply` : '';
+  return `Claude account: ${nameOf(account)}${scope}${suffix}`;
 }
 
 /**
@@ -57,7 +80,7 @@ function accountTitle(account: ClaudeAccount, session: Session): string {
  */
 export const SessionRow: React.FC<SessionRowProps> = ({
   session, isActive, isFocused, isDragging, dropPosition, draggable, account,
-  watchingCount, watchingNames,
+  pendingSwitch = null, watchingCount, watchingNames,
   isEditing, editingName, onEditingNameChange, onStartEdit, onFinishEdit, onCancelEdit,
   onSelect, onContextMenu, onDragStart, onDragEnd, onDragOver, onDrop, onClose,
 }) => {
@@ -114,10 +137,32 @@ export const SessionRow: React.FC<SessionRowProps> = ({
             <span
               className="session-account-dot"
               style={{ background: account.color ?? '#888888' }}
-              title={accountTitle(account, session)}
-              aria-label={`Account: ${account.label}`}
+              title={accountTitle(account, session, pendingSwitch)}
+              aria-label={
+                pendingSwitch
+                  ? `Account: ${account.label}, running; assigned to ${nameOf(pendingSwitch.target)}, restart to apply`
+                  : `Account: ${account.label}`
+              }
               draggable={false}
             />
+          )}
+          {/* Accounts registered before #165 are all the same grey and no UI
+              lets a user recolour one, so tinting the dot could never have
+              carried this. Decorative while the dot beside it names the account
+              — but when the pty is on a deleted account there is no dot, and
+              then this is the only thing on the row with anything to say. */}
+          {pendingSwitch && (
+            <span
+              className="session-account-pending"
+              title="Account switch pending — restart to apply"
+              aria-hidden={account ? true : undefined}
+              role={account ? undefined : 'img'}
+              aria-label={account
+                ? undefined
+                : `Account switch pending; restart to run under ${nameOf(pendingSwitch.target)}`}
+            >
+              ↻
+            </span>
           )}
           <span className="session-info">
             <span className="session-name">{session.name}</span>

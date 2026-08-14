@@ -174,7 +174,7 @@ describe('assignSessionAccount', () => {
     expect(storedUuid('s1')).toBe('uuid-1');
   });
 
-  test('drops the resume UUID when no transcript can be carried over', () => {
+  test('keeps the resume UUID when no transcript can be carried over', () => {
     addAccount('acct-a', true);
     addAccount('acct-b');
     addGroup('g1');
@@ -182,8 +182,12 @@ describe('assignSessionAccount', () => {
 
     accountSwitch.assignSessionAccount('s1', 'acct-b');
 
-    // A stale UUID would burn a doomed --resume on the next spawn.
-    expect(storedUuid('s1')).toBeNull();
+    // #164: this eager copy is best-effort — the authoritative carry happens at
+    // launch, searching every config dir. Dropping the id here destroyed live
+    // conversations, whose transcript was still being appended to in the old
+    // account's tree and simply hadn't arrived yet. The cost of keeping it is
+    // one doomed --resume that the BDHLNDR-9 fallback absorbs.
+    expect(storedUuid('s1')).toBe('uuid-missing');
   });
 
   test('refuses to build a transcript path from an unexpected id format', () => {
@@ -199,11 +203,12 @@ describe('assignSessionAccount', () => {
 
     expect(fs.existsSync(path.join(tmp, 'escape.jsonl'))).toBe(false);
     expect(fs.existsSync(path.join(dirB, 'escape.jsonl'))).toBe(false);
-    // Nothing was carried, so the id is dropped and the respawn starts fresh.
-    expect(storedUuid('s1')).toBeNull();
+    // Refusing to build the path is the security property; the id itself
+    // survives (#164) — deciding a conversation is gone is not this code's job.
+    expect(storedUuid('s1')).toBe('../../escape');
   });
 
-  test('an unreadable projects dir degrades to a fresh conversation', () => {
+  test('an unreadable projects dir does not throw and does not discard the conversation', () => {
     const dirA = addAccount('acct-a', true);
     addAccount('acct-b');
     addGroup('g1');
@@ -213,7 +218,9 @@ describe('assignSessionAccount', () => {
     fs.writeFileSync(path.join(dirA, 'projects'), 'not a directory');
 
     expect(() => accountSwitch.assignSessionAccount('s1', 'acct-b')).not.toThrow();
-    expect(storedUuid('s1')).toBeNull();
+    // A broken machine is not a reason to start a fresh conversation (#164):
+    // the launch-time carry retries against every config dir on respawn.
+    expect(storedUuid('s1')).toBe('uuid-1');
   });
 
   test('leaves an existing transcript in the target dir untouched', () => {
