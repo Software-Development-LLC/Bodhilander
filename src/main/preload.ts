@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -15,10 +15,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('pty:write', id, data),
   resizeSession: (id: string, cols: number, rows: number) =>
     ipcRenderer.send('pty:resize', id, cols, rows),
-  killSession: (id: string) =>
-    ipcRenderer.send('pty:kill', id),
+  killSession: (id: string): Promise<void> =>
+    ipcRenderer.invoke('pty:kill', id),
   primePty: (id: string) =>
     ipcRenderer.send('pty:prime', id),
+  getLiveAccounts: (): Promise<LiveAccountBindings> =>
+    ipcRenderer.invoke('pty:get-live-accounts'),
+  onPtyLiveAccount: (callback: (sessionId: string, binding: LiveAccountBinding | null) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, sessionId: string, binding: LiveAccountBinding | null) =>
+      callback(sessionId, binding);
+    ipcRenderer.on('pty:live-account', listener);
+    return () => ipcRenderer.removeListener('pty:live-account', listener);
+  },
 
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => {

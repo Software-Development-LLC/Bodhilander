@@ -1,0 +1,87 @@
+/* AccountChip (#165) — the single way an account is named across the UI.
+ *
+ * Uses the global design tokens, as global.css asks new code to. The sibling
+ * ClaudeAccountsModal.css deliberately stays on its own #69ADFF family: that
+ * file is internally consistent and is not being migrated here. */
+
+.account-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* --color-text-dim (#666) is 2.7:1 on the header's #252526 and 2.9:1 on the
+     panel's #1e1e1e — below AA at any size, and this text is 11px. The shared
+     --color-text-muted (#888) clears AA on the panel (4.7:1) but lands at 4.3:1
+     on the lighter chrome, so neither token carries both surfaces. This is the
+     lightest value that clears 4.5:1 against the brighter of the two. */
+  --account-chip-email-color: #9a9a9a;
+}
+
+/* SessionRow's dot treatment, so a near-black and a near-white swatch both
+   stay visible against the two surfaces the chip is drawn on. */
+.account-chip-swatch {
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
+  flex: 0 0 auto;
+}
+
+.account-chip-sm .account-chip-swatch {
+  width: 8px;
+  height: 8px;
+}
+
+.account-chip-md .account-chip-swatch {
+  width: 10px;
+  height: 10px;
+}
+
+.account-chip-text {
+  min-width: 0;
+}
+
+.account-chip-sm .account-chip-text {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.account-chip-md .account-chip-text {
+  display: flex;
+  flex-direction: column;
+}
+
+/* min-width: 0 is what makes the ellipsis real: as flex items in the inline
+   layout below, these default to min-width: auto and refuse to shrink past
+   their content, so the truncation never fires and the header overflows. */
+.account-chip-label,
+.account-chip-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.account-chip-sm .account-chip-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.account-chip-md .account-chip-label {
+  font-size: var(--font-size-md);
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.account-chip-email {
+  font-size: var(--font-size-xs);
+  color: var(--account-chip-email-color);
+}
+
+/* The column layout separates label from email by line; the inline one needs a
+   mark, and it is the same interpunct .header-stat already uses. */
+.account-chip-sm .account-chip-email::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--color-text-muted);
+}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ClaudeAccount } from '../../shared/types';
+import { ClaudeAccount, LiveAccountBindings } from '../../shared/types';
 import Terminal from './Terminal';
+import { AccountChip } from './AccountChip';
 import './ClaudeAccountsModal.css';
 
 // -----------------------------------------------------------------------------
@@ -14,14 +15,19 @@ import './ClaudeAccountsModal.css';
 
 export const ClaudeAccountsPanel: React.FC = () => {
   const [accounts, setAccounts] = useState<ClaudeAccount[]>([]);
+  const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
   const [loading, setLoading] = useState(false);
   const [loginFlow, setLoginFlow] = useState<{ account: ClaudeAccount; ptyId: string } | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await window.electronAPI.listAccounts();
+      const [list, live] = await Promise.all([
+        window.electronAPI.listAccounts(),
+        window.electronAPI.getLiveAccounts(),
+      ]);
       setAccounts(list);
+      setLiveAccounts(live);
     } finally {
       setLoading(false);
     }
@@ -38,6 +44,20 @@ export const ClaudeAccountsPanel: React.FC = () => {
     return off;
   }, [refresh]);
 
+  // Ptys come and go while the panel is open — a session started, stopped, or
+  // restarted to apply a switch — and a stale usage count is the one thing that
+  // would make this panel less trustworthy than no count at all.
+  useEffect(() => {
+    return window.electronAPI.onPtyLiveAccount((sessionId, binding) => {
+      setLiveAccounts(prev => {
+        const next = { ...prev };
+        if (binding) next[sessionId] = binding;
+        else delete next[sessionId];
+        return next;
+      });
+    });
+  }, []);
+
   const handleAdd = useCallback(async (label: string) => {
     const result = await window.electronAPI.startAccountLogin(label);
     setLoginFlow(result);
@@ -49,9 +69,21 @@ export const ClaudeAccountsPanel: React.FC = () => {
     await refresh();
   }, [refresh]);
 
-  const handleDelete = useCallback(async (id: string, label: string) => {
+  // The panel computes "N sessions are running on this account" two inches
+  // above this button, and deleting removes the on-disk config dir out from
+  // under those live ptys (#165). Withholding the number here while the dialog
+  // reassures the user that "sessions themselves are kept" is the one place
+  // that count actually had a job to do.
+  const handleDelete = useCallback(async (id: string, label: string, runningSessions: number) => {
+    const subject = runningSessions === 1 ? 'session is' : 'sessions are';
+    const warning = runningSessions > 0
+      ? `\n\n${runningSessions} running ${subject} `
+        + `using this account right now. They keep running, but their account directory goes away `
+        + `with it — restart them onto another account first if you need their conversations.`
+      : '';
     const confirmed = window.confirm(
-      `Delete account "${label}"?\n\nThis removes its saved credentials and unsets any sessions or groups that were bound to it. Sessions themselves are kept.`
+      `Delete account "${label}"?\n\nThis removes its saved credentials and unsets any sessions or `
+      + `groups that were bound to it. Sessions themselves are kept.${warning}`
     );
     if (!confirmed) return;
     await window.electronAPI.deleteAccount(id);
@@ -92,6 +124,12 @@ export const ClaudeAccountsPanel: React.FC = () => {
     }
   }, []);
 
+  // Both empty states render the same box, so the only question is which
+  // sentence goes in it — "still fetching" or "there are genuinely none".
+  const emptyText = loading
+    ? 'Loading…'
+    : 'No accounts yet. Click "Add account" to log in for the first time.';
+
   return (
     <div className="claude-accounts-panel">
       <p className="subtitle">
@@ -99,32 +137,26 @@ export const ClaudeAccountsPanel: React.FC = () => {
         login, so sessions assigned to different accounts can run at the same time.
       </p>
 
-      {loading && accounts.length === 0 ? (
-        <div className="empty">Loading…</div>
-      ) : accounts.length === 0 ? (
-        <div className="empty">No accounts yet. Click "Add account" to log in for the first time.</div>
+      {accounts.length === 0 ? (
+        <div className="empty">{emptyText}</div>
       ) : (
         <ul className="account-list">
-          {accounts.map(acc => (
-            <li key={acc.id} className="account-row">
-              <span className="swatch" style={{ background: acc.color || '#888888' }} />
-              <div className="label">
-                <span className="name">{acc.label}</span>
-                <span className="email">{acc.email || 'Not yet logged in'}</span>
-              </div>
-              {acc.isDefault && <span className="default-tag">default</span>}
-              <div className="row-actions">
-                {!acc.isDefault && (
-                  <button onClick={() => handleSetDefault(acc.id)} title="Use as the default account when a group or session doesn't specify one">
-                    Make default
-                  </button>
-                )}
-                <button className="delete-btn" onClick={() => handleDelete(acc.id, acc.label)}>
-                  Delete
-                </button>
-              </div>
-            </li>
-          ))}
+          {accounts.map(acc => {
+            // Live ptys, not DB assignments — an unapplied switch must not be
+            // reported as usage, and this keeps the panel and the session
+            // header telling the same story.
+            const runningSessions = Object.values(liveAccounts)
+              .filter(b => b.accountId === acc.id).length;
+            return (
+              <AccountRow
+                key={acc.id}
+                account={acc}
+                runningSessions={runningSessions}
+                onMakeDefault={() => handleSetDefault(acc.id)}
+                onDelete={() => handleDelete(acc.id, acc.label, runningSessions)}
+              />
+            );
+          })}
         </ul>
       )}
 
@@ -143,6 +175,65 @@ export const ClaudeAccountsPanel: React.FC = () => {
         />
       )}
     </div>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// One account in the list. Pure — the panel above owns every fetch — so it can
+// be rendered straight from a test without stubbing the account IPC surface.
+// -----------------------------------------------------------------------------
+
+export interface AccountRowProps {
+  account: ClaudeAccount;
+  /** Running ptys currently spawned under this account (#165). 0 renders no badge. */
+  runningSessions: number;
+  onMakeDefault: () => void;
+  onDelete: () => void;
+}
+
+/**
+ * "Which of these am I actually using?" was unanswerable from this list (#165):
+ * every row looked alike whether it had five sessions on it or none, so the
+ * only way to find out what deleting an account would disturb was to delete it.
+ *
+ * The in-use pill answers it with a number rather than a tint, and is filled
+ * where `default` is outlined, so the two read apart at a glance and still read
+ * apart with colour removed entirely.
+ */
+export const AccountRow: React.FC<AccountRowProps> = ({
+  account,
+  runningSessions,
+  onMakeDefault,
+  onDelete,
+}) => {
+  const plural = runningSessions === 1 ? 'session' : 'sessions';
+  return (
+    <li className="account-row">
+      {/* The one surface where "Not yet logged in" describes something the
+          user can act on — this row has the buttons. Everywhere else a missing
+          email renders nothing rather than a status about a working session. */}
+      <AccountChip account={account} size="md" noEmailLabel="Not yet logged in" />
+      {account.isDefault && <span className="default-tag">default</span>}
+      {runningSessions > 0 && (
+        <span
+          className="in-use-tag"
+          title={`${runningSessions} running ${runningSessions === 1 ? 'session is' : 'sessions are'} using this account right now`}
+          aria-label={`In use by ${runningSessions} running ${plural}`}
+        >
+          in use · {runningSessions}
+        </span>
+      )}
+      <div className="row-actions">
+        {!account.isDefault && (
+          <button onClick={onMakeDefault} title="Use as the default account when a group or session doesn't specify one">
+            Make default
+          </button>
+        )}
+        <button className="delete-btn" onClick={onDelete}>
+          Delete
+        </button>
+      </div>
+    </li>
   );
 };
 

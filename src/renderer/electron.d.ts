@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -8,8 +8,12 @@ interface ElectronAPI {
   createSession: (id: string, cwd: string, launchClaude?: boolean, providerId?: string) => Promise<void>;
   writeToSession: (id: string, data: string) => void;
   resizeSession: (id: string, cols: number, rows: number) => void;
-  killSession: (id: string) => void;
+  killSession: (id: string) => Promise<void>;
   primePty: (id: string) => void;
+  /** Live account bindings for every running agent pty, keyed by session id (#165). */
+  getLiveAccounts: () => Promise<LiveAccountBindings>;
+  /** A pty's live account changed: spawned, respawned, or (binding === null) died. */
+  onPtyLiveAccount: (callback: (sessionId: string, binding: LiveAccountBinding | null) => void) => () => void;
 
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => () => void;

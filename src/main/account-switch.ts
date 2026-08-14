@@ -1,11 +1,9 @@
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import log from 'electron-log';
 
 import { AccountSwitchResult, ClaudeAccount } from '../shared/types';
 import { getDatabase } from './database';
 import { resolveAccountForSession } from './account-resolver';
+import { carryTranscript, legacyClaudeConfigDir } from './conversation-transcript';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 
@@ -16,15 +14,19 @@ import * as sessionsRepo from './repositories/sessions';
  * live session therefore keeps billing the old account until its pty respawns.
  *
  * This module owns the two follow-ups the column write can't do on its own:
- *   1. carry the in-flight conversation transcript into the new account's
- *      config dir, so the respawn can still `--resume` it, and
+ *   1. eagerly copy the in-flight conversation transcript into the new
+ *      account's config dir, so the respawn can still `--resume` it, and
  *   2. report which sessions changed effective account, so the renderer knows
  *      which ptys to restart.
+ *
+ * The copy is an optimisation, not the guarantee (#164): a live pty keeps
+ * appending to the old account's tree until it dies, so the authoritative
+ * carry happens at launch in conversation-transcript.ts.
  */
 
 /** Config dir a session runs under when no account resolves (pre-accounts behavior). */
 function configDirOf(account: ClaudeAccount | null): string {
-  return account?.configDir ?? path.join(os.homedir(), '.claude');
+  return account?.configDir ?? legacyClaudeConfigDir();
 }
 
 /**
@@ -78,18 +80,14 @@ export function assignGroupAccount(
 }
 
 /**
- * Keep a session's conversation alive across an account change.
+ * Best-effort eager copy of the conversation into the new account's tree.
  *
- * Claude Code stores transcripts under <configDir>/projects/<cwd-slug>/<uuid>.jsonl
- * and reads that tree on `--resume`. After a switch the stored UUID points into
- * the *old* account's tree, so the next launch would fail to resume and land in
- * PtyManager's resume-failure fallback — a fresh conversation, history orphaned.
- * Copying the transcript across preserves continuity, which is the whole point
- * of switching mid-task when an account runs out.
- *
- * When the transcript can't be carried over (missing, unreadable, copy failed)
- * we drop the stored UUID instead, so the respawn starts a clean conversation
- * rather than burning a doomed `--resume` attempt.
+ * The authoritative carry now happens at LAUNCH (PtyManager.buildAgentSpawn,
+ * #164), which searches every known config dir — so a failure here is not a
+ * lost conversation and must not be treated as one. Dropping the stored UUID
+ * on failure, as this used to, destroyed live conversations: for a running
+ * session the transcript is still being appended to in the OLD account's tree
+ * and simply hadn't arrived yet.
  */
 function rehomeConversation(
   sessionId: string,
@@ -99,81 +97,13 @@ function rehomeConversation(
   const uuid = sessionsRepo.getClaudeSessionId(sessionId);
   if (!uuid) return; // Never launched — nothing to carry.
 
-  if (carryTranscript(uuid, configDirOf(from), configDirOf(to))) return;
-
-  try {
-    sessionsRepo.clearClaudeSessionId(sessionId);
-  } catch (err) {
-    log.error(`[Accounts] Failed to clear claude_session_id for ${sessionId}:`, err);
-  }
-}
-
-/**
- * A conversation id we're willing to interpolate into a filesystem path.
- *
- * Today these are always crypto.randomUUID() output written by this app, so
- * nothing in the current flow can produce a hostile value — but the id reaches
- * us from a database column and is used to build a path, and that pairing
- * shouldn't rest on an assumption about the writer. Rejecting separators and
- * traversal makes the containment local and checkable.
- */
-const PATH_SAFE_CONVERSATION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-function isPathSafeConversationId(uuid: string): boolean {
-  return PATH_SAFE_CONVERSATION_ID.test(uuid) && !uuid.includes('..');
-}
-
-/** @returns true when the transcript is readable from the target config dir. */
-function carryTranscript(uuid: string, fromDir: string, toDir: string): boolean {
-  if (!isPathSafeConversationId(uuid)) {
-    // Not a shape we'd ever have written — refuse to build a path from it and
-    // let the caller drop the id, which restarts on a fresh conversation.
-    log.warn(`[Accounts] Refusing to carry conversation with unexpected id format: ${uuid}`);
-    return false;
+  if (carryTranscript(uuid, configDirOf(from), configDirOf(to))) {
+    log.info(`[Accounts] Conversation ${uuid} is readable from the new account for ${sessionId}`);
+    return;
   }
 
-  try {
-    const source = findTranscript(fromDir, uuid);
-    if (!source) return false;
-
-    // Mirror the source's project-slug dir; the slug is derived from the
-    // session cwd, which the switch doesn't change.
-    const slug = path.basename(path.dirname(source));
-    const targetDir = path.join(toDir, 'projects', slug);
-    const target = path.join(targetDir, `${uuid}.jsonl`);
-    if (fs.existsSync(target)) return true;
-
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.copyFileSync(source, target);
-    log.info(`[Accounts] Carried conversation ${uuid} to ${targetDir}`);
-    return true;
-  } catch (err) {
-    log.warn(`[Accounts] Could not carry conversation ${uuid} across accounts:`, err);
-    return false;
-  }
-}
-
-/** Locate <configDir>/projects/<any-slug>/<uuid>.jsonl without recomputing the slug. */
-function findTranscript(configDir: string, uuid: string): string | null {
-  const projects = path.join(configDir, 'projects');
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(projects, { withFileTypes: true });
-  } catch (err) {
-    // A missing projects/ dir is the ordinary "no transcripts yet" case and
-    // stays quiet. Anything else — permissions, I/O — is an environment
-    // problem, and silently reading it as "nothing to carry" would present a
-    // broken machine as a routine fresh conversation.
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      log.warn(`[Accounts] Could not read ${projects} while carrying a conversation:`, err);
-    }
-    return null;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const candidate = path.join(projects, entry.name, `${uuid}.jsonl`);
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
+  log.warn(
+    `[Accounts] Could not eagerly carry conversation ${uuid} for ${sessionId}; ` +
+    'the launch-time search will retry when the pty respawns.'
+  );
 }
