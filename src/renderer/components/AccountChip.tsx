@@ -58,10 +58,21 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   noEmailLabel,
 }) => {
   const label = account ? account.label : emptyLabel;
-  // Falsiness, not nullishness: a row whose email column is an empty string is
-  // as unidentified as one that is null, and both must reach noEmailLabel.
-  const emailText = account?.email ? account.email : noEmailLabel;
+
+  // Deliberately not `??`. parseAccountEmail (account-auth.ts) resolves its
+  // candidate paths with a ?? chain, so a credentials file carrying an empty
+  // email yields '' rather than null, and mapAccountRow preserves it. A blank
+  // email is as unidentified as a missing one, so both must reach
+  // noEmailLabel — which nullish coalescing would not do.
+  const storedEmail = account?.email;
+  let emailText = noEmailLabel;
+  if (storedEmail && storedEmail.trim()) emailText = storedEmail;
   const email = account ? emailText : null;
+
+  // Same reasoning: an account row written with an empty colour falls back to
+  // the shared default rather than painting the swatch with nothing.
+  let swatch = DEFAULT_SWATCH;
+  if (account?.color) swatch = account.color;
 
   const titleParts = [`Claude account: ${label}`];
   if (account?.email) titleParts.push(` (${account.email})`);
@@ -76,7 +87,7 @@ export const AccountChip: React.FC<AccountChipProps> = ({
       <span
         className="account-chip-swatch"
         aria-hidden="true"
-        style={{ background: account?.color ? account.color : DEFAULT_SWATCH }}
+        style={{ background: swatch }}
       />
       <span className="account-chip-text">
         <span className="account-chip-label">{label}</span>
