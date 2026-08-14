@@ -48,7 +48,8 @@ export function carryTranscript(uuid: string, fromDir: string, toDir: string): b
     const source = findTranscript(fromDir, uuid);
     if (!source) return false;
 
-    return copyTranscriptInto(source, toDir, uuid);
+    copyTranscriptInto(source, toDir, uuid);
+    return true;
   } catch (err) {
     log.warn(`[Accounts] Could not carry conversation ${uuid} across accounts:`, err);
     return false;
@@ -64,22 +65,25 @@ export function carryTranscript(uuid: string, fromDir: string, toDir: string): b
  * Only the launch-time carry turns it on, and only once it has established by
  * mtime AND size that what is already there is an older state of the same
  * append-only file.
+ *
+ * Returns nothing: the only failure mode is a thrown fs error, and every
+ * caller already sits inside a try/catch that decides what a failure means in
+ * its own terms.
  */
 function copyTranscriptInto(
   source: string,
   toDir: string,
   uuid: string,
   overwrite = false,
-): boolean {
+): void {
   const slug = path.basename(path.dirname(source));
   const targetDir = path.join(toDir, 'projects', slug);
   const target = path.join(targetDir, `${uuid}.jsonl`);
-  if (!overwrite && fs.existsSync(target)) return true;
+  if (!overwrite && fs.existsSync(target)) return;
 
   fs.mkdirSync(targetDir, { recursive: true });
   fs.copyFileSync(source, target);
   log.info(`[Accounts] Carried conversation ${uuid} to ${targetDir}`);
-  return true;
 }
 
 /** mtime + size, or null when the file can't be stat'd (raced away, unreadable). */

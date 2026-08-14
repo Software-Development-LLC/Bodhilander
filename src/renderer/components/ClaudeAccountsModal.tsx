@@ -75,8 +75,9 @@ export const ClaudeAccountsPanel: React.FC = () => {
   // reassures the user that "sessions themselves are kept" is the one place
   // that count actually had a job to do.
   const handleDelete = useCallback(async (id: string, label: string, runningSessions: number) => {
+    const subject = runningSessions === 1 ? 'session is' : 'sessions are';
     const warning = runningSessions > 0
-      ? `\n\n${runningSessions} running ${runningSessions === 1 ? 'session is' : 'sessions are'} `
+      ? `\n\n${runningSessions} running ${subject} `
         + `using this account right now. They keep running, but their account directory goes away `
         + `with it — restart them onto another account first if you need their conversations.`
       : '';
@@ -123,6 +124,12 @@ export const ClaudeAccountsPanel: React.FC = () => {
     }
   }, []);
 
+  // Both empty states render the same box, so the only question is which
+  // sentence goes in it — "still fetching" or "there are genuinely none".
+  const emptyText = loading
+    ? 'Loading…'
+    : 'No accounts yet. Click "Add account" to log in for the first time.';
+
   return (
     <div className="claude-accounts-panel">
       <p className="subtitle">
@@ -130,10 +137,8 @@ export const ClaudeAccountsPanel: React.FC = () => {
         login, so sessions assigned to different accounts can run at the same time.
       </p>
 
-      {loading && accounts.length === 0 ? (
-        <div className="empty">Loading…</div>
-      ) : accounts.length === 0 ? (
-        <div className="empty">No accounts yet. Click "Add account" to log in for the first time.</div>
+      {accounts.length === 0 ? (
+        <div className="empty">{emptyText}</div>
       ) : (
         <ul className="account-list">
           {accounts.map(acc => {

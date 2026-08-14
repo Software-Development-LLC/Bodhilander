@@ -351,11 +351,11 @@ describe('pty identity (#164)', () => {
     const b = manager.kill('session-1');
 
     let settled = 0;
-    void a.then(() => { settled++; });
-    void b.then(() => { settled++; });
+    const aSettled = a.then(() => { settled++; });
+    const bSettled = b.then(() => { settled++; });
 
     first.exitCb!({ exitCode: 0 });
-    await Promise.all([a, b]);
+    await Promise.all([aSettled, bSettled]);
     expect(settled).toBe(2);
   });
 

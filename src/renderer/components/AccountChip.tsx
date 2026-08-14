@@ -26,6 +26,13 @@ export interface AccountChipProps {
 }
 
 /**
+ * Swatch for an account that has no colour of its own — every account
+ * registered before #165 started assigning them from the sidebar palette.
+ * Matches the repository's own default so old and new rows agree.
+ */
+const DEFAULT_SWATCH = '#888888';
+
+/**
  * One account, named the same way everywhere (#165).
  *
  * An account has no email until a login writes one, and on macOS the login
@@ -51,7 +58,10 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   noEmailLabel,
 }) => {
   const label = account ? account.label : emptyLabel;
-  const email = account ? (account.email || noEmailLabel) : null;
+  // Falsiness, not nullishness: a row whose email column is an empty string is
+  // as unidentified as one that is null, and both must reach noEmailLabel.
+  const emailText = account?.email ? account.email : noEmailLabel;
+  const email = account ? emailText : null;
 
   const titleParts = [`Claude account: ${label}`];
   if (account?.email) titleParts.push(` (${account.email})`);
@@ -66,7 +76,7 @@ export const AccountChip: React.FC<AccountChipProps> = ({
       <span
         className="account-chip-swatch"
         aria-hidden="true"
-        style={{ background: account?.color || '#888888' }}
+        style={{ background: account?.color ? account.color : DEFAULT_SWATCH }}
       />
       <span className="account-chip-text">
         <span className="account-chip-label">{label}</span>

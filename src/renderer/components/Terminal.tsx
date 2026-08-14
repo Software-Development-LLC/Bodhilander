@@ -855,13 +855,13 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // them should offer a button that spawns a pty (#164).
   if (restarting) {
     return (
-      <div className="terminal-stopped terminal-restarting" role="status">
+      <output className="terminal-stopped terminal-restarting">
         {installHintUi}
         <p>Waiting for the session to exit…</p>
         <p className="terminal-restarting-detail">
           It will start again on its own. Claude Code can take a few seconds to shut down.
         </p>
-      </div>
+      </output>
     );
   }
 

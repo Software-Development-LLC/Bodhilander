@@ -213,7 +213,7 @@ function getWaitingPatterns(provider: ProviderDefinition | null): readonly RegEx
 
 export class PtyManager extends EventEmitter {
   private sessions: Map<string, PtySession> = new Map();
-  private pendingKills: Map<string, PendingKill> = new Map();
+  private readonly pendingKills: Map<string, PendingKill> = new Map();
   private socketPath: string;
 
   constructor() {
@@ -404,9 +404,9 @@ export class PtyManager extends EventEmitter {
       const transcriptOnDisk = session?.transcriptStaged === 'present'
         || session?.transcriptStaged === 'carried';
 
-      if (resumeFailedEarly && transcriptOnDisk) {
+      if (resumeFailedEarly && transcriptOnDisk && session?.provider) {
         log.warn(
-          `[PTY] ${session!.provider!.name} exited ${exitCode} for session ${id} within the resume ` +
+          `[PTY] ${session.provider.name} exited ${exitCode} for session ${id} within the resume ` +
           `window, but its transcript is staged in the config dir it launched under — keeping the ` +
           `conversation id and surfacing the exit instead of starting over.`
         );

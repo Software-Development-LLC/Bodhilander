@@ -26,31 +26,38 @@ class FakeBuffer {
   active = { baseY: 0, viewportY: 0 };
 }
 
+/**
+ * The xterm surface Terminal.tsx calls but these tests never assert on. Shared
+ * so the fakes below declare which calls they tolerate without each one being
+ * an empty body.
+ */
+const noop = () => {};
+
 class FakeTerm {
   cols = 120;
   rows = 40;
   buffer = new FakeBuffer();
   disposed = false;
-  loadAddon() {}
-  open() {}
-  write() {}
-  clear() {}
-  focus() {}
-  selectAll() {}
-  scrollToBottom() {}
-  resize() {}
-  getSelection() { return ''; }
-  attachCustomKeyEventHandler() {}
-  onData() {}
-  dispose() { this.disposed = true; }
+  loadAddon = noop;
+  open = noop;
+  write = noop;
+  clear = noop;
+  focus = noop;
+  selectAll = noop;
+  scrollToBottom = noop;
+  resize = noop;
+  getSelection = () => '';
+  attachCustomKeyEventHandler = noop;
+  onData = noop;
+  dispose = () => { this.disposed = true; };
 }
 
 mock.module('xterm', () => ({ Terminal: FakeTerm }));
-mock.module('xterm-addon-fit', () => ({ FitAddon: class { fit() {} } }));
+mock.module('xterm-addon-fit', () => ({ FitAddon: class { fit = noop; } }));
 mock.module('xterm-addon-webgl', () => ({
   // Terminal loads this one behind a try/catch inside a rAF; throwing here
   // would exercise the fallback path rather than the restart path.
-  WebglAddon: class { onContextLoss() {} dispose() {} },
+  WebglAddon: class { onContextLoss = noop; dispose = noop; },
 }));
 
 const Terminal = (await import('../Terminal')).default;
@@ -81,8 +88,8 @@ beforeEach(() => {
 
   // happy-dom has no ResizeObserver; the terminal observes its container.
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
-    observe() {}
-    disconnect() {}
+    observe = noop;
+    disconnect = noop;
   };
 
   const noopSub = () => () => {};
