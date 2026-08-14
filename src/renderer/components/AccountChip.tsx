@@ -66,7 +66,7 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   // noEmailLabel — which nullish coalescing would not do.
   const storedEmail = account?.email;
   let emailText = noEmailLabel;
-  if (storedEmail && storedEmail.trim()) emailText = storedEmail;
+  if (storedEmail?.trim()) emailText = storedEmail;
   const email = account ? emailText : null;
 
   // Same reasoning: an account row written with an empty colour falls back to
