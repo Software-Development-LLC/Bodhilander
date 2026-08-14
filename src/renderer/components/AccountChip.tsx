@@ -64,9 +64,14 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   // email yields '' rather than null, and mapAccountRow preserves it. A blank
   // email is as unidentified as a missing one, so both must reach
   // noEmailLabel — which nullish coalescing would not do.
-  const storedEmail = account?.email;
+  //
+  // The trimmed value is also what renders. The same parse can hand back an
+  // email with the file's trailing newline still on it, and a chip that has
+  // one line of room for "label email" must not spend it on whitespace — nor
+  // may the tooltip disagree with the text beside it (#165).
+  const trimmedEmail = account?.email?.trim();
   let emailText = noEmailLabel;
-  if (storedEmail?.trim()) emailText = storedEmail;
+  if (trimmedEmail) emailText = trimmedEmail;
   const email = account ? emailText : null;
 
   // Same reasoning: an account row written with an empty colour falls back to
@@ -75,7 +80,7 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   if (account?.color) swatch = account.color;
 
   const titleParts = [`Claude account: ${label}`];
-  if (account?.email) titleParts.push(` (${account.email})`);
+  if (trimmedEmail) titleParts.push(` (${trimmedEmail})`);
   if (detail) titleParts.push(` — ${detail}`);
 
   return (

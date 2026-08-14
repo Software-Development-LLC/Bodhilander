@@ -4,13 +4,20 @@
  * creation (no await between check and insert), so overlapping calls can't
  * both become the default.
  *
- * electron, the accounts repo (better-sqlite3), mcp-config, pty-manager
- * (node-pty), and the seed helper are all stubbed; the flow's own fs usage
- * (mkdir, watch) runs against a temp userData dir.
+ * electron, mcp-config, pty-manager (node-pty), and the seed helper are all
+ * stubbed; the flow's own fs usage (mkdir, watch) runs against a temp userData
+ * dir. The accounts repository runs REAL against an in-memory bun:sqlite
+ * standing in for '../database' — the same shape account-switch.test.ts uses.
+ * It used to be a hand-rolled array fake, but bun's mock.module patches a
+ * specifier for the whole test process, so that fake silently became the
+ * subject of repositories/__tests__/accounts.test.ts. Going through the real
+ * repository also makes the overlapping-login test mean more: the default flag
+ * now has to survive the partial unique index the real schema carries.
  *
  * Run with: bun test src/main/__tests__
  */
 import { describe, expect, test, mock, beforeEach, afterEach } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -23,30 +30,46 @@ mock.module('electron', () => ({
   BrowserWindow: Object,
 }));
 
-interface AccountRow {
-  id: string;
-  label: string;
-  configDir: string;
-  isDefault: boolean;
-}
-const accounts: AccountRow[] = [];
-mock.module('../repositories/accounts', () => ({
-  getAllAccounts: () => [...accounts],
-  createAccount: (a: AccountRow) => {
-    accounts.push(a);
-    return { ...a, email: null, createdAt: new Date() };
-  },
-  updateAccount: () => undefined,
-  deleteAccount: (id: string) => {
-    const i = accounts.findIndex((a) => a.id === id);
-    if (i >= 0) accounts.splice(i, 1);
-  },
-  getAccount: (id: string) => accounts.find((a) => a.id === id) ?? null,
-  // Unused here, but pty-manager imports these names from the same module —
-  // bun's mock.module patches globally, so keep the surface a superset.
-  resolveAccountForSession: () => null,
-  touchAccount: () => undefined,
+let db: Database;
+mock.module('../database', () => ({
+  getDatabase: () => db,
 }));
+
+/**
+ * Post-migration schema for the tables the login flow can touch. sessions and
+ * groups are here because the rollback path (spawn failure → deleteAccount)
+ * NULLs their claude_account_id.
+ */
+function freshDb(): Database {
+  const d = new Database(':memory:');
+  d.exec(`
+    CREATE TABLE claude_accounts (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      config_dir TEXT NOT NULL UNIQUE,
+      email TEXT,
+      color TEXT DEFAULT '#888888',
+      is_default INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      last_used_at TEXT
+    );
+    CREATE UNIQUE INDEX idx_claude_accounts_single_default
+      ON claude_accounts(is_default) WHERE is_default = 1;
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      group_id TEXT,
+      name TEXT NOT NULL,
+      working_dir TEXT NOT NULL,
+      claude_account_id TEXT DEFAULT NULL
+    );
+    CREATE TABLE groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      claude_account_id TEXT DEFAULT NULL
+    );
+  `);
+  return d;
+}
 
 // Stubbed so the flow never writes into a real ~/.claude. registerHooks is the
 // only registration left now that the memory MCP server is gone; the calls are
@@ -93,9 +116,21 @@ function fakePtyManager(): PtyManager & { loginSessions: string[] } {
   return stub as unknown as PtyManager & { loginSessions: string[] };
 }
 
+/**
+ * Registered accounts in creation order. Deliberately not getAllAccounts(),
+ * which sorts the default first — that would hide which login was first, and
+ * "the first caller is the one that became default" is the property these
+ * tests exist to hold.
+ */
+function storedAccounts(): { id: string; isDefault: boolean }[] {
+  return (db.prepare('SELECT id, is_default FROM claude_accounts ORDER BY created_at ASC, rowid ASC')
+    .all() as { id: string; is_default: number }[])
+    .map((r) => ({ id: r.id, isDefault: Boolean(r.is_default) }));
+}
+
 beforeEach(() => {
   userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'account-auth-'));
-  accounts.length = 0;
+  db = freshDb();
   seedCalls.length = 0;
   hookRegistrations.length = 0;
   seedDelayMs = 0;
@@ -111,8 +146,7 @@ describe('startLoginFlow legacy seeding', () => {
     const { account, ptyId } = await accountAuth.startLoginFlow(pty, null, 'Work');
 
     expect(seedCalls).toEqual([account.configDir]);
-    expect(accounts.length).toBe(1);
-    expect(accounts[0].isDefault).toBe(true);
+    expect(storedAccounts()).toEqual([{ id: account.id, isDefault: true }]);
     expect(pty.loginSessions).toEqual([ptyId]);
     // Hooks land in the account's isolated config dir, not the global ~/.claude
     // (BDHLNDR-31), and before the login pty spawns.
@@ -127,7 +161,10 @@ describe('startLoginFlow legacy seeding', () => {
     const second = await accountAuth.startLoginFlow(pty, null, 'Personal');
 
     expect(seedCalls).toEqual([first.account.configDir]);
-    expect(accounts.map((a) => a.isDefault)).toEqual([true, false]);
+    expect(storedAccounts()).toEqual([
+      { id: first.account.id, isDefault: true },
+      { id: second.account.id, isDefault: false },
+    ]);
     // Seeding is first-account-only; hook registration is per-account.
     expect(hookRegistrations).toEqual([first.account.configDir, second.account.configDir]);
 
@@ -144,8 +181,14 @@ describe('startLoginFlow legacy seeding', () => {
       accountAuth.startLoginFlow(pty, null, 'Two'),
     ]);
 
-    expect(accounts.length).toBe(2);
-    expect(accounts.filter((acc) => acc.isDefault).length).toBe(1);
+    // Naming which account is default, not just counting them: the real
+    // repository demotes the incumbent on every isDefault insert, so a widened
+    // check-then-act window still yields exactly one default — it just makes it
+    // the SECOND login. Only the first caller saw an empty table.
+    expect(storedAccounts()).toEqual([
+      { id: a.account.id, isDefault: true },
+      { id: b.account.id, isDefault: false },
+    ]);
     expect(seedCalls.length).toBe(1);
 
     accountAuth.cancelLoginFlow(pty, a.ptyId, false);

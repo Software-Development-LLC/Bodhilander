@@ -45,6 +45,26 @@ describe('AccountChip', () => {
     expect(document.body.textContent).not.toContain('Not yet logged in');
   });
 
+  test('a padded email renders trimmed, in the text and the tooltip alike', () => {
+    // The stored value is whatever parseAccountEmail read out of the
+    // credentials file, newline and all. The falsiness check below already
+    // treated '   ' as unidentified; rendering the untrimmed string meant a
+    // real address still arrived with its padding attached, so the chip's one
+    // line of room went on whitespace and the tooltip disagreed with the text.
+    render(<AccountChip account={account({ email: '  a@b.com  ' })} />);
+    const rendered = document.querySelector('.account-chip-email') as HTMLElement;
+    expect(rendered.textContent).toBe('a@b.com');
+    expect(chip().getAttribute('title')).toContain('(a@b.com)');
+    expect(chip().getAttribute('title')).not.toContain('(  a@b.com  )');
+  });
+
+  test('a whitespace-only email is as unidentified as a missing one', () => {
+    render(<AccountChip account={account({ email: '   ' })} noEmailLabel="Not yet logged in" />);
+    expect(screen.getByText('Not yet logged in')).toBeTruthy();
+    // And the tooltip agrees — it used to append an empty parenthetical.
+    expect(chip().getAttribute('title')).toBe('Claude account: Personal');
+  });
+
   test('a caller that can act on a missing login may name it', () => {
     render(<AccountChip account={account({ email: null })} noEmailLabel="Not yet logged in" />);
     expect(screen.getByText('Not yet logged in')).toBeTruthy();

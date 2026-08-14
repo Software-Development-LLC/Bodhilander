@@ -58,11 +58,14 @@ function fakeSpawn(file: string, args: string[], opts: { cols: number; rows: num
 // Mock discipline: bun's mock.module patches a specifier for the whole test
 // process, so ONLY mock modules that no other test file exercises for real
 // (node-pty, electron-log) or that are mocked with a compatible shape
-// elsewhere (electron, preferences, accounts, shell-detector). The provider
-// registry, sessions repository, and key-vault are used REAL —
-// resolve.test/sessions.test/key-vault.test cover them — which works because
-// these tests run codex, a passthrough provider whose capabilities are all
-// false, so no DB-backed function is ever called.
+// elsewhere (electron, preferences, shell-detector). The provider registry,
+// sessions repository, accounts repository, account resolver, and key-vault
+// are used REAL — resolve.test/sessions.test/accounts.test/key-vault.test
+// cover them — which works because these tests run codex, a passthrough
+// provider whose capabilities are all false, so no DB-backed function is ever
+// called. The accounts repository in particular must NOT be mocked here:
+// repositories/__tests__/accounts.test.ts tests it for real, and a mock
+// registered by this file would silently become that file's subject.
 mock.module('node-pty', () => ({ spawn: fakeSpawn }));
 mock.module('electron-log', () => ({
   default: { info() {}, warn() {}, error() {} },
@@ -76,17 +79,6 @@ mock.module('../repositories/preferences', () => ({
   getPreference: () => null,
   setPreference: () => {},
   deletePreference: () => {},
-}));
-// Superset of the accounts-repo surface so account-auth.ts stays satisfied
-// no matter which file's mock a given evaluation order leaves in place.
-mock.module('../repositories/accounts', () => ({
-  resolveAccountForSession: () => null,
-  touchAccount: () => {},
-  getAllAccounts: () => [],
-  createAccount: (a: unknown) => a,
-  updateAccount: () => undefined,
-  deleteAccount: () => undefined,
-  getAccount: () => null,
 }));
 // Any real, existing executable path works — the pty spawn is mocked.
 mock.module('../shell-detector', () => ({

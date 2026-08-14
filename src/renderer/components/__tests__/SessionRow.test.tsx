@@ -179,6 +179,51 @@ describe('SessionRow', () => {
     expect(document.querySelector('.session-account-pending')).toBeTruthy();
   });
 
+  test('a pending switch on a deleted account still names itself', () => {
+    // Delete the account out from under a running session and the dot goes
+    // with it — there is no account object left to colour or name. The marker
+    // is then the only thing on the row that knows the pty is not where the
+    // database says it is, so it stops being decorative and becomes an image
+    // with a name of its own (#165).
+    renderRow({
+      account: null,
+      pendingSwitch: { target: { id: 'a2', label: 'Personal', email: 'p@x.test', color: '#98c379' } },
+    });
+
+    expect(document.querySelector('.session-account-dot')).toBeNull();
+    // By accessible name, not by presence: an unnamed span in the a11y tree is
+    // exactly the failure this branch exists to prevent.
+    const marker = screen.getByRole('img', {
+      name: 'Account switch pending; restart to run under Personal (p@x.test)',
+    });
+    expect(marker.className).toContain('session-account-pending');
+    expect(marker.hasAttribute('aria-hidden')).toBe(false);
+  });
+
+  test('a deleted account switching back to the default login says so', () => {
+    // nameOf(null) is the default ~/.claude login, and "restart to run under
+    // the default login" is the whole instruction — a bare "switch pending"
+    // would not tell the user where a restart lands them.
+    renderRow({ account: null, pendingSwitch: { target: null } });
+    expect(screen.getByRole('img', {
+      name: 'Account switch pending; restart to run under the default login',
+    })).toBeTruthy();
+  });
+
+  test('the marker stays decorative while the dot is there to name the account', () => {
+    // Two things saying "Work" into a screen reader is worse than one; the dot
+    // already carries the pending wording in its own label.
+    renderRow({
+      account: { id: 'a1', label: 'Work', email: 'w@x.test', color: '#61afef' },
+      pendingSwitch: { target: { id: 'a2', label: 'Personal', email: 'p@x.test', color: '#98c379' } },
+    });
+    const marker = document.querySelector('.session-account-pending') as HTMLElement;
+    expect(marker.getAttribute('aria-hidden')).toBe('true');
+    expect(marker.hasAttribute('role')).toBe(false);
+    expect(marker.hasAttribute('aria-label')).toBe(false);
+    expect(screen.queryAllByRole('img')).toHaveLength(0);
+  });
+
   test('no pending marker when the pty is on the account it is assigned to', () => {
     renderRow({ account: { id: 'a1', label: 'Work', email: null, color: '#61afef' } });
     expect(document.querySelector('.session-account-pending')).toBeNull();
