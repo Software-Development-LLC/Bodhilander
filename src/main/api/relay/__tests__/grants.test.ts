@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   buildGrantMessage,
+  buildShareCreateMessage,
   checkCertificate,
   COMMAND_CAPS,
   DENY_ALL,
@@ -11,6 +12,9 @@ import {
   grantFrom,
   isSessionScoped,
   MINTABLE_ROLES,
+  GRANT_NEVER_EXPIRES,
+  GRANT_TTL_UNTIL_REVOKED,
+  grantExpiryAt,
   ownerGrant,
   parseCertificate,
   permits,
@@ -18,6 +22,7 @@ import {
   verifyCertificateSignature,
   type Cap,
   type GrantParts,
+  type ShareCreateParts,
 } from '../grants';
 
 const FIXTURE = JSON.parse(
@@ -32,6 +37,7 @@ const FIXTURE = JSON.parse(
     signatureB64url: string;
     certificate: string;
   };
+  shareCreate: { parts: ShareCreateParts; message: string };
   policy: {
     caps: Cap[];
     roleCaps: Record<string, Cap[]>;
@@ -96,6 +102,22 @@ describe('the checked-in certificate vector', () => {
 
   test('parsing the fixture yields exactly the fixture parts', () => {
     expect(parseCertificate(VEC.certificate)!.parts).toEqual(VEC.parts);
+  });
+});
+
+describe('the checked-in share-create vector', () => {
+  test('builds byte-for-byte what the relay expects to verify', () => {
+    // The two trees build this message independently. A drift is invisible
+    // until it lands as "relay rejected the share request (401)" for someone
+    // who did nothing wrong.
+    expect(new TextDecoder().decode(buildShareCreateMessage(FIXTURE.shareCreate.parts))).toBe(
+      FIXTURE.shareCreate.message,
+    );
+  });
+
+  test('an until-revoked TTL travels as 0, not as an omission or a large number', () => {
+    expect(FIXTURE.shareCreate.parts.grantTtlSeconds).toBe(0);
+    expect(FIXTURE.shareCreate.message.split('\n')[4]).toBe('0');
   });
 });
 
@@ -355,5 +377,41 @@ describe('policy immutability', () => {
     const g = grantFrom({ ...VEC.parts, role: 'viewer' }, scope);
     scope.push('s2');
     expect(permits(g, 'terminal:subscribe', 's2', VEC.parts.issuedAt + 1)).toBe(false);
+  });
+});
+
+/**
+ * "Until I revoke it" (#171). The clock is not what bounds a share — the
+ * desktop's own table is, and it is consulted on every open — so an expiry
+ * the owner never has to renew is a real option rather than a loophole.
+ */
+describe('grantExpiryAt', () => {
+  const now = 1_700_000_000_000;
+
+  test('a TTL of seconds is that many seconds from now', () => {
+    expect(grantExpiryAt(now, 4 * 3600)).toBe(now + 4 * 3600 * 1000);
+  });
+
+  test('the until-revoked sentinel expires at the end of representable time', () => {
+    expect(GRANT_TTL_UNTIL_REVOKED).toBe(0);
+    expect(grantExpiryAt(now, GRANT_TTL_UNTIL_REVOKED)).toBe(GRANT_NEVER_EXPIRES);
+  });
+
+  test('that expiry is a safe integer and a valid Date, so nothing has to special-case it', () => {
+    // Every expiry check in both trees is a plain comparison, and
+    // `assertGrantFieldsSafe` refuses anything that is not a safe integer.
+    expect(Number.isSafeInteger(GRANT_NEVER_EXPIRES)).toBe(true);
+    expect(Number.isNaN(new Date(GRANT_NEVER_EXPIRES).getTime())).toBe(false);
+  });
+
+  test('an unexpiring grant is still stopped by revocation', () => {
+    // Which is the whole reason it is safe to offer: what ends the share is
+    // the owner, not the clock.
+    const live = grantFrom(
+      { ...FIXTURE.certificate.parts, expiresAt: GRANT_NEVER_EXPIRES },
+      ['s1'],
+    );
+    expect(permits(live, 'terminal:subscribe', 's1', GRANT_NEVER_EXPIRES - 1)).toBe(true);
+    expect(permits(DENY_ALL, 'terminal:subscribe', 's1', now)).toBe(false);
   });
 });

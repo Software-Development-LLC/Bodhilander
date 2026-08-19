@@ -5,11 +5,13 @@ import { openDb, type RelayDb } from './db';
 import { createRepositories, type Repositories } from './repositories';
 import {
   buildGrantMessage,
+  buildShareCreateMessage,
   formatCertificate,
   GRANT_VERSION,
   MINTABLE_ROLES,
   parseCertificate,
   type GrantParts,
+  type ShareCreateParts,
 } from './protocol';
 import { verifyEd25519, fromBase64 } from './crypto';
 
@@ -34,6 +36,7 @@ const FIXTURE = JSON.parse(
     signatureB64url: string;
     certificate: string;
   };
+  shareCreate: { parts: ShareCreateParts; message: string };
   policy: { mintableRoles: string[] };
 };
 
@@ -59,6 +62,17 @@ describe('grant certificate wire format', () => {
 
   test('parsing yields exactly the fixture parts', () => {
     expect(parseCertificate(VEC.certificate)!.parts).toEqual(VEC.parts);
+  });
+
+  test('the share-create message matches the desktop byte for byte', () => {
+    // This one the relay DOES evaluate: it verifies the signature over these
+    // bytes before creating an invite, so a drift here rejects a share request
+    // from a machine that did everything right. `grantTtlSeconds: 0` — until
+    // revoked — is in the vector because it is the field most likely to be
+    // defaulted away by one tree and not the other.
+    expect(Buffer.from(buildShareCreateMessage(FIXTURE.shareCreate.parts)).toString('utf8')).toBe(
+      FIXTURE.shareCreate.message,
+    );
   });
 
   test('mintable roles match the fixture and exclude owner', () => {

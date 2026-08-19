@@ -205,12 +205,29 @@ describe('POST /api/machines/:id/shares', () => {
     }
   });
 
-  test('rejects a TTL beyond the ceiling', async () => {
+  test('rejects a TTL beyond the ceiling, or one that is not a whole count', async () => {
     const f = await fixture();
     try {
       expect((await createInvite(f, { grantTtlSeconds: 400 * 24 * 3600 })).status).toBe(400);
       expect((await createInvite(f, { inviteTtlSeconds: 400 * 24 * 3600 })).status).toBe(400);
-      expect((await createInvite(f, { grantTtlSeconds: 0 })).status).toBe(400);
+      expect((await createInvite(f, { grantTtlSeconds: -1 })).status).toBe(400);
+      expect((await createInvite(f, { grantTtlSeconds: 1.5 })).status).toBe(400);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('accepts 0 — the owner asking for access that lasts until they revoke it', async () => {
+    // The relay is not the authority on how long a grant lives: the machine
+    // that signs the certificate is, and it ends the grant on revoke or on a
+    // restart of the shared session whatever the clock says. Storing 0 is
+    // storing the owner's answer, not granting anything.
+    const f = await fixture();
+    try {
+      const res = await createInvite(f, { grantTtlSeconds: 0 });
+      expect(res.status).toBe(200);
+      const { inviteId } = (await res.json()) as { inviteId: string };
+      expect(f.repos.listShareInvites(f.machineId).find((i) => i.id === inviteId)?.grant_ttl_seconds).toBe(0);
     } finally {
       f.db.close();
     }

@@ -74,6 +74,25 @@ describe('rendering', () => {
     expect(screen.getByText(/Once they join, access lasts/i)).toBeTruthy();
   });
 
+  test('offers access that lasts until the owner revokes it', async () => {
+    // A 4-hour ceiling means anyone monitoring a session alongside their own
+    // work loses it mid-afternoon and has to be re-invited. 0 is the sentinel
+    // for "no expiry" — the desktop still decides when the grant ends.
+    renderModal();
+    const grantSelect = document.getElementById('share-grant-ttl') as HTMLSelectElement;
+    expect([...grantSelect.options].map((o) => o.textContent)).toContain('Until I revoke it');
+
+    fireEvent.change(loginInput(), { target: { value: 'dana-k' } });
+    fireEvent.change(grantSelect, { target: { value: '0' } });
+    fireEvent.click(createBtn());
+
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]!.grantTtlSeconds).toBe(0);
+    // And the confirmation says so, because this is the choice that keeps
+    // running after the owner has stopped thinking about it.
+    expect(screen.getByText(/until you revoke it/i)).toBeTruthy();
+  });
+
   test('offers watch-and-type as disabled rather than hiding it', () => {
     // The absence of a control is not an explanation.
     renderModal();

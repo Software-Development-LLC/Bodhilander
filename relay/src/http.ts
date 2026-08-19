@@ -76,6 +76,7 @@ const SHARE_PER_IP = 20;
  * defaults; these exist so a malformed or hostile request cannot produce a
  * grant that outlives any reasonable session.
  */
+/** Upper bound for a grant that expires at all; 0 means "until revoked". */
 const MAX_GRANT_TTL_SECONDS = 24 * 60 * 60;
 const MAX_INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -394,7 +395,13 @@ export function createRouter(ctx: RelayContext) {
       return json({ error: 'invalid_request' }, 400);
     }
     if (!(MINTABLE_ROLES as readonly string[]).includes(role)) return json({ error: 'invalid_role' }, 400);
-    if (grantTtlSeconds <= 0 || grantTtlSeconds > MAX_GRANT_TTL_SECONDS) return json({ error: 'invalid_ttl' }, 400);
+    // 0 is "until the owner revokes it" — see GRANT_TTL_UNTIL_REVOKED. The
+    // relay stores it and nothing more: it is not the authority on how long a
+    // grant lives, the machine that signs the certificate is, and that machine
+    // ends the grant on revoke or on a restart of the shared session whatever
+    // the clock says. Every other value stays capped.
+    if (!Number.isInteger(grantTtlSeconds) || grantTtlSeconds < 0) return json({ error: 'invalid_ttl' }, 400);
+    if (grantTtlSeconds > MAX_GRANT_TTL_SECONDS) return json({ error: 'invalid_ttl' }, 400);
     if (inviteTtlSeconds <= 0 || inviteTtlSeconds > MAX_INVITE_TTL_SECONDS) return json({ error: 'invalid_ttl' }, 400);
     if (Math.abs(Date.now() - issuedAt) > LINK_MAX_SKEW_MS) return json({ error: 'stale_request' }, 400);
 

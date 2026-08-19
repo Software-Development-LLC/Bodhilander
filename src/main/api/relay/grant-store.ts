@@ -16,7 +16,14 @@ import { getDatabase } from '../../database';
 import { getPreference, setPreference } from '../../repositories/preferences';
 import { signWithIdentity, ensureIdentity } from './relay-identity';
 import * as sql from './grant-sql';
-import { buildGrantMessage, formatCertificate, MINTABLE_ROLES, type GrantRole, type GrantParts } from './grants';
+import {
+  buildGrantMessage,
+  formatCertificate,
+  grantExpiryAt,
+  MINTABLE_ROLES,
+  type GrantRole,
+  type GrantParts,
+} from './grants';
 
 export type { StoredGrant, StoredGrantSession } from './grant-sql';
 export { RELAY_SHARING_SCHEMA } from './grant-sql';
@@ -100,6 +107,7 @@ export interface MintRequest {
   role: GrantRole;
   /** Sessions the owner approved, with the PTY instance each was approved on. */
   sessions: sql.StoredGrantSession[];
+  /** Seconds of access, or `GRANT_TTL_UNTIL_REVOKED` (0) for no expiry. */
   ttlSeconds: number;
 }
 
@@ -127,7 +135,7 @@ export function mintGrant(req: MintRequest, now = Date.now()): { grant: sql.Stor
     throw new Error('refusing to mint a grant with no sessions');
   }
 
-  const expiresAt = now + req.ttlSeconds * 1000;
+  const expiresAt = grantExpiryAt(now, req.ttlSeconds);
   const parts: GrantParts = {
     grantId: req.grantId,
     machineId: req.machineId,

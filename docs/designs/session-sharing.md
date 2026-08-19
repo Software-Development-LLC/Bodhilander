@@ -382,6 +382,14 @@ roll-up, not the only route.
   *"This link works for 1 hour if nobody uses it. Once dana-k joins, they have access for 4
   hours."*
 
+  Access may also last **until the owner revokes it** (#171), carried as
+  `grantTtlSeconds: 0` — a different answer to the question, not a longer one. The clock was
+  never what bounded a share: the desktop's own table decides whether a grant is live and is
+  consulted at every `client:open`, the scope is bound to a PTY instance so a restart of the
+  shared session ends it regardless, and revocation reaches live sockets immediately. An
+  unexpiring certificate is not an unrevocable one, and a four-hour ceiling only meant
+  re-inviting the same colleague every afternoon.
+
 The created state shows the URL, a QR, the readable code, and `🔑 This link is the key. Send
 it over something private.`
 

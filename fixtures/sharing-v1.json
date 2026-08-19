@@ -33,6 +33,25 @@
     "certificate": "grant:v1.Z3JhbnQ6djEKN2YzYTFjOTItNWI0ZS00ZDE4LTlhMjAtNmMxZThmMGIzZDQ3CmMyYjhhNGUwLTFkNzYtNGYzOS04ZTU1LTlhM2I3YzBkMmY2MQpodHRwczovL3JlbGF5LmV4YW1wbGUuY29tCmQ5MWU2YjczLTJhMDgtNGM1Zi1iMTM0LTdlNTBmOWE2Yzg4Mgp2aWV3ZXIKMTc2MDAwMDAwMDAwMAoxNzYwMDE0NDAwMDAw.xINoFOrJmE64iKEUDCsYEGL6JSpBOPOLl8KucZy8RFktvWqwxgcOmcn5IBXLgd-ejm6Aj44cMzuGkvNHiHZYAw"
   },
 
+  "shareCreate": {
+    "_note": [
+      "The message a desktop signs to create a share invite. Hand-duplicated in",
+      "src/main/api/relay/grants.ts and relay/src/protocol.ts, and a drift between them is",
+      "invisible until it surfaces as 'relay rejected the share request (401)'.",
+      "grantTtlSeconds is 0 on purpose: 0 means UNTIL REVOKED, and it is the value most",
+      "likely to be 'helpfully' defaulted away by one side and not the other."
+    ],
+    "parts": {
+      "machineId": "c2b8a4e0-1d76-4f39-8e55-9a3b7c0d2f61",
+      "expectedGithubLogin": "dana-k",
+      "role": "viewer",
+      "grantTtlSeconds": 0,
+      "inviteTtlSeconds": 3600,
+      "issuedAt": 1760000000000
+    },
+    "message": "share-create:v1\nc2b8a4e0-1d76-4f39-8e55-9a3b7c0d2f61\ndana-k\nviewer\n0\n3600\n1760000000000"
+  },
+
   "policy": {
     "_note": [
       "The certificate format will not drift; this will, the moment 'operator' becomes",

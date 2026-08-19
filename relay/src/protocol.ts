@@ -66,6 +66,7 @@ export interface ShareCreateParts {
   /** Empty string for an open link. */
   expectedGithubLogin: string;
   role: string;
+  /** Seconds of access once the guest joins; 0 means until the owner revokes. */
   grantTtlSeconds: number;
   inviteTtlSeconds: number;
   issuedAt: number;
