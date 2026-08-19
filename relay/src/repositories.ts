@@ -164,7 +164,18 @@ export interface CreateShareInviteInput {
 
 export type RedeemResult =
   | { ok: true; grant: MachineGrant; invite: ShareInvite }
-  | { ok: false; reason: 'not_found' | 'expired' | 'already_used' | 'revoked' | 'wrong_account' | 'own_machine' };
+  | {
+      ok: false;
+      reason:
+        | 'not_found'
+        | 'expired'
+        | 'already_used'
+        | 'revoked'
+        | 'wrong_account'
+        | 'own_machine'
+        /** Addressed invite, and this user's GitHub handle is not on file yet. */
+        | 'login_unknown';
+    };
 
 /** Thrown inside the redemption transaction to roll it back on a lost race. */
 class RedeemRaceError extends Error {
@@ -420,10 +431,15 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
       if (machine.user_id === user.id) return { ok: false, reason: 'own_machine' };
 
       if (row.expected_github_login) {
-        // A NULL login can never match: a user who has not signed in since
-        // migration 003 must not silently satisfy an addressed invite.
         const login = user.github_login?.trim().toLowerCase();
-        if (!login || login !== row.expected_github_login) return { ok: false, reason: 'wrong_account' };
+        // A NULL login can never match: a user who has not signed in since
+        // migration 003 must not silently satisfy an addressed invite. But it
+        // is not evidence that this is the wrong person either, and answering
+        // as though it were told the RIGHT person the link was not for them,
+        // with no hint that signing in again is all it takes. Fail closed on
+        // both, distinguish the cause.
+        if (!login) return { ok: false, reason: 'login_unknown' };
+        if (login !== row.expected_github_login) return { ok: false, reason: 'wrong_account' };
       }
 
       const ts = now();

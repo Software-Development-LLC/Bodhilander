@@ -408,7 +408,38 @@ describe('redeemShareInvite', () => {
     try {
       const { code } = f.repos.createShareInvite(inviteInput(f));
       const result = f.repos.redeemShareInvite(code, guestUser(f, null), crypto.randomUUID());
-      expect(result).toEqual({ ok: false, reason: 'wrong_account' });
+      expect(result.ok).toBe(false);
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('a missing login is reported as its own cause, not as the wrong account', () => {
+    // The refusal is the same; the explanation is not. Told "this link isn't
+    // for this account", the person it WAS for has no reason to think signing
+    // in again would change anything — and it is the only thing that does.
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: 'dana-k' }));
+      const result = f.repos.redeemShareInvite(code, guestUser(f, null), crypto.randomUUID());
+      expect(result).toEqual({ ok: false, reason: 'login_unknown' });
+    } finally {
+      f.db.close();
+    }
+  });
+
+  test('the invite survives a login_unknown refusal, so the retry works', () => {
+    // A refusal that consumed the code would make the fix unreachable: the
+    // guest signs in again and finds a link that now says "already used".
+    const f = freshFixture();
+    try {
+      const { code } = f.repos.createShareInvite(inviteInput(f, { expectedGithubLogin: 'dana-k' }));
+      expect(f.repos.redeemShareInvite(code, guestUser(f, null), crypto.randomUUID())).toEqual({
+        ok: false,
+        reason: 'login_unknown',
+      });
+      // Same person, back from OAuth with their handle on file.
+      expect(f.repos.redeemShareInvite(code, guestUser(f, 'dana-k'), crypto.randomUUID()).ok).toBe(true);
     } finally {
       f.db.close();
     }

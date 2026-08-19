@@ -117,8 +117,13 @@ function invitedFingerprint(): string | null {
   return m ? decodeURIComponent(m[1]!) : null;
 }
 
-/** Copy for each way an invite can fail. Never guesses. */
-const REDEEM_COPY: Record<string, { title: string; body: string }> = {
+/**
+ * Copy for each way an invite can fail. Never guesses.
+ *
+ * `reauth` marks the one failure the person reading it can actually fix, and
+ * gets a button rather than a sentence telling them to go and do it.
+ */
+const REDEEM_COPY: Record<string, { title: string; body: string; reauth?: boolean }> = {
   invite_not_found: { title: "That link doesn't work", body: 'Check you copied all of it, or ask for a new one.' },
   invite_expired: { title: 'That link has expired', body: 'Ask for a new one — links stop working after a while on purpose.' },
   invite_already_used: { title: 'That link has been used', body: 'Invite links work once. Ask for a new one.' },
@@ -128,6 +133,13 @@ const REDEEM_COPY: Record<string, { title: string; body: string }> = {
     body: 'It was addressed to a specific GitHub account. Sign in as that account, or ask for a link addressed to you.',
   },
   invite_own_machine: { title: "That's your own machine", body: 'You already have full access to it — no invite needed.' },
+  invite_login_unknown: {
+    title: "One more sign-in and you're in",
+    body:
+      "This link is addressed to a GitHub account, and we don't have your handle on file yet — signing in again " +
+      'fetches it and brings you straight back here.',
+    reauth: true,
+  },
 };
 
 async function renderRedeem(code: string): Promise<void> {
@@ -162,10 +174,25 @@ async function renderRedeem(code: string): Promise<void> {
       body: 'Ask whoever sent it for a new one.',
     };
     rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
-      <div class="logo">🚫</div><h1>${esc(copy.title)}</h1>
+      <div class="logo">${copy.reauth ? '🔑' : '🚫'}</div><h1>${esc(copy.title)}</h1>
       <p>${esc(copy.body)}</p>
+      ${copy.reauth ? '<button class="btn gh" id="reauth">Sign in with GitHub</button>' : ''}
       <a class="btn ghost" href="/">Go to my machines</a>
     </div></div>`;
+    // Stash the invite the same way the signed-out path does, so OAuth returns
+    // to this link — with its fingerprint fragment — instead of the home page.
+    const reauth = $('#reauth');
+    if (reauth) {
+      reauth.onclick = () => {
+        // From the path, keep the fragment: it carries the machine fingerprint
+        // and does not survive the OAuth round trip on its own. From a typed
+        // code there is no fragment, so rebuild the link from the code itself
+        // rather than stashing whatever page they happened to be on.
+        const here = inviteCodeFromPath() === code ? location.pathname + location.hash : `/i/${encodeURIComponent(code)}`;
+        sessionStorage.setItem(INVITE_STASH, here);
+        location.href = '/auth/github/login';
+      };
+    }
     return;
   }
 
