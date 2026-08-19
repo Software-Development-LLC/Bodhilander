@@ -72,6 +72,10 @@ export interface TunnelPty {
   /** Identifies the PTY *instance*; changes when a session is restarted. */
   ptyEpoch(id: string): number | null;
   getSerializedBuffer(id: string): Promise<string>;
+  /** A point in the output stream that survives the scrollback cap trimming. */
+  scrollbackMark(id: string): number | null;
+  /** Rendered history from `mark` onward — never the whole scrollback. */
+  getSerializedBufferSince(id: string, mark: number): Promise<string>;
 }
 
 export interface TunnelSessionRow {
@@ -178,6 +182,13 @@ interface ClientSession {
   grant: Grant;
   /** Who the relay says this is, for presence. Never authorization. */
   principal: Principal | null;
+  /**
+   * Per-session point in the output stream this client's share began at, so a
+   * guest re-attaching is replayed what it has already been shown rather than
+   * being wiped back to a blank screen (#169). Empty for the owner, who gets
+   * the whole scrollback instead.
+   */
+  marks: Map<string, number>;
 }
 
 /** Decrypted command from a web client (union of every message's fields). */
@@ -198,8 +209,24 @@ interface ClientFrame {
 
 type Handler = (clientId: string, s: ClientSession, inner: ClientFrame) => void;
 
+/** What a connecting client may do, and where its view of each session starts. */
+interface ResolvedGrant {
+  grant: Grant;
+  marks: Map<string, number>;
+}
+
 export class SessionTunnel {
   private readonly sessions = new Map<string, ClientSession>();
+  /**
+   * grantId → sessionId → the point in that session's output the share began
+   * at (#169).
+   *
+   * Deliberately in memory rather than in `relay_grants`: a mark indexes into
+   * a PTY instance's live output, and a grant is bound to that instance by
+   * `ptyEpoch`, so neither can outlive this process. Persisting it would
+   * create a number that survives the buffer it points into.
+   */
+  private readonly shareMarks = new Map<string, Map<string, number>>();
   /** Detaches the shared PTY listeners; null when not attached. */
   private detach: (() => void) | null = null;
   private readonly deps: TunnelDeps;
@@ -295,6 +322,10 @@ export class SessionTunnel {
     // taken away.
     const ranOut = s.grant.caps.length > 0 && s.grant.expiresAt <= now;
     const reason = ranOut ? 'expired' : 'revoked';
+    // Both endings are terminal for the grant — an expired certificate never
+    // verifies again — so its share window goes with it rather than sitting in
+    // the map for as long as the app runs.
+    if (s.grant.grantId) this.shareMarks.delete(s.grant.grantId);
     s.subs.clear();
     s.grant = DENY_ALL;
     this.sealTo(clientId, { type: 'denied', reason });
@@ -338,13 +369,15 @@ export class SessionTunnel {
         return;
       }
 
-      const grant = this.resolveGrant(payload, principal);
-      if (grant === null) {
+      const resolved = this.resolveGrant(payload, principal);
+      if (resolved === null) {
         this.deps.log.warn('[Relay] refusing a channel with no usable grant', { clientId });
         // Unsealed: no key exists yet, and there is nothing secret in it.
         this.route(clientId, { type: 'denied', reason: 'not_authorized' });
         return;
       }
+
+      const { grant, marks } = resolved;
 
       // A per-channel ephemeral keypair (see e2e.ts) — never the machine's
       // long-lived X25519 key, which would make this exchange replayable.
@@ -361,6 +394,7 @@ export class SessionTunnel {
         subs: new Set(),
         grant,
         principal: principal ?? null,
+        marks,
       };
       this.sessions.set(clientId, session);
       this.startListening();
@@ -393,11 +427,13 @@ export class SessionTunnel {
    *   - nothing, before the owner id has ever been confirmed — the pre-sharing
    *     behaviour, allowed only until the latch closes.
    */
-  private resolveGrant(payload: unknown, principal?: Principal): Grant | null {
+  private resolveGrant(payload: unknown, principal?: Principal): ResolvedGrant | null {
     const certificate = (payload as { certificate?: unknown })?.certificate;
     const ownerId = this.deps.grants.ownerUserId();
 
-    if (ownerId && principal?.userId === ownerId) return ownerGrant();
+    // The owner is replayed the whole scrollback, so there is no window to
+    // mark — hence an empty mark map on both owner branches.
+    if (ownerId && principal?.userId === ownerId) return { grant: ownerGrant(), marks: new Map() };
 
     if (certificate !== undefined && certificate !== null) {
       return this.grantFromCertificate(certificate, principal);
@@ -415,11 +451,11 @@ export class SessionTunnel {
       this.deps.log.warn('[Relay] refusing an unconfirmed-owner channel: grant enforcement is latched on');
       return null;
     }
-    return ownerGrant();
+    return { grant: ownerGrant(), marks: new Map() };
   }
 
   /** Verify a presented certificate and resolve it against our own table. */
-  private grantFromCertificate(certificate: unknown, principal?: Principal): Grant | null {
+  private grantFromCertificate(certificate: unknown, principal?: Principal): ResolvedGrant | null {
     const machineId = this.deps.machineId();
     if (!machineId || !principal?.userId) return null;
 
@@ -467,7 +503,16 @@ export class SessionTunnel {
     // From here on this machine has enforced a certificate, so it must never
     // fall back to "whoever connects is the owner" again.
     this.deps.grants.latch();
-    return grantFrom(checked.parts, live.map((s) => s.sessionId));
+    // The share window this grant was approved at, per session. Absent when
+    // the grant was minted without one; `shareMark` then starts the window at
+    // first attach rather than replaying anything the guest was not shown.
+    const recorded = this.shareMarks.get(checked.parts.grantId);
+    const marks = new Map<string, number>();
+    for (const { sessionId } of live) {
+      const mark = recorded?.get(sessionId);
+      if (mark !== undefined) marks.set(sessionId, mark);
+    }
+    return { grant: grantFrom(checked.parts, live.map((s) => s.sessionId)), marks };
   }
 
   /** A sealed frame arrived from a web client. */
@@ -530,6 +575,40 @@ export class SessionTunnel {
     }
   }
 
+  /**
+   * Record where a grant's view of each session starts — called at the moment
+   * of consent, from the same place that captures `ptyEpoch`.
+   *
+   * Taken at approval rather than at first attach so the guest's first view
+   * covers the whole window they were let into, not just whatever happened
+   * after they got round to opening the link.
+   */
+  noteShareMarks(grantId: string, marks: { sessionId: string; mark: number }[]): void {
+    const forGrant = this.shareMarks.get(grantId) ?? new Map<string, number>();
+    for (const { sessionId, mark } of marks) forGrant.set(sessionId, mark);
+    this.shareMarks.set(grantId, forGrant);
+  }
+
+  /**
+   * Where this client's view of `sessionId` starts, or null if there is
+   * nothing to replay from.
+   *
+   * A missing mark is not treated as position zero — that would replay the
+   * entire scrollback to a guest, which is the one thing this must never do.
+   * It starts the window here instead, so this attach shows nothing extra and
+   * every later one is continuous.
+   */
+  private shareMark(s: ClientSession, sessionId: string): number | null {
+    const known = s.marks.get(sessionId);
+    if (known !== undefined) return known;
+
+    const here = this.deps.pty.scrollbackMark(sessionId);
+    if (here === null) return null;
+    s.marks.set(sessionId, here);
+    if (s.grant.grantId) this.noteShareMarks(s.grant.grantId, [{ sessionId, mark: here }]);
+    return here;
+  }
+
   private async handleSubscribe(clientId: string, s: ClientSession, inner: ClientFrame): Promise<void> {
     if (typeof inner.sessionId !== 'string') return;
     const sessionId = inner.sessionId;
@@ -539,15 +618,28 @@ export class SessionTunnel {
     const size = this.deps.pty.getSize(sessionId);
     this.sealTo(clientId, { type: 'terminal:size', sessionId, cols: size.cols, rows: size.rows });
 
-    // Scrollback is not shared. A guest joins at the moment they were let in,
-    // not at whatever was on screen before — replaying history would hand over
+    // Scrollback from before the share is never sent: a guest joins at the
+    // moment they were let in, and replaying the buffer would hand over
     // everything typed before the decision to share was made.
+    //
+    // What IS replayed is the window since that moment. Sending nothing on
+    // every attach — which is what this did — meant a guest who stepped away
+    // to their own session and came back found the shared one wiped, and had
+    // no way to get back what they had already been shown (#169).
     if (s.grant.role !== 'owner') {
+      const mark = this.shareMark(s, sessionId);
       this.sealTo(clientId, {
         type: 'terminal:output',
         sessionId,
         data: '\x1b[2J\x1b[3J\x1b[H── shared from here ──\r\n',
       });
+      if (mark === null) return;
+      const since = await this.deps.pty.getSerializedBufferSince(sessionId, mark);
+      for (const data of chunkText(since)) {
+        // Re-check every chunk: the client may unsubscribe or drop mid-replay.
+        if (!s.subs.has(sessionId) || this.sessions.get(clientId) !== s) return;
+        this.sealTo(clientId, { type: 'terminal:output', sessionId, data });
+      }
       return;
     }
 
@@ -628,6 +720,10 @@ export class SessionTunnel {
    * believes they have been removed from.
    */
   revokeGrant(grantId: string, reason = 'revoked'): void {
+    // The share window dies with the grant. Keeping it would mean a later
+    // grant reusing this id — or a re-approval — inheriting a start point from
+    // access that was taken away.
+    this.shareMarks.delete(grantId);
     for (const [clientId, s] of this.sessions) {
       if (s.grant.grantId === grantId) this.revokeClient(clientId, reason);
     }

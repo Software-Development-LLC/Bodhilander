@@ -38,7 +38,8 @@ the split §4 of the relay design already pre-committed to — "enforced by the 
 
 ## Non-goals (v1)
 
-Machine-wide grants · guest-initiated sharing · sharing scrollback history · guest-driven
+Machine-wide grants · guest-initiated sharing · sharing scrollback history *from before the
+share* (see §6.1) · guest-driven
 `terminal:resize` · `session:create` / `group:create` / `dirs:list` for any guest, ever ·
 browser-held guest device keys · session recording · federation of grants between relays.
 
@@ -339,8 +340,9 @@ Concretely in `session-tunnel.ts`:
   per repeat, and `PtyManager` never raises its default max of 10);
 - replace the three per-client listeners with **one tunnel-level set** fanning out over the
   client map;
-- gate `terminal:subscribe` on scope *before* `getSerializedBuffer`, and skip history entirely
-  for guests — seal `\x1b[2J\x1b[3J\x1b[H` plus `── shared from here ──`;
+- gate `terminal:subscribe` on scope *before* `getSerializedBuffer`, and skip pre-share
+  history for guests — seal `\x1b[2J\x1b[3J\x1b[H` plus `── shared from here ──`, then the
+  share window (§6.1);
 - filter `sendSessions`/`sendGroups` to scope and strip `workingDir`;
 - `revokeGrant()` → `DENY_ALL`, clear subs, detach, sealed `denied`, `client:kick`;
 - cache decrypted key material in memory — `deriveSharedSecret` and `signWithIdentity` each
@@ -355,6 +357,32 @@ in bun and will break `pty-manager.test.ts` in a load-order-dependent way. Refac
 defaulting to the singletons, matching the repo's existing injectable-database convention.
 Testing an extracted pure policy module proves the table is right but not that `dispatch()`
 consults it — which is the bug class this feature must not ship.
+
+### 6.1 The share window (#169)
+
+"No scrollback" was implemented as "nothing, on every attach", and those are not the same
+rule. A guest who left the shared session to look at one of their own and came back found it
+wiped, with no way to recover what they had already been shown — which makes watching a
+session useless to anyone who is also doing their own work, the exact person sharing is for.
+
+The line is drawn at the moment of consent, not at each attach:
+
+- `approveGrant` captures a **mark** per session alongside `ptyEpoch` — a count of characters
+  the PTY has ever produced, not an index into the scrollback buffer, so it stays resolvable
+  after the 2 MB cap trims.
+- Every guest `terminal:subscribe` replays `getSerializedBufferSince(sessionId, mark)` after
+  the `── shared from here ──` marker. Re-attaching, refreshing, reconnecting and joining
+  from a second device all become continuous.
+- A grant with **no** mark starts its window at first attach. A missing mark is never treated
+  as position zero: zero means "replay everything", which is precisely what a guest is not
+  entitled to.
+- Marks live in memory on the tunnel, keyed by `grantId`, and are dropped on revocation. They
+  index into a PTY instance's output and the grant is bound to that instance by `ptyEpoch`, so
+  neither outlives the process; persisting one would create a number that survives the buffer
+  it points into.
+
+What a guest can see is therefore unchanged in extent — everything from the moment they were
+let in, nothing before it — and changed only in that it survives them looking away.
 
 ## 7. UX
 

@@ -670,6 +670,19 @@ export class RelayClient extends EventEmitter {
       return { sessionId, ptyEpoch };
     });
 
+    // Where the guest's view of each session begins — captured HERE for the
+    // same reason `ptyEpoch` is: this is the moment of consent. Everything
+    // from here on is theirs to re-read when they come back to it (#169);
+    // everything before it is not, and never becomes so.
+    this.tunnel.noteShareMarks(
+      grantId,
+      // A missing mark is dropped, never defaulted to 0: zero would replay the
+      // whole scrollback, which is the one thing a guest must never be sent.
+      sessions
+        .map(({ sessionId }) => ({ sessionId, mark: ptyManager.scrollbackMark(sessionId) }))
+        .filter((m): m is { sessionId: string; mark: number } => m.mark !== null),
+    );
+
     // From the invite the owner created, not from `expiresAt` — that is NULL
     // until we countersign, which is exactly the moment we are in now.
     const ttlSeconds = pending.grantTtlSeconds ?? DEFAULT_GRANT_TTL_SECONDS;

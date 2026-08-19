@@ -41,6 +41,8 @@ export function defaultDeps(relayOrigin: () => string, machineId: () => string |
       // restart, which is exactly the staleness a session grant must notice.
       ptyEpoch: (id) => ptyManager.getSession(id)?.spawnedAt ?? null,
       getSerializedBuffer: (id) => ptyManager.getSerializedBuffer(id),
+      scrollbackMark: (id) => ptyManager.scrollbackMark(id),
+      getSerializedBufferSince: (id, mark) => ptyManager.getSerializedBufferSince(id, mark),
     },
     sessions: { getAll: () => getAllSessions() as unknown as TunnelSessionRow[] },
     groups: { getAll: () => getAllGroups() as unknown as TunnelGroupRow[] },

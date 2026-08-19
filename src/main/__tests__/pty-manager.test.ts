@@ -477,3 +477,56 @@ describe('getSerializedBuffer (rendered-text history)', () => {
     expect(await manager.getSerializedBuffer('nope')).toBe('');
   });
 });
+
+/**
+ * #169. A shared session replays the window since someone was let in — not the
+ * whole scrollback, which would hand over what was on screen before the
+ * decision to share, and not nothing, which wipes the guest's view every time
+ * they come back to it.
+ */
+describe('getSerializedBufferSince (the window a guest is entitled to)', () => {
+  test('replays from the mark onward and nothing before it', async () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('SECRET BEFORE THE SHARE\r\n');
+
+    const mark = manager.scrollbackMark('session-1')!;
+    ptyProc.dataCb!('watched output\r\n');
+
+    const text = await manager.getSerializedBufferSince('session-1', mark);
+    expect(text).toContain('watched output');
+    expect(text).not.toContain('SECRET BEFORE THE SHARE');
+  });
+
+  test('a mark taken at the current position replays nothing', async () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('already on screen\r\n');
+
+    const text = await manager.getSerializedBufferSince('session-1', manager.scrollbackMark('session-1')!);
+    expect(text).toBe('');
+  });
+
+  test('a mark the scrollback cap has evicted yields what survives, never more', async () => {
+    // The mark counts characters ever produced, so it stays resolvable after a
+    // trim; an index into the buffer would silently point somewhere else and
+    // replay content from before the share.
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('EVICTED FIRST LINE\r\n');
+    const mark = manager.scrollbackMark('session-1')!;
+    // Push past the 2MB cap plus its 25% slack so the trim actually runs.
+    for (let i = 0; i < 40; i++) ptyProc.dataCb!('x'.repeat(100 * 1024));
+    ptyProc.dataCb!('\r\nlast line\r\n');
+
+    const text = await manager.getSerializedBufferSince('session-1', mark);
+    expect(text).toContain('last line');
+    expect(text).not.toContain('EVICTED FIRST LINE');
+  });
+
+  test('returns empty string for an unknown session, and no mark for one', async () => {
+    const manager = new PtyManager();
+    expect(manager.scrollbackMark('nope')).toBeNull();
+    expect(await manager.getSerializedBufferSince('nope', 0)).toBe('');
+  });
+});

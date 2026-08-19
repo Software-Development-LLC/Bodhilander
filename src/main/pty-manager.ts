@@ -47,6 +47,13 @@ interface PtySession {
   lastState: string;
   outputBuffer: string;
   scrollbackBuffer: string;  // Larger buffer for terminal history
+  /**
+   * Every character ever appended to `scrollbackBuffer`, including what the
+   * cap has since evicted. `scrollbackBuffer` is a sliding window, so an
+   * index into it stops meaning the same thing the moment it trims; this
+   * counter is what makes a mark taken now still resolvable later.
+   */
+  scrollbackTotal: number;
   idleTimeout: NodeJS.Timeout | null;
   workingDebounce: NodeJS.Timeout | null;
   recentOutputBytes: number;
@@ -137,6 +144,7 @@ const MAX_SCROLLBACK_SIZE = 2 * 1024 * 1024;
  */
 function appendScrollback(session: PtySession, data: string): void {
   session.scrollbackBuffer += data;
+  session.scrollbackTotal += data.length;
   if (session.scrollbackBuffer.length > MAX_SCROLLBACK_SIZE * 1.25) {
     session.scrollbackBuffer = session.scrollbackBuffer.slice(-MAX_SCROLLBACK_SIZE);
   }
@@ -454,6 +462,7 @@ export class PtyManager extends EventEmitter {
       lastState: 'idle',
       outputBuffer: '',
       scrollbackBuffer: '',
+      scrollbackTotal: 0,
       idleTimeout: null,
       workingDebounce: null,
       recentOutputBytes: 0,
@@ -792,6 +801,7 @@ export class PtyManager extends EventEmitter {
       lastState: 'idle',
       outputBuffer: '',
       scrollbackBuffer: '',
+      scrollbackTotal: 0,
       idleTimeout: null,
       workingDebounce: null,
       recentOutputBytes: 0,
@@ -904,6 +914,7 @@ export class PtyManager extends EventEmitter {
       lastState: 'idle',
       outputBuffer: '',
       scrollbackBuffer: '',
+      scrollbackTotal: 0,
       idleTimeout: null,
       workingDebounce: null,
       recentOutputBytes: 0,
@@ -1131,6 +1142,54 @@ export class PtyManager extends EventEmitter {
     const session = this.sessions.get(id);
     const raw = session?.scrollbackBuffer;
     if (!session || !raw) return '';
+    return this.serialize(session, raw);
+  }
+
+  /**
+   * A point in this session's output stream that stays meaningful later.
+   *
+   * Returned as a count of characters ever produced, not an index into the
+   * scrollback: the buffer is a sliding window, so an index into it means
+   * something different after every trim. Null when the session isn't running,
+   * which the caller must treat as "no mark" rather than as position zero —
+   * zero would replay the whole buffer.
+   */
+  scrollbackMark(id: string): number | null {
+    const session = this.sessions.get(id);
+    return session ? session.scrollbackTotal : null;
+  }
+
+  /**
+   * Rendered-text history from `mark` onward — what a shared session has
+   * produced since someone was let into it (#169).
+   *
+   * A guest is never sent the whole scrollback: replaying it would hand over
+   * everything typed before the decision to share was made. But sending them
+   * nothing on every attach means leaving the session and coming back wipes
+   * what they had already watched, so the window between the mark and now is
+   * exactly what they are entitled to and exactly what they lose otherwise.
+   *
+   * If the cap has already evicted the mark, this returns everything still
+   * held — which is a subset of what they were entitled to, never a superset.
+   */
+  async getSerializedBufferSince(id: string, mark: number): Promise<string> {
+    const session = this.sessions.get(id);
+    if (!session || !session.scrollbackBuffer) return '';
+    const evicted = session.scrollbackTotal - session.scrollbackBuffer.length;
+    const start = Math.min(Math.max(0, mark - evicted), session.scrollbackBuffer.length);
+    const raw = session.scrollbackBuffer.slice(start);
+    if (!raw) return '';
+    return this.serialize(session, raw);
+  }
+
+  /**
+   * Render raw PTY bytes to resolved text through a headless terminal at the
+   * session's CURRENT width. Unlike the raw bytes this can be reflowed to a
+   * different width (e.g. a phone) WITHOUT garbling — the absolute cursor
+   * moves have already been applied here. Falls back to the raw bytes if
+   * serialization isn't available.
+   */
+  private async serialize(session: PtySession, raw: string): Promise<string> {
     try {
       const term = new HeadlessTerminal({
         cols: session.lastCols || 80,
@@ -1145,7 +1204,7 @@ export class PtyManager extends EventEmitter {
       term.dispose();
       return text;
     } catch (err) {
-      console.warn('[PtyManager] getSerializedBuffer failed, falling back to raw:', err);
+      console.warn('[PtyManager] serialize failed, falling back to raw:', err);
       return raw;
     }
   }
