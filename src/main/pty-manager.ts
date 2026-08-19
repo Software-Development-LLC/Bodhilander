@@ -1174,7 +1174,7 @@ export class PtyManager extends EventEmitter {
    */
   async getSerializedBufferSince(id: string, mark: number): Promise<string> {
     const session = this.sessions.get(id);
-    if (!session || !session.scrollbackBuffer) return '';
+    if (!session?.scrollbackBuffer) return '';
     const evicted = session.scrollbackTotal - session.scrollbackBuffer.length;
     const start = Math.min(Math.max(0, mark - evicted), session.scrollbackBuffer.length);
     const raw = session.scrollbackBuffer.slice(start);

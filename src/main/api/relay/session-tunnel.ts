@@ -215,18 +215,30 @@ interface ResolvedGrant {
   marks: Map<string, number>;
 }
 
+/** One grant's share window: where each session's replay starts, and until when. */
+interface ShareWindow {
+  /**
+   * The grant's expiry, carried so the entry can be swept.
+   *
+   * Revocation reaches this map through `revokeGrant`, but expiry does not:
+   * a grant that is approved, never connected to, and simply runs out leaves
+   * no client behind to notice, so nothing would ever delete it.
+   */
+  expiresAt: number;
+  marks: Map<string, number>;
+}
+
 export class SessionTunnel {
   private readonly sessions = new Map<string, ClientSession>();
   /**
-   * grantId → sessionId → the point in that session's output the share began
-   * at (#169).
+   * grantId → where each of its sessions' output the share began at (#169).
    *
    * Deliberately in memory rather than in `relay_grants`: a mark indexes into
    * a PTY instance's live output, and a grant is bound to that instance by
    * `ptyEpoch`, so neither can outlive this process. Persisting it would
    * create a number that survives the buffer it points into.
    */
-  private readonly shareMarks = new Map<string, Map<string, number>>();
+  private readonly shareMarks = new Map<string, ShareWindow>();
   /** Detaches the shared PTY listeners; null when not attached. */
   private detach: (() => void) | null = null;
   private readonly deps: TunnelDeps;
@@ -368,6 +380,7 @@ export class SessionTunnel {
         this.deps.log.warn('[Relay] ignoring duplicate client:open', { clientId });
         return;
       }
+      this.sweepShareWindows();
 
       const resolved = this.resolveGrant(payload, principal);
       if (resolved === null) {
@@ -506,7 +519,7 @@ export class SessionTunnel {
     // The share window this grant was approved at, per session. Absent when
     // the grant was minted without one; `shareMark` then starts the window at
     // first attach rather than replaying anything the guest was not shown.
-    const recorded = this.shareMarks.get(checked.parts.grantId);
+    const recorded = this.shareMarks.get(checked.parts.grantId)?.marks;
     const marks = new Map<string, number>();
     for (const { sessionId } of live) {
       const mark = recorded?.get(sessionId);
@@ -583,10 +596,32 @@ export class SessionTunnel {
    * covers the whole window they were let into, not just whatever happened
    * after they got round to opening the link.
    */
-  noteShareMarks(grantId: string, marks: { sessionId: string; mark: number }[]): void {
-    const forGrant = this.shareMarks.get(grantId) ?? new Map<string, number>();
-    for (const { sessionId, mark } of marks) forGrant.set(sessionId, mark);
-    this.shareMarks.set(grantId, forGrant);
+  noteShareMarks(grantId: string, marks: { sessionId: string; mark: number }[], expiresAt: number): void {
+    this.sweepShareWindows();
+    const window = this.shareMarks.get(grantId) ?? { expiresAt, marks: new Map<string, number>() };
+    for (const { sessionId, mark } of marks) {
+      // First write wins. A second call for a session already recorded would
+      // move that window FORWARD, hiding everything produced between the two
+      // calls from a guest who is entitled to it — and a window that only ever
+      // moves forward is the bug this whole change exists to fix. New sessions
+      // are added; recorded ones are left where they are.
+      if (!window.marks.has(sessionId)) window.marks.set(sessionId, mark);
+    }
+    this.shareMarks.set(grantId, window);
+  }
+
+  /**
+   * Drop windows whose grants have run out.
+   *
+   * On write and on open rather than on a timer: both are the moments the map
+   * is about to be used, and a grant that expired with nobody attached has no
+   * client left to carry it out of here any other way.
+   */
+  private sweepShareWindows(): void {
+    const now = this.deps.now();
+    for (const [grantId, window] of this.shareMarks) {
+      if (window.expiresAt <= now) this.shareMarks.delete(grantId);
+    }
   }
 
   /**
@@ -605,7 +640,7 @@ export class SessionTunnel {
     const here = this.deps.pty.scrollbackMark(sessionId);
     if (here === null) return null;
     s.marks.set(sessionId, here);
-    if (s.grant.grantId) this.noteShareMarks(s.grant.grantId, [{ sessionId, mark: here }]);
+    if (s.grant.grantId) this.noteShareMarks(s.grant.grantId, [{ sessionId, mark: here }], s.grant.expiresAt);
     return here;
   }
 

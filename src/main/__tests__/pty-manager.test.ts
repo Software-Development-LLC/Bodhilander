@@ -524,6 +524,19 @@ describe('getSerializedBufferSince (the window a guest is entitled to)', () => {
     expect(text).not.toContain('EVICTED FIRST LINE');
   });
 
+  test('a mark from a previous PTY instance clamps to the end and replays nothing', async () => {
+    // A restarted session gets a fresh buffer, so an older instance's mark is
+    // larger than everything this one has produced. The grant's ptyEpoch check
+    // already refuses a certificate whose sessions have restarted, so such a
+    // mark should never reach here — and if one does it must fail closed and
+    // empty rather than replaying from a clamped-to-zero start.
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('output from the new instance\r\n');
+
+    expect(await manager.getSerializedBufferSince('session-1', 10_000_000)).toBe('');
+  });
+
   test('returns empty string for an unknown session, and no mark for one', async () => {
     const manager = new PtyManager();
     expect(manager.scrollbackMark('nope')).toBeNull();

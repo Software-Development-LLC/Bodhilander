@@ -28,6 +28,7 @@ const RELAY_ORIGIN = 'https://relay.example.com';
 const OWNER_ID = 'owner-user';
 const GUEST_ID = 'guest-user';
 const NOW = 1_800_000_000_000;
+const HOUR = 3_600_000;
 
 // The machine identity the fake identity port serves.
 const machineKeys = crypto.generateKeyPairSync('ed25519');
@@ -428,7 +429,7 @@ describe('a guest coming back to a session they already watched', () => {
   test('is replayed what it has already seen, and nothing from before the share', async () => {
     const h = harness({ grantRow: storedGrant() });
     // What the approval flow records at the moment of consent.
-    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }]);
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
     h.append('s1', 'AFTER ONE');
 
     const key = guest(h, 'c1');
@@ -475,7 +476,7 @@ describe('a guest coming back to a session they already watched', () => {
 
   test('every attach still says where the share starts', async () => {
     const h = harness({ grantRow: storedGrant() });
-    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }]);
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
 
     const key = guest(h, 'c1');
     h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
@@ -485,11 +486,64 @@ describe('a guest coming back to a session they already watched', () => {
     expect(String(first[0]!.data)).toContain('shared from here');
   });
 
+  test('a second approval does not move an already-recorded window forward', async () => {
+    // Approval is one-shot per grantId today — `pendingGrants` is cleared and
+    // `insertGrant` would collide — but if it ever stops being, recomputing
+    // the marks would hide everything produced between the two calls from a
+    // guest already watching. First write wins.
+    const h = harness({ grantRow: storedGrant() });
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
+    h.append('s1', 'BETWEEN THE TWO APPROVALS');
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
+
+    const key = guest(h, 'c1');
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const replayed = h
+      .opened('c1', key)
+      .filter((m) => m.type === 'terminal:output')
+      .map((m) => String(m.data))
+      .join('');
+    expect(replayed).toContain('BETWEEN THE TWO APPROVALS');
+  });
+
+  test('a window whose grant ran out is swept, not held for the life of the process', async () => {
+    // Revocation reaches the map through revokeGrant, but expiry does not: a
+    // grant approved, never connected to, and simply timed out leaves no
+    // client behind to carry its window out. So the map is swept on write and
+    // on open. Observed through behaviour — a swept window falls back to
+    // starting at the next attach — since the map itself is private.
+    const clock = { now: NOW };
+    const h = harness({ grantRow: storedGrant(), now: () => clock.now });
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + 1000);
+    h.append('s1', 'PRODUCED WHILE NOBODY WATCHED');
+
+    clock.now = NOW + 2000; // the grant's clock runs out with nobody attached
+
+    // A later channel sweeps it. In production the certificate would have
+    // expired with it; here it carries a fresh expiry so the sweep — not the
+    // certificate check — is what the assertion is about.
+    const key = h.openChannel('c1', {
+      principal: { userId: GUEST_ID },
+      certificate: mintCertificate({ expiresAt: NOW + HOUR }),
+    })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const replayed = h
+      .opened('c1', key)
+      .filter((m) => m.type === 'terminal:output')
+      .map((m) => String(m.data))
+      .join('');
+    expect(replayed).not.toContain('PRODUCED WHILE NOBODY WATCHED');
+  });
+
   test('revoking the grant forgets the window it opened', async () => {
     // Otherwise a re-approval would inherit a start point from access that was
     // taken away, and replay output produced while the guest had none.
     const h = harness({ grantRow: storedGrant() });
-    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }]);
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
     h.append('s1', 'WHILE REVOKED');
     h.tunnel.revokeGrant('grant-1');
 

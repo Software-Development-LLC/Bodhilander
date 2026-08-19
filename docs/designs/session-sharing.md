@@ -376,10 +376,16 @@ The line is drawn at the moment of consent, not at each attach:
 - A grant with **no** mark starts its window at first attach. A missing mark is never treated
   as position zero: zero means "replay everything", which is precisely what a guest is not
   entitled to.
-- Marks live in memory on the tunnel, keyed by `grantId`, and are dropped on revocation. They
-  index into a PTY instance's output and the grant is bound to that instance by `ptyEpoch`, so
-  neither outlives the process; persisting one would create a number that survives the buffer
-  it points into.
+- Marks live in memory on the tunnel, keyed by `grantId`. They index into a PTY instance's
+  output and the grant is bound to that instance by `ptyEpoch`, so neither outlives the
+  process; persisting one would create a number that survives the buffer it points into.
+- A window is dropped on revocation, and **swept on expiry** — on every write and every
+  `client:open`. Revocation reaches the map through `revokeGrant`, but a grant that is
+  approved, never connected to, and simply times out leaves no client behind to carry its
+  window out any other way.
+- A mark, once recorded for a session, is never overwritten. Recomputing it would move a
+  window **forward**, hiding output the guest was entitled to — the same failure as sending
+  nothing, arriving by a different route.
 
 What a guest can see is therefore unchanged in extent — everything from the moment they were
 let in, nothing before it — and changed only in that it survives them looking away.
