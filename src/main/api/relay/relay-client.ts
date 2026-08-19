@@ -672,6 +672,9 @@ export class RelayClient extends EventEmitter {
 
     // From the invite the owner created, not from `expiresAt` — that is NULL
     // until we countersign, which is exactly the moment we are in now.
+    //
+    // `??`, not `||`: 0 is a value the owner chose (until revoked), and `||`
+    // would quietly turn it back into four hours.
     const ttlSeconds = pending.grantTtlSeconds ?? DEFAULT_GRANT_TTL_SECONDS;
     const { certificate, grant } = mintGrant({
       grantId,

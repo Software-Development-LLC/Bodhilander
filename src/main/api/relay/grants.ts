@@ -102,6 +102,35 @@ export function buildShareCreateMessage(p: ShareCreateParts): Uint8Array {
   return new TextEncoder().encode(line);
 }
 
+/**
+ * `grantTtlSeconds: 0` means "until the owner revokes it".
+ *
+ * Zero rather than a magic large number because it is the value that travels:
+ * it sits inside the signed `share-create:v1` message and in the relay's
+ * `grant_ttl_seconds` column, and a sentinel that reads as "no duration" is
+ * harder to mistake for a duration than 3155760000 is.
+ *
+ * This is safe here because a certificate's lifetime is not what bounds a
+ * share. The desktop's own table decides whether a grant is still live and is
+ * consulted on every `client:open`, the scope is bound to a PTY instance so a
+ * session restart ends it regardless of clock, and revocation reaches live
+ * sockets immediately. An unexpiring certificate is not an unrevocable one.
+ */
+export const GRANT_TTL_UNTIL_REVOKED = 0;
+
+/**
+ * The expiry an "until revoked" certificate carries: the largest timestamp
+ * `Date` can represent. Every check on this value is a plain comparison, so
+ * nothing needs to special-case it — and it stays a safe integer, which
+ * `assertGrantFieldsSafe` requires and SQLite stores exactly.
+ */
+export const GRANT_NEVER_EXPIRES = 8_640_000_000_000_000;
+
+/** When a grant minted now with `ttlSeconds` should stop being honoured. */
+export function grantExpiryAt(now: number, ttlSeconds: number): number {
+  return ttlSeconds === GRANT_TTL_UNTIL_REVOKED ? GRANT_NEVER_EXPIRES : now + ttlSeconds * 1000;
+}
+
 export interface GrantParts {
   grantId: string;
   machineId: string;

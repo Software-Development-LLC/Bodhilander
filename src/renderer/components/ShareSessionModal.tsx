@@ -24,11 +24,20 @@ const INVITE_TTL_OPTIONS = [
   { label: '1 day', seconds: 24 * HOUR },
 ];
 
-/** Grant lifetime — how long access lasts once they join. */
+/**
+ * Grant lifetime — how long access lasts once they join.
+ *
+ * "Until I revoke it" is 0, not a very large number: it is a different answer
+ * to the question, not a longer one. Someone watching a session alongside
+ * their own work should not lose it mid-afternoon and have to be re-invited,
+ * and re-issuing a link every few hours buys nothing — revoking is instant,
+ * and restarting the shared session ends the share on its own.
+ */
 const GRANT_TTL_OPTIONS = [
   { label: '1 hour', seconds: HOUR },
   { label: '4 hours', seconds: 4 * HOUR },
   { label: '8 hours', seconds: 8 * HOUR },
+  { label: 'Until I revoke it', seconds: 0 },
 ];
 
 interface ShareSessionModalProps {
@@ -144,6 +153,14 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({ sessionId,
               : `Only @${login.trim()} can use this link. You still have to let them in.`}
           </p>
 
+          {/* Stated on the confirmation too: this is the one choice that keeps
+              running after the owner has stopped thinking about it. */}
+          {grantTtl === 0 && (
+            <p className="share-note">
+              Access lasts until you revoke it — or until this session restarts.
+            </p>
+          )}
+
           <div className="share-buttons">
             <button type="button" className="share-secondary" onClick={onClose}>
               Done
@@ -218,7 +235,7 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({ sessionId,
                   </option>
                 ))}
               </select>
-              <span className="share-hint">you can end it sooner</span>
+              <span className="share-hint">{grantTtl === 0 ? 'ends when you say so' : 'you can end it sooner'}</span>
             </div>
           </fieldset>
 
