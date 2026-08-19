@@ -28,6 +28,7 @@ const RELAY_ORIGIN = 'https://relay.example.com';
 const OWNER_ID = 'owner-user';
 const GUEST_ID = 'guest-user';
 const NOW = 1_800_000_000_000;
+const HOUR = 3_600_000;
 
 // The machine identity the fake identity port serves.
 const machineKeys = crypto.generateKeyPairSync('ed25519');
@@ -40,6 +41,10 @@ interface Harness {
   tunnel: SessionTunnelType;
   sent: { clientId: string; payload: unknown }[];
   deps: TunnelDeps;
+  /** Represent output arriving on a session. */
+  append(sessionId: string, data: string): void;
+  /** The mark the approval flow would capture right now. */
+  markNow(sessionId: string): number;
   /** The client public key most recently offered, for proof assertions. */
   lastClientPub: string | null;
   /** Client-side key material, so tests can read what the tunnel sealed. */
@@ -59,6 +64,12 @@ const GROUPS: TunnelGroupRow[] = [
 
 function harness(over: Partial<TunnelDeps> & { grantRow?: TunnelStoredGrant | null } = {}): Harness {
   const sent: { clientId: string; payload: unknown }[] = [];
+  // What each session has produced so far. Tests append to it to represent
+  // output arriving while a guest is attached, or away.
+  const stream = new Map<string, string>([
+    ['s1', 'BEFORE THE SHARE'],
+    ['s2', ''],
+  ]);
   const epochs = new Map<string, number>([
     ['s1', 111],
     ['s2', 222],
@@ -74,6 +85,11 @@ function harness(over: Partial<TunnelDeps> & { grantRow?: TunnelStoredGrant | nu
       isLive: (id) => epochs.has(id),
       ptyEpoch: (id) => epochs.get(id) ?? null,
       getSerializedBuffer: async () => 'OWNER SCROLLBACK',
+      // A stand-in for the PTY's output stream: a mark is a length, and
+      // "since" is the tail past it — the same contract `PtyManager` honours
+      // through its evict-aware counter.
+      scrollbackMark: (id) => (epochs.has(id) ? (stream.get(id) ?? '').length : null),
+      getSerializedBufferSince: async (id, mark) => (stream.get(id) ?? '').slice(mark),
     },
     sessions: { getAll: () => SESSIONS },
     groups: { getAll: () => GROUPS },
@@ -104,6 +120,12 @@ function harness(over: Partial<TunnelDeps> & { grantRow?: TunnelStoredGrant | nu
     sent,
     deps,
     lastClientPub: null,
+    append(sessionId, data) {
+      stream.set(sessionId, (stream.get(sessionId) ?? '') + data);
+    },
+    markNow(sessionId) {
+      return (stream.get(sessionId) ?? '').length;
+    },
     openChannel(clientId, opts = {}) {
       const clientKeys = crypto.generateKeyPairSync('x25519');
       const pubB64 = Buffer.from(
@@ -394,6 +416,150 @@ describe('scoped disclosure', () => {
   });
 });
 
+/**
+ * #169. Sending a guest nothing on every attach is not the same rule as "no
+ * scrollback": it also throws away what they were already shown, so leaving a
+ * shared session to look at your own and coming back wiped it. The window
+ * since the share began is theirs; everything before it still is not.
+ */
+describe('a guest coming back to a session they already watched', () => {
+  const guest = (h: ReturnType<typeof harness>, clientId: string) =>
+    h.openChannel(clientId, { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+
+  test('is replayed what it has already seen, and nothing from before the share', async () => {
+    const h = harness({ grantRow: storedGrant() });
+    // What the approval flow records at the moment of consent.
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
+    h.append('s1', 'AFTER ONE');
+
+    const key = guest(h, 'c1');
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    // They step away to one of their own sessions; output keeps arriving.
+    h.send('c1', key, 1, { type: 'terminal:unsubscribe', sessionId: 's1' });
+    h.append('s1', ' AND TWO');
+
+    h.send('c1', key, 2, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const replayed = h
+      .opened('c1', key)
+      .filter((m) => m.type === 'terminal:output')
+      .map((m) => String(m.data))
+      .join('');
+    expect(replayed).toContain('AFTER ONE AND TWO');
+    expect(replayed).not.toContain('BEFORE THE SHARE');
+  });
+
+  test('with no recorded mark, starts its window at the first attach', async () => {
+    // A grant minted without a mark must not fall back to position zero —
+    // that would replay the entire scrollback to someone entitled to none.
+    const h = harness({ grantRow: storedGrant() });
+
+    const key = guest(h, 'c1');
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+    h.send('c1', key, 1, { type: 'terminal:unsubscribe', sessionId: 's1' });
+    h.append('s1', 'ONLY THIS');
+    h.send('c1', key, 2, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const replayed = h
+      .opened('c1', key)
+      .filter((m) => m.type === 'terminal:output')
+      .map((m) => String(m.data))
+      .join('');
+    expect(replayed).toContain('ONLY THIS');
+    expect(replayed).not.toContain('BEFORE THE SHARE');
+  });
+
+  test('every attach still says where the share starts', async () => {
+    const h = harness({ grantRow: storedGrant() });
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
+
+    const key = guest(h, 'c1');
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const first = h.opened('c1', key).filter((m) => m.type === 'terminal:output');
+    expect(String(first[0]!.data)).toContain('shared from here');
+  });
+
+  test('a second approval does not move an already-recorded window forward', async () => {
+    // Approval is one-shot per grantId today — `pendingGrants` is cleared and
+    // `insertGrant` would collide — but if it ever stops being, recomputing
+    // the marks would hide everything produced between the two calls from a
+    // guest already watching. First write wins.
+    const h = harness({ grantRow: storedGrant() });
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
+    h.append('s1', 'BETWEEN THE TWO APPROVALS');
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
+
+    const key = guest(h, 'c1');
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const replayed = h
+      .opened('c1', key)
+      .filter((m) => m.type === 'terminal:output')
+      .map((m) => String(m.data))
+      .join('');
+    expect(replayed).toContain('BETWEEN THE TWO APPROVALS');
+  });
+
+  test('a window whose grant ran out is swept, not held for the life of the process', async () => {
+    // Revocation reaches the map through revokeGrant, but expiry does not: a
+    // grant approved, never connected to, and simply timed out leaves no
+    // client behind to carry its window out. So the map is swept on write and
+    // on open. Observed through behaviour — a swept window falls back to
+    // starting at the next attach — since the map itself is private.
+    const clock = { now: NOW };
+    const h = harness({ grantRow: storedGrant(), now: () => clock.now });
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + 1000);
+    h.append('s1', 'PRODUCED WHILE NOBODY WATCHED');
+
+    clock.now = NOW + 2000; // the grant's clock runs out with nobody attached
+
+    // A later channel sweeps it. In production the certificate would have
+    // expired with it; here it carries a fresh expiry so the sweep — not the
+    // certificate check — is what the assertion is about.
+    const key = h.openChannel('c1', {
+      principal: { userId: GUEST_ID },
+      certificate: mintCertificate({ expiresAt: NOW + HOUR }),
+    })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const replayed = h
+      .opened('c1', key)
+      .filter((m) => m.type === 'terminal:output')
+      .map((m) => String(m.data))
+      .join('');
+    expect(replayed).not.toContain('PRODUCED WHILE NOBODY WATCHED');
+  });
+
+  test('revoking the grant forgets the window it opened', async () => {
+    // Otherwise a re-approval would inherit a start point from access that was
+    // taken away, and replay output produced while the guest had none.
+    const h = harness({ grantRow: storedGrant() });
+    h.tunnel.noteShareMarks('grant-1', [{ sessionId: 's1', mark: h.markNow('s1') }], NOW + HOUR);
+    h.append('s1', 'WHILE REVOKED');
+    h.tunnel.revokeGrant('grant-1');
+
+    const key = guest(h, 'c2');
+    h.send('c2', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const replayed = h
+      .opened('c2', key)
+      .filter((m) => m.type === 'terminal:output')
+      .map((m) => String(m.data))
+      .join('');
+    expect(replayed).not.toContain('WHILE REVOKED');
+  });
+});
+
 describe('revocation of a live client', () => {
   test('drops it to DENY_ALL and tells it, sealed', () => {
     const h = harness({ grantRow: storedGrant() });
@@ -437,6 +603,8 @@ describe('PTY listener lifecycle', () => {
         isLive: () => true,
         ptyEpoch: () => 111,
         getSerializedBuffer: async () => '',
+        scrollbackMark: () => 0,
+        getSerializedBufferSince: async () => '',
       },
     });
 
@@ -466,6 +634,8 @@ describe('PTY listener lifecycle', () => {
         isLive: () => true,
         ptyEpoch: () => 111,
         getSerializedBuffer: async () => '',
+        scrollbackMark: () => 0,
+        getSerializedBufferSince: async () => '',
       },
     });
 
@@ -643,6 +813,8 @@ describe('a lapsed grant stops the stream, not just the commands', () => {
         isLive: () => true,
         ptyEpoch: () => 111,
         getSerializedBuffer: async () => '',
+        scrollbackMark: () => 0,
+        getSerializedBufferSince: async () => '',
       },
     });
     return { h, emit: (data: string) => emit?.({ id: 's1', data }) };

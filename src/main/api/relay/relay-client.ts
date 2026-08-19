@@ -670,6 +670,19 @@ export class RelayClient extends EventEmitter {
       return { sessionId, ptyEpoch };
     });
 
+    // Where the guest's view of each session begins — read HERE for the same
+    // reason `ptyEpoch` is: this is the moment of consent. Everything from
+    // here on is theirs to re-read when they come back to it (#169);
+    // everything before it is not, and never becomes so.
+    //
+    // A missing mark is dropped, never defaulted to 0: zero would replay the
+    // whole scrollback, which is the one thing a guest must never be sent.
+    // Read before minting and handed over after, so the window cannot drift
+    // past the moment being consented to.
+    const marks = sessions
+      .map(({ sessionId }) => ({ sessionId, mark: ptyManager.scrollbackMark(sessionId) }))
+      .filter((m): m is { sessionId: string; mark: number } => m.mark !== null);
+
     // From the invite the owner created, not from `expiresAt` — that is NULL
     // until we countersign, which is exactly the moment we are in now.
     //
@@ -686,6 +699,13 @@ export class RelayClient extends EventEmitter {
       sessions,
       ttlSeconds,
     });
+
+    // The certificate's own expiry, so an approved grant nobody ever connects
+    // to takes its window with it when it runs out. The fallback is
+    // unreachable — `insertGrant` always writes one — and exists only because
+    // the row type allows null between redemption and countersigning, and a
+    // window with no expiry would never be swept.
+    this.tunnel.noteShareMarks(grantId, marks, grant.expiresAt ?? Date.now());
 
     this.send({ type: 'share:bind', grantId, certificate, expiresAt: grant.expiresAt });
     this.pendingGrants.delete(grantId);
