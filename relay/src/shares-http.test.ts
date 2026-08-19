@@ -313,6 +313,35 @@ describe('POST /api/shares/redeem', () => {
     }
   });
 
+  test('an account whose GitHub handle is not on file gets its own answer', async () => {
+    // Same refusal, different cause: this one the person reading it can fix,
+    // and the wrong_account copy tells them not to bother trying.
+    const f = await fixture();
+    try {
+      const code = await codeFor(f);
+      const stale = f.repos.upsertGithubUser({
+        providerUserId: '4',
+        displayName: 'Signed in before migration 003',
+        login: '',
+        email: null,
+        avatarUrl: null,
+      });
+      f.db.query('UPDATE users SET github_login = NULL WHERE id = ?').run(stale.id);
+      const res = await f.route(
+        new Request('http://relay.test/api/shares/redeem', {
+          method: 'POST',
+          headers: { cookie: `bdl_session=${f.repos.createSession(stale.id, 3600).token}` },
+          body: JSON.stringify({ code }),
+        }),
+      );
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({ error: 'invite_login_unknown' });
+      expect(f.redeemed).toHaveLength(0);
+    } finally {
+      f.db.close();
+    }
+  });
+
   test('requires a session', async () => {
     const f = await fixture();
     try {

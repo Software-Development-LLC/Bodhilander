@@ -484,6 +484,10 @@ export function createRouter(ctx: RelayContext) {
     const result = repos.redeemShareInvite(code, user, crypto.randomUUID());
     if (!result.ok) {
       const status = result.reason === 'not_found' ? 404 : 409;
+      // Logged because a refusal is the one outcome the guest cannot explain
+      // and the owner cannot see. `login_unknown` in particular looked exactly
+      // like a wrong account from the outside.
+      logger.info('share invite refused', { reason: result.reason });
       return json({ error: `invite_${result.reason}` }, status);
     }
 

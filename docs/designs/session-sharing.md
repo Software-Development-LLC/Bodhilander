@@ -373,6 +373,12 @@ roll-up, not the only route.
   `expected_github_login` so redemption by anyone else fails closed. A secondary *"Or make an
   open link"* covers the case where the owner doesn't know the handle. An addressed invite
   turns the approval modal into a confirmation instead of a stranger-check.
+
+  A NULL `users.github_login` — every account that has not signed in since migration 003 —
+  fails closed, and must, but it is **not** the same refusal as a wrong account (#170). It
+  gets its own reason, `login_unknown`, and copy that offers the one action that fixes it:
+  sign in again, which is what puts the handle on file. Telling the person the link *was*
+  addressed to that it "isn't for this account" is both wrong and a dead end.
 - **What they can do?**
   - **Watch** — *"They see this session's live output. They can't type."*
   - **Watch and type** — *"They can run any command you can, read any file you can, and spend
