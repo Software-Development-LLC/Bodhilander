@@ -26,6 +26,15 @@ interface Machine {
   certificate?: string | null;
 }
 
+interface Me {
+  id: string;
+  displayName: string;
+  email: string | null;
+  avatarUrl: string | null;
+  /** The handle the RELAY holds, which may be null — see the account sheet. */
+  githubLogin: string | null;
+}
+
 /** True when the signed-in user is a guest on the machine they are viewing. */
 const isGuest = () => app.machine?.relation === 'grantee';
 
@@ -54,7 +63,7 @@ function toggleTheme() { const d = !isDark(); root.setAttribute('data-theme', d 
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
-const app = { conn: null as RelayConnection | null, machine: null as Machine | null, machines: [] as Machine[], sessions: [] as RSession[], groups: [] as RGroup[], activeId: null as string | null, fp: '', fpVerified: false, devLogin: false };
+const app = { conn: null as RelayConnection | null, user: null as Me | null, machine: null as Machine | null, machines: [] as Machine[], sessions: [] as RSession[], groups: [] as RGroup[], activeId: null as string | null, fp: '', fpVerified: false, devLogin: false };
 const rootEl = document.getElementById('root')!;
 
 // history-layer nav so Back works within the app
@@ -80,6 +89,7 @@ async function boot() {
       if (invite) sessionStorage.setItem(INVITE_STASH, location.pathname + location.hash);
       return renderSignIn(!!invite);
     }
+    app.user = ((await me.json().catch(() => ({}))) as { user?: Me }).user ?? null;
 
     // Back from OAuth on an invite link.
     const stashed = sessionStorage.getItem(INVITE_STASH);
@@ -123,7 +133,7 @@ function invitedFingerprint(): string | null {
  * `reauth` marks the one failure the person reading it can actually fix, and
  * gets a button rather than a sentence telling them to go and do it.
  */
-const REDEEM_COPY: Record<string, { title: string; body: string; reauth?: boolean }> = {
+const REDEEM_COPY: Record<string, { title: string; body: string; reauth?: boolean; switchAccount?: boolean }> = {
   invite_not_found: { title: "That link doesn't work", body: 'Check you copied all of it, or ask for a new one.' },
   invite_expired: { title: 'That link has expired', body: 'Ask for a new one — links stop working after a while on purpose.' },
   invite_already_used: { title: 'That link has been used', body: 'Invite links work once. Ask for a new one.' },
@@ -131,6 +141,7 @@ const REDEEM_COPY: Record<string, { title: string; body: string; reauth?: boolea
   invite_wrong_account: {
     title: "This link isn't for this account",
     body: 'It was addressed to a specific GitHub account. Sign in as that account, or ask for a link addressed to you.',
+    switchAccount: true,
   },
   invite_own_machine: { title: "That's your own machine", body: 'You already have full access to it — no invite needed.' },
   invite_login_unknown: {
@@ -177,21 +188,32 @@ async function renderRedeem(code: string): Promise<void> {
       <div class="logo">${copy.reauth ? '🔑' : '🚫'}</div><h1>${esc(copy.title)}</h1>
       <p>${esc(copy.body)}</p>
       ${copy.reauth ? '<button class="btn gh" id="reauth">Sign in with GitHub</button>' : ''}
+      ${copy.switchAccount ? '<button class="btn gh" id="switchAcct">Sign in as another account</button>' : ''}
       <a class="btn ghost" href="/">Go to my machines</a>
     </div></div>`;
     // Stash the invite the same way the signed-out path does, so OAuth returns
     // to this link — with its fingerprint fragment — instead of the home page.
+    // From the path that means keeping the fragment: it carries the machine fingerprint and
+    // does not survive the OAuth round trip on its own. From a typed code there
+    // is no fragment, so rebuild the link from the code itself rather than
+    // stashing whatever page they happened to be on.
+    const returnTo = () =>
+      inviteCodeFromPath() === code ? location.pathname + location.hash : `/i/${encodeURIComponent(code)}`;
+
     const reauth = $('#reauth');
     if (reauth) {
       reauth.onclick = () => {
-        // From the path, keep the fragment: it carries the machine fingerprint
-        // and does not survive the OAuth round trip on its own. From a typed
-        // code there is no fragment, so rebuild the link from the code itself
-        // rather than stashing whatever page they happened to be on.
-        const here = inviteCodeFromPath() === code ? location.pathname + location.hash : `/i/${encodeURIComponent(code)}`;
-        sessionStorage.setItem(INVITE_STASH, here);
+        sessionStorage.setItem(INVITE_STASH, returnTo());
         location.href = '/auth/github/login';
       };
+    }
+    // Addressed to someone else. Re-running OAuth would silently hand back the
+    // same account, so this one has to end the session first — otherwise the
+    // copy above tells them to do something the app gives them no way to do.
+    const switchAcct = $<HTMLButtonElement>('#switchAcct');
+    if (switchAcct) {
+      switchAcct.onclick = () =>
+        void signOut({ to: '/auth/github/login', stashInvite: returnTo(), btn: switchAcct });
     }
     return;
   }
@@ -264,8 +286,13 @@ function renderApp(machines: Machine[]) {
       <button class="btn" id="inviteBtn">Enter an invite code</button>
       <button class="btn ghost" style="margin-top:10px" id="linkBtn">Link my own machine</button>
       <button class="btn ghost" style="margin-top:10px" onclick="location.reload()">Refresh</button>
+      ${accountFooter()}
     </div></div>`;
     $('#linkBtn')!.onclick = openLinkMachine;
+    // "Nothing here yet" is exactly what the wrong account looks like, so this
+    // screen of all of them must offer a way out of the identity you're in.
+    const out = $<HTMLButtonElement>('#emptyOut');
+    if (out) out.onclick = () => void signOut({ btn: out });
     // Posts to /api/shares/redeem, never /link/claim — the latter would
     // attempt an ownership transfer, which is a completely different act.
     $('#inviteBtn')!.onclick = () => {
@@ -289,6 +316,7 @@ function renderApp(machines: Machine[]) {
       <header class="bar">
         <div class="brand grow"><span class="logo">🛰️</span> <span>Bodhilander</span></div>
         <button class="iconbtn" id="theme" aria-label="Toggle light/dark theme">◐</button>
+        ${accountButton()}
       </header>
       <div style="padding:12px 16px 0"><button class="machine-pill" id="machineBtn"><span class="dot off" id="mdot"></span> <span>${esc(
         app.machine.relation === 'grantee' && app.machine.ownerName
@@ -322,6 +350,7 @@ function renderApp(machines: Machine[]) {
   </div>`;
 
   $('#theme')!.onclick = toggleTheme;
+  $('#acct')!.onclick = openAccount;
   $('#fab')!.onclick = openCreate;
   $('#fpBtn')!.onclick = openFp; $('#fpBtn2')!.onclick = openFp;
   $('#machineBtn')!.onclick = openMachineMenu;
@@ -930,6 +959,96 @@ function renderDirs(d: { path: string; entries: string[] }) {
   list.innerHTML = '';
   if (!d.entries.length) list.appendChild(h('li', {}, '<div class="dir empty">No subfolders — use this folder</div>'));
   for (const name of d.entries) { const b = h('button', { class: 'dir' }, `<span class="f-ico">📁</span><span class="f-name">${esc(name)}</span><span class="f-chev">›</span>`); b.onclick = () => browseDir(d.path.replace(/\/$/, '') + '/' + name); const li = document.createElement('li'); li.appendChild(b); list.appendChild(li); }
+}
+
+// ---------------------------------------------------------------------------
+// Account
+// ---------------------------------------------------------------------------
+
+/** Avatars come from GitHub via our own DB, but src is attacker-adjacent
+ *  enough to be worth a scheme check rather than a trusting interpolation. */
+const safeAvatar = (url: string | null | undefined) => (url?.startsWith('https://') ? url : null);
+
+const initialOf = (name: string) => [...name.trim()][0]?.toUpperCase() ?? '?';
+
+/**
+ * A signed-in line for screens that have no header bar to hang the avatar on.
+ * Only the empty state needs it today, but that is the screen a wrong-account
+ * sign-in lands on, so it is not an optional flourish there.
+ */
+function accountFooter(): string {
+  const name = app.user?.githubLogin ? `@${app.user.githubLogin}` : app.user?.displayName;
+  if (!name) return '';
+  return `<p class="acct-foot">Signed in as ${esc(name)} · <button id="emptyOut">Sign out</button></p>`;
+}
+
+function accountButton(): string {
+  const u = app.user;
+  const name = u?.displayName ?? 'your account';
+  const avatar = safeAvatar(u?.avatarUrl);
+  const face = avatar
+    ? `<img class="avatar" src="${esc(avatar)}" alt="" />`
+    : `<span class="avatar init">${esc(initialOf(name))}</span>`;
+  return `<button class="acctbtn" id="acct" aria-label="Account — signed in as ${esc(name)}">${face}</button>`;
+}
+
+function openAccount() {
+  const u = app.user;
+  const name = u?.displayName ?? 'Signed in';
+  const avatar = safeAvatar(u?.avatarUrl);
+  // The handle is the point of this sheet, not decoration: an addressed invite
+  // matches on it, and until now nothing in the UI revealed what we hold.
+  const handle = u?.githubLogin
+    ? `<div class="acct-handle">@${esc(u.githubLogin)}</div>`
+    : `<div class="banner warn" role="status">We don't have your GitHub handle on file. Invites addressed to a
+       specific account can't reach you until you sign in again — that fetches it.</div>`;
+
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim open';
+  scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="acch">
+    <div class="sheet-head"><h3 id="acch">Account</h3><button class="iconbtn" id="accx" aria-label="Close">✕</button></div>
+    <div class="acct-id">
+      ${avatar ? `<img class="avatar lg" src="${esc(avatar)}" alt="" />` : `<span class="avatar init lg">${esc(initialOf(name))}</span>`}
+      <div class="acct-who">
+        <div class="acct-name">${esc(name)}</div>
+        ${u?.email ? `<div class="acct-mail">${esc(u.email)}</div>` : ''}
+      </div>
+    </div>
+    ${handle}
+    <button class="btn ghost" id="accOut" style="margin-top:18px">Sign out</button>
+  </div>`;
+  document.body.appendChild(scrim);
+  pushLayer(() => scrim.remove());
+  scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
+  $('#accx')!.onclick = () => history.back();
+  $('#accOut')!.onclick = (e) => void signOut({ btn: e.currentTarget as HTMLButtonElement });
+}
+
+/**
+ * End the session on the server, then reload signed-out.
+ *
+ * Local state is cleared because it is per-ACCOUNT, not per-browser: leaving a
+ * machine preference or a half-finished invite behind would greet whoever signs
+ * in next with the last person's context. The reload (rather than a re-render)
+ * is deliberate — it drops the decrypted terminal buffers held in memory.
+ */
+async function signOut(opts: { to?: string; stashInvite?: string; btn?: HTMLButtonElement | null } = {}): Promise<void> {
+  const { to = '/', stashInvite, btn } = opts;
+  if (btn) { btn.disabled = true; btn.textContent = 'Signing out…'; }
+  app.conn?.close();
+  try {
+    await api('/auth/logout', { method: 'POST' });
+  } catch {
+    // The cookie may survive a network failure, so we cannot claim success —
+    // but the local wipe below and the reload still put them on the sign-in
+    // screen, which is where a retry starts from anyway.
+  }
+  localStorage.removeItem('bodhi.machineId');
+  sessionStorage.removeItem(INVITE_STASH);
+  // Re-stash AFTER the wipe: switching accounts to accept an invite is the one
+  // case where the pending link must outlive the session it was refused by.
+  if (stashInvite) sessionStorage.setItem(INVITE_STASH, stashInvite);
+  location.href = to;
 }
 
 // ---------------------------------------------------------------------------

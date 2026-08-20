@@ -413,6 +413,12 @@ roll-up, not the only route.
   gets its own reason, `login_unknown`, and copy that offers the one action that fixes it:
   sign in again, which is what puts the handle on file. Telling the person the link *was*
   addressed to that it "isn't for this account" is both wrong and a dead end.
+
+  A genuine `wrong_account` needs an escape too (#175). Re-running OAuth would hand back the
+  same session, so that refusal offers **sign out, then sign in** — and the invite is
+  re-stashed *after* the sign-out wipe so the pending link outlives the session it was
+  refused by. Without it the copy asks the guest to switch accounts in an app that, until
+  #175, had no sign-out control anywhere.
 - **What they can do?**
   - **Watch** — *"They see this session's live output. They can't type."*
   - **Watch and type** — *"They can run any command you can, read any file you can, and spend

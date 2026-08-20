@@ -295,6 +295,17 @@ describe('router: GitHub OAuth', () => {
   }
   const mockFetch = makeMockFetch();
 
+  /** Run the OAuth callback and return the issued session token. */
+  async function signIn(route: (req: Request) => Promise<Response> | Response): Promise<string> {
+    const res = await route(
+      new Request('http://relay.test/auth/github/callback?code=abc&state=xyz', {
+        headers: { cookie: 'bdl_oauth_state=xyz' },
+      }),
+    );
+    const session = res.headers.getSetCookie().find((c) => c.startsWith('bdl_session='))!;
+    return session.slice('bdl_session='.length).split(';')[0]!;
+  }
+
   test('login without OAuth config returns 503', async () => {
     const { config } = loadConfig({});
     const route = createRouter({ config, logger, repos: freshRepos() });
@@ -332,6 +343,42 @@ describe('router: GitHub OAuth', () => {
     const { user } = (await meRes.json()) as { user: { displayName: string; email: string } };
     expect(user.displayName).toBe('The Octocat');
     expect(user.email).toBe('octo@gh.com');
+  });
+
+  // The client shows this handle, and shows a warning when it is missing —
+  // an addressed invite matches on it, so an absent one is the difference
+  // between a link working and being refused (#170).
+  test('/api/me reports the GitHub handle the relay holds', async () => {
+    const { config } = loadConfig({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret' });
+    const route = createRouter({ config, logger, repos: freshRepos(), fetchImpl: mockFetch });
+    const token = await signIn(route);
+
+    const meRes = await route(new Request('http://relay.test/api/me', { headers: { cookie: `bdl_session=${token}` } }));
+    const { user } = (await meRes.json()) as { user: { githubLogin: string | null } };
+    expect(user.githubLogin).toBe('octocat');
+  });
+
+  test('logout destroys the session, so the same cookie stops working', async () => {
+    const { config } = loadConfig({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret' });
+    const route = createRouter({ config, logger, repos: freshRepos(), fetchImpl: mockFetch });
+    const token = await signIn(route);
+    const cookie = `bdl_session=${token}`;
+
+    const outRes = await route(new Request('http://relay.test/auth/logout', { method: 'POST', headers: { cookie } }));
+    expect(outRes.status).toBe(204);
+    expect(outRes.headers.get('set-cookie')).toContain('bdl_session=;');
+
+    // Clearing the cookie is only half of it. A cookie that was copied off the
+    // machine has to die server-side too, or "sign out" is decoration.
+    const after = await route(new Request('http://relay.test/api/me', { headers: { cookie } }));
+    expect(after.status).toBe(401);
+  });
+
+  test('logout without a session is not an error', async () => {
+    const { config } = loadConfig({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret' });
+    const route = createRouter({ config, logger, repos: freshRepos() });
+    const res = await route(new Request('http://relay.test/auth/logout', { method: 'POST' }));
+    expect(res.status).toBe(204);
   });
 
   test('callback with mismatched state is rejected', async () => {

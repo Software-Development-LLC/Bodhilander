@@ -578,6 +578,11 @@ function publicUser(user: User) {
     displayName: user.display_name,
     email: user.primary_email,
     avatarUrl: user.avatar_url,
+    // Null is a real, reachable state: a row created before we recorded logins
+    // has none until the next sign-in backfills it. The client surfaces that
+    // rather than hiding it — it is the whole reason an addressed invite can
+    // refuse someone who IS the right person (#170).
+    githubLogin: user.github_login,
   };
 }
 
