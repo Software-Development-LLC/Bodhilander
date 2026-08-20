@@ -5,6 +5,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
 import { RelayConnection, type ConnState, type Inner } from './connection';
 import { createReconnectScheduler } from './reconnect';
+import { clearAccountState, INVITE_STASH } from './account';
 
 // ---------------------------------------------------------------------------
 // Types (mirror the agent's sealed payloads)
@@ -49,6 +50,14 @@ function h(tag: string, attrs: Record<string, string> = {}, html?: string): HTML
   return el;
 }
 const esc = (s: string) => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
+/**
+ * `esc()` serializes a TEXT node, and the HTML spec does not escape quotes
+ * there — only `&`, `<`, `>` and nbsp. That is safe between tags and unsafe
+ * inside a quoted attribute, where a `"` in the value ends the attribute and
+ * everything after it is parsed as markup. Display names and avatar URLs both
+ * arrive from GitHub, so attribute interpolation uses this instead.
+ */
+const escAttr = (s: string) => esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const api = (path: string, init?: RequestInit) => fetch(path, { credentials: 'same-origin', ...init });
 
 // ---------------------------------------------------------------------------
@@ -114,7 +123,6 @@ async function boot() {
 // Invite redemption (/i/:code)
 // ---------------------------------------------------------------------------
 
-const INVITE_STASH = 'bodhi.invite';
 
 function inviteCodeFromPath(): string | null {
   const m = /^\/i\/([^/]+)\/?$/.exec(location.pathname);
@@ -587,7 +595,7 @@ function renderSessions() {
   for (const s of sorted) {
     const b = BADGE[s.state]; const gp = groupPath(s.groupId);
     const li = document.createElement('li');
-    li.innerHTML = `<button class="session s-${s.state === 'working' ? 'work' : s.state === 'waiting' ? 'wait' : s.state === 'error' ? 'err' : s.state === 'idle' ? 'idle' : 'stop'} ${s.state === 'waiting' ? 'attn' : ''}" aria-label="${esc(s.name)}, ${b.label}">
+    li.innerHTML = `<button class="session s-${s.state === 'working' ? 'work' : s.state === 'waiting' ? 'wait' : s.state === 'error' ? 'err' : s.state === 'idle' ? 'idle' : 'stop'} ${s.state === 'waiting' ? 'attn' : ''}" aria-label="${escAttr(s.name)}, ${b.label}">
       <span class="state-rail" aria-hidden="true"></span>
       <span class="s-main"><span class="s-title"><span class="s-name">${esc(s.name)}</span><span class="provider">${esc(s.shellType === 'bash' ? 'shell' : s.provider)}</span></span>
       <span class="s-sub"><span class="gd" style="background:${gp.color}"></span>${esc(gp.label)}</span></span>
@@ -987,9 +995,9 @@ function accountButton(): string {
   const name = u?.displayName ?? 'your account';
   const avatar = safeAvatar(u?.avatarUrl);
   const face = avatar
-    ? `<img class="avatar" src="${esc(avatar)}" alt="" />`
+    ? `<img class="avatar" src="${escAttr(avatar)}" alt="" />`
     : `<span class="avatar init">${esc(initialOf(name))}</span>`;
-  return `<button class="acctbtn" id="acct" aria-label="Account — signed in as ${esc(name)}">${face}</button>`;
+  return `<button class="acctbtn" id="acct" aria-label="Account — signed in as ${escAttr(name)}">${face}</button>`;
 }
 
 function openAccount() {
@@ -1008,7 +1016,7 @@ function openAccount() {
   scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="acch">
     <div class="sheet-head"><h3 id="acch">Account</h3><button class="iconbtn" id="accx" aria-label="Close">✕</button></div>
     <div class="acct-id">
-      ${avatar ? `<img class="avatar lg" src="${esc(avatar)}" alt="" />` : `<span class="avatar init lg">${esc(initialOf(name))}</span>`}
+      ${avatar ? `<img class="avatar lg" src="${escAttr(avatar)}" alt="" />` : `<span class="avatar init lg">${esc(initialOf(name))}</span>`}
       <div class="acct-who">
         <div class="acct-name">${esc(name)}</div>
         ${u?.email ? `<div class="acct-mail">${esc(u.email)}</div>` : ''}
@@ -1037,17 +1045,19 @@ async function signOut(opts: { to?: string; stashInvite?: string; btn?: HTMLButt
   if (btn) { btn.disabled = true; btn.textContent = 'Signing out…'; }
   app.conn?.close();
   try {
-    await api('/auth/logout', { method: 'POST' });
+    // Bounded, because the alternative to a slow relay answering is not
+    // "wait longer" — it is a disabled button that never comes back. The
+    // cookie may then outlive the click, so we cannot claim success; the
+    // local wipe and the reload still land them on the sign-in screen,
+    // which is where a retry starts from anyway.
+    await Promise.race([
+      api('/auth/logout', { method: 'POST' }),
+      new Promise((resolve) => setTimeout(resolve, 5000)),
+    ]);
   } catch {
-    // The cookie may survive a network failure, so we cannot claim success —
-    // but the local wipe below and the reload still put them on the sign-in
-    // screen, which is where a retry starts from anyway.
+    // Same reasoning: a network failure changes nothing about where we go.
   }
-  localStorage.removeItem('bodhi.machineId');
-  sessionStorage.removeItem(INVITE_STASH);
-  // Re-stash AFTER the wipe: switching accounts to accept an invite is the one
-  // case where the pending link must outlive the session it was refused by.
-  if (stashInvite) sessionStorage.setItem(INVITE_STASH, stashInvite);
+  clearAccountState({ local: localStorage, session: sessionStorage }, stashInvite);
   location.href = to;
 }
 
