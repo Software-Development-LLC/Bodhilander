@@ -123,7 +123,6 @@ async function boot() {
 // Invite redemption (/i/:code)
 // ---------------------------------------------------------------------------
 
-
 function inviteCodeFromPath(): string | null {
   const m = /^\/i\/([^/]+)\/?$/.exec(location.pathname);
   return m ? decodeURIComponent(m[1]!) : null;
