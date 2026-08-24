@@ -111,7 +111,7 @@ function fakePtyManager(): PtyManager & { loginSessions: string[] } {
     },
     on() {},
     off() {},
-    kill() {},
+    kill: () => Promise.resolve(),
   };
   return stub as unknown as PtyManager & { loginSessions: string[] };
 }
@@ -193,5 +193,36 @@ describe('startLoginFlow legacy seeding', () => {
 
     accountAuth.cancelLoginFlow(pty, a.ptyId, false);
     accountAuth.cancelLoginFlow(pty, b.ptyId, false);
+  });
+});
+
+describe('cancelLoginFlow', () => {
+  test('a rejecting kill is swallowed and cleanup still runs to completion', async () => {
+    const pty = fakePtyManager();
+    let kills = 0;
+    pty.kill = () => {
+      kills++;
+      return Promise.reject(new Error('teardown glitched'));
+    };
+    const { ptyId } = await accountAuth.startLoginFlow(pty, null, 'Doomed');
+
+    const escaped: unknown[] = [];
+    const onUnhandled = (err: unknown) => { escaped.push(err); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      accountAuth.cancelLoginFlow(pty, ptyId, true);
+      // Give a floating rejection an event-loop turn to surface.
+      await new Promise((r) => setTimeout(r, 10));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    expect(escaped).toEqual([]);
+    expect(kills).toBe(1);
+    // The abort rollback ran past the failed kill: the account row is gone.
+    expect(storedAccounts()).toEqual([]);
+    // And so is the flow itself — a second cancel is a no-op, not a re-kill.
+    accountAuth.cancelLoginFlow(pty, ptyId, true);
+    expect(kills).toBe(1);
   });
 });

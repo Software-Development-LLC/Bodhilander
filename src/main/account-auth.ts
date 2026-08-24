@@ -237,11 +237,12 @@ export function cancelLoginFlow(
 
   flow.watcher?.close();
   ptyManager.off('exit', flow.exitListener);
-  try {
-    ptyManager.kill(ptyId);
-  } catch (err) {
-    // Pty may have already exited.
-  }
+  // Best-effort: a pty that already exited resolves cleanly, so a rejection
+  // means teardown itself glitched — and with the flow being discarded either
+  // way, that is worth a log line, not a failed cancel.
+  ptyManager.kill(ptyId).catch((err) => {
+    log.warn(`[Accounts] Failed to kill login pty ${ptyId}:`, err);
+  });
 
   if (deleteAccount) {
     try {
