@@ -110,7 +110,7 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
       onPtyLiveAccount: () => () => {},
       onAccountLoginCompleted: () => () => {},
       deleteAccount: async (id: string) => { deleted.push(id); },
-      setDefaultAccount: async () => {},
+      setDefaultAccount: async () => true,
       startAccountLogin: async () => ({ account: listed[0], ptyId: 'p' }),
       cancelAccountLogin: async () => {},
       platform: 'darwin',
