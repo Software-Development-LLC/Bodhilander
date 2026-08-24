@@ -98,3 +98,89 @@ describe('http router', () => {
     expect((await res.json()) as { error: string }).toEqual({ error: 'not_found' });
   });
 });
+
+describe('http router: PWA statics', () => {
+  const { config } = loadConfig({});
+  const logger = createLogger('error');
+  const repos = createRepositories(openDb(':memory:'));
+  const route = createRouter({ config, logger, repos });
+
+  interface Manifest {
+    display: string;
+    start_url: string;
+    scope: string;
+    theme_color: string;
+    background_color: string;
+    icons: Array<{ src: string; sizes: string; type: string; purpose?: string }>;
+  }
+  const manifest = async () =>
+    (await (await route(new Request('http://relay.test/manifest.webmanifest'))).json()) as Manifest;
+
+  test('GET /manifest.webmanifest declares a standalone app at the root scope', async () => {
+    const res = await route(new Request('http://relay.test/manifest.webmanifest'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/manifest+json');
+    const m = (await res.json()) as Manifest;
+    expect(m.display).toBe('standalone');
+    expect(m.start_url).toBe('/');
+    expect(m.scope).toBe('/');
+    const sizes = m.icons.map((i) => i.sizes);
+    expect(sizes).toContain('192x192');
+    expect(sizes).toContain('512x512');
+    expect(m.icons.some((i) => i.purpose === 'maskable')).toBe(true);
+  });
+
+  test('manifest colors match the theme-color metas in the shell', async () => {
+    const m = await manifest();
+    const html = await (await route(new Request('http://relay.test/'))).text();
+    const metas = [...html.matchAll(/name="theme-color" content="([^"]+)"/g)].map((x) => x[1]);
+    expect(metas).toContain(m.theme_color);
+    expect(metas).toContain(m.background_color);
+  });
+
+  test('every manifest icon and the apple-touch-icon are served as real PNGs', async () => {
+    const m = await manifest();
+    for (const src of [...m.icons.map((i) => i.src), '/apple-touch-icon.png']) {
+      const res = await route(new Request(`http://relay.test${src}`));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('image/png');
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      expect([...bytes.slice(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    }
+  });
+
+  test('GET /sw.js serves the worker as javascript, uncached so updates are found', async () => {
+    const res = await route(new Request('http://relay.test/sw.js'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    expect(res.headers.get('cache-control')).toBe('no-cache');
+  });
+
+  test('GET /offline.html serves the branded fallback in both themes', async () => {
+    const res = await route(new Request('http://relay.test/offline.html'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    const html = await res.text();
+    expect(html).toContain("Can't reach the relay");
+    expect(html).toContain('prefers-color-scheme: light');
+  });
+
+  test('the shell links the manifest, the worker scope-critical files and the iOS icon', async () => {
+    const html = await (await route(new Request('http://relay.test/'))).text();
+    expect(html).toContain('rel="manifest" href="/manifest.webmanifest"');
+    expect(html).toContain('rel="apple-touch-icon"');
+    expect(html).toContain('apple-mobile-web-app-capable');
+  });
+
+  test('paths next to the statics still refuse — the allow-list holds', async () => {
+    for (const p of ['/icons/icon-999.png', '/icons/', '/manifest.json', '/sw.js.map', '/offline']) {
+      const res = await route(new Request(`http://relay.test${p}`));
+      expect(res.status).toBe(404);
+    }
+  });
+
+  test('non-GET requests to the statics refuse too', async () => {
+    const res = await route(new Request('http://relay.test/sw.js', { method: 'POST' }));
+    expect(res.status).toBe(404);
+  });
+});
