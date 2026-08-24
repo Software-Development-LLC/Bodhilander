@@ -6,6 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { RelayConnection, type ConnState, type Inner } from './connection';
 import { createReconnectScheduler } from './reconnect';
 import { clearAccountState, INVITE_STASH } from './account';
+import { endedCopy } from './ended';
 import {
   confirmCopy,
   guestShareRows,
@@ -483,31 +484,10 @@ const reconnector = createReconnectScheduler({
   reconnect: () => { app.conn?.close(); connect(); },
 });
 
-/**
- * Why access ended, in the guest's words.
- *
- * Distinct per reason on purpose: telling someone "Will revoked your access"
- * when Will merely closed a terminal is a false and socially loaded story, and
- * the agent already knows which one it was.
- */
-const ENDED_COPY: Record<string, { icon: string; title: string; body: string }> = {
-  revoked: { icon: '🔒', title: 'Your access was ended', body: 'The person who shared this session stopped sharing it.' },
-  expired: { icon: '⌛', title: 'Your access expired', body: 'Shared access runs out on a timer. Ask for a new link if you still need it.' },
-  session_ended: { icon: '⏹', title: 'That session ended', body: 'The terminal you were watching was closed. Nothing was taken away from you.' },
-  machine_unlinked: { icon: '🔌', title: 'That machine was unlinked', body: 'It is no longer reachable through Bodhilander.' },
-  not_authorized: { icon: '🚫', title: "You're not in yet", body: 'This machine did not accept the invitation. Ask for a new link.' },
-};
-
 function renderEnded(reason: string): void {
-  // Fall back to a statement of fact, NOT to "they revoked you". Guessing a
-  // cause we do not know puts a false and socially loaded story in front of
-  // someone — the exact failure this enum exists to prevent.
-  const copy =
-    ENDED_COPY[reason] ?? {
-      icon: '🔌',
-      title: 'This session ended',
-      body: "The connection to that machine closed. Ask whoever shared it if you still need access.",
-    };
+  // The words live in ended.ts, where the sealed-only attribution rule is
+  // pinned by tests; a close-derived ending can only reach the neutral copy.
+  const copy = endedCopy(reason);
   stopPolling();
   reconnector.cancel();
   app.conn?.close();

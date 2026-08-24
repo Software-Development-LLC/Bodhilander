@@ -360,7 +360,10 @@ export function createGateway(ctx: WsGatewayContext) {
       }
       const access = repos.getMachineAccess(msg.machineId, data.userId);
       if (access.relation === 'none') {
-        ws.close(4403, 'not your machine');
+        // A former guest is told which ending their access met — anything
+        // else sends their client into a silent reconnect loop against a
+        // dead grant. A stranger still gets the unrevealing answer.
+        ws.close(4403, repos.endedGrantReason(msg.machineId, data.userId) ?? 'not your machine');
         return;
       }
       const machine = access.machine;

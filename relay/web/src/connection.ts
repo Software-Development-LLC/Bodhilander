@@ -37,6 +37,13 @@ export type DeniedReason = (typeof ENDING_REASONS)[number];
 export function isEndingReason(reason: string): reason is DeniedReason {
   return (ENDING_REASONS as readonly string[]).includes(reason);
 }
+
+/**
+ * The detail reported for a close-derived ending. Close reasons select
+ * termination, never attribution: a person-attributed story ("they stopped
+ * sharing") is reserved for reasons that arrive SEALED from the machine.
+ */
+export const CONNECTION_ENDED = 'connection_ended';
 export interface Inner {
   type: string;
   [k: string]: unknown;
@@ -102,11 +109,10 @@ export class RelayConnection {
     ws.onmessage = (e) => void this.handle(JSON.parse(String(e.data)));
     ws.onclose = (e) => {
       this.stopPing();
-      // 4403 is the relay itself cutting access — an HTTP revoke kicks the
-      // live socket before the agent can say anything sealed. A known ending
-      // reason is trusted from it; anything else stays a plain close, so the
-      // reconnect behaviour is untouched.
-      if (e.code === 4403 && isEndingReason(e.reason)) return this.onState('denied', e.reason);
+      // A 4403 with a known ending reason is terminal — reconnecting would
+      // loop forever against a dead grant. The reason itself is not forwarded:
+      // it came unsealed, so it may end the session but never tell its story.
+      if (e.code === 4403 && isEndingReason(e.reason)) return this.onState('denied', CONNECTION_ENDED);
       this.onState('closed');
     };
     ws.onerror = () => this.onState('error');

@@ -108,6 +108,13 @@ export interface Repositories {
    */
   getMachineAccess(machineId: string, userId: string): MachineAccess;
 
+  /**
+   * Why a former guest no longer gets in: the ending their most recent grant
+   * met. Null for someone who never held one — a stranger must stay
+   * indistinguishable from one asking about a machine that does not exist.
+   */
+  endedGrantReason(machineId: string, userId: string): 'revoked' | 'expired' | null;
+
   // --- sharing (M5.2) ---
 
   createShareInvite(input: CreateShareInviteInput): { invite: ShareInvite; code: string };
@@ -354,6 +361,23 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
 
       if (!grant) return { relation: 'none' };
       return { relation: 'grantee', machine, grant };
+    },
+
+    endedGrantReason(machineId, userId) {
+      // The most recent grant tells the story; the reaper purging dead rows
+      // bounds how long it can be told, which is acceptable — after that the
+      // caller falls back to the stranger answer.
+      const grant = db
+        .query(
+          `SELECT * FROM machine_grants
+            WHERE machine_id = ? AND grantee_user_id = ?
+            ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(machineId, userId) as MachineGrant | null;
+      if (!grant) return null;
+      if (grant.status === 'revoked') return 'revoked';
+      if (grant.expires_at !== null && grant.expires_at <= now()) return 'expired';
+      return null;
     },
 
     createShareInvite(input) {

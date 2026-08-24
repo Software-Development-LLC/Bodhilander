@@ -48,8 +48,8 @@ function connect(url: string, headers?: Record<string, string>) {
     ws.onopen = () => res();
     ws.onerror = () => rej(new Error('ws error'));
   });
-  const closed = new Promise<{ code: number }>((res) => {
-    ws.addEventListener('close', (e) => res({ code: (e as CloseEvent).code }));
+  const closed = new Promise<{ code: number; reason: string }>((res) => {
+    ws.addEventListener('close', (e) => res({ code: (e as CloseEvent).code, reason: (e as CloseEvent).reason }));
   });
   const next = () =>
     new Promise<any>((res) => {
@@ -286,7 +286,11 @@ describe('client ↔ agent brokering (M3)', () => {
       const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
       await client.opened;
       client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
-      expect((await client.closed).code).toBe(4403);
+      const closed = await client.closed;
+      expect(closed.code).toBe(4403);
+      // A stranger gets the unrevealing answer — never a grant's ending,
+      // which would confirm a share existed on a machine that is not theirs.
+      expect(closed.reason).toBe('not your machine');
     } finally {
       server.stop(true);
     }
@@ -766,7 +770,59 @@ describe('share:* messages (M5.2)', () => {
       await client.nextOfType('channel:open');
 
       gateway.notifyGrantRevoked(repos.getGrant(grantId)!);
-      expect((await client.closed).code).toBe(4403);
+      const closed = await client.closed;
+      expect(closed.code).toBe(4403);
+      // The literal is load-bearing: the web client maps exactly this reason
+      // to a terminal ending, so a rename here would silently regress every
+      // revoked guest back into a reconnect loop.
+      expect(closed.reason).toBe('revoked');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('a revoked guest who reconnects is told the ending, not the stranger answer', async () => {
+    // A browser revoke lands while the guest's phone is asleep; on wake the
+    // client reopens the channel. 'not your machine' is not an ending reason,
+    // so it would leave them silently retrying against a dead grant.
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { grantId, guest } = await shared(server.port!, db, repos, m);
+      repos.bindGrantCertificate(grantId, 'grant:v1.a.b', Date.now() + 3_600_000);
+      repos.revokeGrant(grantId);
+
+      const { token } = repos.createSession(guest.id, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId: m.machineId }));
+      const closed = await client.closed;
+      expect(closed.code).toBe(4403);
+      expect(closed.reason).toBe('revoked');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('a guest whose grant ran out is told "expired"', async () => {
+    const { db, repos } = freshReposWithDb();
+    const m = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const { grantId, guest } = await shared(server.port!, db, repos, m);
+      // Bound with a lifetime that has already run out.
+      repos.bindGrantCertificate(grantId, 'grant:v1.a.b', Date.now() - 1);
+
+      const { token } = repos.createSession(guest.id, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId: m.machineId }));
+      const closed = await client.closed;
+      expect(closed.code).toBe(4403);
+      expect(closed.reason).toBe('expired');
     } finally {
       db.close();
       server.stop(true);
