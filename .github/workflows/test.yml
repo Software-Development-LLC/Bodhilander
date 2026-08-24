@@ -48,7 +48,8 @@ jobs:
         run: bun test --isolate
 
       # The relay deploys against its own lockfile (relay/bun.lock), so its
-      # suite must also pass standalone from relay/.
+      # suite must also pass standalone from relay/. --isolate for the same
+      # reason as above — the first relay mock.module must not change this.
       - name: Run relay suite
-        run: bun test
+        run: bun test --isolate
         working-directory: relay

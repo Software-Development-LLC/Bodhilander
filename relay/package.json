@@ -12,7 +12,7 @@
     "start": "bun run src/index.ts",
     "dev": "bun run build:web && bun --watch src/index.ts",
     "build:web": "bun build web/src/main.ts --outdir web/dist --target browser --minify",
-    "test": "bun test",
+    "test": "bun test --isolate",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc -p web/tsconfig.json"
   },
