@@ -1,8 +1,7 @@
 /**
  * The sharing sheets' data and copy. What matters here is honesty: the two
- * role words are the ONLY capability vocabulary that may reach a person, the
- * "until you revoke it" sentinel must not render as a date, and the
- * after-revoke copy must not claim more than the relay actually did.
+ * role words are the only capability vocabulary that may reach a person, and
+ * the copy must not claim more than the relay actually did.
  */
 import { describe, expect, test } from 'bun:test';
 import {
