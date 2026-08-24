@@ -6,6 +6,17 @@ import { FitAddon } from '@xterm/addon-fit';
 import { RelayConnection, type ConnState, type Inner } from './connection';
 import { createReconnectScheduler } from './reconnect';
 import { clearAccountState, INVITE_STASH } from './account';
+import {
+  confirmCopy,
+  guestShareRows,
+  ownerShareRows,
+  revokeDoneCopy,
+  revokeFailedCopy,
+  type ShareRow,
+  type WireMyShare,
+  type WireShareGrant,
+  type WireShareInvite,
+} from './shares';
 
 // ---------------------------------------------------------------------------
 // Types (mirror the agent's sealed payloads)
@@ -325,11 +336,11 @@ function renderApp(machines: Machine[]) {
         <button class="iconbtn" id="theme" aria-label="Toggle light/dark theme">◐</button>
         ${accountButton()}
       </header>
-      <div style="padding:12px 16px 0"><button class="machine-pill" id="machineBtn"><span class="dot off" id="mdot"></span> <span>${esc(
+      <div class="pill-row"><button class="machine-pill" id="machineBtn"><span class="dot off" id="mdot"></span> <span>${esc(
         app.machine.relation === 'grantee' && app.machine.ownerName
           ? `${app.machine.ownerName}'s ${app.machine.name}`
           : app.machine.name,
-      )}</span></button></div>
+      )}</span></button><button class="sharebtn" id="shareBtn"><span aria-hidden="true">🤝</span> ${isGuest() ? 'Your access' : 'Sharing'}</button></div>
       <div class="list-head"><h2>Sessions</h2><span class="attn-count hidden" id="attn"></span></div>
       <ul class="sessions" id="sessions"><li class="empty-note"><div class="spinner"></div><p style="margin-top:14px">Connecting securely…</p></li></ul>
       <button class="fab" id="fab" aria-label="New session">＋</button>
@@ -361,6 +372,7 @@ function renderApp(machines: Machine[]) {
   $('#fab')!.onclick = openCreate;
   $('#fpBtn')!.onclick = openFp; $('#fpBtn2')!.onclick = openFp;
   $('#machineBtn')!.onclick = openMachineMenu;
+  $('#shareBtn')!.onclick = () => (isGuest() ? openMyShares() : openSharing());
   $('#back')!.onclick = () => history.back();
   if (isGuest()) applyWatchOnly();
   else { buildKeys(); setupCompose(); }
@@ -454,6 +466,10 @@ function connect() {
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let lastSessionsJson = '';
+// Whether the relay last said this machine's agent is connected. The sharing
+// sheet's after-revoke copy hangs on it: "disconnected now" and "lands when it
+// reconnects" are different claims, and only one of them is true at a time.
+let machineOffline = false;
 function startPolling() { stopPolling(); pollTimer = setInterval(() => app.conn?.command({ type: 'sessions:list' }), 2500); }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
@@ -508,12 +524,14 @@ function onConnState(s: ConnState, detail?: string) {
   if (s === 'denied') return renderEnded(detail ?? 'revoked');
   const dot = $('#mdot'); const list = $('#sessions');
   if (s === 'ready') {
+    machineOffline = false;
     reconnector.cancel();
     dot?.classList.remove('off');
     app.conn!.command({ type: 'groups:list' });
     app.conn!.command({ type: 'sessions:list' });
     startPolling(); // keep the list live (new/removed sessions + state changes)
   } else if (s === 'offline') {
+    machineOffline = true;
     stopPolling(); dot?.classList.add('off');
     if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">🌙</div><p>This machine is offline. It'll appear here when it reconnects.</p></li>`;
     reconnector.schedule(3000); // agent not connected yet — keep polling until it appears
@@ -1058,6 +1076,167 @@ async function signOut(opts: { to?: string; stashInvite?: string; btn?: HTMLButt
   }
   clearAccountState({ local: localStorage, session: sessionStorage }, stashInvite);
   location.href = to;
+}
+
+// ---------------------------------------------------------------------------
+// Sharing: the owner's list of who can reach this machine, and the guest's
+// mirror of what is shared with them
+// ---------------------------------------------------------------------------
+
+function openSharing(): void {
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim open';
+  scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shh">
+    <div class="sheet-head"><h3 id="shh">Sharing</h3><button class="iconbtn" id="shx" aria-label="Close">✕</button></div>
+    <p>Who can reach <b>${esc(app.machine!.name)}</b> right now, and who has been invited.</p>
+    <div class="banner hidden" id="shNote" role="status"></div>
+    <ul class="share-list" id="shList"><li class="empty-note"><div class="spinner"></div></li></ul>
+  </div>`;
+  document.body.appendChild(scrim);
+  pushLayer(() => scrim.remove());
+  scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
+  $('#shx')!.onclick = () => history.back();
+  void loadOwnerShares();
+}
+
+async function loadOwnerShares(): Promise<void> {
+  let rows: ShareRow[];
+  try {
+    const res = await api(`/api/machines/${app.machine!.id}/shares`);
+    if (!res.ok) throw new Error();
+    const body = (await res.json()) as { invites: WireShareInvite[]; grants: WireShareGrant[] };
+    rows = ownerShareRows(body.invites, body.grants, Date.now());
+  } catch {
+    return renderShareLoadError('#shList', loadOwnerShares);
+  }
+  renderShareRows(
+    '#shList',
+    rows,
+    `<div style="font-size:28px">🤝</div><p>Nothing is shared right now. Share a session from the desktop app to invite someone.</p>`,
+    (r, b) => void revokeOwnerRow(r, b),
+  );
+}
+
+async function revokeOwnerRow(row: ShareRow, btn: HTMLButtonElement): Promise<void> {
+  if (!confirm(confirmCopy(row))) return;
+  btn.disabled = true;
+  // Invites are cancelled on the machine-scoped route; grants on their own.
+  const path = row.kind === 'invite'
+    ? `/api/machines/${app.machine!.id}/shares/${row.id}`
+    : `/api/shares/${row.id}`;
+  const status = await del(path);
+  const note = $('#shNote');
+  if (status === 204 || status === 404) {
+    if (note) {
+      note.className = `banner ${status === 204 ? 'ok' : 'warn'}`;
+      note.textContent = status === 204 ? revokeDoneCopy(row, machineOffline) : revokeFailedCopy(404);
+    }
+    void loadOwnerShares();
+    return;
+  }
+  if (note) { note.className = 'banner err'; note.textContent = revokeFailedCopy(status); }
+  btn.disabled = false;
+}
+
+function openMyShares(): void {
+  const scrim = document.createElement('div');
+  scrim.className = 'sheet-scrim open';
+  scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="msh">
+    <div class="sheet-head"><h3 id="msh">Your access</h3><button class="iconbtn" id="msx" aria-label="Close">✕</button></div>
+    <p>What people are sharing with you. Leaving hands access back — nobody has to approve it.</p>
+    <div class="banner hidden" id="msNote" role="status"></div>
+    <ul class="share-list" id="msList"><li class="empty-note"><div class="spinner"></div></li></ul>
+  </div>`;
+  document.body.appendChild(scrim);
+  pushLayer(() => scrim.remove());
+  scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
+  $('#msx')!.onclick = () => history.back();
+  void loadMyShares();
+}
+
+async function loadMyShares(): Promise<void> {
+  let rows: ShareRow[];
+  try {
+    const res = await api('/api/shares');
+    if (!res.ok) throw new Error();
+    const body = (await res.json()) as { grants: WireMyShare[] };
+    rows = guestShareRows(body.grants, Date.now());
+  } catch {
+    return renderShareLoadError('#msList', loadMyShares);
+  }
+  renderShareRows(
+    '#msList',
+    rows,
+    `<div style="font-size:28px">🤝</div><p>Nothing is shared with you right now. If someone sends you a link, it starts here.</p>`,
+    (r, b) => void leaveShareRow(r, b),
+  );
+}
+
+async function leaveShareRow(row: ShareRow, btn: HTMLButtonElement): Promise<void> {
+  if (!confirm(confirmCopy(row))) return;
+  btn.disabled = true;
+  // Leaving the share we are connected THROUGH: tear the channel down first,
+  // deliberately, so the relay cutting it doesn't render as "your access was
+  // ended" — a false story about a choice this person just made.
+  const current = app.machine?.grantId === row.id;
+  if (current) { stopPolling(); reconnector.cancel(); app.conn?.close(); app.conn = null; }
+  const status = await del(`/api/shares/${row.id}`);
+  if (status === 204 || status === 404) {
+    if (current) { localStorage.removeItem('bodhi.machineId'); location.href = '/'; return; }
+    const note = $('#msNote');
+    if (note) { note.className = 'banner ok'; note.textContent = revokeDoneCopy(row, false); }
+    void loadMyShares();
+    return;
+  }
+  const note = $('#msNote');
+  if (note) { note.className = 'banner err'; note.textContent = revokeFailedCopy(status); }
+  if (current) connect();
+  btn.disabled = false;
+}
+
+function renderShareRows(
+  listSel: string,
+  rows: ShareRow[],
+  emptyHtml: string,
+  act: (row: ShareRow, btn: HTMLButtonElement) => void,
+): void {
+  const list = $(listSel);
+  if (!list) return; // the sheet was closed while the fetch was in flight
+  if (!rows.length) { list.innerHTML = `<li class="empty-note">${emptyHtml}</li>`; return; }
+  list.innerHTML = '';
+  for (const r of rows) {
+    const li = document.createElement('li');
+    li.className = 'share-row';
+    li.innerHTML = `<div class="share-main">
+      <div class="share-who">${esc(r.person)}</div>
+      <div class="share-meta"><span class="share-role">${esc(r.roleWord)}</span>${r.pending ? '<span class="share-pend">Pending</span>' : ''}</div>
+      <div class="share-detail">${esc(r.detail)}</div></div>
+      <button class="share-x" aria-label="${escAttr(`${r.action} — ${r.person}`)}">${esc(r.action)}</button>`;
+    const btn = li.querySelector<HTMLButtonElement>('button')!;
+    btn.onclick = () => act(r, btn);
+    list.appendChild(li);
+  }
+}
+
+function renderShareLoadError(listSel: string, retry: () => Promise<void>): void {
+  const list = $(listSel);
+  if (!list) return;
+  list.innerHTML = `<li class="empty-note"><div style="font-size:28px">📡</div>
+    <p>Couldn't load this. Check your connection.</p>
+    <button class="btn ghost" style="margin-top:6px">Try again</button></li>`;
+  list.querySelector('button')!.addEventListener('click', () => {
+    list.innerHTML = `<li class="empty-note"><div class="spinner"></div></li>`;
+    void retry();
+  });
+}
+
+/** DELETE, returning the status — null when the request never got through. */
+async function del(path: string): Promise<number | null> {
+  try {
+    return (await api(path, { method: 'DELETE' })).status;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

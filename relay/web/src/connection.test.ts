@@ -48,7 +48,7 @@ class FakeSocket {
   readyState = 1;
   onopen: (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((e: { code: number; reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   constructor() {
     FakeSocket.last = this;
@@ -255,6 +255,37 @@ describe('losing access still ends the session', () => {
 
     const denied = states.find((x) => x.state === 'denied');
     expect(denied?.detail).toBe('not_authorized');
+  });
+});
+
+describe('the relay cutting the socket', () => {
+  // An HTTP revoke reaches a live guest as a close from the relay itself —
+  // the agent never gets a sealed word in first. Without this mapping the
+  // guest would sit on a frozen terminal, silently reconnecting forever.
+  test('a 4403 close with a known ending reason ends the session with it', async () => {
+    const s = await connected();
+    s.socket.onclose!({ code: 4403, reason: 'revoked' });
+
+    const denied = s.states.filter((x) => x.state === 'denied');
+    expect(denied).toHaveLength(1);
+    expect(denied[0]!.detail).toBe('revoked');
+    expect(s.states.some((x) => x.state === 'closed')).toBe(false);
+  });
+
+  test('a 4403 with an unknown reason stays a plain close, so it reconnects', async () => {
+    const s = await connected();
+    s.socket.onclose!({ code: 4403, reason: 'paused' });
+
+    expect(s.states.some((x) => x.state === 'denied')).toBe(false);
+    expect(s.states.some((x) => x.state === 'closed')).toBe(true);
+  });
+
+  test('an ordinary network drop is still a plain close', async () => {
+    const s = await connected();
+    s.socket.onclose!({ code: 1006, reason: '' });
+
+    expect(s.states.some((x) => x.state === 'closed')).toBe(true);
+    expect(s.states.some((x) => x.state === 'denied')).toBe(false);
   });
 });
 

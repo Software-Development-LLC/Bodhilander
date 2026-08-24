@@ -100,8 +100,13 @@ export class RelayConnection {
       this.onState('handshaking');
     };
     ws.onmessage = (e) => void this.handle(JSON.parse(String(e.data)));
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       this.stopPing();
+      // 4403 is the relay itself cutting access — an HTTP revoke kicks the
+      // live socket before the agent can say anything sealed. A known ending
+      // reason is trusted from it; anything else stays a plain close, so the
+      // reconnect behaviour is untouched.
+      if (e.code === 4403 && isEndingReason(e.reason)) return this.onState('denied', e.reason);
       this.onState('closed');
     };
     ws.onerror = () => this.onState('error');
