@@ -18,9 +18,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { app, BrowserWindow } from 'electron';
+import { app } from 'electron';
+import type { BrowserWindow } from 'electron';
 import log from 'electron-log';
-import { PtyManager } from './pty-manager';
+// Type-only: a value import would drag node-pty (a native module) into every
+// process that loads this file, including the test runner.
+import type { PtyManager } from './pty-manager';
 import * as accountsRepo from './repositories/accounts';
 import { registerHooks } from './mcp-config';
 import { seedLegacyConversations } from './legacy-claude-seed';
