@@ -4,10 +4,10 @@ Multi-tenant cloud relay for Bodhilander remote hosting. Lets a signed-in user
 reach their desktop Bodhilander from a browser or phone when they're **off-LAN**,
 without standing up their own tunnel.
 
-> **Status: Milestone 1 (M1).** This is the service skeleton — config, logging,
-> SQLite schema + migrations, a `/health` endpoint, and a `/ws` endpoint that
-> upgrades and immediately closes `1013 not implemented`. Auth, machine linking,
-> and the real relay protocol land in later milestones (see [Milestones](#milestones)).
+The service is live and feature-complete for its current scope: GitHub OAuth
+sign-in (with an optional org gate), machine linking, the end-to-end-encrypted
+relay tunnel, session sharing, rate limiting, and a mobile-first web client.
+See [What's implemented](#whats-implemented).
 
 ## Runtime
 
@@ -28,7 +28,7 @@ bun run typecheck         # tsc --noEmit
 Quick check once it's running:
 
 ```bash
-curl -s localhost:8080/health   # {"ok":true,"version":"0.1.0","uptime":...}
+curl -s localhost:8080/health   # {"ok":true,"version":"...","uptime":...}
 ```
 
 ## Deploy (Docker)
@@ -126,16 +126,52 @@ All configuration is environment-driven; see [`.env.example`](./.env.example)
 for the annotated list. Invalid values fail fast at startup; insecure dev
 defaults emit a warning instead.
 
-## Milestones
+## What's implemented
 
-| Milestone | Scope | Status |
-| --------- | ----- | ------ |
-| **M1** | Service skeleton: config, logging, DB schema + migrations, `/health`, `/ws`. | ✅ done |
-| **M2** | GitHub OAuth sign-in (+ optional org gate), machine linking via link codes, agent WS challenge/response presence, minimal web client. | ✅ done |
-| **M3** | The live relay protocol — brokering a web/phone client ↔ desktop agent over `/ws` (E2E ciphertext). | next |
-| **M4+** | Full web client (terminal view) + web-push. | planned |
+**Auth & linking**
+- GitHub OAuth sign-in (`/auth/github/login` → `/auth/github/callback`), cookie
+  sessions, `POST /auth/logout`. `ALLOWED_GITHUB_ORG` optionally gates sign-in
+  to org members.
+- Machine linking: the desktop agent registers over `POST /link` with an
+  Ed25519 signature and gets a short link code; the signed-in user claims it
+  via `POST /link/claim` (or from the web client).
 
-The layout of the M1 schema (users, sessions, machines with keypairs, link
-codes, push subscriptions) anticipates these; the tables exist but are unused
-until their milestone.
-```
+**The tunnel**
+- `/ws` (agents) and `/ws/client` (browsers). Agents authenticate by signing a
+  server nonce with their machine key; browser clients authenticate with the
+  session cookie at upgrade time.
+- The relay is a **blind router**: client↔agent frames carry an opaque payload
+  the relay forwards without reading. Terminal traffic is end-to-end encrypted
+  between the browser and the desktop (X25519 ECDH → HKDF-SHA256 →
+  AES-256-GCM, fresh ephemeral keys per channel, an Ed25519 handshake proof
+  against MITM, and a fingerprint shown in the web client for verification).
+
+**Session sharing**
+- Owners mint single-use invites, signed by the machine key (a stolen relay
+  session cannot mint invites). Invites can be addressed to a specific GitHub
+  login — enforced at redemption — or left open.
+- Grants are session-scoped (the relay never learns session ids) and either
+  time-boxed or valid until revoked. The protocol defines `viewer` and
+  `operator` roles, but only watch-only (`viewer`) grants are offered today.
+  Every join still requires the owner's explicit approval on the desktop.
+- Access certificates are Ed25519-signed by the machine and bound to the relay
+  origin, so a certificate minted against one relay is useless on another.
+
+**Web client** (`web/`)
+- A dependency-light TypeScript SPA ("Bodhilander Remote") served by the relay:
+  GitHub sign-in, machine list, session list with live state, a full xterm
+  terminal, session/group creation, invite redemption at `/i/:code`, and a
+  watch-only mode for guests. Mobile-first: the phone's screen size drives the
+  PTY dimensions.
+
+**Operational**
+- Fixed-window rate limiting per IP (and per machine key for `/link`),
+  `/health`, structured logging, SQLite schema + migrations, and a periodic
+  reaper for expired sessions, link codes, invites, and grants.
+
+**Not implemented:** web push from the relay. (Push notifications exist only on
+the desktop app's LAN path.)
+
+Design history lives in
+[`docs/designs/remote-hosting-relay.md`](../docs/designs/remote-hosting-relay.md)
+and [`docs/designs/session-sharing.md`](../docs/designs/session-sharing.md).

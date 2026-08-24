@@ -10,7 +10,7 @@
 
 ## Unified Session Management
 
-*A cross-platform Claude Code session manager*
+*A cross-platform session manager for AI coding CLIs — with Claude Code as the flagship*
 
 </div>
 
@@ -18,16 +18,33 @@
 
 ## Overview
 
-Managing multiple Claude Code terminal sessions across different projects can be challenging. **Bodhilander** provides a unified interface to organize, monitor, and manage all your Claude Code sessions in one place.
+Bodhilander is a desktop app for running, organizing, and monitoring AI coding-agent
+CLI sessions. It manages seven providers — **Claude Code**, **Codex (OpenAI)**,
+**Grok Build (xAI)**, **opencode**, **Kimi Code**, **Cursor Agent**, and
+**Antigravity** — with automatic detection of installed CLIs, one-click install for
+missing ones, and a vault for provider API keys. Claude Code gets the deepest
+integration: multiple accounts and CLI lifecycle hooks for precise session-state
+reporting.
+
+Your sessions are also reachable off the desktop: from a phone on the same LAN via
+a paired mobile web app, or from anywhere through an end-to-end-encrypted cloud
+relay — including sharing a live session with an invited guest.
 
 ## Features
 
-### Session Management
-All your Claude Code sessions in one application. No more hunting through terminal windows.
+### Multi-Provider Sessions
+Run sessions against any of the seven supported agent CLIs. **Settings → Providers**
+detects what's installed, offers "Install for me" for what isn't, and stores
+provider API keys in an encrypted key vault. Claude Code additionally supports
+multiple accounts (per-session or per-group) and state-reporting hooks.
+
+### Arena
+Run the same prompt against several provider CLIs side by side and compare the
+responses, with follow-up rounds that resume each provider's conversation.
 
 ### Real-Time Status Detection
 See at a glance which sessions are:
-- **Waiting** - Claude awaits your command
+- **Waiting** - The agent awaits your command
 - **Working** - Processing your request
 - **Idle** - Shell ready
 - **Error** - Something went wrong
@@ -51,13 +68,28 @@ Stay informed without watching the window:
 - Badge showing count of waiting sessions
 - Quick access to waiting sessions from the tray context menu
 
-### Mobile Companion
-Connect to your sessions from a mobile device:
-- **Local API server** on the same LAN — HTTPS/TLS, bound to all interfaces
-- **Pairing codes** with QR code generation
-- **Device management** with per-device permissions
-- **Network discovery** via mDNS/Bonjour
-- **Remote access** via [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) — no Bodhilander-hosted infrastructure required. See **Settings → Mobile App → Remote Access** for the two-command setup.
+### Mobile Companion (same LAN)
+A mobile web app served by the desktop app itself:
+- **Pairing codes** with QR code generation — scan from your phone to connect
+- **Device management** with per-device permissions (view / control / modify) and unpairing
+- **Push notifications** to the paired device for session events
+- The local API server speaks **plain HTTP** (default port 8443, all interfaces)
+  with access restricted to private-network addresses. Traffic on the LAN is not
+  encrypted — for access from outside your network, use Remote Hosting below.
+
+### Remote Hosting & Session Sharing
+Reach your desktop from anywhere through a cloud relay ([self-hostable](relay/README.md)):
+- **End-to-end encrypted** — traffic between your browser and your desktop is
+  sealed with X25519 + HKDF + AES-256-GCM and a fingerprint you can verify; the
+  relay blindly routes ciphertext it cannot read
+- **GitHub sign-in** on the relay, with machine linking via short link codes
+  (**Settings → Remote Hosting**)
+- **Web client** — mobile-first: session list with live state, a full terminal,
+  and session/group creation from the browser
+- **Session sharing** — invite a guest to watch a live session: invites are
+  single-use, addressed to a GitHub account (or an open link), and every join
+  needs your explicit approval. Shared sessions show who's watching, and access
+  is time-boxed or lasts until you revoke it. Guests are watch-only.
 
 ### Microsoft Teams Integration
 Receive session event notifications in Microsoft Teams:
@@ -88,57 +120,68 @@ Grab the latest release for your platform from [Releases](https://github.com/Sof
 | macOS | `Bodhilander-x.x.x.dmg` |
 | Linux | `Bodhilander-x.x.x.AppImage` or `.deb` |
 
-> **macOS Note:** The app is currently unsigned. Run this before opening:
-> ```bash
-> xattr -cr /Applications/Bodhilander.app
-> ```
+> **macOS Note:** Releases are signed with a Developer ID certificate and
+> notarized by Apple, so the app opens like any other. If Gatekeeper complains,
+> you are running an old unsigned build — download the current DMG instead.
 
 ### Build from Source
+
+Building requires [Bun](https://bun.sh) — the npm scripts delegate to `bun run`.
 
 ```bash
 # Clone the repository
 git clone https://github.com/Software-Development-LLC/Bodhilander.git
-cd bodhilander
+cd Bodhilander
 
-# Install dependencies
-npm install
+# Install dependencies (rebuilds native modules for Electron)
+bun install
 
-# Run in development
-npm run start
+# Build and run
+bun run start
 
-# Build for your platform
-npm run dist:linux   # Linux
-npm run dist:mac     # macOS
-npm run dist:win     # Windows
+# Run the tests
+bun test
+
+# Build installers for your platform
+bun run dist:linux   # Linux
+bun run dist:mac     # macOS
+bun run dist:win     # Windows
 ```
 
 ---
 
 ## Keyboard Shortcuts
 
-| Action | Shortcut |
-|--------|----------|
-| New Session | `Ctrl/Cmd + N` |
-| Close Session | `Ctrl/Cmd + W` |
-| Next Session | `Ctrl/Cmd + Tab` |
-| Previous Session | `Ctrl/Cmd + Shift + Tab` |
-| Next Waiting | `Ctrl/Cmd + Shift + W` |
-| New Group | `Ctrl/Cmd + G` |
-| New Sub-group | `Ctrl/Cmd + Shift + G` |
-| Focus Sidebar | `Ctrl/Cmd + Q` |
-| Settings | `Ctrl/Cmd + ,` |
+Bare `Ctrl` chords always pass through to the terminal (SIGINT, readline, tmux),
+so app actions use `Cmd` on macOS and `Ctrl+Shift` on Windows/Linux.
+
+| Action | macOS | Windows / Linux |
+|--------|-------|-----------------|
+| New Session | `Cmd + N` | `Ctrl + Shift + N` |
+| Close Session | `Cmd + W` | `Ctrl + Shift + W` |
+| Next Session | `Ctrl + Tab` | `Ctrl + Tab` |
+| Previous Session | `Ctrl + Shift + Tab` | `Ctrl + Shift + Tab` |
+| Next Waiting | `Cmd + Shift + J` | `Ctrl + Shift + J` |
+| Terminal / Analytics / Arena view | `Cmd + 1 / 2 / 3` | `Ctrl + Shift + 1 / 2 / 3` |
+| Focus Sidebar | `Cmd + B` | `Ctrl + Shift + B` |
+| Copy / Paste | `Cmd + C` / `Cmd + V` | `Ctrl + Shift + C` / `Ctrl + Shift + V` |
+| Clear Terminal | `Cmd + K` | `Ctrl + Shift + K` |
+| Settings | `Cmd + ,` | `Ctrl + ,` |
 
 ---
 
 ## Settings
 
-Bodhilander offers extensive configuration across multiple tabs:
+Nine tabs of configuration:
 
-- **General** - Auto-launch Claude, custom shell path, preferred editor, close-to-tray
+- **General** - Auto-launch Claude, custom shell path, preferred editor, close-to-tray, data import/export, diagnostics
 - **Terminal** - Font size, WebGL renderer acceleration
+- **Mobile App** - Local API server, QR pairing, device management
+- **Remote Hosting** - Relay connection: machine name, link code, relay URL, machine fingerprint, keep-awake
 - **Sound** - Master toggle, per-event sounds, volume, debounce frequency, custom audio files
-- **Mobile** - API server, pairing, device management, Tailscale Funnel guidance for remote access
 - **Integrations** - Microsoft Teams notifications
+- **Providers** - Detect installed agent CLIs, one-click install, API key vault
+- **Claude Accounts** - Manage multiple Claude accounts
 - **Updates** - Release channel (Stable / Beta opt-in)
 
 ---
@@ -147,25 +190,22 @@ Bodhilander offers extensive configuration across multiple tabs:
 
 - **Electron** - Cross-platform desktop framework
 - **TypeScript** - Type-safe development
-- **React** - UI rendering
+- **React** - UI rendering (desktop renderer and the mobile PWA)
 - **xterm.js** - Terminal emulation
 - **node-pty** - Pseudo-terminal management
 - **better-sqlite3** - Persistent storage
-- **sqlite-vec** - Vector similarity search
-- **tree-sitter** - Code parsing and symbol extraction
-- **onnxruntime-node** - Local embedding inference
+- **Express** - Local API server for the mobile companion
 - **electron-updater** - Auto-updates
+- **Bun** - Build/test toolchain, and the runtime of the [cloud relay](relay/README.md)
 
 ---
 
-## Roadmap
+## Status & Direction
 
-| Phase | Status | Features |
-|-------|--------|----------|
-| **1 (MVP)** | Complete | Multi-session management, state detection, groups, persistence, auto-update |
-| **2** | Complete | Notifications & sound, settings |
-| **3** | Complete | Teams integration, mobile companion, editor integration |
-| **4** | Future | AI session summaries, advanced analytics |
+Recent releases shipped multi-provider sessions with arena mode, the LAN mobile
+companion, and relay-based remote hosting with end-to-end encryption and session
+sharing. Active work is tracked in the
+[GitHub issues](https://github.com/Software-Development-LLC/Bodhilander/issues).
 
 ---
 
