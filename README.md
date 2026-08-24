@@ -39,8 +39,9 @@ provider API keys in an encrypted key vault. Claude Code additionally supports
 multiple accounts (per-session or per-group) and state-reporting hooks.
 
 ### Arena
-Run the same prompt against several provider CLIs side by side and compare the
-responses, with follow-up rounds that resume each provider's conversation.
+Run the same prompt against several provider CLIs — plus a local
+[Ollama](https://ollama.com) model — side by side and compare the responses,
+with follow-up rounds that resume each contestant's conversation.
 
 ### Real-Time Status Detection
 See at a glance which sessions are:
@@ -89,7 +90,8 @@ Reach your desktop from anywhere through a cloud relay ([self-hostable](relay/RE
 - **Session sharing** — invite a guest to watch a live session: invites are
   single-use, addressed to a GitHub account (or an open link), and every join
   needs your explicit approval. Shared sessions show who's watching, and access
-  is time-boxed or lasts until you revoke it. Guests are watch-only.
+  is time-boxed or lasts until you revoke it — or until the shared session
+  restarts. Guests are watch-only.
 
 ### Microsoft Teams Integration
 Receive session event notifications in Microsoft Teams:
@@ -101,7 +103,7 @@ Receive session event notifications in Microsoft Teams:
 New versions download and install automatically via GitHub Releases. Two channels are available:
 
 - **Stable** (default) — tested releases only.
-- **Beta** (opt-in) — earlier access to new features while they're being validated. Enable from **Settings → Updates**. You'll see a small **BETA** pill in the sidebar while running a beta build. Switch back to Stable any time; the next stable release ≥ your current beta will auto-install.
+- **Beta** (opt-in) — earlier access to new features while they're being validated. Enable from **Settings → Updates**. You'll see a small **BETA** pill in the sidebar while running a beta build. Switch back to Stable any time; the app will move you back to the latest stable release (a downgrade if no stable ≥ your beta exists yet).
 
 ### Cross-Platform Support
 - Windows (native + WSL)
@@ -126,7 +128,11 @@ Grab the latest release for your platform from [Releases](https://github.com/Sof
 
 ### Build from Source
 
-Building requires [Bun](https://bun.sh) — the npm scripts delegate to `bun run`.
+Prerequisites: [Bun](https://bun.sh) (the npm scripts delegate to `bun run`),
+Node.js, Python 3, and a C/C++ toolchain — Xcode Command Line Tools on macOS,
+Visual Studio 2022 Build Tools on Windows, `build-essential` on Linux. The
+install step rebuilds the native modules (`better-sqlite3`, `node-pty`) for
+Electron via node-gyp, which is what needs Node and Python.
 
 ```bash
 # Clone the repository
@@ -152,8 +158,9 @@ bun run dist:win     # Windows
 
 ## Keyboard Shortcuts
 
-Bare `Ctrl` chords always pass through to the terminal (SIGINT, readline, tmux),
-so app actions use `Cmd` on macOS and `Ctrl+Shift` on Windows/Linux.
+Bare `Ctrl` chords are left to the terminal (SIGINT, readline, tmux) wherever
+possible, so app actions use `Cmd` on macOS and `Ctrl+Shift` on Windows/Linux —
+`Ctrl+Tab` session switching is the deliberate exception.
 
 | Action | macOS | Windows / Linux |
 |--------|-------|-----------------|

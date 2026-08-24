@@ -151,7 +151,8 @@ defaults emit a warning instead.
   session cannot mint invites). Invites can be addressed to a specific GitHub
   login — enforced at redemption — or left open.
 - Grants are session-scoped (the relay never learns session ids) and either
-  time-boxed or valid until revoked. The protocol defines `viewer` and
+  time-boxed or valid until revoked — restarting the shared session also ends
+  the share. The protocol defines `viewer` and
   `operator` roles, but only watch-only (`viewer`) grants are offered today.
   Every join still requires the owner's explicit approval on the desktop.
 - Access certificates are Ed25519-signed by the machine and bound to the relay
