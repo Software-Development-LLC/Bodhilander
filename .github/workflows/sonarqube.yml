@@ -31,6 +31,25 @@ jobs:
           # Disabling shallow clone is recommended for improving relevancy of reporting.
           fetch-depth: 0
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      # --ignore-scripts skips postinstall's electron-rebuild, which needs an
+      # Electron download and a native toolchain. The suites never load a
+      # native module: they use bun:sqlite and mock node-pty.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Install relay dependencies
+        run: bun install --frozen-lockfile
+        working-directory: relay
+
+      # One root run discovers relay's tests too, producing a single
+      # coverage/lcov.info whose paths are all repo-root-relative — the shape
+      # sonar.javascript.lcov.reportPaths expects.
+      - name: Generate test coverage
+        run: bun test --coverage --coverage-reporter=lcov
+
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
         env:
