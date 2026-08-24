@@ -217,32 +217,37 @@ describe('setDefaultAccount', () => {
     seedAccount('a', '2026-01-01T00:00:00.000Z', { isDefault: true });
     seedAccount('b', '2026-02-01T00:00:00.000Z');
 
-    accountsRepo.setDefaultAccount('b');
+    expect(accountsRepo.setDefaultAccount('b')).toBe(true);
 
     expect(defaultIds()).toEqual(['b']);
     expect(accountsRepo.getDefaultAccount()?.id).toBe('b');
   });
 
-  test('re-defaulting the current default is idempotent', () => {
+  test('re-defaulting the current default is idempotent, and still reports true', () => {
     seedAccount('a', '2026-01-01T00:00:00.000Z', { isDefault: true });
 
-    accountsRepo.setDefaultAccount('a');
+    expect(accountsRepo.setDefaultAccount('a')).toBe(true);
 
     expect(defaultIds()).toEqual(['a']);
   });
 
-  test('pointing at an unknown id leaves the app with no default', () => {
-    // Pinning current behaviour, not endorsing it: the demote runs
-    // unconditionally, so a stale id demotes the incumbent and promotes
-    // nobody. That is the same accountless state #165 just closed on the
-    // delete path. The window is narrow — the renderer only offers ids it read
-    // out of this table moments earlier — so this test exists to make the
-    // behaviour visible and to fail loudly if someone tightens it.
+  test('pointing at an unknown id leaves the incumbent default and reports false', () => {
+    // The renderer offers ids from a cached list, so it can ask for an account
+    // another window already deleted. The demote must not land without a
+    // matching promote — otherwise this is the same accountless state #165
+    // closed on the delete path — and `false` is how a caller can tell the
+    // switch it asked for never happened.
     seedAccount('a', '2026-01-01T00:00:00.000Z', { isDefault: true });
 
-    accountsRepo.setDefaultAccount('ghost');
+    expect(accountsRepo.setDefaultAccount('ghost')).toBe(false);
 
-    expect(defaultIds()).toEqual([]);
+    expect(defaultIds()).toEqual(['a']);
+    expect(accountsRepo.getDefaultAccount()?.id).toBe('a');
+  });
+
+  test('an unknown id against an empty table reports false without throwing', () => {
+    expect(accountsRepo.setDefaultAccount('ghost')).toBe(false);
+    expect(accountsRepo.getDefaultAccount()).toBeNull();
   });
 });
 
@@ -313,8 +318,8 @@ describe('deleteAccount promotes a survivor (#165)', () => {
     seedAccount('a', '2026-01-01T00:00:00.000Z');
     seedAccount('b', '2026-02-01T00:00:00.000Z');
 
-    // Neither row is default (a state the app can reach by deleting the
-    // default before #165, or by setDefaultAccount on a stale id).
+    // Neither row is default (a state databases that predate the #165
+    // promotion can still carry).
     accountsRepo.deleteAccount('b');
 
     expect(defaultIds()).toEqual([]);

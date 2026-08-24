@@ -342,7 +342,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('accounts:delete', id),
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }): Promise<void> =>
     ipcRenderer.invoke('accounts:update', id, updates),
-  setDefaultAccount: (id: string): Promise<void> =>
+  setDefaultAccount: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('accounts:setDefault', id),
   assignAccountToSession: (sessionId: string, accountId: string | null): Promise<AccountSwitchResult> =>
     ipcRenderer.invoke('accounts:assignToSession', sessionId, accountId),
