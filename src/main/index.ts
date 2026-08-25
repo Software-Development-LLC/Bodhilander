@@ -410,12 +410,13 @@ function registerFailoverWiring(): void {
   // account-failover's call, and applying the move is the renderer's — a switch
   // reaches the CLI as CLAUDE_CONFIG_DIR, which is fixed at spawn, so it takes a
   // respawn and only the renderer owns those.
-  ptyManager.on('usageLimit', ({ id, accountId, resetAt }) => {
+  ptyManager.on('usageLimit', ({ id, accountId, resetAt, rateLimitType }) => {
     try {
       const event = accountFailover.handleUsageLimit({
         sessionId: id,
         accountId,
         resetAt,
+        rateLimitType,
         liveAccounts: ptyManager.getLiveAccounts(),
       });
       if (event) publishFailover(event, id);

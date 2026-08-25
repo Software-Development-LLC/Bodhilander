@@ -8,6 +8,7 @@ import {
 } from '../shared/types';
 import { resolveAccountForSession } from './account-resolver';
 import { assignSessionAccount } from './account-switch';
+import { describeRateLimitType } from './quota-limit';
 import * as accountsRepo from './repositories/accounts';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
@@ -32,13 +33,8 @@ import * as sessionsRepo from './repositories/sessions';
 const FAILOVER_PREF = 'accountFailoverEnabled';
 const FAILBACK_PREF = 'accountFailbackEnabled';
 
-/**
- * Off unless switched on. Detection reads rendered CLI output, which cannot
- * distinguish an announcement from text discussing one, so acting on it is
- * something to opt into rather than discover.
- */
 export function isFailoverEnabled(): boolean {
-  return getPreference(FAILOVER_PREF) === 'true';
+  return getPreference(FAILOVER_PREF) !== 'false';
 }
 
 export function isFailbackEnabled(): boolean {
@@ -46,12 +42,14 @@ export function isFailbackEnabled(): boolean {
 }
 
 export interface UsageLimitReport {
-  /** Session whose pty printed the announcement. */
+  /** Session whose transcript recorded the rejection. */
   sessionId: string;
   /** Account that pty was BILLING — its live binding, not its assignment. */
   accountId: string | null;
-  /** Reset time parsed from the message, or null when it named none. */
+  /** Exact reset, off the CLI's own entry. Null only if it carried none. */
   resetAt: Date | null;
+  /** The CLI's name for the window, e.g. 'five_hour', 'seven_day'. */
+  rateLimitType?: string | null;
   /** Which accounts running ptys are currently bound to. */
   liveAccounts: LiveAccountBindings;
 }
@@ -92,8 +90,8 @@ export function handleUsageLimit(report: UsageLimitReport): AccountFailoverEvent
   const resetAt = report.resetAt ?? new Date(Date.now() + accountsRepo.DEFAULT_COOLDOWN_MS);
   accountsRepo.markAccountLimited(from.id, resetAt);
   log.info(
-    `[Failover] ${from.label} is out of quota until ${resetAt.toISOString()}` +
-    `${report.resetAt ? ' (from the CLI message)' : ' (default window — the message named no reset)'}`
+    `[Failover] ${from.label} hit its ${describeRateLimitType(report.rateLimitType ?? null)} ` +
+    `until ${resetAt.toISOString()}`
   );
 
   const to = nextHealthyAccount(from.id);

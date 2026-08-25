@@ -255,9 +255,9 @@ describe('handleUsageLimit', () => {
     expect(accountsRepo.getAccount('primary')!.limitedUntil).toBeNull();
   });
 
-  test('is off unless explicitly switched on', () => {
+  test('is on unless explicitly switched off', () => {
     prefs.clear();
-    expect(failover.isFailoverEnabled()).toBe(false);
+    expect(failover.isFailoverEnabled()).toBe(true);
   });
 
   /**
