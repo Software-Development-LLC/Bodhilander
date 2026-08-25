@@ -499,9 +499,15 @@ If neither lands, cut phone guests from M5.2 rather than ship an illegible prima
 
 The request travels as `terminal:resize-request {sessionId, cols, rows}`, which requires only
 `view`: it resizes nothing, so a guest role never needs `resize`. The tunnel clamps the size,
-scopes it to a live subscription, throttles it (each one interrupts the owner) and forwards it
-to the renderer, which performs the resize itself on accept. Declining sends nothing back, so
-a refusal reaches the guest as silence and their view is left exactly as it was.
+scopes it to a live subscription, throttles it **per grant** — a guest may open as many sockets
+as they like, so a per-socket throttle is one refresh away from free — and forwards it to the
+renderer, which performs the resize itself on accept. Declining sends nothing back, so a
+refusal reaches the guest as silence and their view is left exactly as it was.
+
+An accepted fit is **held** against that window's own re-fits until the owner takes it back
+through the existing `Resume desktop size` banner. Without the hold the next focus or window
+resize re-measures an unchanged container and pushes the desktop grid back — undoing the grant
+silently, seconds after it was given, with the guest panning again and nobody told.
 
 **Ending states get distinct copy**, driven by a reason enum the agent already knows —
 `revoked` / `expired` / `session_ended` / `machine_unlinked`. Telling a guest *"Will revoked
