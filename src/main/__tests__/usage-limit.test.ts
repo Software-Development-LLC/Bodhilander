@@ -32,6 +32,60 @@ describe('detectUsageLimit', () => {
     }
   });
 
+  /**
+   * The message a real weekly limit produced, verbatim, on 2026-08-25.
+   *
+   * The first version of these patterns did not match it. Every one of them
+   * required the word "reached"; this says "hit", and joins the reset to the
+   * limit with a bullet rather than a sentence, so neither "limit reached" nor
+   * "will reset at" appears anywhere in it. Detection returned null and
+   * failover silently never fired — the exact failure the feature exists to
+   * prevent, arrived at by guessing the wording instead of observing it.
+   *
+   * It is pinned here as a literal because a paraphrase would not have caught
+   * it: the difference between the guess and the truth was one verb.
+   */
+  test('catches the weekly-limit message an actual run produced', () => {
+    const real = "You've hit your weekly limit · resets Aug 26 at 2pm (America/New_York)";
+    const hit = detectUsageLimit(real, undefined, NOW);
+    expect(hit).not.toBeNull();
+    expect(hit!.resetAt?.getMonth()).toBe(7); // August
+    expect(hit!.resetAt?.getDate()).toBe(26);
+    expect(hit!.resetAt?.getHours()).toBe(14);
+  });
+
+  test('catches it wrapped in the error line an agent reports it through', () => {
+    const wrapped = "Agent terminated early due to an API error: "
+      + "You've hit your weekly limit · resets Aug 26 at 2pm (America/New_York)";
+    expect(detectUsageLimit(wrapped, undefined, NOW)).not.toBeNull();
+  });
+
+  test('catches a limit with no qualifier and a status-line reset', () => {
+    expect(detectUsageLimit("You've hit your limit", undefined, NOW)).not.toBeNull();
+    expect(detectUsageLimit('5-hour limit · resets 9pm', undefined, NOW)).not.toBeNull();
+  });
+
+  /**
+   * The accepted false-positive surface, made visible.
+   *
+   * "You've hit your <something> limit" is a sentence other services say too,
+   * and this terminal shows their errors as readily as Claude's. A false
+   * positive is not inert — it restarts live sessions and benches a healthy
+   * account for hours — so the qualifier is an enumerated set of the windows
+   * Anthropic actually meters on, not any word at all.
+   */
+  test('does not treat another service\'s limit as a Claude usage limit', () => {
+    const foreign = [
+      "You've hit your credit limit",
+      "You've reached your spending limit",
+      "You have reached your character limit",
+      "You've hit your context limit",
+    ];
+    for (const line of foreign) {
+      expect(detectUsageLimit(line, undefined, NOW), line).toBeNull();
+    }
+  });
+
   test('ignores ordinary agent output', () => {
     const lines = [
       'Rate limiting the relay to 100 requests per minute',
@@ -57,6 +111,11 @@ describe('detectUsageLimit', () => {
       '+ Claude usage limit reached',
       "42: 'Claude usage limit reached',",
       "const message = 'Claude usage limit reached';",
+      // The new "hit your <x> limit" and bullet-form patterns, quoted.
+      "  /(?:usage|weekly|5-hour|session) limit\\b[^\\n]{0,24}?\\bresets?\\b/i,",
+      "  // You've hit your weekly limit — the message we match on",
+      "+ You've hit your weekly limit",
+      "const msg = \"You've hit your weekly limit\";",
     ];
     for (const line of quoted) {
       expect(detectUsageLimit(line, undefined, NOW), line).toBeNull();
