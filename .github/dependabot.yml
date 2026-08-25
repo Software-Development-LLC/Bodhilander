@@ -11,10 +11,4 @@ updates:
       actions:
         patterns:
           - '*'
-    ignore:
-      # Private org repo hosting the reusable workflows (pr-title).
-      # Dependabot has no access to it — without this ignore the
-      # whole github-actions job fails with git_dependencies_not_reachable.
-      # Versioning of those workflows is managed upstream in org-standards.
-      - dependency-name: Software-Development-LLC/org-standards
 
