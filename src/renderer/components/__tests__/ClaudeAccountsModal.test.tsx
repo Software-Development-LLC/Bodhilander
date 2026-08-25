@@ -61,6 +61,31 @@ describe('AccountRow', () => {
     expect(inUse()).toBeNull();
   });
 
+  test('an account resolved as logged out is the one told to log in', () => {
+    renderRow({ email: null, loggedIn: false });
+    expect(screen.getByText('Not yet logged in')).toBeTruthy();
+  });
+
+  // The status follows the resolved login, not the address: on macOS a healthy
+  // account records no address, and this is the row where a user would act on
+  // being told — wrongly — that none of their accounts had ever logged in.
+  test('a logged-in account with no address is not told to log in', () => {
+    renderRow({ email: null, loggedIn: true });
+    expect(screen.queryByText('Not yet logged in')).toBeNull();
+    expect(screen.getByText('Personal')).toBeTruthy();
+  });
+
+  test('an unresolved account makes no claim about its login either way', () => {
+    renderRow({ email: null });
+    expect(screen.queryByText('Not yet logged in')).toBeNull();
+  });
+
+  test('an address, once known, outranks the status it would replace', () => {
+    renderRow({ email: 'me@example.com', loggedIn: false });
+    expect(screen.getByText('me@example.com')).toBeTruthy();
+    expect(screen.queryByText('Not yet logged in')).toBeNull();
+  });
+
   test('usage is reported as a number, not a tint', () => {
     renderRow({}, 2);
     expect(inUse().textContent).toContain('2');

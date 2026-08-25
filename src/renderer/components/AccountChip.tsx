@@ -35,9 +35,9 @@ const DEFAULT_SWATCH = '#888888';
 /**
  * One account, named the same way everywhere (#165).
  *
- * An account has no email until a login writes one, and on macOS the login
- * usually never writes one; accounts registered before #165 are all the same
- * grey. So neither the swatch nor the email identifies an account on its own.
+ * An account has no email until a login records one, and not every login
+ * does; accounts registered before #165 are all the same grey. So neither the
+ * swatch nor the email identifies an account on its own.
  * The label always carries the identity; the swatch is decoration (aria-hidden,
  * next to real text) and the email is enrichment.
  *

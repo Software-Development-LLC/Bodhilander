@@ -202,6 +202,91 @@ describe('startLoginFlow legacy seeding', () => {
   });
 });
 
+function storedEmail(id: string): string | null {
+  const row = db.prepare('SELECT email FROM claude_accounts WHERE id = ?').get(id) as
+    { email: string | null } | undefined;
+  return row?.email ?? null;
+}
+
+function writeConfigFile(configDir: string, name: string, contents: unknown): void {
+  fs.writeFileSync(path.join(configDir, name), JSON.stringify(contents));
+}
+
+/** fs.watch delivers asynchronously, so the assertion has to outlast it. */
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error('condition was never met');
+}
+
+/**
+ * Which writes into the config dir mean "a login landed". The watch used to
+ * answer that with the presence of a token file, which a platform holding its
+ * tokens in a keyring never writes.
+ */
+describe('login detection', () => {
+  test('a login that writes only a profile completes the flow and takes its email', async () => {
+    const pty = fakePtyManager();
+    const { account, ptyId } = await accountAuth.startLoginFlow(pty, null, 'Work');
+
+    // What Claude Code leaves in a dir it has started in but nobody has logged
+    // into: the file is there, the profile block is not.
+    writeConfigFile(account.configDir, '.claude.json', { userID: 'u1', projects: {} });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(storedEmail(account.id)).toBeNull();
+
+    writeConfigFile(account.configDir, '.claude.json', {
+      userID: 'u1',
+      oauthAccount: { accountUuid: 'u-1', emailAddress: 'will@acme.test' },
+    });
+    await waitFor(() => storedEmail(account.id) === 'will@acme.test');
+
+    // And it got there without the artifact the old check demanded.
+    expect(fs.existsSync(path.join(account.configDir, '.credentials.json'))).toBe(false);
+
+    accountAuth.cancelLoginFlow(pty, ptyId, false);
+  });
+
+  test('a token file appearing still completes the flow', async () => {
+    const pty = fakePtyManager();
+    const { account, ptyId } = await accountAuth.startLoginFlow(pty, null, 'Work');
+
+    writeConfigFile(account.configDir, '.credentials.json', {
+      claudeAiOauth: { accessToken: 'not-a-real-token', subscriptionEmail: 'will@linux.test' },
+    });
+    await waitFor(() => storedEmail(account.id) === 'will@linux.test');
+
+    accountAuth.cancelLoginFlow(pty, ptyId, false);
+  });
+
+  test('the manual confirmation records the email the watch would have', async () => {
+    const pty = fakePtyManager();
+    const { account, ptyId } = await accountAuth.startLoginFlow(pty, null, 'Work');
+
+    writeConfigFile(account.configDir, '.claude.json', {
+      oauthAccount: { accountUuid: 'u-1', emailAddress: 'will@acme.test' },
+    });
+    accountAuth.confirmLoginMacOS(null, ptyId);
+
+    expect(storedEmail(account.id)).toBe('will@acme.test');
+    accountAuth.cancelLoginFlow(pty, ptyId, false);
+  });
+
+  test('confirming with nothing on disk keeps the account rather than inventing an email', async () => {
+    const pty = fakePtyManager();
+    const { account, ptyId } = await accountAuth.startLoginFlow(pty, null, 'Work');
+
+    accountAuth.confirmLoginMacOS(null, ptyId);
+
+    expect(storedEmail(account.id)).toBeNull();
+    expect(storedAccounts()).toEqual([{ id: account.id, isDefault: true }]);
+    accountAuth.cancelLoginFlow(pty, ptyId, false);
+  });
+});
+
 describe('cancelLoginFlow', () => {
   test('a rejecting kill is swallowed and cleanup still runs to completion', async () => {
     const pty = fakePtyManager();

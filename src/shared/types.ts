@@ -262,8 +262,14 @@ export interface ClaudeAccount {
   label: string;
   /** Absolute path to the account's isolated .claude directory. */
   configDir: string;
-  /** Email parsed from credentials after login, for display. */
+  /** Email of the logged-in profile, for display. */
   email: string | null;
+  /**
+   * Whether the config dir shows a completed login. Resolved from disk when
+   * accounts are listed, and absent on rows read straight from the database —
+   * where nothing was consulted, so nothing may claim the account is logged out.
+   */
+  loggedIn?: boolean;
   /** Hex color for UI badge. */
   color: string;
   /** True for the single account used as the global default fallback. */

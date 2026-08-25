@@ -210,9 +210,15 @@ export const AccountRow: React.FC<AccountRowProps> = ({
   return (
     <li className="account-row">
       {/* The one surface where "Not yet logged in" describes something the
-          user can act on — this row has the buttons. Everywhere else a missing
-          email renders nothing rather than a status about a working session. */}
-      <AccountChip account={account} size="md" noEmailLabel="Not yet logged in" />
+          user can act on — this row has the buttons. Keyed to the resolved
+          login state and never to a missing email: an account can be logged in
+          and hold no address, and a row the user runs sessions on must not be
+          told otherwise. */}
+      <AccountChip
+        account={account}
+        size="md"
+        noEmailLabel={account.loggedIn === false ? 'Not yet logged in' : undefined}
+      />
       {account.isDefault && <span className="default-tag">default</span>}
       {runningSessions > 0 && (
         <span
@@ -299,9 +305,10 @@ const AddAccountButton: React.FC<{ onAdd: (label: string) => Promise<void>; disa
 };
 
 // -----------------------------------------------------------------------------
-// Login modal — embeds a Terminal attached to the login pty. Auto-closes when
-// the credentials file appears (Linux/Windows). On macOS, shows an explicit
-// "I'm logged in" button since tokens go to Keychain.
+// Login modal — embeds a Terminal attached to the login pty, and reports the
+// login as soon as main sees one land in the config dir. macOS also gets an
+// explicit "I'm logged in" button, as the platform whose token store is the
+// one main cannot read directly.
 // -----------------------------------------------------------------------------
 
 interface ClaudeAccountLoginModalProps {
@@ -367,11 +374,11 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
         <h3 id="claude-account-login-title">Log in to "{account.label}"</h3>
         <p className="hint">
           {completed ? (
-            <>Login detected{' — '}credentials were saved to this account's isolated config directory. You can close this window.</>
+            <>Login detected{' — '}this account is signed in. You can close this window.</>
           ) : exited ? (
             <>The login process exited before credentials were saved. Abort and try again, or close this window to keep the empty account.</>
           ) : isMac ? (
-            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. Because macOS stores tokens in Keychain, click "I'm logged in" once you see "Logged in" in the terminal.</>
+            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window closes itself once the login lands; macOS keeps the tokens in Keychain, so click "I'm logged in" if it doesn't.</>
           ) : (
             <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>
           )}

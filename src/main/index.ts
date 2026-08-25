@@ -19,6 +19,7 @@ import * as chatEventsRepo from './repositories/chat-events';
 import { ChatParser } from './api/chat-parser';
 import * as accountsRepo from './repositories/accounts';
 import * as accountAuth from './account-auth';
+import { withAccountIdentity } from './account-identity';
 import * as accountSwitch from './account-switch';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
@@ -808,8 +809,11 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
 });
 
 // Claude account IPC handlers (BDHLNDR-31)
+// Login state is resolved from each config dir here rather than read off the
+// row: the stored email is a one-shot write from the login flow, so accounts
+// that logged in without producing one present as logged out forever.
 safeHandle('accounts:list', () => {
-  return accountsRepo.getAllAccounts();
+  return accountsRepo.getAllAccounts().map(withAccountIdentity);
 });
 
 safeHandle('accounts:startLogin', (label: string) => {
