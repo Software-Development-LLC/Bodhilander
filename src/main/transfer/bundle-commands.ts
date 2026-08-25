@@ -1,8 +1,7 @@
 /**
- * The dialog-driven half of the transfer bundle: everything that needs
- * Electron, and nothing that needs testing. The archive is built in memory
- * first so its real size can be shown before the user is asked where to put
- * it, and an import is two steps so the roots can be answered in between.
+ * The dialog-driven half: everything that needs Electron. The archive is built
+ * in memory so its real size can be shown before a location is asked for, and
+ * an import is two steps so the roots can be answered in between.
  */
 
 import { app, dialog } from 'electron';

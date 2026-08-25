@@ -1,10 +1,7 @@
 /**
- * Post-migration schema and seed helpers shared by the transfer-bundle tests.
- *
- * Mirrors what `initializeTables` leaves behind after every ALTER in
- * `database.ts`, so the SQL under test meets the columns it meets in the app.
- * bun:sqlite stands in for better-sqlite3: same API for these statements, no
- * native build needed.
+ * Post-migration schema and seed helpers for the transfer-bundle tests.
+ * bun:sqlite stands in for better-sqlite3 — same API for these statements,
+ * and no native build needed.
  */
 import { Database } from 'bun:sqlite';
 import * as fs from 'fs';

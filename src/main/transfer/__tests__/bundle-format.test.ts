@@ -1,10 +1,6 @@
 /**
- * The `.bodhilander-bundle` container and the preference exclusion policy.
- *
- * The container has to be readable by a build that did not write it, so the
- * header is plaintext and the version check happens before anything is
- * decompressed. The exclusion policy is the export-side gate on secrets.
- *
+ * The container and the preference exclusion policy — the export-side gate on
+ * secrets, and a version check that runs before anything is decompressed.
  * Run with: bun test src/main/transfer
  */
 import { describe, expect, test } from 'bun:test';

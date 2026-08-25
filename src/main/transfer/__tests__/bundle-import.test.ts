@@ -1,11 +1,7 @@
 /**
- * Restoring a bundle onto a machine that is not the one that wrote it.
- *
- * The cases that decide whether a restore is usable: paths rewritten, config
- * dirs rebuilt under this machine's userData, a session whose folder is gone
- * parked instead of launched, and a half-failed import leaving nothing behind.
- *
- * Run with: bun test src/main/transfer
+ * Restoring onto a machine that did not write the bundle: paths rewritten,
+ * config dirs rebuilt, a missing folder parked rather than launched, a
+ * half-failed import leaving nothing. Run with: bun test src/main/transfer
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';

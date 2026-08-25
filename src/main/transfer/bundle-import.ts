@@ -1,10 +1,7 @@
 /**
- * Restores a transfer bundle onto this machine.
- *
- * Two jobs beyond inserting rows: absolute paths written by the source machine
- * are rebuilt against this one, and transcripts are landed where the CLI reads
- * them. Row ids are preserved, which is what makes a second import a no-op and
- * keeps every event attached to the session it came from.
+ * Restores a bundle onto this machine: source-machine paths rebuilt against
+ * this one, transcripts landed where the CLI reads them. Row ids are
+ * preserved, which is what makes a second import a no-op.
  */
 
 import * as fs from 'fs';

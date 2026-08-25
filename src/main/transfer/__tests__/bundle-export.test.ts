@@ -1,10 +1,7 @@
 /**
- * What the exporter puts in the archive, and — the part that matters — what it
- * does not. The exclusion assertions read the PRODUCED bytes rather than
- * calling the filter, because a filter that is correct and unwired looks
- * identical from the inside.
- *
- * Run with: bun test src/main/transfer
+ * What the exporter puts in the archive, and what it does not. The exclusion
+ * assertions read the PRODUCED bytes: a filter that is correct and unwired
+ * looks identical from the inside. Run with: bun test src/main/transfer
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';

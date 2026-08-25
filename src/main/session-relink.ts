@@ -1,9 +1,7 @@
 /**
  * Sessions restored from another machine whose working directory is not here.
- *
- * `PtyManager.createSession` throws when the cwd is missing, and that throw
- * surfaces as a spawn failure with nothing the user can do about it. A session
- * in this state is held back at the launch boundary and asked about instead.
+ * `PtyManager.createSession` throws on a missing cwd, which surfaces as a
+ * spawn failure, so such a session is held back at the launch boundary.
  */
 
 import { SessionState } from '../shared/types';

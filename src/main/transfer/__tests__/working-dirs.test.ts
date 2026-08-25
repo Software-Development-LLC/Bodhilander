@@ -1,11 +1,6 @@
 /**
- * Working-directory root derivation and remapping.
- *
- * The manifest surfaces roots so a restore onto another machine can be told
- * where the same trees now live. Both halves are pure string work, so they are
- * pinned here across the platform mixes an actual handoff produces.
- *
- * Run with: bun test src/main/transfer
+ * Root derivation and remapping, across the platform mixes an actual handoff
+ * produces. Run with: bun test src/main/transfer
  */
 import { describe, expect, test } from 'bun:test';
 import { collectWorkingDirRoots, remapWorkingDir } from '../working-dirs';

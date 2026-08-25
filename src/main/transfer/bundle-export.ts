@@ -1,10 +1,7 @@
 /**
- * Reads a machine's portable state into a transfer bundle.
- *
- * Takes its database handle rather than reaching for the app's, so the whole
- * thing runs against a real schema in a test — which is what lets the
- * exclusion rules be checked against the produced archive instead of against
- * the filter that is supposed to apply them.
+ * Reads a machine's portable state into a transfer bundle. Takes its database
+ * handle rather than reaching for the app's, so the exclusion rules can be
+ * checked against a produced archive instead of against the filter.
  */
 
 import * as fs from 'fs';

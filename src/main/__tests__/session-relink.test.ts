@@ -1,10 +1,6 @@
 /**
- * The launch guard for restored sessions.
- *
- * A needs-relink session must never reach PtyManager, which throws on a
- * missing cwd; every other state must pass through untouched.
- *
- * Run with: bun test src/main/__tests__/session-relink.test.ts
+ * The launch guard: a needs-relink session must never reach PtyManager, which
+ * throws on a missing cwd. Run with: bun test src/main/__tests__
  */
 import { describe, expect, test } from 'bun:test';
 import { launchBlockReason, needsRelink, NEEDS_RELINK_STATE } from '../session-relink';

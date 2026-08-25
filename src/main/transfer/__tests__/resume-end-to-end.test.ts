@@ -1,13 +1,7 @@
 /**
- * The promise the whole feature rests on: a session restored on a second
- * machine resumes the conversation it had on the first.
- *
- * Driven through the real functions `PtyManager.buildAgentSpawn` composes —
- * the account resolver, the stored conversation id, the launch-time transcript
- * staging, and the provider's own command builder — rather than by asserting a
- * row landed. Only `pty.spawn` itself is out of reach here.
- *
- * Run with: bun test src/main/transfer
+ * The promise the feature rests on: a restored session resumes its
+ * conversation. Driven through the real functions buildAgentSpawn composes;
+ * only `pty.spawn` is out of reach. Run with: bun test src/main/transfer
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';

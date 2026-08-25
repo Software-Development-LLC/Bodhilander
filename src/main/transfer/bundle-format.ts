@@ -1,8 +1,7 @@
 /**
  * The `.bodhilander-bundle` container: a plaintext header naming every entry,
- * followed by the entries' gzipped bytes. The header stays uncompressed so a
- * build that cannot read this version says so before spending memory on the
- * payload, and so the manifest can be shown to the user during an import.
+ * then the entries' gzipped bytes. The header stays uncompressed so a build
+ * that cannot read this version says so before decompressing anything.
  */
 
 import * as zlib from 'zlib';
