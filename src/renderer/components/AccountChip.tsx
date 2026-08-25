@@ -50,11 +50,14 @@ export const AccountChip: React.FC<AccountChipProps> = ({
 }) => {
   const label = account ? account.label : emptyLabel;
 
-  // Trimmed, and blank treated as missing. A stored row can carry an empty or
-  // padded address; the chip has one line of room for "label email", so it may
-  // not spend it on whitespace, nor let the tooltip disagree with the text.
+  // Trimmed, and blank treated as missing — a stored row can carry an empty or
+  // padded address. Deliberately a truthiness check and not `??`: '' is a
+  // value, so nullish coalescing would keep it and hand the chip an address
+  // that identifies nothing. The chip has one line of room for "label email",
+  // so it may not spend it on whitespace or disagree with its own tooltip.
   const trimmedEmail = account?.email?.trim();
-  const email = trimmedEmail || null;
+  let email: string | null = null;
+  if (trimmedEmail) email = trimmedEmail;
 
   // Same reasoning: an account row written with an empty colour falls back to
   // the shared default rather than painting the swatch with nothing.

@@ -65,6 +65,16 @@ describe('AccountChip', () => {
     expect(chip().getAttribute('title')).toBe('Claude account: Personal');
   });
 
+  // '' is a value, not an absence, so it survives every nullish check on the
+  // way here. It still identifies nothing, so the chip must render no address
+  // rather than an empty one, and must not widen its tooltip for it either.
+  test('an empty-string email renders no address, not an empty one', () => {
+    render(<AccountChip account={account({ email: '' })} />);
+    expect(document.querySelector('.account-chip-email')).toBeNull();
+    expect(chip().getAttribute('title')).toBe('Claude account: Personal');
+    expect(document.querySelector('.account-chip-text')!.textContent).toBe('Personal');
+  });
+
   // The chip names an account; it never grades one. A login state is resolved
   // from the config dir and rendered by the caller that can act on it, so no
   // absent address anywhere can be dressed up as a report about a login.
