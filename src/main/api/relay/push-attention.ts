@@ -28,7 +28,13 @@ export const MAX_NAME_LENGTH = 80;
 export interface AttentionGate {
   /** Whether this transition should produce a push right now. */
   allow(sessionId: string, state: AttentionState): boolean;
-  /** Forget every window — used when the relay connection is torn down. */
+  /**
+   * Reopen one window. Used when the relay refuses a batch: the notification
+   * never left the building, so spending the debounce on it would leave those
+   * sessions quiet until their next state change.
+   */
+  forget(sessionId: string, state: AttentionState): void;
+  /** Forget every window — used when remote hosting is switched off. */
   clear(): void;
 }
 
@@ -53,6 +59,10 @@ export function createAttentionGate(now: () => number = Date.now): AttentionGate
       lastAt.delete(key);
       lastAt.set(key, ts);
       return true;
+    },
+
+    forget(sessionId, state) {
+      lastAt.delete(`${sessionId}:${state}`);
     },
 
     clear() {
@@ -100,6 +110,12 @@ export interface PushSendMessage {
   items: Array<{ id: string; body: string }>;
 }
 
+/** A message, plus the debounce window it consumed to produce it. */
+export interface PlannedAttentionPush {
+  message: PushSendMessage;
+  spent: AttentionEvent;
+}
+
 export interface PlanAttentionPushInput {
   /** Whether the relay socket is up. Nothing is queued while it is not. */
   connected: boolean;
@@ -117,7 +133,7 @@ export interface PlanAttentionPushInput {
  * whole trigger lives here rather than in `RelayClient`, so the parts that can
  * be wrong need no Electron app, socket or PTY to exercise.
  */
-export function planAttentionPush(input: PlanAttentionPushInput): PushSendMessage | null {
+export function planAttentionPush(input: PlanAttentionPushInput): PlannedAttentionPush | null {
   const { connected, machineId, subs, gate, event } = input;
   if (!connected || !machineId || subs.length === 0) return null;
   if (!gate.allow(event.sessionId, event.state)) return null;
@@ -133,5 +149,6 @@ export function planAttentionPush(input: PlanAttentionPushInput): PushSendMessag
       input.onSealError?.(err);
     }
   }
-  return items.length > 0 ? { type: 'push:send', items } : null;
+  if (items.length === 0) return null;
+  return { message: { type: 'push:send', items }, spent: event };
 }

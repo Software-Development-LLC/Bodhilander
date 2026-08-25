@@ -73,8 +73,12 @@ export function createVapid(ctx: {
    */
   let resolving: Promise<{ publicKey: string; signingKey: CryptoKey }> | null = null;
 
-  /** audience → a token good until `expiresAt`. */
+  /**
+   * audience → a token good until `expiresAt`. Bounded: the audience comes from
+   * a stored endpoint, so an unbounded map would grow with them.
+   */
   const tokens = new Map<string, { token: string; expiresAt: number }>();
+  const MAX_CACHED_TOKENS = 64;
 
   function resolveKeys(): Promise<{ publicKey: string; signingKey: CryptoKey }> {
     resolving ??= loadOrMint();
@@ -99,7 +103,18 @@ export function createVapid(ctx: {
     // mean the next restart mints a different key and orphans anything that
     // subscribed in between, which is worth saying out loud.
     try {
-      repos.setKv(VAPID_KV_KEY, JSON.stringify({ publicKey: minted.publicKey, privateKey: minted.privateKey }));
+      // Insert-if-absent, then adopt what is stored: two processes starting
+      // together must converge on ONE key, or whichever wrote second would
+      // orphan every subscription the first had already handed out.
+      const stored = repos.setKvIfAbsent(
+        VAPID_KV_KEY,
+        JSON.stringify({ publicKey: minted.publicKey, privateKey: minted.privateKey }),
+      );
+      const winner = JSON.parse(stored) as StoredKeypair;
+      if (winner.publicKey !== minted.publicKey) {
+        logger.info('another process had already stored a VAPID keypair; using theirs');
+        return { publicKey: winner.publicKey, signingKey: await importSigningKey(winner.publicKey, winner.privateKey) };
+      }
       // Said once, at the only moment it is actionable. Every subscription is
       // bound to this key, so an operator on disposable storage needs to know
       // to pin it in the environment instead — and an operator on a durable
@@ -156,6 +171,11 @@ export function createVapid(ctx: {
 
       const expiresAt = nowSeconds + JWT_TTL_SECONDS;
       const token = await signJwt(signingKey, { aud: audience, exp: expiresAt, sub: config.vapidSubject });
+      // Signing is cheap; unbounded growth is not. Oldest out first.
+      if (tokens.size >= MAX_CACHED_TOKENS) {
+        const oldest = tokens.keys().next().value;
+        if (oldest !== undefined) tokens.delete(oldest);
+      }
       tokens.set(audience, { token, expiresAt });
       return `vapid t=${token},k=${publicKey}`;
     },

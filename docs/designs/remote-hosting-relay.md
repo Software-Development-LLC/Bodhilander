@@ -368,13 +368,33 @@ later makes an outbound POST to it. Unchecked, "subscribe" is a general-purpose
 primitive, which reaches cloud metadata services and anything else its egress
 can see. `isAllowedPushEndpoint` therefore requires HTTPS, no credentials, no
 explicit port, and a dotted hostname that is not an address literal, `.local`,
-`.internal` or `.localhost` — checked at subscribe time *and* again at send, so
-a row that predates the rule cannot be used.
+`.internal` or `.localhost`.
 
-A hostname that *resolves* to a private address still gets through. Closing that
+It runs at subscribe time and again at send. Be precise about what that buys:
+**both look at the same string, and neither sees where the request lands.** The
+second check exists so a row stored before a rule tightened cannot be used, not
+because it validates anything new.
+
+Two ways past a string check, one of which needed no cleverness at all:
+
+- **Redirects.** `fetch` follows by default, preserving POST and body across the
+  hop, so an endpoint that passes every rule above can answer `307 Location:
+  http://169.254.169.254/…` and the relay dials a URL nothing checked. Every
+  property this list enforces is discarded at the first hop. Closed by
+  `redirect: 'manual'`, treating any 3xx as a delivery failure — a real push
+  service never redirects, so it costs nothing. Deliberately **not** counted as
+  `gone`: reaping deletes the row and re-syncs the agent, which is a reply
+  channel, and an attacker watching it gets exists/doesn't-exist for every probe.
+- **The trailing dot.** `URL` preserves it, so `metadata.google.internal.`
+  resolves to the same host as the name the suffix list refuses, and `localhost.`
+  additionally satisfies the "must contain a dot" rule. Stripped before matching.
+
+What is still open: a hostname that *resolves* to a private address. Closing it
 needs resolution-time filtering the runtime does not expose, so it is recorded
 rather than papered over: **do not treat the relay's outbound egress as
-trusted.**
+trusted.** Deliveries also carry a 10s timeout, because a deliberately slow
+endpoint otherwise pins a socket and stalls the rest of its batch — including
+the reap re-sync that runs after it.
 
 ### Debounce, and what is out of scope
 
@@ -386,6 +406,25 @@ would surface as "notifications are broken", not as a race. The windows survive
 a socket reconnect deliberately — a bounce mid-flap is precisely when resetting
 them would let the storm through — and are cleared only when remote hosting is
 switched off, which is a decision rather than a blip.
+
+**A subscription belongs to an account, not to a browser.** Signing out drops it
+first, before the local wipe; taking an endpoint over — a shared device changing
+hands — deletes and re-creates the row rather than reassigning its `user_id`, so
+the per-account cap applies to the new owner and the displaced account's agents
+are re-synced. `endpoint` is `UNIQUE` globally in migration 001, which is why
+this is a delete-then-insert rather than a per-user uniqueness constraint.
+
+**An agent that cannot seal is surfaced, not just handled.** `push:v1` gating is
+honest at the protocol layer and was silent at the UI layer, which is the state
+a window after every relay deploy sits in: both subscribe calls succeed, the
+sheet says notifications are on, and nothing will ever arrive. `/api/machines`
+now carries `pushCapable` for owned machines — true, false, or null when the
+agent is offline and the relay genuinely does not know — and the client says so.
+
+**A refused batch is nacked.** The relay's per-machine rate limit used to drop
+silently, which spent the agent's 30s debounce on a notification that never
+left; those sessions then stayed quiet until their next state change. The relay
+sends `push:throttled` and the agent reopens the window it spent.
 
 **Guests do not get push.** Subscriptions are per user and the relay fans out to
 the machine *owner* only. A guest's client still has the poll, the sorting and

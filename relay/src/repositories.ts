@@ -146,13 +146,15 @@ export interface Repositories {
   /** Small durable server-side settings. Today: the minted VAPID keypair. */
   getKv(key: string): string | null;
   setKv(key: string, value: string): void;
+  /** Insert-if-absent, returning whatever is stored afterwards. */
+  setKvIfAbsent(key: string, value: string): string;
 
   /**
    * Record a browser's push subscription, replacing the keys if that endpoint
    * is known. Null when the user is at `MAX_PUSH_SUBSCRIPTIONS_PER_USER` — a
    * refusal, not an error; the alternative is an unbounded table.
    */
-  upsertPushSubscription(userId: string, input: PushSubscriptionInput): PushSubscription | null;
+  upsertPushSubscription(userId: string, input: PushSubscriptionInput): PushSubscriptionUpsert | null;
   listPushSubscriptions(userId: string): PushSubscription[];
   getPushSubscription(id: string): PushSubscription | null;
   deletePushSubscription(id: string): boolean;
@@ -175,6 +177,16 @@ export interface PushSubscriptionInput {
   endpoint: string;
   p256dh: string;
   auth: string;
+}
+
+export interface PushSubscriptionUpsert {
+  subscription: PushSubscription;
+  /**
+   * The account this endpoint was taken from, if any — a shared device
+   * changing hands. Named so the caller can re-sync THAT account's agents,
+   * which would otherwise keep sealing to a browser it no longer reaches.
+   */
+  displacedUserId: string | null;
 }
 
 /**
@@ -624,42 +636,65 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
       );
     },
 
+    /**
+     * Write only if the key is unset, and return what is stored either way.
+     * Two processes minting a VAPID pair at once would otherwise have the
+     * second overwrite the first, orphaning anything that subscribed between.
+     */
+    setKvIfAbsent(key, value) {
+      db.query('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run(key, value);
+      const row = db.query('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | null;
+      return row?.value ?? value;
+    },
+
     upsertPushSubscription(userId, input) {
-      const existing = db.query('SELECT * FROM push_subscriptions WHERE endpoint = ?').get(input.endpoint) as
-        | PushSubscription
-        | null;
+      return db.transaction((): PushSubscriptionUpsert | null => {
+        const existing = db.query('SELECT * FROM push_subscriptions WHERE endpoint = ?').get(input.endpoint) as
+          | PushSubscription
+          | null;
 
-      if (existing) {
-        // Re-subscribing refreshes the keys and takes ownership: a browser that
-        // signs in as someone else keeps the same endpoint, and leaving the row
-        // pointed at the previous account would send that account's alerts to a
-        // device it no longer belongs to.
-        db.query('UPDATE push_subscriptions SET user_id = ?, p256dh = ?, auth = ? WHERE id = ?').run(
-          userId,
-          input.p256dh,
-          input.auth,
-          existing.id,
-        );
-        return { ...existing, user_id: userId, p256dh: input.p256dh, auth: input.auth };
-      }
+        // The same account re-subscribing the same browser: refresh the keys in
+        // place. This is the ordinary case and touches nobody else.
+        if (existing && existing.user_id === userId) {
+          db.query('UPDATE push_subscriptions SET p256dh = ?, auth = ? WHERE id = ?').run(
+            input.p256dh,
+            input.auth,
+            existing.id,
+          );
+          return {
+            subscription: { ...existing, p256dh: input.p256dh, auth: input.auth },
+            displacedUserId: null,
+          };
+        }
 
-      const count = db.query('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(userId) as {
-        n: number;
-      };
-      if (count.n >= MAX_PUSH_SUBSCRIPTIONS_PER_USER) return null;
+        // Counted BEFORE anything is deleted. A shared device changing hands is
+        // legitimate, but refusing this caller after dropping the previous
+        // owner's row would take their notifications away for nothing.
+        const count = db.query('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(userId) as {
+          n: number;
+        };
+        if (count.n >= MAX_PUSH_SUBSCRIPTIONS_PER_USER) return null;
 
-      const row: PushSubscription = {
-        id: crypto.randomUUID(),
-        user_id: userId,
-        endpoint: input.endpoint,
-        p256dh: input.p256dh,
-        auth: input.auth,
-        created_at: now(),
-      };
-      db.query(
-        'INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(row.id, row.user_id, row.endpoint, row.p256dh, row.auth, row.created_at);
-      return row;
+        // Delete-then-insert rather than reassigning `user_id`. The old path
+        // returned before the cap was consulted, so taking an endpoint over was
+        // also the way past it — and the displaced account has to be named, or
+        // its agents keep sealing to a device that is no longer theirs.
+        const displacedUserId = existing ? existing.user_id : null;
+        if (existing) db.query('DELETE FROM push_subscriptions WHERE id = ?').run(existing.id);
+
+        const row: PushSubscription = {
+          id: crypto.randomUUID(),
+          user_id: userId,
+          endpoint: input.endpoint,
+          p256dh: input.p256dh,
+          auth: input.auth,
+          created_at: now(),
+        };
+        db.query(
+          'INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(row.id, row.user_id, row.endpoint, row.p256dh, row.auth, row.created_at);
+        return { subscription: row, displacedUserId };
+      })();
     },
 
     listPushSubscriptions(userId) {

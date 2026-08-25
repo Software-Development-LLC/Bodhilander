@@ -54,6 +54,7 @@ function main(): void {
     onGrantRedeemed: (grant) => gateway.notifyGrantRedeemed(grant),
     onGrantRevoked: (grant) => gateway.notifyGrantRevoked(grant),
     onPushSubscriptionsChanged: (userId) => gateway.notifyPushSubscriptions(userId),
+    isPushCapable: (machineId) => gateway.isPushCapable(machineId),
   });
 
   const server = Bun.serve({

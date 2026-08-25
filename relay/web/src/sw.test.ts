@@ -56,6 +56,7 @@ function loadWorker(fetchImpl: FetchImpl) {
   const opened: string[] = [];
   const navigated: string[] = [];
   let windows: Array<Record<string, any>> = [];
+  let currentSub: Record<string, any> | null = null;
 
   const self = {
     location: new URL(`${ORIGIN}/sw.js`),
@@ -63,6 +64,7 @@ function loadWorker(fetchImpl: FetchImpl) {
     skipWaiting: () => { skipWaitingCalls++; },
     registration: {
       showNotification: async (title: string, options: Record<string, any>) => { shown.push({ title, options }); },
+      pushManager: { getSubscription: async () => currentSub },
     },
   };
   const clients = {
@@ -70,7 +72,15 @@ function loadWorker(fetchImpl: FetchImpl) {
     matchAll: async () => windows,
     openWindow: async (url: string) => { opened.push(url); return { url }; },
   };
-  new Function('self', 'caches', 'clients', 'fetch', SW_SOURCE)(self, caches, clients, fetchImpl);
+  const posts: Array<{ path: string; body: any }> = [];
+  const recordingFetch: FetchImpl = ((input: any, init?: any) => {
+    if (init?.method === 'POST') {
+      posts.push({ path: String(input), body: JSON.parse(String(init.body)) });
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    return fetchImpl(input);
+  }) as unknown as FetchImpl;
+  new Function('self', 'caches', 'clients', 'fetch', SW_SOURCE)(self, caches, clients, recordingFetch);
 
   async function dispatch(type: string, event: Record<string, unknown> = {}): Promise<Response | null> {
     const settled: Promise<unknown>[] = [];
@@ -107,8 +117,16 @@ function loadWorker(fetchImpl: FetchImpl) {
     navigated,
     addWindow,
     clearWindows: () => { windows = []; },
+    posts,
+    setSubscription: (sub: Record<string, any> | null) => { currentSub = sub; },
   };
 }
+
+/** A browser subscription as `toJSON()` reports it. */
+const fakeSub = (endpoint: string) => ({
+  endpoint,
+  toJSON: () => ({ keys: { p256dh: 'BPoint', auth: 'Auth' } }),
+});
 
 /** A `push` event carrying `payload` as its JSON data. */
 function pushEvent(payload: unknown) {
@@ -296,6 +314,23 @@ describe('tapping a notification', () => {
     expect(sw.opened).toEqual(['/?m=machine-7']);
   });
 
+  test('carries the session the notification was about, not just the machine', async () => {
+    const sw = loadWorker(offline);
+    const { event } = clickEvent({ machineId: 'machine-7', sessionId: 'sess-42' });
+    await sw.dispatch('notificationclick', event);
+    expect(sw.opened).toEqual(['/?m=machine-7&s=sess-42']);
+  });
+
+  test('opens a new window when the open one cannot be navigated', async () => {
+    const sw = loadWorker(offline);
+    // `navigate` is not everywhere. Focusing alone would strand the reader on
+    // whatever machine that window happened to be showing.
+    sw.addWindow(`${ORIGIN}/`, { navigate: undefined });
+    const { event } = clickEvent({ machineId: 'machine-7' });
+    await sw.dispatch('notificationclick', event);
+    expect(sw.opened).toEqual(['/?m=machine-7']);
+  });
+
   test('opens the home page when the payload named no machine', async () => {
     const sw = loadWorker(offline);
     const { event } = clickEvent({});
@@ -308,5 +343,36 @@ describe('tapping a notification', () => {
     const { event } = clickEvent({ machineId: 'a b&c=d' });
     await sw.dispatch('notificationclick', event);
     expect(sw.opened).toEqual(['/?m=a%20b%26c%3Dd']);
+  });
+});
+
+describe('a rotated subscription', () => {
+  test('is re-registered with the relay, and the old endpoint dropped', async () => {
+    const sw = loadWorker(offline);
+    await sw.dispatch('pushsubscriptionchange', {
+      oldSubscription: fakeSub('https://push.example.com/send/old'),
+      newSubscription: fakeSub('https://push.example.com/send/new'),
+    });
+    // Otherwise the relay keeps sealing to an endpoint nothing reads, while the
+    // toggle carries on saying On.
+    expect(sw.posts.map((p) => p.path)).toEqual(['/api/push/unsubscribe', '/api/push/subscribe']);
+    expect(sw.posts[0]!.body).toEqual({ endpoint: 'https://push.example.com/send/old' });
+    expect(sw.posts[1]!.body.endpoint).toBe('https://push.example.com/send/new');
+    expect(sw.posts[1]!.body.keys).toEqual({ p256dh: 'BPoint', auth: 'Auth' });
+  });
+
+  test('falls back to the live subscription when the event names neither', async () => {
+    const sw = loadWorker(offline);
+    sw.setSubscription(fakeSub('https://push.example.com/send/current'));
+    await sw.dispatch('pushsubscriptionchange', {});
+    expect(sw.posts.map((p) => p.path)).toEqual(['/api/push/subscribe']);
+    expect(sw.posts[0]!.body.endpoint).toBe('https://push.example.com/send/current');
+  });
+
+  test('does nothing loudly when there is no subscription left to register', async () => {
+    const sw = loadWorker(offline);
+    sw.setSubscription(null);
+    await sw.dispatch('pushsubscriptionchange', { oldSubscription: fakeSub('https://push.example.com/send/old') });
+    expect(sw.posts.map((p) => p.path)).toEqual(['/api/push/unsubscribe']);
   });
 });

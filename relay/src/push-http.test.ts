@@ -8,7 +8,7 @@ import { loadConfig } from './config';
 import { createLogger } from './logger';
 import { openDb, type RelayDb } from './db';
 import { createRepositories, MAX_PUSH_SUBSCRIPTIONS_PER_USER, type Repositories, type User } from './repositories';
-import { createRouter } from './http';
+import { createRouter, PUSH_KEY_PER_IP, PUSH_PER_IP } from './http';
 import { createVapid } from './push/vapid';
 import { createRateLimiter } from './rate-limit';
 
@@ -163,11 +163,48 @@ describe('POST /api/push/subscribe', () => {
   test('a browser that signs in as someone else takes its endpoint with it', async () => {
     const f = fixture();
     await f.route(post('/api/push/subscribe', f.ownerCookie, subscribeBody()), '1.1.1.1');
+    f.changed.length = 0;
     await f.route(post('/api/push/subscribe', f.otherCookie, subscribeBody()), '1.1.1.1');
     // Otherwise the previous account's alerts keep arriving on a device that
     // has been handed to a different person.
     expect(f.repos.listPushSubscriptions(f.owner.id).length).toBe(0);
     expect(f.repos.listPushSubscriptions(f.other.id).length).toBe(1);
+    // BOTH accounts are re-synced. The displaced one matters more: its agents
+    // are still holding keys for a browser they can no longer reach.
+    expect(new Set(f.changed)).toEqual(new Set([f.other.id, f.owner.id]));
+  });
+
+  test('taking an endpoint over is not a way past the per-user cap', async () => {
+    const f = fixture();
+    // Someone else already holds the endpoint we are about to claim.
+    await f.route(post('/api/push/subscribe', f.otherCookie, subscribeBody()), '1.1.1.1');
+    for (let i = 0; i < MAX_PUSH_SUBSCRIPTIONS_PER_USER; i++) {
+      await f.route(
+        post('/api/push/subscribe', f.ownerCookie, subscribeBody(`https://push.example.com/send/${i}`)),
+        '1.1.1.1',
+      );
+    }
+
+    const res = await f.route(post('/api/push/subscribe', f.ownerCookie, subscribeBody()), '1.1.1.1');
+    expect(res.status).toBe(409);
+    // And the refusal must not have cost the other account its subscription on
+    // the way out — the cap is checked before anything is deleted.
+    expect(f.repos.listPushSubscriptions(f.other.id).length).toBe(1);
+    expect(f.repos.listPushSubscriptions(f.owner.id).length).toBe(MAX_PUSH_SUBSCRIPTIONS_PER_USER);
+  });
+
+  test('the same account re-subscribing does not disturb anyone', async () => {
+    const f = fixture();
+    await f.route(post('/api/push/subscribe', f.ownerCookie, subscribeBody()), '1.1.1.1');
+    const before = f.repos.listPushSubscriptions(f.owner.id)[0]!;
+    f.changed.length = 0;
+
+    await f.route(post('/api/push/subscribe', f.ownerCookie, subscribeBody()), '1.1.1.1');
+    const after = f.repos.listPushSubscriptions(f.owner.id)[0]!;
+    // Same row, kept — not deleted and re-created, which would churn the id the
+    // agent addresses and reset created_at on every page load.
+    expect(after.id).toBe(before.id);
+    expect(f.changed).toEqual([f.owner.id]);
   });
 
   test.each([
@@ -284,7 +321,9 @@ describe('rate limits', () => {
     const limiter = createRateLimiter();
     const f = fixture({ rateLimiter: limiter });
     const allowed = await drain(f.route, () => post('/api/push/subscribe', f.ownerCookie, subscribeBody()), '9.9.9.9');
-    expect(allowed).toBeGreaterThan(0);
+    // Pinned, not just "more than none": a limit that silently drifted to 3 or
+    // to 3000 would pass a `> 0` assertion either way.
+    expect(allowed).toBe(PUSH_PER_IP);
 
     // Same bucket: the limit is on the pair of routes, not on each.
     const after = await f.route(post('/api/push/unsubscribe', f.ownerCookie, { endpoint: ENDPOINT }), '9.9.9.9');
@@ -300,7 +339,7 @@ describe('rate limits', () => {
     const limiter = createRateLimiter();
     const f = fixture({ rateLimiter: limiter });
     const allowed = await drain(f.route, () => get('/api/push/vapid-key', f.ownerCookie), '9.9.9.9');
-    expect(allowed).toBeGreaterThan(0);
+    expect(allowed).toBe(PUSH_KEY_PER_IP);
     expect((await f.route(get('/api/push/vapid-key', f.ownerCookie), '9.9.9.9')).status).toBe(429);
   });
 
@@ -308,6 +347,6 @@ describe('rate limits', () => {
     const limiter = createRateLimiter();
     const f = fixture({ rateLimiter: limiter });
     const allowed = await drain(f.route, () => post('/api/push/subscribe', null, subscribeBody()), '7.7.7.7');
-    expect(allowed).toBeGreaterThan(0);
+    expect(allowed).toBe(PUSH_PER_IP);
   });
 });

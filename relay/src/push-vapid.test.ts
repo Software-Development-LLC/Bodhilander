@@ -166,6 +166,10 @@ describe('isAllowedPushEndpoint', () => {
   });
 
   test.each([
+    ['a trailing-dot internal name', 'https://metadata.google.internal./a'],
+    ['a trailing-dot loopback', 'https://localhost./a'],
+    ['a trailing-dot mDNS name', 'https://printer.local./a'],
+    ['a trailing-dot cluster name', 'https://vault.svc.cluster.local./a'],
     ['http, not https', 'http://push.example.com/a'],
     ['loopback by name', 'https://localhost/a'],
     ['loopback by address', 'https://127.0.0.1/a'],
@@ -193,10 +197,12 @@ describe('the dispatcher', () => {
 
   function dispatcherWith(handler: (req: Request) => Response) {
     const { vapid } = ctx();
-    const seen: Request[] = [];
+    // `Request` exposes `redirect`/`signal` as readonly and normalises them, so
+    // the init is recorded ALONGSIDE the request rather than read back off it.
+    const seen: Array<{ req: Request; init?: RequestInit }> = [];
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
-      const req = new Request(input as string, init);
-      seen.push(req);
+      const req = new Request(input as string, { ...init, signal: undefined, redirect: undefined });
+      seen.push({ req, init });
       return Promise.resolve(handler(req));
     }) as unknown as typeof fetch;
     return { dispatcher: createPushDispatcher({ vapid, fetchImpl }), seen };
@@ -207,7 +213,7 @@ describe('the dispatcher', () => {
     const result = await dispatcher.deliver('https://push.example.com/send/abc', sealed);
 
     expect(result).toEqual({ status: 201, gone: false });
-    const req = seen[0]!;
+    const req = seen[0]!.req;
     expect(req.method).toBe('POST');
     expect(req.headers.get('content-encoding')).toBe('aes128gcm');
     expect(req.headers.get('content-type')).toBe('application/octet-stream');
@@ -224,6 +230,38 @@ describe('the dispatcher', () => {
   test.each([429, 500, 502])('leaves %d alone — the next attention event retries', async (status) => {
     const { dispatcher } = dispatcherWith(() => new Response(null, { status }));
     expect(await dispatcher.deliver('https://push.example.com/send/abc', sealed)).toEqual({ status, gone: false });
+  });
+
+  test('does not follow a redirect, and does not reap the row for one', async () => {
+    // The allow-list checks the URL we are GIVEN. Following a hop would let a
+    // host that passes every check hand the relay a URL nothing checked —
+    // discarding https-only, no-port and no-address-literal in one move.
+    const { dispatcher, seen } = dispatcherWith(
+      () => new Response(null, { status: 307, headers: { location: 'http://169.254.169.254/latest/meta-data/' } }),
+    );
+    const result = await dispatcher.deliver('https://push.attacker.example/x', sealed);
+
+    expect(result).toEqual({ status: 307, gone: false, redirected: true });
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.init?.redirect).toBe('manual');
+    // NOT gone: reaping would delete the row and re-sync the agent, which is a
+    // reply channel — an exists/doesn't-exist oracle, one probe at a time.
+  });
+
+  test.each([301, 302, 303, 307, 308])('refuses to follow a %d', async (status) => {
+    const { dispatcher } = dispatcherWith(() => new Response(null, { status }));
+    const result = await dispatcher.deliver('https://push.example.com/send/abc', sealed);
+    expect(result.redirected).toBe(true);
+    expect(result.gone).toBe(false);
+  });
+
+  test('bounds how long one endpoint can hold the batch', async () => {
+    const { dispatcher, seen } = dispatcherWith(() => new Response(null, { status: 201 }));
+    await dispatcher.deliver('https://push.example.com/send/abc', sealed);
+    // Without this a deliberately slow endpoint pins the socket and stalls
+    // every later item in its batch, including the reap re-sync.
+    expect(seen[0]!.init?.signal).toBeTruthy();
+    expect(seen[0]!.init!.signal!.aborted).toBe(false);
   });
 
   test('never dials a disallowed endpoint, even one already in the database', async () => {

@@ -123,21 +123,6 @@ export function sealWebPushPayload(
   return Buffer.concat([header, senderPublic, ciphertext]);
 }
 
-/**
- * Whether two subscription key sets are the same. Constant-time: the values
- * come from the relay, and there is no reason to leak a prefix length.
- */
-export function sameSubscriptionKeys(a: PushSubscriptionKeys, b: PushSubscriptionKeys): boolean {
-  return equalStrings(a.p256dh, b.p256dh) && equalStrings(a.auth, b.auth);
-}
-
-function equalStrings(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8');
-  const right = Buffer.from(b, 'utf8');
-  if (left.length !== right.length) return false;
-  return timingSafeEqual(left, right);
-}
-
 function decodeKey(value: string, field: string): Buffer {
   if (typeof value !== 'string' || value.length === 0) {
     throw new PushSealError(`${field} is missing`);

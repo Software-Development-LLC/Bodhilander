@@ -74,6 +74,12 @@ export interface RelayContext {
    * same HTTP↔WebSocket seam as the grant callbacks above.
    */
   onPushSubscriptionsChanged?: (userId: string) => void;
+  /**
+   * Whether a machine's live agent can seal push payloads; null when it is
+   * offline. Without this the client cannot tell "notifications are on" from
+   * "notifications are on and this desktop will never send one".
+   */
+  isPushCapable?: (machineId: string) => boolean | null;
 }
 
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
@@ -91,9 +97,9 @@ const SHARE_PER_IP = 20;
  * browser that re-subscribes on every launch and tight enough that a script
  * cannot walk the per-user cap with a stream of throwaway endpoints.
  */
-const PUSH_PER_IP = 30;
+export const PUSH_PER_IP = 30;
 /** Reading the public key is free and idempotent — this is anti-hammering only. */
-const PUSH_KEY_PER_IP = 120;
+export const PUSH_KEY_PER_IP = 120;
 
 /**
  * Ceilings on what an invite may ask for. The desktop offers far shorter
@@ -207,42 +213,11 @@ export function createRouter(ctx: RelayContext) {
         return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
       }
 
-      // --- sharing (M5.2) ---
+      const shared = await shareRoutes(req, peerIp, pathname, method);
+      if (shared) return shared;
 
-      const shares = matchMachineShares(pathname);
-      if (shares) {
-        if (method === 'POST' && !shares.inviteId) {
-          return limited(req, peerIp, 'share', SHARE_PER_IP) ?? (await handleCreateShare(req, shares.machineId));
-        }
-        if (method === 'GET' && !shares.inviteId) return handleListShares(req, shares.machineId);
-        if (method === 'DELETE' && shares.inviteId) {
-          return handleRevokeInvite(req, shares.machineId, shares.inviteId);
-        }
-      }
-
-      if (pathname === '/api/shares' && method === 'GET') {
-        return handleListMyShares(req);
-      }
-
-      if (pathname === '/api/shares/redeem' && method === 'POST') {
-        // Code-guessing surface, same as /link/claim.
-        return limited(req, peerIp, 'redeem', CLAIM_PER_IP) ?? (await handleRedeem(req));
-      }
-
-      const grantId = matchShareGrant(pathname);
-      if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
-
-      // --- web push (M5.3) ---
-
-      if (pathname === '/api/push/vapid-key' && method === 'GET') {
-        return limited(req, peerIp, 'push:key', PUSH_KEY_PER_IP) ?? (await handleVapidKey(req));
-      }
-      if (pathname === '/api/push/subscribe' && method === 'POST') {
-        return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushSubscribe(req));
-      }
-      if (pathname === '/api/push/unsubscribe' && method === 'POST') {
-        return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushUnsubscribe(req));
-      }
+      const pushed = await pushRoutes(req, peerIp, pathname, method);
+      if (pushed) return pushed;
 
       return json({ error: 'not_found' }, 404);
     } catch (err) {
@@ -254,6 +229,52 @@ export function createRouter(ctx: RelayContext) {
       return json({ error: 'internal_error' }, 500);
     }
   };
+
+  /** Sharing (M5.2). Null when the path is not one of these. */
+  async function shareRoutes(
+    req: Request,
+    peerIp: string | null,
+    pathname: string,
+    method: string,
+  ): Promise<Response | null> {
+    const shares = matchMachineShares(pathname);
+    if (shares) {
+      if (method === 'POST' && !shares.inviteId) {
+        return limited(req, peerIp, 'share', SHARE_PER_IP) ?? (await handleCreateShare(req, shares.machineId));
+      }
+      if (method === 'GET' && !shares.inviteId) return handleListShares(req, shares.machineId);
+      if (method === 'DELETE' && shares.inviteId) return handleRevokeInvite(req, shares.machineId, shares.inviteId);
+    }
+
+    if (pathname === '/api/shares' && method === 'GET') return handleListMyShares(req);
+    if (pathname === '/api/shares/redeem' && method === 'POST') {
+      // Code-guessing surface, same as /link/claim.
+      return limited(req, peerIp, 'redeem', CLAIM_PER_IP) ?? (await handleRedeem(req));
+    }
+
+    const grantId = matchShareGrant(pathname);
+    if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
+    return null;
+  }
+
+  /** Web push (M5.3). Null when the path is not one of these. */
+  async function pushRoutes(
+    req: Request,
+    peerIp: string | null,
+    pathname: string,
+    method: string,
+  ): Promise<Response | null> {
+    if (pathname === '/api/push/vapid-key' && method === 'GET') {
+      return limited(req, peerIp, 'push:key', PUSH_KEY_PER_IP) ?? (await handleVapidKey(req));
+    }
+    if (pathname === '/api/push/subscribe' && method === 'POST') {
+      return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushSubscribe(req));
+    }
+    if (pathname === '/api/push/unsubscribe' && method === 'POST') {
+      return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushUnsubscribe(req));
+    }
+    return null;
+  }
 
   async function handleOAuthCallback(url: URL, req: Request): Promise<Response> {
     if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
@@ -376,6 +397,9 @@ export function createRouter(ctx: RelayContext) {
     const owned = repos.listMachines(user.id).map((m) => ({
       ...publicMachine(m),
       relation: 'owner' as const,
+      // Only for machines you own: a guest never triggers a notification, so
+      // the answer would be noise on their row.
+      pushCapable: ctx.isPushCapable ? ctx.isPushCapable(m.id) : null,
       ownerName: null as string | null,
       grantId: null as string | null,
       role: null as string | null,
@@ -397,6 +421,7 @@ export function createRouter(ctx: RelayContext) {
       shared.push({
         ...publicMachine(machine),
         relation: 'grantee' as const,
+        pushCapable: null,
         // Label by person: "machine" is owner vocabulary.
         ownerName: owner?.display_name ?? null,
         grantId: grant.id,
@@ -602,6 +627,12 @@ export function createRouter(ctx: RelayContext) {
 
     logger.info('push subscription registered', { userId: user.id });
     onPushSubscriptionsChanged?.(user.id);
+    // A shared device changed hands. The previous owner's agents are still
+    // sealing to it, and this is the only thing that tells them to stop.
+    if (saved.displacedUserId) {
+      logger.info('push endpoint moved between accounts', { to: user.id });
+      onPushSubscriptionsChanged?.(saved.displacedUserId);
+    }
     return new Response(null, { status: 204 });
   }
 

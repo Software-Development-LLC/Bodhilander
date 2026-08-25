@@ -119,9 +119,9 @@ const P256DH = Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 7)]).toStrin
 const AUTH = Buffer.alloc(16, 3).toString('base64url');
 
 function subscribe(repos: Repositories, userId: string, endpoint: string) {
-  const row = repos.upsertPushSubscription(userId, { endpoint, p256dh: P256DH, auth: AUTH });
-  if (!row) throw new Error('subscription refused');
-  return row;
+  const saved = repos.upsertPushSubscription(userId, { endpoint, p256dh: P256DH, auth: AUTH });
+  if (!saved) throw new Error('subscription refused');
+  return saved.subscription;
 }
 
 const sealed = (text: string) => Buffer.from(text, 'utf8').toString('base64');
@@ -303,7 +303,7 @@ describe('push:send — forwarding a sealed body', () => {
     server.stop(true);
   });
 
-  test('forwards at most MAX_PUSH_ITEMS from one message', async () => {
+  test('delivers once per subscription however many times its id is repeated', async () => {
     const repos = createRepositories(openDb(':memory:'));
     const m = await registerMachine(repos);
     const sub = subscribe(repos, m.userId, 'https://push.example.com/send/phone');
@@ -311,15 +311,62 @@ describe('push:send — forwarding a sealed body', () => {
     const { server } = startServer(repos, { push: dispatcher });
 
     const agent = await onlineAgent(server.port, m.pub, m.sign);
+    // Otherwise one message is a multiplier: 32 copies of an id the agent chose
+    // is 32 POSTs at a single target.
     agent.ws.send(
       JSON.stringify({
         type: 'push:send',
-        items: Array.from({ length: MAX_PUSH_ITEMS + 10 }, () => ({ id: sub.id, body: sealed('x') })),
+        items: Array.from({ length: MAX_PUSH_ITEMS }, () => ({ id: sub.id, body: sealed('x') })),
       }),
     );
 
     await Bun.sleep(120);
-    expect(sent.length).toBe(MAX_PUSH_ITEMS);
+    expect(sent.length).toBe(1);
+    agent.ws.close();
+    server.stop(true);
+  });
+
+  test('drops items past MAX_PUSH_ITEMS instead of walking the whole list', async () => {
+    const repos = createRepositories(openDb(':memory:'));
+    const m = await registerMachine(repos);
+    const sub = subscribe(repos, m.userId, 'https://push.example.com/send/phone');
+    const { dispatcher, sent } = recordingDispatcher();
+    const { server } = startServer(repos, { push: dispatcher });
+
+    const agent = await onlineAgent(server.port, m.pub, m.sign);
+    // The only real subscription sits PAST the cap, so a delivery here would
+    // mean the slice is not being applied.
+    const padding = Array.from({ length: MAX_PUSH_ITEMS }, (_, i) => ({ id: `filler-${i}`, body: sealed('x') }));
+    agent.ws.send(
+      JSON.stringify({ type: 'push:send', items: [...padding, { id: sub.id, body: sealed('past the cap') }] }),
+    );
+    await Bun.sleep(120);
+    expect(sent).toEqual([]);
+
+    // Positive control: the same item inside the cap does go out.
+    agent.ws.send(JSON.stringify({ type: 'push:send', items: [{ id: sub.id, body: sealed('inside') }] }));
+    await Bun.sleep(120);
+    expect(sent.length).toBe(1);
+    agent.ws.close();
+    server.stop(true);
+  });
+
+  test('tells the agent when it refuses a batch, so the debounce is not burned', async () => {
+    const repos = createRepositories(openDb(':memory:'));
+    const m = await registerMachine(repos);
+    const sub = subscribe(repos, m.userId, 'https://push.example.com/send/phone');
+    const { dispatcher } = recordingDispatcher();
+    const { server } = startServer(repos, { push: dispatcher, rateLimiter: createRateLimiter() });
+
+    const agent = await onlineAgent(server.port, m.pub, m.sign);
+    for (let i = 0; i < PUSH_SENDS_PER_MINUTE + 1; i++) {
+      agent.ws.send(JSON.stringify({ type: 'push:send', items: [{ id: sub.id, body: sealed(`x${i}`) }] }));
+    }
+
+    // Silence here spends the agent's 30s window on a notification that never
+    // left the relay, so those sessions go quiet until they change state again.
+    const nack = await agent.nextOfType('push:throttled');
+    expect(nack.retryAfterSeconds).toBeGreaterThan(0);
     agent.ws.close();
     server.stop(true);
   });

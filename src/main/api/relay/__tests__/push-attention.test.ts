@@ -76,9 +76,11 @@ describe('planAttentionPush — the guards', () => {
   });
 
   test('sends when the socket is up, the machine is linked and a device is subscribed', () => {
-    const message = plan();
-    expect(message?.type).toBe('push:send');
-    expect(message?.items.length).toBe(1);
+    const planned = plan();
+    expect(planned?.message.type).toBe('push:send');
+    expect(planned?.message.items.length).toBe(1);
+    // The window it spent is reported, so a relay-side refusal can hand it back.
+    expect(planned?.spent).toEqual(EVENT);
   });
 });
 
@@ -86,7 +88,7 @@ describe('planAttentionPush — the message', () => {
   test('seals one payload per subscribed device, each readable only by that device', () => {
     const phone = makeSubscription('phone');
     const tablet = makeSubscription('tabletx');
-    const message = plan({ subs: [phone.sub, tablet.sub] });
+    const message = plan({ subs: [phone.sub, tablet.sub] })?.message;
 
     expect(message!.items.map((i) => i.id)).toEqual(['phone', 'tabletx']);
     // Each body is a separate sealing, not one blob copied twice.
@@ -102,7 +104,7 @@ describe('planAttentionPush — the message', () => {
     const message = plan({
       subs: [device.sub],
       event: { sessionId: 's-9', sessionName: 'deploy-prod', state: 'waiting' },
-    });
+    })?.message;
     expect(device.open(message!.items[0]!.body)).toEqual({
       title: 'deploy-prod',
       body: 'Waiting for your input',
@@ -117,7 +119,7 @@ describe('planAttentionPush — the message', () => {
     const message = plan({
       subs: [device.sub],
       event: { sessionId: 's-9', sessionName: 'top-secret-project', state: 'waiting' },
-    });
+    })?.message;
     // The entire message as it goes on the wire. If the name appears anywhere
     // in here, the zero-knowledge property this design rests on is broken.
     expect(JSON.stringify(message)).not.toContain('top-secret-project');
@@ -128,7 +130,7 @@ describe('planAttentionPush — the message', () => {
     const message = plan({
       subs: [device.sub],
       event: { sessionId: 's-2', sessionName: 'api', state: 'error' },
-    });
+    })?.message;
     expect(device.open(message!.items[0]!.body).body).toBe('Hit an error and is waiting');
   });
 
@@ -136,7 +138,7 @@ describe('planAttentionPush — the message', () => {
     const good = makeSubscription('good');
     const broken: RelayPushSubscription = { id: 'broken', p256dh: 'not-a-point', auth: 'nope' };
     const errors: unknown[] = [];
-    const message = plan({ subs: [broken, good.sub], onSealError: (err) => errors.push(err) });
+    const message = plan({ subs: [broken, good.sub], onSealError: (err) => errors.push(err) })?.message;
 
     expect(message!.items.map((i) => i.id)).toEqual(['good']);
     expect(errors.length).toBe(1);
@@ -195,6 +197,22 @@ describe('the debounce', () => {
     expect(gate.allow(`s-${MAX_DEBOUNCE_ENTRIES + 49}`, 'waiting')).toBe(false);
   });
 
+  test('forget() reopens one window, for a batch the relay refused', () => {
+    clock = 1_000_000;
+    const gate = gateAt();
+    expect(gate.allow('s-1', 'waiting')).toBe(true);
+    expect(gate.allow('s-1', 'waiting')).toBe(false);
+    // The notification never left the building, so the debounce must not have
+    // been spent on it — otherwise that session stays quiet until it changes
+    // state again, which for a waiting session may be a long time.
+    gate.forget('s-1', 'waiting');
+    expect(gate.allow('s-1', 'waiting')).toBe(true);
+    // And it is precise: a different window is untouched.
+    expect(gate.allow('s-2', 'waiting')).toBe(true);
+    gate.forget('s-2', 'error');
+    expect(gate.allow('s-2', 'waiting')).toBe(false);
+  });
+
   test('clear() forgets every window', () => {
     clock = 1_000_000;
     const gate = gateAt();
@@ -225,7 +243,7 @@ describe('buildAttentionPayload', () => {
     const message = plan({
       subs: [device.sub],
       event: { sessionId: 's', sessionName: '🛰️'.repeat(200), state: 'waiting' },
-    });
+    })?.message;
     expect(Buffer.from(message!.items[0]!.body, 'base64').length).toBeLessThanOrEqual(4096);
     // Truncating mid-surrogate would leave an UNPAIRED half here, which renders
     // as a replacement glyph on a lock screen. Matched pairs are fine — that is

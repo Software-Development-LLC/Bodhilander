@@ -145,6 +145,8 @@ export class RelayClient extends EventEmitter {
   private pushSubs: RelayPushSubscription[] = [];
   /** Suppresses a push storm from a session flapping in and out of `waiting`. */
   private readonly attentionGate = createAttentionGate();
+  /** The window the most recent `push:send` spent, for a `push:throttled`. */
+  private lastAttention: AttentionEvent | null = null;
   /** Routes E2E terminal frames to/from web clients (M3). */
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
@@ -355,6 +357,11 @@ export class RelayClient extends EventEmitter {
       this.connected = false;
       this.stopPing();
       this.ws = null;
+      // A dropped socket does NOT run teardown(), so the subscription keys have
+      // to be released here too. Otherwise a list the relay has since reaped
+      // survives the gap and is sealed to in the instant after `agent:ready`,
+      // before the fresh `push:sync` lands.
+      this.forgetPushSubscriptions();
       if (wasConnected) this.emitStatus();
 
       if (!this.enabled) return;
@@ -390,6 +397,7 @@ export class RelayClient extends EventEmitter {
       grants?: PendingGrant[];
       grantId?: string;
       subs?: RelayPushSubscription[];
+      retryAfterSeconds?: number;
     };
     try {
       msg = JSON.parse(raw);
@@ -433,6 +441,13 @@ export class RelayClient extends EventEmitter {
     // changes; the relay never asks us for anything back.
     if (msg.type === 'push:sync' && Array.isArray(msg.subs)) {
       this.notePushSubscriptions(msg.subs);
+      return;
+    }
+
+    // The relay would not take that batch. Nothing was delivered, so the
+    // debounce it cost is given back.
+    if (msg.type === 'push:throttled') {
+      this.notePushThrottled(msg.retryAfterSeconds);
       return;
     }
 
@@ -492,7 +507,7 @@ export class RelayClient extends EventEmitter {
     this.tunnel.closeAll();
     // Subscription keys are the relay's record, re-sent on every connect, so a
     // revocation heard while we were away cannot be acted on with a stale list.
-    this.pushSubs = [];
+    this.forgetPushSubscriptions();
     // The debounce windows deliberately survive a reconnect: a socket bouncing
     // mid-flap is when a reset would let the storm through. `disable()` clears
     // them, because that is a decision rather than a blip.
@@ -512,6 +527,15 @@ export class RelayClient extends EventEmitter {
   // --- web push (M5.3) ---
 
   /**
+   * Drop the relay's subscription list. Every path that ends a connection calls
+   * this, because the relay re-states the list on the next `agent:ready`.
+   */
+  private forgetPushSubscriptions(): void {
+    this.pushSubs = [];
+    this.lastAttention = null;
+  }
+
+  /**
    * Adopt the relay's statement of which browsers are subscribed. Replaced
    * wholesale, never merged: subscribe, unsubscribe and 410-reaping all land
    * there, so a merge would resurrect a device its owner just switched off.
@@ -524,11 +548,6 @@ export class RelayClient extends EventEmitter {
     log.info('[Relay] push subscriptions updated', { count: this.pushSubs.length });
   }
 
-  /** Browsers currently subscribed, for the owner's settings surface. */
-  pushSubscriptionCount(): number {
-    return this.pushSubs.length;
-  }
-
   /**
    * A session needs the owner: seal one notification per subscribed browser,
    * hand the bodies to the relay to address. The name rides inside the
@@ -538,7 +557,7 @@ export class RelayClient extends EventEmitter {
     // Every decision — the guards, the debounce window the desktop notifier
     // also uses, the payload, the per-device sealing — is in `planAttentionPush`
     // so it can be tested without an Electron app or a socket.
-    const message = planAttentionPush({
+    const planned = planAttentionPush({
       connected: this.connected,
       machineId: getPreference(PREF.machineId),
       subs: this.pushSubs,
@@ -547,10 +566,28 @@ export class RelayClient extends EventEmitter {
       onSealError: (err) =>
         log.warn('[Relay] could not seal a push payload:', err instanceof Error ? err.message : err),
     });
-    if (!message) return;
+    if (!planned) return;
 
-    log.info('[Relay] sending attention push', { state: event.state, devices: message.items.length });
-    this.send(message);
+    // Remembered so a `push:throttled` can hand the debounce window back. The
+    // relay refusing a batch must not leave those sessions silent until their
+    // next state change.
+    this.lastAttention = planned.spent;
+    log.info('[Relay] sending attention push', { state: event.state, devices: planned.message.items.length });
+    this.send(planned.message);
+  }
+
+  /**
+   * The relay refused a batch. Reopen the window it cost us, so the next state
+   * change on that session notifies instead of being debounced against a
+   * notification that never left.
+   */
+  private notePushThrottled(retryAfterSeconds: unknown): void {
+    const spent = this.lastAttention;
+    this.lastAttention = null;
+    if (spent) this.attentionGate.forget(spent.sessionId, spent.state);
+    log.warn('[Relay] push refused by the relay; debounce reopened', {
+      retryAfterSeconds: typeof retryAfterSeconds === 'number' ? retryAfterSeconds : null,
+    });
   }
 
   // --- sharing (M5.2) ---

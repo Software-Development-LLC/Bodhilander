@@ -173,6 +173,16 @@ describe('currentPushState', () => {
     const h = harness({ registration: () => Promise.reject(new Error('no active worker')) });
     expect(await currentPushState(h.deps)).toBe('off');
   });
+
+  test('settles even though serviceWorker.ready never rejects OR resolves', async () => {
+    // This is the real failure — /sw.js 404s mid-deploy, or the first load is
+    // offline. `ready` is specified never to reject, so it simply hangs, and a
+    // control that never settles reads as a hung app.
+    const h = harness({ registration: () => new Promise(() => {}) });
+    const started = Date.now();
+    expect(await currentPushState({ ...h.deps, registrationTimeoutMs: 30 })).toBe('off');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
 });
 
 describe('enablePush', () => {
@@ -219,6 +229,18 @@ describe('enablePush', () => {
     expect(h.calls).toEqual([]);
   });
 
+  test('a full device list is told what to do about it, not to retry', async () => {
+    const h = harness({
+      permission: 'granted',
+      respond: (path) =>
+        path === '/api/push/vapid-key' ? Response.json({ key: VAPID_KEY }) : new Response(null, { status: 409 }),
+    });
+    // "Check your connection and try again" sends someone round a loop that
+    // can never clear.
+    expect(await enablePush(h.deps)).toEqual({ ok: false, reason: 'too_many' });
+    expect(pushFailureCopy('too_many')).toContain('Turn them off');
+  });
+
   test('a relay with push switched off says so, without subscribing', async () => {
     const h = harness({ respond: () => new Response(null, { status: 503 }) });
     expect(await enablePush(h.deps)).toEqual({ ok: false, reason: 'unavailable' });
@@ -235,7 +257,7 @@ describe('enablePush', () => {
     const created = fakeSubscription();
     const h = harness({
       respond: (path) =>
-        path === '/api/push/vapid-key' ? Response.json({ key: VAPID_KEY }) : new Response(null, { status: 409 }),
+        path === '/api/push/vapid-key' ? Response.json({ key: VAPID_KEY }) : new Response(null, { status: 500 }),
     });
     // Swap in a subscription we can watch being undone.
     const deps: PushDeps = {
@@ -325,12 +347,30 @@ describe('consumePushTarget', () => {
 
   test('adopts the machine the notification named and strips it from the URL', () => {
     const s = stores();
-    const id = consumePushTarget({ search: `?${PUSH_TARGET_PARAM}=machine-7`, pathname: '/', ...s });
-    expect(id).toBe('machine-7');
+    const target = consumePushTarget({ search: `?${PUSH_TARGET_PARAM}=machine-7`, pathname: '/', ...s });
+    expect(target).toEqual({ machineId: 'machine-7', sessionId: null });
     expect(s.written).toEqual([[MACHINE_PREF_KEY, 'machine-7']]);
     // Left in place, `?m=` would re-pin that machine on every later refresh,
     // quietly overriding a switch made afterwards.
     expect(s.replaced).toEqual(['/']);
+  });
+
+  test('carries the session the notification was about', () => {
+    const s = stores();
+    // Landing on the right machine and then hunting for the session that woke
+    // you is half an answer.
+    expect(consumePushTarget({ search: '?m=machine-7&s=sess-42', pathname: '/', ...s })).toEqual({
+      machineId: 'machine-7',
+      sessionId: 'sess-42',
+    });
+  });
+
+  test('strips only its OWN parameters, keeping the rest of the query', () => {
+    const s = stores();
+    consumePushTarget({ search: '?utm=email&m=machine-7&s=sess-42&debug=1', pathname: '/', ...s });
+    // Rewriting to the bare pathname would drop everything else the link
+    // carried, which is not this function's to throw away.
+    expect(s.replaced).toEqual(['/?utm=email&debug=1']);
   });
 
   test('does nothing to an ordinary visit', () => {
@@ -348,13 +388,13 @@ describe('consumePushTarget', () => {
 
   test('decodes an escaped id', () => {
     const s = stores();
-    expect(consumePushTarget({ search: '?m=a%20b%26c', pathname: '/', ...s })).toBe('a b&c');
+    expect(consumePushTarget({ search: '?m=a%20b%26c', pathname: '/', ...s })?.machineId).toBe('a b&c');
   });
 });
 
 describe('pushFailureCopy', () => {
   test('says something different, and actionable, for every refusal', () => {
-    const reasons = ['denied', 'dismissed', 'unsupported', 'unavailable', 'failed'] as const;
+    const reasons = ['denied', 'dismissed', 'unsupported', 'unavailable', 'too_many', 'failed'] as const;
     const lines = reasons.map(pushFailureCopy);
     expect(new Set(lines).size).toBe(reasons.length);
     for (const line of lines) expect(line.length).toBeGreaterThan(20);

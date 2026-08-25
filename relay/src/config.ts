@@ -168,8 +168,16 @@ function parseVapidKeys(env: Record<string, string | undefined>): {
   publicKey: string | null;
   privateKey: string | null;
 } {
-  const publicKey = env.VAPID_PUBLIC_KEY?.trim() || null;
-  const privateKey = env.VAPID_PRIVATE_KEY?.trim() || null;
+  // Empty and unset are the same thing here. Written out rather than as
+  // `?.trim() || null`, which reads as a `??` waiting to happen — and `??`
+  // would keep the empty string, tripping the paired check below on a relay
+  // that has `VAPID_PUBLIC_KEY=` in its .env and started fine yesterday.
+  let publicKey: string | null = null;
+  let privateKey: string | null = null;
+  const rawPublic = env.VAPID_PUBLIC_KEY?.trim();
+  const rawPrivate = env.VAPID_PRIVATE_KEY?.trim();
+  if (rawPublic) publicKey = rawPublic;
+  if (rawPrivate) privateKey = rawPrivate;
 
   if (!publicKey && !privateKey) return { publicKey: null, privateKey: null };
   if (!publicKey || !privateKey) {

@@ -9,13 +9,7 @@
 // what we send.
 import { describe, expect, test } from 'bun:test';
 import { createDecipheriv, createECDH, hkdfSync } from 'crypto';
-import {
-  MAX_PLAINTEXT_BYTES,
-  PushSealError,
-  RECORD_SIZE,
-  sameSubscriptionKeys,
-  sealWebPushPayload,
-} from '../push-seal';
+import { MAX_PLAINTEXT_BYTES, PushSealError, RECORD_SIZE, sealWebPushPayload } from '../push-seal';
 
 const b64 = (s: string) => Buffer.from(s, 'base64url');
 
@@ -162,14 +156,5 @@ describe('sealWebPushPayload', () => {
   test('refuses a payload too large for one record', () => {
     const sub = makeSubscription();
     expect(() => sealWebPushPayload(sub.keys, 'x'.repeat(MAX_PLAINTEXT_BYTES + 1))).toThrow(PushSealError);
-  });
-});
-
-describe('sameSubscriptionKeys', () => {
-  test('matches an identical pair and separates any difference', () => {
-    const a = { p256dh: 'AAA', auth: 'BBB' };
-    expect(sameSubscriptionKeys(a, { ...a })).toBe(true);
-    expect(sameSubscriptionKeys(a, { p256dh: 'AAA', auth: 'CCC' })).toBe(false);
-    expect(sameSubscriptionKeys(a, { p256dh: 'AAAA', auth: 'BBB' })).toBe(false);
   });
 });

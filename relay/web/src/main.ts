@@ -48,6 +48,8 @@ interface Machine {
   grantId?: string | null;
   role?: string | null;
   certificate?: string | null;
+  /** Can this machine's live agent seal push payloads? Null when offline. */
+  pushCapable?: boolean | null;
 }
 
 interface Me {
@@ -203,8 +205,9 @@ async function renderRedeem(code: string): Promise<void> {
     rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
       <div class="logo">📡</div><h1>Couldn't reach the server</h1>
       <p>Check your connection and try again.</p>
-      <button class="btn" onclick="location.reload()">Try again</button>
+      <button class="btn" id="redeemRetry">Try again</button>
     </div></div>`;
+    $('#redeemRetry')!.onclick = () => location.reload();
     return;
   }
 
@@ -315,10 +318,11 @@ function renderApp(machines: Machine[]) {
          <b>Settings → Remote Hosting → Generate link code</b> in the desktop app.</p>
       <button class="btn" id="inviteBtn">Enter an invite code</button>
       <button class="btn ghost" style="margin-top:10px" id="linkBtn">Link my own machine</button>
-      <button class="btn ghost" style="margin-top:10px" onclick="location.reload()">Refresh</button>
+      <button class="btn ghost" style="margin-top:10px" id="emptyRefresh">Refresh</button>
       ${accountFooter()}
     </div></div>`;
     $('#linkBtn')!.onclick = openLinkMachine;
+    $('#emptyRefresh')!.onclick = () => location.reload();
     // "Nothing here yet" is exactly what the wrong account looks like, so this
     // screen of all of them must offer a way out of the identity you're in.
     const out = $<HTMLButtonElement>('#emptyOut');
@@ -548,6 +552,7 @@ function onAgentMessage(m: Inner) {
     lastSessionsJson = j;
     app.sessions = list;
     renderSessions();
+    openPushTargetSession();
     updateTermHeader(); // keep the open terminal's state chip / attention banner live
     return;
   }
@@ -1046,6 +1051,22 @@ function openAccount() {
 // Notifications
 // ---------------------------------------------------------------------------
 
+/** The session a tapped notification named, until the list arrives to open it. */
+let pushTargetSessionId: string | null = null;
+
+/**
+ * Open the session a notification was about, once the agent has sent the list.
+ * Tried on every refresh and cleared on the first hit — the tap happens long
+ * before the channel is up, and the session may not exist any more.
+ */
+function openPushTargetSession(): void {
+  if (!pushTargetSessionId || app.activeId) return;
+  const session = app.sessions.find((s) => s.id === pushTargetSessionId);
+  if (!session) return;
+  pushTargetSessionId = null;
+  openTerminal(session);
+}
+
 /**
  * Browser surfaces the push flow needs, gathered in one place so `push.ts`
  * itself touches no globals and stays testable.
@@ -1078,6 +1099,8 @@ function notificationsSection(): string {
       </button>
     </div>
     <div class="pref-note" id="pushNote" role="status">Checking…</div>
+    <div class="banner warn hidden" id="pushStale" role="status">This machine’s desktop app is too old to send
+      notifications. Update Bodhilander on it — nothing will arrive until you do.</div>
     ${guestOnly ? '<div class="pref-note">Only your own machines send these. Sessions shared with you don’t, yet.</div>' : ''}
   </div>`;
 }
@@ -1096,10 +1119,16 @@ function paintNotifications(state: PushState, note?: string): void {
   if (!toggle || !noteEl) return; // the sheet was closed mid-flight
 
   toggle.setAttribute('aria-checked', String(state === 'on'));
-  // `denied` and `unsupported` are both "there is nothing this control can do",
-  // so it stops offering. The sentence below says why.
-  toggle.disabled = state === 'denied' || state === 'unsupported';
+  // `denied` and `unsupported` are both "there is nothing this control can do".
+  // Kept FOCUSABLE with aria-disabled rather than the disabled attribute: a
+  // disabled button is skipped by a screen reader, so the one person who most
+  // needs the sentence explaining why could never reach it.
+  const inert = state === 'denied' || state === 'unsupported';
+  toggle.setAttribute('aria-disabled', String(inert));
   noteEl.textContent = note ?? PUSH_STATE_NOTE[state];
+
+  const stale = $('#pushStale');
+  if (stale) stale.classList.toggle('hidden', !(state === 'on' && app.machine?.pushCapable === false));
 }
 
 function wireNotifications(): void {
@@ -1109,6 +1138,9 @@ function wireNotifications(): void {
   void currentPushState(pushDeps).then((state) => paintNotifications(state));
 
   toggle.onclick = async () => {
+    // Focusable but inert: `denied` and `unsupported` are states this control
+    // cannot change, and clicking must not pretend otherwise.
+    if (toggle.getAttribute('aria-disabled') === 'true') return;
     const turningOn = toggle.getAttribute('aria-checked') !== 'true';
     toggle.disabled = true;
     const noteEl = $('#pushNote');
@@ -1144,6 +1176,11 @@ async function signOut(opts: { to?: string; stashInvite?: string; btn?: HTMLButt
   const { to = '/', stashInvite, btn } = opts;
   if (btn) { btn.disabled = true; btn.textContent = 'Signing out…'; }
   app.conn?.close();
+  // Before anything else. A subscription is per-ACCOUNT even though the browser
+  // holds it: left behind, the previous account's agents keep sealing session
+  // names to this lock screen, and the next person to sign in is told
+  // notifications are "on" about a subscription that is not theirs.
+  await disablePush(pushDeps);
   try {
     // Bounded, because the alternative to a slow relay answering is not
     // "wait longer" — it is a disabled button that never comes back. The
@@ -1427,11 +1464,12 @@ if ('serviceWorker' in navigator) {
 
 // Arriving from a tapped notification: adopt the machine it named before boot()
 // reads the stored preference, and strip it back out of the URL.
-consumePushTarget({
+const pushTarget = consumePushTarget({
   search: location.search,
   pathname: location.pathname,
   storage: localStorage,
   replace: (url) => history.replaceState(null, '', url),
 });
+pushTargetSessionId = pushTarget?.sessionId ?? null;
 
 boot();

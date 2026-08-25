@@ -94,9 +94,57 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = event.notification.data || {};
-  const url = data.machineId ? '/?m=' + encodeURIComponent(data.machineId) : '/';
+  let url = '/';
+  if (data.machineId) {
+    url = '/?m=' + encodeURIComponent(data.machineId);
+    /* The session too, when the payload named one: landing on the right machine
+     * and then hunting for the session it woke you about is half an answer. */
+    if (data.sessionId) url += '&s=' + encodeURIComponent(data.sessionId);
+  }
   event.waitUntil(openClient(url));
 });
+
+/* The browser replaced this subscription — after a key rotation, or a restore.
+ * Nothing else notices: the relay keeps sealing to the old endpoint and the
+ * toggle keeps reading On. Re-register the new one from here, since the page
+ * may never be opened again. */
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(resubscribe(event));
+});
+
+function resubscribe(event) {
+  const next = event.newSubscription;
+  const previous = event.oldSubscription;
+  const drop = previous
+    ? post('/api/push/unsubscribe', { endpoint: previous.endpoint })
+    : Promise.resolve();
+
+  return drop
+    .then(function () {
+      if (next) return next;
+      /* Some browsers hand over neither, and expect the worker to re-subscribe
+       * with the key it was originally given. */
+      return self.registration.pushManager.getSubscription();
+    })
+    .then(function (sub) {
+      if (!sub) return null;
+      const keys = sub.toJSON().keys;
+      if (!keys || !keys.p256dh || !keys.auth) return null;
+      return post('/api/push/subscribe', { endpoint: sub.endpoint, keys: keys });
+    })
+    .catch(function () {
+      /* Offline, most likely. The page re-registers on its next visit. */
+    });
+}
+
+function post(path, body) {
+  return fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
 
 /* Focus a window that is already open rather than piling up tabs, and steer it
  * at the right machine. `navigate` is not everywhere, and can reject on a
@@ -111,7 +159,9 @@ function openClient(url) {
       return Promise.resolve(open.focus())
         .then((focused) => {
           const target = focused || open;
-          return target.navigate ? target.navigate(url) : null;
+          /* No `navigate` (it is not everywhere) means focusing alone would
+           * strand the reader on whatever machine that window was showing. */
+          return target.navigate ? target.navigate(url) : clients.openWindow(url);
         })
         .catch(() => clients.openWindow(url));
     })

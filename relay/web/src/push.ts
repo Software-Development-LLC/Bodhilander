@@ -12,12 +12,20 @@
 
 import { MACHINE_PREF_KEY } from './account';
 
-/** The query parameter a notification tap arrives with. */
+/** The query parameters a notification tap arrives with. */
 export const PUSH_TARGET_PARAM = 'm';
+export const PUSH_SESSION_PARAM = 's';
 
 export type PushState = 'unsupported' | 'denied' | 'on' | 'off';
 
-export type PushFailure = 'unsupported' | 'denied' | 'dismissed' | 'unavailable' | 'failed';
+/** Where a tapped notification wants the client to land. */
+export interface PushTarget {
+  machineId: string;
+  /** The session it was about, when the payload named one. */
+  sessionId: string | null;
+}
+
+export type PushFailure = 'unsupported' | 'denied' | 'dismissed' | 'unavailable' | 'too_many' | 'failed';
 
 export type PushResult = { ok: true } | { ok: false; reason: PushFailure };
 
@@ -41,6 +49,8 @@ export interface PushDeps {
   /** Resolves once the worker registered in main.ts is active. */
   registration: () => Promise<{ pushManager: PushManagerLike }>;
   api: (path: string, init?: RequestInit) => Promise<Response>;
+  /** Shortened in tests; see `REGISTRATION_TIMEOUT_MS`. */
+  registrationTimeoutMs?: number;
 }
 
 /**
@@ -76,16 +86,35 @@ export function subscriptionKeys(sub: PushSubscriptionLike): { p256dh: string; a
   return { p256dh: keys.p256dh, auth: keys.auth };
 }
 
+/**
+ * How long to wait for the service worker before giving up on it.
+ *
+ * `serviceWorker.ready` is specified never to REJECT, so a worker that never
+ * registers leaves it pending forever — and a control that never settles reads
+ * as a hung app. Raced rather than caught, because there is nothing to catch.
+ */
+export const REGISTRATION_TIMEOUT_MS = 4000;
+
+/** Sentinel for the race below; never returned to a caller. */
+const TIMED_OUT = Symbol('registration timed out');
+
 /** What the toggle should show right now. */
 export async function currentPushState(deps: PushDeps): Promise<PushState> {
   if (!deps.supported) return 'unsupported';
   if (deps.permission() === 'denied') return 'denied';
   try {
-    const registration = await deps.registration();
+    const registration = await Promise.race([
+      deps.registration(),
+      new Promise<typeof TIMED_OUT>((resolve) =>
+        setTimeout(() => resolve(TIMED_OUT), deps.registrationTimeoutMs ?? REGISTRATION_TIMEOUT_MS),
+      ),
+    ]);
+    // No worker, so nothing can arrive. Offered as "off" rather than "on":
+    // /sw.js can 404 mid-deploy, the first load can be offline, or the browser
+    // can refuse registration outright.
+    if (registration === TIMED_OUT) return 'off';
     return (await registration.pushManager.getSubscription()) ? 'on' : 'off';
   } catch {
-    // A worker that never activated. Not a permission problem, and offering the
-    // toggle is more honest than showing "on" for something that cannot arrive.
     return 'off';
   }
 }
@@ -149,7 +178,9 @@ export async function enablePush(deps: PushDeps): Promise<PushResult> {
       // The relay would not keep it, so neither do we — otherwise the browser
       // holds a subscription nothing will ever send to and the toggle lies.
       if (!existing) await sub.unsubscribe().catch(() => false);
-      return { ok: false, reason: 'failed' };
+      // 409 is the per-account device cap. Telling someone to check their
+      // connection would send them round a loop that can never clear.
+      return { ok: false, reason: res.status === 409 ? 'too_many' : 'failed' };
     }
     return { ok: true };
   } catch {
@@ -193,18 +224,25 @@ export function consumePushTarget(ctx: {
   pathname: string;
   storage: Pick<Storage, 'setItem'>;
   replace: (url: string) => void;
-}): string | null {
-  let machineId: string | null;
+}): PushTarget | null {
+  let params: URLSearchParams;
   try {
-    machineId = new URLSearchParams(ctx.search).get(PUSH_TARGET_PARAM);
+    params = new URLSearchParams(ctx.search);
   } catch {
     return null;
   }
+  const machineId = params.get(PUSH_TARGET_PARAM);
   if (!machineId) return null;
+  const sessionId = params.get(PUSH_SESSION_PARAM);
 
   ctx.storage.setItem(MACHINE_PREF_KEY, machineId);
-  ctx.replace(ctx.pathname);
-  return machineId;
+  // Only OUR parameters are removed. Rewriting to the bare pathname would throw
+  // away anything else the link carried, which is not this function's to drop.
+  params.delete(PUSH_TARGET_PARAM);
+  params.delete(PUSH_SESSION_PARAM);
+  const rest = params.toString();
+  ctx.replace(rest ? `${ctx.pathname}?${rest}` : ctx.pathname);
+  return { machineId, sessionId };
 }
 
 /** Copy for every way enabling can fail. Never guesses, never blames. */
@@ -218,6 +256,8 @@ export function pushFailureCopy(reason: PushFailure): string {
       return 'This browser can’t do push here. On iPhone or iPad, add Bodhilander to your Home Screen first.';
     case 'unavailable':
       return 'This relay isn’t set up for notifications yet.';
+    case 'too_many':
+      return 'You’ve got notifications on for as many browsers as this account allows. Turn them off on a device you no longer use, then try again.';
     default:
       return 'Couldn’t turn notifications on. Check your connection and try again.';
   }

@@ -15,10 +15,19 @@ export const MAX_ENDPOINT_LENGTH = 1024;
 /** How long a push service should hold an undelivered message. */
 const PUSH_TTL_SECONDS = 4 * 60 * 60;
 
+/**
+ * How long one POST may take. Without it a deliberately slow endpoint pins the
+ * socket and stalls the rest of its batch — including the reap re-sync that
+ * runs after it.
+ */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
 export interface PushDelivery {
   status: number | null;
   /** The subscription is dead and should be dropped: 404 or 410. */
   gone: boolean;
+  /** The endpoint answered with a redirect, which we refuse to follow. */
+  redirected?: boolean;
 }
 
 export interface PushDispatcher {
@@ -49,10 +58,16 @@ export function isAllowedPushEndpoint(raw: string): boolean {
   // A port means "not a public push service"; every real one is on 443.
   if (url.port) return false;
 
-  const host = url.hostname.toLowerCase();
+  // The trailing dot of a fully-qualified name is stripped BEFORE anything is
+  // matched. `URL` preserves it, so `metadata.google.internal.` resolves to the
+  // same host as the name the suffix list below refuses — and `localhost.` also
+  // slips the bare-name check, because it now contains a dot.
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
   if (!host.includes('.')) return false; // bare `localhost`, container names
   if (host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localhost')) return false;
-  // Address literals, v4 and v6. `URL` gives IPv6 hosts in brackets.
+  // Address literals, v4 and v6. `URL` gives IPv6 hosts in brackets, and
+  // normalises the shorthand forms (`2130706433`, `0x7f000001`, `127.1`) into
+  // dotted quads before this regex sees them.
   if (host.startsWith('[')) return false;
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
 
@@ -88,7 +103,16 @@ export function createPushDispatcher(ctx: { vapid: Vapid; fetchImpl?: typeof fet
           urgency: 'high',
         },
         body,
+        // The allow-list above checks the URL we are GIVEN. Following a
+        // redirect would make the relay dial a URL nothing checked, which
+        // discards every property that list enforces in one hop.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
+      // A real push service never redirects. Treated as a failure and NOT as
+      // `gone`: reaping here would turn the refusal into a probe that reports
+      // back through the re-sync, which is the oracle this closes.
+      if (res.status >= 300 && res.status < 400) return { status: res.status, gone: false, redirected: true };
       return { status: res.status, gone: res.status === 404 || res.status === 410 };
     },
   };
