@@ -8,6 +8,17 @@ import { createReconnectScheduler } from './reconnect';
 import { clearAccountState, INVITE_STASH } from './account';
 import { endedCopy } from './ended';
 import {
+  consumePushTarget,
+  currentPushState,
+  disablePush,
+  enablePush,
+  isPushSupported,
+  pushFailureCopy,
+  type PushDeps,
+  type PushManagerLike,
+  type PushState,
+} from './push';
+import {
   confirmCopy,
   guestShareRows,
   ownerShareRows,
@@ -1020,6 +1031,7 @@ function openAccount() {
       </div>
     </div>
     ${handle}
+    ${notificationsSection()}
     <button class="btn ghost" id="accOut" style="margin-top:18px">Sign out</button>
   </div>`;
   document.body.appendChild(scrim);
@@ -1027,6 +1039,101 @@ function openAccount() {
   scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
   $('#accx')!.onclick = () => history.back();
   $('#accOut')!.onclick = (e) => void signOut({ btn: e.currentTarget as HTMLButtonElement });
+  wireNotifications();
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+/**
+ * Browser surfaces the push flow needs, gathered in one place so `push.ts`
+ * itself touches no globals and stays testable.
+ */
+const pushDeps: PushDeps = {
+  supported: isPushSupported(window as unknown as { navigator?: { serviceWorker?: unknown } }),
+  permission: () => Notification.permission,
+  requestPermission: () => Notification.requestPermission(),
+  registration: () => navigator.serviceWorker.ready as unknown as Promise<{ pushManager: PushManagerLike }>,
+  api,
+};
+
+/**
+ * The notifications row.
+ *
+ * A switch rather than a button, because this is a setting with two states and
+ * a screen reader should hear which one it is in. It renders in a pending state
+ * and settles once the browser has been asked — the answer needs the service
+ * worker to be ready, and blocking the sheet on that would make opening your
+ * account feel broken on a slow connection.
+ */
+function notificationsSection(): string {
+  // A guest with no machines of their own would never get one of these, and
+  // saying so is better than a switch that silently does nothing.
+  const guestOnly = app.machines.length > 0 && app.machines.every((m) => m.relation === 'grantee');
+  return `<div class="pref">
+    <div class="pref-row">
+      <div class="pref-main">
+        <div class="pref-name" id="pushLabel">Notifications</div>
+        <div class="pref-sub">Get a push when a session needs you — even with this closed.</div>
+      </div>
+      <button class="switch" id="pushToggle" role="switch" aria-checked="false" aria-labelledby="pushLabel" disabled>
+        <span class="track" aria-hidden="true"><span class="knob"></span></span>
+      </button>
+    </div>
+    <div class="pref-note" id="pushNote" role="status">Checking…</div>
+    ${guestOnly ? '<div class="pref-note">Only your own machines send these. Sessions shared with you don’t, yet.</div>' : ''}
+  </div>`;
+}
+
+/** Copy for each settled state. `on` says what it means, not just that it is on. */
+const PUSH_STATE_NOTE: Record<PushState, string> = {
+  on: 'On for this browser. The session name is encrypted end-to-end — the relay only forwards it.',
+  off: 'Off for this browser.',
+  denied: pushFailureCopy('denied'),
+  unsupported: pushFailureCopy('unsupported'),
+};
+
+function paintNotifications(state: PushState, note?: string): void {
+  const toggle = $<HTMLButtonElement>('#pushToggle');
+  const noteEl = $('#pushNote');
+  if (!toggle || !noteEl) return; // the sheet was closed mid-flight
+
+  toggle.setAttribute('aria-checked', String(state === 'on'));
+  // `denied` and `unsupported` are both "there is nothing this control can do",
+  // so it stops offering. The sentence below says why.
+  toggle.disabled = state === 'denied' || state === 'unsupported';
+  noteEl.textContent = note ?? PUSH_STATE_NOTE[state];
+}
+
+function wireNotifications(): void {
+  const toggle = $<HTMLButtonElement>('#pushToggle');
+  if (!toggle) return;
+
+  void currentPushState(pushDeps).then((state) => paintNotifications(state));
+
+  toggle.onclick = async () => {
+    const turningOn = toggle.getAttribute('aria-checked') !== 'true';
+    toggle.disabled = true;
+    const noteEl = $('#pushNote');
+    if (noteEl) noteEl.textContent = turningOn ? 'Asking your browser…' : 'Turning off…';
+
+    if (!turningOn) {
+      await disablePush(pushDeps);
+      paintNotifications(await currentPushState(pushDeps));
+      return;
+    }
+
+    const result = await enablePush(pushDeps);
+    if (result.ok) {
+      paintNotifications('on');
+      return;
+    }
+    // Re-read rather than assuming: a refused prompt leaves the browser in a
+    // state this control has to reflect, and it is not always the one we
+    // started from.
+    paintNotifications(await currentPushState(pushDeps), pushFailureCopy(result.reason));
+  };
 }
 
 /**
@@ -1308,10 +1415,29 @@ function linkErrorText(error?: string): string {
   }
 }
 
-// Root scope, so the worker covers `/i/*` invite links and can carry web
-// push. An updated worker must never take over a page mid-terminal-session;
-// sw.js therefore never calls skipWaiting/clients.claim, and nothing here
-// needs to wait on, prompt about, or reload for an update.
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// Root scope, so the worker covers `/i/*` invite links and carries web push.
+// An updated worker must never take over a page mid-terminal-session; sw.js
+// therefore never calls skipWaiting/clients.claim, and nothing here needs to
+// wait on, prompt about, or reload for an update.
+//
+// The failure is logged rather than swallowed: registration failing is silent
+// from a person's point of view — the app keeps working, offline support and
+// notifications simply never arrive — so without this there is no signal at all
+// that sw.js broke.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch((err) => {
+    // eslint-disable-next-line no-console
+    console.warn('[sw] registration failed — offline support and notifications are off:', err);
+  });
+}
+
+// Arriving from a tapped notification: adopt the machine it named before boot()
+// reads the stored preference, and strip it back out of the URL.
+consumePushTarget({
+  search: location.search,
+  pathname: location.pathname,
+  storage: localStorage,
+  replace: (url) => history.replaceState(null, '', url),
+});
 
 boot();

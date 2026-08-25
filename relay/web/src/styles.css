@@ -180,6 +180,23 @@ input, textarea { font-family: inherit; }
 .sheet p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
 .fp { font-family: var(--mono); font-size: 13px; background: var(--bg); border: 1px solid var(--hair); border-radius: 10px; padding: 12px; word-break: break-all; color: var(--accent); }
 .fp-ok { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; margin-top: 10px; font-family: var(--mono); }
+
+/* A setting inside a sheet: a labelled row with a switch on the right. Every
+   colour comes from a token, so light and dark are one rule rather than two. */
+.pref { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hair); }
+.pref-row { display: flex; align-items: center; gap: 14px; }
+.pref-main { min-width: 0; flex: 1; }
+.pref-name { font-weight: 600; font-size: 14.5px; }
+.pref-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.pref-note { color: var(--faint); font-size: 12.5px; margin-top: 9px; line-height: 1.45; }
+/* The button is the 44x44 touch target; the visible track sits inside it. */
+.switch { flex: none; width: 60px; height: 44px; display: grid; place-items: center; padding: 0; background: none; }
+.switch .track { width: 46px; height: 27px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--hair); position: relative; transition: background .18s ease, border-color .18s ease; }
+.switch .knob { position: absolute; top: 3px; left: 3px; width: 19px; height: 19px; border-radius: 50%; background: var(--muted); transition: transform .18s ease, background .18s ease; }
+.switch[aria-checked="true"] .track { background: var(--accent); border-color: var(--accent); }
+.switch[aria-checked="true"] .knob { transform: translateX(19px); background: var(--accent-ink); }
+.switch:disabled { opacity: .45; }
+@media (prefers-reduced-motion: reduce) { .switch .track, .switch .knob { transition: none; } }
 .fp-ok.good { color: var(--idle); } .fp-ok.bad { color: var(--err); }
 .fld-label { display: block; font-size: 12px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--faint); margin: 16px 2px 8px; }
 .provider-row { display: flex; gap: 7px; flex-wrap: wrap; }
