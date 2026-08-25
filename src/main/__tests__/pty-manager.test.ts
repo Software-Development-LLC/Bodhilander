@@ -12,6 +12,9 @@
  *   the replacement bound to its id, kill() settles off the real exit and
  *   coalesces per id, and the silent resume-failure respawn inherits the last
  *   known size instead of dropping back to 80x24,
+ * - the kill force path, on an injectable grace: a pty trapping the graceful
+ *   signal is reaped by SIGKILL, and a graceful kill that throws rejects the
+ *   caller while the armed reaper still escalates,
  * - live-account publication (#165) for a provider without account support.
  *
  * Run with: bun test src/main/__tests__
@@ -28,11 +31,13 @@ interface FakePty {
   spawnOpts: { cols: number; rows: number };
   dataCb: ((data: string) => void) | null;
   exitCb: ((event: { exitCode: number }) => void) | null;
+  /** Signals delivered through the handle; undefined is the default kill(). */
+  killSignals: (string | undefined)[];
   onData(cb: (data: string) => void): void;
   onExit(cb: (event: { exitCode: number }) => void): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  kill(signal?: string): void;
 }
 
 const spawned: FakePty[] = [];
@@ -45,11 +50,15 @@ function fakeSpawn(file: string, args: string[], opts: { cols: number; rows: num
     spawnOpts: opts,
     dataCb: null,
     exitCb: null,
+    killSignals: [],
     onData(cb) { p.dataCb = cb; },
     onExit(cb) { p.exitCb = cb; },
     write() {},
     resize() {},
-    kill() { p.exitCb?.({ exitCode: 0 }); },
+    kill(signal?: string) {
+      p.killSignals.push(signal);
+      p.exitCb?.({ exitCode: 0 });
+    },
   };
   spawned.push(p);
   return p;
@@ -439,6 +448,45 @@ describe('pty identity (#164)', () => {
     expect(spawned[0].spawnOpts.cols).toBe(100);
     expect(spawned[0].spawnOpts.rows).toBe(30);
     expect(manager.getSize('s2')).toEqual({ cols: 100, rows: 30 });
+  });
+});
+
+describe('kill() force path (injectable grace)', () => {
+  // The escalation branch is POSIX (win32 shells out to taskkill instead).
+  const posixTest = process.platform === 'win32' ? test.skip : test;
+
+  posixTest('a pty that traps the graceful signal is SIGKILLed and the waiter still resolves', async () => {
+    const manager = new PtyManager({ killGraceMs: 5 });
+    createAgentSession(manager);
+    const proc = spawned[0];
+    // Records the signals but never exits — the timer is the only way out.
+    proc.kill = (signal?: string) => { proc.killSignals.push(signal); };
+
+    await manager.kill('session-1');
+
+    expect(proc.killSignals).toEqual([undefined, 'SIGKILL']);
+  });
+
+  posixTest('a graceful kill that throws rejects the caller but leaves the reaper armed', async () => {
+    const manager = new PtyManager({ killGraceMs: 5 });
+    createAgentSession(manager);
+    const proc = spawned[0];
+    proc.kill = (signal?: string) => {
+      if (signal === undefined) throw new Error('native handle already gone');
+      proc.killSignals.push(signal);
+    };
+
+    await expect(manager.kill('session-1')).rejects.toThrow('native handle already gone');
+    // The map slot emptied before the throw, so a caller that catches can
+    // retry its own work without tripping over a phantom live session.
+    expect(manager.getSession('session-1')).toBeUndefined();
+
+    // The force timer armed ahead of the signal still escalates and reaps.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(proc.killSignals).toEqual(['SIGKILL']);
+    // The drained teardown released its pending entry: a follow-up kill
+    // resolves immediately instead of joining a settled waiter.
+    await manager.kill('session-1');
   });
 });
 

@@ -223,10 +223,13 @@ export class PtyManager extends EventEmitter {
   private sessions: Map<string, PtySession> = new Map();
   private readonly pendingKills: Map<string, PendingKill> = new Map();
   private socketPath: string;
+  /** How long a signalled pty gets to exit before kill() escalates by force. */
+  private readonly killGraceMs: number;
 
-  constructor() {
+  constructor(opts?: { killGraceMs?: number }) {
     super();
     this.socketPath = getSocketPath();
+    this.killGraceMs = opts?.killGraceMs ?? 3000;
   }
 
   private getShellInfo(): ShellInfo {
@@ -1060,7 +1063,7 @@ export class PtyManager extends EventEmitter {
     // its caller, not the mechanism that normally settles.
     if (process.platform === 'win32' && pid) {
       entry.timer = setTimeout(() => {
-        log.warn(`[PTY] Force-killing session ${id} (pid ${pid}) after 3s timeout`);
+        log.warn(`[PTY] Force-killing session ${id} (pid ${pid}) after ${this.killGraceMs}ms timeout`);
         try {
           execFile('taskkill', ['/F', '/T', '/PID', String(pid)], (err) => {
             if (err) {
@@ -1072,7 +1075,7 @@ export class PtyManager extends EventEmitter {
           log.error(`[PTY] Failed to spawn taskkill for pid ${pid}:`, err);
           entry.settle();
         }
-      }, 3000);
+      }, this.killGraceMs);
     } else {
       entry.timer = setTimeout(() => {
         // node-pty's UnixTerminal.kill() sends SIGHUP and swallows the result,
@@ -1081,7 +1084,7 @@ export class PtyManager extends EventEmitter {
         // `await kill()` on a live process and hand the restart the same
         // guess-based ordering #164 removed, except now the survivor is muted
         // by the identity guard and there is no exit to notice it by.
-        log.warn(`[PTY] Session ${id} (pid ${pid}) ignored SIGHUP for 3s; escalating to SIGKILL`);
+        log.warn(`[PTY] Session ${id} (pid ${pid}) ignored SIGHUP for ${this.killGraceMs}ms; escalating to SIGKILL`);
         // Through the pty handle rather than process.kill, so the signal can
         // only ever reach a process this manager spawned.
         try {
@@ -1090,7 +1093,7 @@ export class PtyManager extends EventEmitter {
           log.error(`[PTY] SIGKILL failed for session ${id} (pid ${pid}):`, err);
         }
         entry.settle();
-      }, 3000);
+      }, this.killGraceMs);
     }
 
     // Send the graceful kill signal. The onExit handler registered at spawn

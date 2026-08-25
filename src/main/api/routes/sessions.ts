@@ -261,13 +261,15 @@ export function createSessionsRouter(): Router {
     '/:id',
     requireModifyPermission,
     validateIdParam,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const id = getStringParam(req.params.id);
 
-        // Stop PTY if running
+        // Stop PTY if running. A kill failure aborts the delete and surfaces
+        // as the 500 below; kill() already emptied its session slot, so a
+        // retry skips straight to removing the record.
         if (ptyManager.getSession(id)) {
-          ptyManager.kill(id);
+          await ptyManager.kill(id);
         }
 
         sessionsRepo.deleteSession(id);
@@ -324,7 +326,7 @@ export function createSessionsRouter(): Router {
     '/:id/stop',
     requireControlPermission,
     validateIdParam,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const id = getStringParam(req.params.id);
 
@@ -333,7 +335,9 @@ export function createSessionsRouter(): Router {
           return;
         }
 
-        ptyManager.kill(id);
+        // Settles on the real exit (force path bounds it), so success means
+        // the process is gone — a client may start again on this response.
+        await ptyManager.kill(id);
 
         log.info(`[SessionsAPI] Stopped session: ${id}`);
         res.json({ success: true });
