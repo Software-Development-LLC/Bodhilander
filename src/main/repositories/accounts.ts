@@ -93,13 +93,21 @@ export function updateAccount(id: string, updates: UpdateAccountInput): void {
   db.prepare(`UPDATE claude_accounts SET ${fields.join(', ')} WHERE id = ?`).run(...values);
 }
 
-export function setDefaultAccount(id: string): void {
+/**
+ * Make the account the default, demoting the incumbent in one transaction.
+ * A missing id — the renderer can offer one another window already deleted —
+ * returns false and touches nothing: demoting anyway would leave no default.
+ */
+export function setDefaultAccount(id: string): boolean {
   const db = getDatabase();
   const tx = db.transaction(() => {
+    const target = db.prepare('SELECT 1 FROM claude_accounts WHERE id = ?').get(id);
+    if (!target) return false;
     db.prepare('UPDATE claude_accounts SET is_default = 0 WHERE is_default = 1').run();
     db.prepare('UPDATE claude_accounts SET is_default = 1 WHERE id = ?').run(id);
+    return true;
   });
-  tx();
+  return tx();
 }
 
 export function touchAccount(id: string): void {

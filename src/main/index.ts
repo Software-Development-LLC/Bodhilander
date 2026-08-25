@@ -838,7 +838,7 @@ safeHandle('accounts:update', (
 });
 
 safeHandle('accounts:setDefault', (id: string) => {
-  accountsRepo.setDefaultAccount(id);
+  return accountsRepo.setDefaultAccount(id);
 });
 
 // Assigning an account is routed through account-switch (not db:sessions:update)

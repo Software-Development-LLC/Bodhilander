@@ -174,7 +174,7 @@ interface ElectronAPI {
   confirmAccountLoginMacOS: (ptyId: string) => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }) => Promise<void>;
-  setDefaultAccount: (id: string) => Promise<void>;
+  setDefaultAccount: (id: string) => Promise<boolean>;
   assignAccountToSession: (sessionId: string, accountId: string | null) => Promise<AccountSwitchResult>;
   assignAccountToGroup: (groupId: string, accountId: string | null) => Promise<AccountSwitchResult>;
   onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => () => void;
