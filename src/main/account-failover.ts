@@ -32,8 +32,13 @@ import * as sessionsRepo from './repositories/sessions';
 const FAILOVER_PREF = 'accountFailoverEnabled';
 const FAILBACK_PREF = 'accountFailbackEnabled';
 
+/**
+ * Off unless switched on. Detection reads rendered CLI output, which cannot
+ * distinguish an announcement from text discussing one, so acting on it is
+ * something to opt into rather than discover.
+ */
 export function isFailoverEnabled(): boolean {
-  return getPreference(FAILOVER_PREF) !== 'false';
+  return getPreference(FAILOVER_PREF) === 'true';
 }
 
 export function isFailbackEnabled(): boolean {
@@ -79,19 +84,17 @@ export function handleUsageLimit(report: UsageLimitReport): AccountFailoverEvent
   const from = accountsRepo.getAccount(report.accountId);
   if (!from) return null;
 
-  // Bookkeeping happens even when failover is switched off. Knowing an account
-  // is spent until 9pm is worth having on its own — the panel shows it, and it
-  // stops that account being picked as somebody else's failover target.
+  // The switch gates the RECORD, not just the move: when detection is wrong,
+  // marking is the harm — an account shown as spent and skipped as a target
+  // for hours. A switch that leaves the damaging half running is not a switch.
+  if (!isFailoverEnabled()) return null;
+
   const resetAt = report.resetAt ?? new Date(Date.now() + accountsRepo.DEFAULT_COOLDOWN_MS);
   accountsRepo.markAccountLimited(from.id, resetAt);
   log.info(
     `[Failover] ${from.label} is out of quota until ${resetAt.toISOString()}` +
     `${report.resetAt ? ' (from the CLI message)' : ' (default window — the message named no reset)'}`
   );
-
-  if (!isFailoverEnabled()) {
-    return { reason: 'limit', from, to: null, sessionIds: [], resetAt, blocked: 'disabled' };
-  }
 
   const to = nextHealthyAccount(from.id);
   if (!to) {
@@ -299,12 +302,6 @@ export function describeFailover(event: AccountFailoverEvent): { title: string; 
   const spent = event.from?.label ?? 'That account';
   const until = event.resetAt ? ` until ${formatResetTime(event.resetAt)}` : '';
 
-  if (event.blocked === 'disabled') {
-    return {
-      title: `${spent} hit its usage limit`,
-      body: `Automatic failover is off, so nothing moved. Held${until}.`,
-    };
-  }
   if (event.blocked === 'no-healthy-account') {
     const held = until ? `; ${spent} is held${until}` : '';
     return {

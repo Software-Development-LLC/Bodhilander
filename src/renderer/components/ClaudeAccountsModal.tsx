@@ -371,14 +371,14 @@ const FAILBACK_PREF = 'accountFailbackEnabled';
  * restart cost them the whole feature.
  */
 const FailoverSettings: React.FC = () => {
-  const [failover, setFailover] = useState(true);
+  const [failover, setFailover] = useState(false);
   const [failback, setFailback] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     window.electronAPI.getAllPreferences().then(prefs => {
       if (cancelled) return;
-      setFailover(prefs[FAILOVER_PREF] !== 'false');
+      setFailover(prefs[FAILOVER_PREF] === 'true');
       setFailback(prefs[FAILBACK_PREF] !== 'false');
     }).catch(() => {});
     return () => { cancelled = true; };
@@ -399,8 +399,9 @@ const FailoverSettings: React.FC = () => {
         />
         <span>
           <strong>Switch accounts when one hits its usage limit.</strong>{' '}
-          Every session running on the spent account moves to the next one in the
-          order below and resumes its conversation.
+          Off by default: a limit is detected by reading the CLI's own output, and
+          text that merely discusses a limit can read the same way. While this is
+          on, an account can be marked spent when it is not.
         </span>
       </label>
       <label className="failover-toggle">

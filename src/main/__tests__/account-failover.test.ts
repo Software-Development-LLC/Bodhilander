@@ -137,6 +137,9 @@ beforeEach(() => {
   db = freshDb();
   mock.module('../repositories/preferences', prefsModule);
   prefs.clear();
+  // Failover is opt-in. These tests are about what it does once
+  // switched on; the off case is asserted explicitly below.
+  prefs.set('accountFailoverEnabled', 'true');
 });
 
 describe('handleUsageLimit', () => {
@@ -233,24 +236,28 @@ describe('handleUsageLimit', () => {
   });
 
   /**
-   * Switched off, the cooldown is still worth recording: the panel shows it,
-   * and it keeps the spent account from being picked as somebody else's
-   * failover target.
+   * Switched off, nothing is recorded either.
+   *
+   * When detection is wrong the marking IS the harm — an account shown as
+   * spent and skipped as a target for hours — so the control has to stop it.
    */
-  test('still records the limit when failover is switched off', () => {
+  test('records nothing at all when failover is switched off', () => {
     prefs.set('accountFailoverEnabled', 'false');
     addAccount('primary', 0, true);
     addAccount('backup', 1);
     addGroup('g');
     addSession('s1', 'g', 'primary');
 
-    const event = failover.handleUsageLimit({
+    expect(failover.handleUsageLimit({
       sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
-    });
-
-    expect(event!.blocked).toBe('disabled');
+    })).toBeNull();
     expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('primary');
-    expect(accountsRepo.getAccount('primary')!.limitedUntil).not.toBeNull();
+    expect(accountsRepo.getAccount('primary')!.limitedUntil).toBeNull();
+  });
+
+  test('is off unless explicitly switched on', () => {
+    prefs.clear();
+    expect(failover.isFailoverEnabled()).toBe(false);
   });
 
   /**
@@ -483,19 +490,6 @@ describe('describeFailover', () => {
       blocked: 'no-healthy-account',
     });
     expect(body).toContain('No other account is available');
-    expect(body).not.toContain('moved to');
-  });
-
-  test('never claims a move when the user switched failover off', () => {
-    const { body } = failover.describeFailover({
-      reason: 'limit',
-      from: account('a', 'Personal'),
-      to: null,
-      sessionIds: [],
-      resetAt: null,
-      blocked: 'disabled',
-    });
-    expect(body).toContain('Automatic failover is off');
     expect(body).not.toContain('moved to');
   });
 

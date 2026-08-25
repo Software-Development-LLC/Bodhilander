@@ -79,6 +79,16 @@ function lineAround(text: string, index: number): string {
 }
 
 /**
+ * Longest a run of text may be and still be read as one message.
+ *
+ * A TUI positions with escape codes, not newlines, so stripping them delivers
+ * a whole screen as one run with unrelated words adjacent. A match inside one
+ * says the words are on screen somewhere — true of any conversation about
+ * limits. Observed false positives ran 725-1877 chars; a real line is ~70.
+ */
+const MAX_MESSAGE_LINE = 200;
+
+/**
  * Longest a cooldown may run. A parsed reset time further out than this is a
  * misread, not a week-long lockout, and is dropped in favour of the caller's
  * default window.
@@ -108,6 +118,10 @@ export function detectUsageLimit(
     if (!match) continue;
 
     const line = lineAround(text, match.index).trim();
+    // Order matters: the quoting guard below reasons about the shape of a
+    // line, and is meaningless applied to a whole screen. This is what makes
+    // it apply to a line at all.
+    if (line.length > MAX_MESSAGE_LINE) continue;
     if (QUOTED_MARKERS.some(marker => marker.test(line))) continue;
 
     return { line, resetAt: parseResetAt(text.slice(match.index), now) };

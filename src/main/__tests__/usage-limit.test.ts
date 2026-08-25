@@ -189,3 +189,48 @@ describe('parseResetAt', () => {
     expect(parseResetAt(`usage limit reached|${epoch}`, NOW)).toBeNull();
   });
 });
+
+/**
+ * Repaint blobs captured from a real machine while detection was misfiring.
+ *
+ * An agent TUI positions with escape codes rather than newlines, so once those
+ * are stripped a whole screen arrives as one unbroken run — which is why the
+ * words are run together. Two of these contain no limit message at all; they
+ * matched on prose ABOUT limits, which is the text most likely to contain the
+ * trigger words.
+ *
+ * Kept verbatim. A tidied fixture would not reproduce the bug, because what
+ * made it possible was the shape of the input, not its content.
+ */
+const REPAINT_BLOBS: readonly string[] = [
+    "h I'd failed to crack:thePRisCONFLICTING.GitHubrunspull_requestworkflowsagainstrefs/pull/205/merge,andaconflictingPRhasnosuchref",
+    "\u2014sopushesproducednothing,whileGitGuardian(whichrunsonthecommititself)reportednormally.developmentmovedto24bd702elevenminutesbeforethePRopened.Onemerge",
+    "clearsbothproblems.",
+    "Sotheownernowhastwoblockersbatched:",
+    "1.The relink refetch\u2014theoperator-pathbugabove.",
+    "2.Merge development\u2014threerealconflicts,plusfourfileseditedonbothsidesthatauto-mergebuthaveneverbeenexercisedcombined.Everygreensofarwasmeasuredonatree",
+  ];
+
+describe('screen repaint is not a message', () => {
+  test('refuses every blob that marked a healthy account limited', () => {
+    for (const blob of REPAINT_BLOBS) {
+      expect(detectUsageLimit(blob, undefined, NOW), blob.slice(0, 70)).toBeNull();
+    }
+  });
+
+  /**
+   * The guard has to be about SHAPE, not about these particular strings. A
+   * genuine announcement is still caught when it arrives as its own line.
+   */
+  test('still catches the real message on a line of its own', () => {
+    const real = "You've hit your weekly limit \u00b7 resets Aug 26 at 2pm (America/New_York)";
+    expect(detectUsageLimit(real, undefined, NOW)).not.toBeNull();
+    expect(detectUsageLimit('agent output\n' + real + '\nmore output', undefined, NOW)).not.toBeNull();
+  });
+
+  test('refuses it once it is buried in a screen-sized run', () => {
+    const real = "You've hit your weekly limit \u00b7 resets Aug 26 at 2pm";
+    const buried = 'x'.repeat(400) + real + 'y'.repeat(400);
+    expect(detectUsageLimit(buried, undefined, NOW)).toBeNull();
+  });
+});

@@ -71,9 +71,6 @@ function describeLimit(event: AccountFailoverEvent): string {
 }
 
 function renderOutcome(event: AccountFailoverEvent, sessions: string): React.ReactNode {
-  if (event.blocked === 'disabled') {
-    return 'Automatic failover is off, so nothing moved.';
-  }
   if (event.blocked === 'no-healthy-account') {
     return 'Every other account is limited too, so nothing moved.';
   }
