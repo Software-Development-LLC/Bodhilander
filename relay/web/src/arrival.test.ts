@@ -124,15 +124,16 @@ describe('machineMenuTitle', () => {
 });
 
 describe('showSectionTitles', () => {
-  test('headings appear when there is someone else\'s machine to separate', () => {
+  test('headings appear when there are two sections to tell apart', () => {
     expect(showSectionTitles(machineSections([mine(), shared()]))).toBe(true);
-    expect(showSectionTitles(machineSections([shared(), shared({ id: 'g2' })]))).toBe(true);
   });
 
-  test('an owner with only their own machines gets no new heading over them', () => {
-    // "MY MACHINES" over the only section labels nothing — it was not there
-    // before sharing existed and it earns nothing now.
+  test('the only section is never headed — either side of the relation', () => {
+    // A heading over the only section labels nothing and repeats the sheet's
+    // own title directly above it. True for an owner with only their own
+    // machines, and equally true for a guest holding only other people's.
     expect(showSectionTitles(machineSections([mine(), mine({ id: 'm2' })]))).toBe(false);
+    expect(showSectionTitles(machineSections([shared(), shared({ id: 'g2' })]))).toBe(false);
   });
 });
 

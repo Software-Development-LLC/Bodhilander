@@ -78,11 +78,11 @@ export function wideBannerCopy(ownerName: string | null | undefined, cols: numbe
 export const FIT_ACTION = 'Fit to my screen';
 
 /**
- * After the ask. It promises nothing: the request surfaces as a prompt the
- * owner may decline, and a declined request changes nothing here — so this
- * says exactly that instead of implying a resize is on its way.
+ * After the ask. It promises nothing — not even that the request was seen: a
+ * prompt already up holds its place against a second one, and the owner may
+ * be nowhere near their desk. Silence is expected, so this makes it so.
  */
 export function fitAskedCopy(ownerName?: string | null): string {
   const who = ownerName ?? 'them';
-  return `Asked ${who} to resize. Nothing changes unless they say yes — you can keep reading meanwhile.`;
+  return `Asked ${who} to resize. They may not be at their desk — nothing changes unless they say yes, so keep reading meanwhile.`;
 }

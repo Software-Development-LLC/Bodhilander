@@ -107,9 +107,13 @@ describe('wideBannerCopy', () => {
 });
 
 describe('fitAskedCopy', () => {
-  test('promises nothing — the owner may say no, and then nothing changes', () => {
+  test('promises nothing — not a resize, and not even that it was seen', () => {
+    // Two paths end in silence with the owner never prompted: a prompt
+    // already on their screen holds its place, and a size below the floor is
+    // refused. The copy must not leave someone waiting on an answer that was
+    // never going to come.
     expect(fitAskedCopy('Will')).toBe(
-      'Asked Will to resize. Nothing changes unless they say yes — you can keep reading meanwhile.',
+      'Asked Will to resize. They may not be at their desk — nothing changes unless they say yes, so keep reading meanwhile.',
     );
     expect(fitAskedCopy(null)).toContain('Asked them to resize.');
   });

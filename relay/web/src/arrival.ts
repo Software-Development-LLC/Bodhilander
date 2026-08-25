@@ -46,8 +46,6 @@ export function planArrival<T extends ArrivalMachine>(machines: T[], preferredId
 
 export interface MachineSection<T extends ArrivalMachine = ArrivalMachine> {
   title: string;
-  /** Whose they are. Drives whether the headings are worth showing at all. */
-  kind: 'mine' | 'shared';
   items: T[];
 }
 
@@ -63,18 +61,18 @@ export function machineSections<T extends ArrivalMachine>(machines: T[]): Machin
     .slice()
     .sort((a, b) => (a.ownerName ?? '').localeCompare(b.ownerName ?? '') || a.name.localeCompare(b.name));
   const sections: MachineSection<T>[] = [];
-  if (mine.length) sections.push({ title: 'My machines', kind: 'mine', items: mine });
-  if (shared.length) sections.push({ title: 'Shared with me', kind: 'shared', items: shared });
+  if (mine.length) sections.push({ title: 'My machines', items: mine });
+  if (shared.length) sections.push({ title: 'Shared with me', items: shared });
   return sections;
 }
 
 /**
- * Whether the headings earn their place. They separate yours from someone
- * else's, so with nothing of anyone else's in the list there is nothing to
- * separate — and "MY MACHINES" over the only section is a label, not an aid.
+ * Whether the headings earn their place. A heading separates one section from
+ * another, so the only section has nothing to separate itself from — and it
+ * would repeat the sheet's own title directly underneath it.
  */
 export function showSectionTitles(sections: MachineSection<ArrivalMachine>[]): boolean {
-  return sections.some((section) => section.kind === 'shared');
+  return sections.length > 1;
 }
 
 /**
