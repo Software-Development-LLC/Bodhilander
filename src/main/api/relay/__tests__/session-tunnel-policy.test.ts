@@ -421,6 +421,38 @@ describe('scoped disclosure', () => {
     const output = h.opened('c1', key).filter((m) => m.type === 'terminal:output');
     expect(output.map((o) => o.data).join('')).toContain('OWNER SCROLLBACK');
   });
+
+  test('a replay clears the screen first, whoever it is for', async () => {
+    // The frame means "here is the whole buffer". A client that subscribes
+    // WITHOUT wiping its own screen first — a reconnect re-subscribing, rather
+    // than a tap that cleared locally — would otherwise draw the entire
+    // scrollback again underneath what it is already showing.
+    const h = harness();
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const output = h.opened('c1', key).filter((m) => m.type === 'terminal:output');
+    expect(String(output[0]!.data).startsWith('\x1b[2J\x1b[3J\x1b[H')).toBe(true);
+  });
+
+  test('re-subscribing after a reconnect does not stack a second copy', async () => {
+    // The shape of the regression: one socket drops, the client re-subscribes
+    // on the new one, and the buffer arrives again. Every replay must be
+    // preceded by its own clear, not just the first.
+    const h = harness();
+    const key = h.openChannel('c1', { principal: { userId: OWNER_ID } })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+    h.send('c1', key, 1, { type: 'terminal:subscribe', sessionId: 's1' });
+    await Bun.sleep(5);
+
+    const output = h.opened('c1', key).filter((m) => m.type === 'terminal:output');
+    const replays = output.filter((o) => String(o.data).includes('OWNER SCROLLBACK'));
+    const clears = output.filter((o) => String(o.data).includes('\x1b[2J'));
+    expect(replays).toHaveLength(2);
+    expect(clears).toHaveLength(2);
+  });
 });
 
 /**

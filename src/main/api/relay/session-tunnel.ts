@@ -218,6 +218,9 @@ interface ClientSession {
  */
 const RESIZE_ASK_INTERVAL_MS = 10_000;
 
+/** Wipe viewport and scrollback, so a replay cannot stack on what is shown. */
+const CLEAR_SCREEN = '\x1b[2J\x1b[3J\x1b[H';
+
 /** Decrypted command from a web client (union of every message's fields). */
 interface ClientFrame {
   type?: string;
@@ -696,7 +699,7 @@ export class SessionTunnel {
       this.sealTo(clientId, {
         type: 'terminal:output',
         sessionId,
-        data: '\x1b[2J\x1b[3J\x1b[H── shared from here ──\r\n',
+        data: `${CLEAR_SCREEN}── shared from here ──\r\n`,
       });
       if (mark === null) return;
       const since = await this.deps.pty.getSerializedBufferSince(sessionId, mark);
@@ -712,6 +715,12 @@ export class SessionTunnel {
     // shared terminal without the scrollback garbling. Then live output streams.
     // Chunked so a long scrollback can't put a multi-megabyte frame on the wire
     // (xterm.js carries parser state across writes, so splitting is safe).
+    //
+    // Cleared first, like the guest branch above: this frame means "here is the
+    // whole buffer", so a client that subscribes without wiping its own screen
+    // — a reconnect re-subscribing, rather than a tap that cleared first —
+    // would otherwise render the entire scrollback again underneath itself.
+    this.sealTo(clientId, { type: 'terminal:output', sessionId, data: CLEAR_SCREEN });
     const history = await this.deps.pty.getSerializedBuffer(sessionId);
     for (const data of chunkText(history)) {
       // Re-check every chunk: the client may unsubscribe or drop mid-replay.
