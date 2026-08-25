@@ -540,13 +540,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
                 <div className="settings-group">
                   <h4>Data</h4>
-                  {/* Two buttons, not one control — so this names the pair as
-                      a group rather than pretending to label a single input. */}
-                  <div className="settings-row" role="group" aria-labelledby="move-machine-label">
-                    <span className="settings-row-label" id="move-machine-label">Move to Another Machine:</span>
+                  {/* Two buttons, not one control — so the purpose rides on each
+                      button's own name instead of a label with nothing to point at. */}
+                  <div className="settings-row">
+                    <span className="settings-row-label" aria-hidden="true">Move to Another Machine:</span>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <button
                         className="settings-button"
+                        aria-label="Export this machine, to move to another one"
                         onClick={async () => {
                           const result = await window.electronAPI.exportGroups();
                           if (result.success) {
@@ -560,6 +561,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                       </button>
                       <button
                         className="settings-button"
+                        aria-label="Import a machine exported from another one"
                         onClick={async () => {
                           const result = await window.electronAPI.importGroups();
                           if (result.success) {

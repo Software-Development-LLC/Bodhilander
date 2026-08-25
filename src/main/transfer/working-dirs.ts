@@ -70,8 +70,13 @@ type Fold = (segment: string) => string;
 const foldExact: Fold = (segment) => segment;
 const foldCaseless: Fold = (segment) => segment.toLowerCase();
 
-function folderFor(windows: boolean): Fold {
-  return windows ? foldCaseless : foldExact;
+/**
+ * The fold rule for a path, or for a pair being compared — where either side
+ * being a Windows path makes the whole comparison case-insensitive, since a
+ * Windows path cannot distinguish two segments that differ only in case.
+ */
+function folderFor(...paths: ParsedDir[]): Fold {
+  return paths.some((p) => p.windows) ? foldCaseless : foldExact;
 }
 
 interface TrieNode {
@@ -111,7 +116,7 @@ export function collectWorkingDirRoots(dirs: string[]): string[] {
     const parsed = parseDir(dir);
     if (!parsed) continue;
 
-    const folder = folderFor(parsed.windows);
+    const folder = folderFor(parsed);
     const key = `${folder(parsed.prefix)}|${parsed.absolute}|${parsed.windows}`;
     const bucket = buckets.get(key) ?? { sample: parsed, trie: emptyNode(), volumeRoot: false };
     buckets.set(key, bucket);
@@ -170,7 +175,7 @@ export function remapWorkingDir(dir: string, mappings: WorkingDirMapping[]): str
     .sort((a, b) => b.from.segments.length - a.from.segments.length);
 
   for (const { mapping, from } of candidates) {
-    const folder = folderFor(from.windows || subject.windows);
+    const folder = folderFor(from, subject);
     if (!startsWithDir(subject, from, folder)) continue;
 
     const tail = subject.segments.slice(from.segments.length);
