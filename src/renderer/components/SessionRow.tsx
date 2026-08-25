@@ -70,6 +70,23 @@ function accountTitle(
   return `Claude account: ${nameOf(account)}${scope}${suffix}`;
 }
 
+function rowClasses(state: {
+  isActive: boolean;
+  isFocused: boolean;
+  isDragging: boolean;
+  dropPosition: string | null;
+  needsRelink: boolean;
+}): string {
+  return [
+    'session',
+    state.isActive && 'active',
+    state.isFocused && 'item-focused',
+    state.isDragging && 'dragging',
+    state.dropPosition && `drop-${state.dropPosition}`,
+    state.needsRelink && 'needs-relink',
+  ].filter(Boolean).join(' ');
+}
+
 function AccountDot({ account, session, pending }: {
   account: ClaudeAccount;
   session: Session;
@@ -140,14 +157,13 @@ export const SessionRow: React.FC<SessionRowProps> = ({
   isEditing, editingName, onEditingNameChange, onStartEdit, onFinishEdit, onCancelEdit,
   onSelect, onContextMenu, onDragStart, onDragEnd, onDragOver, onDrop, onClose, onRelink,
 }) => {
-  const classes = [
-    'session',
-    isActive ? 'active' : '',
-    isFocused ? 'item-focused' : '',
-    isDragging ? 'dragging' : '',
-    dropPosition ? `drop-${dropPosition}` : '',
-    session.workingDirMissing ? 'needs-relink' : '',
-  ].filter(Boolean).join(' ');
+  const classes = rowClasses({
+    isActive,
+    isFocused,
+    isDragging,
+    dropPosition,
+    needsRelink: !!session.workingDirMissing,
+  });
 
   const provider = PROVIDER_LABELS[session.provider] ?? session.provider;
   const showProvider = session.shellType === 'claude' && session.provider !== 'claude';
