@@ -137,6 +137,9 @@ beforeEach(() => {
   db = freshDb();
   mock.module('../repositories/preferences', prefsModule);
   prefs.clear();
+  // Failover is opt-in. These tests are about what it does once
+  // switched on; the off case is asserted explicitly below.
+  prefs.set('accountFailoverEnabled', 'true');
 });
 
 describe('handleUsageLimit', () => {
@@ -155,24 +158,20 @@ describe('handleUsageLimit', () => {
       .toBe(resetAt.toISOString());
   });
 
-  /**
-   * No reset time in the message means the account is held for a full rolling
-   * window rather than released optimistically — an account handed back early
-   * is a second failover, and a second restart, for every session on it.
-   */
-  test('falls back to a full window when the message named no reset', () => {
+  test('records the window the CLI named', () => {
     addAccount('primary', 0, true);
     addAccount('backup', 1);
     addGroup('g');
     addSession('s1', 'g', 'primary');
 
-    const before = Date.now();
+    const resetAt = new Date(Date.now() + 7 * 24 * HOUR);
     failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt, rateLimitType: 'seven_day',
+      liveAccounts: live({ s1: 'primary' }),
     });
 
-    const until = accountsRepo.getAccount('primary')!.limitedUntil!.getTime();
-    expect(until).toBeGreaterThanOrEqual(before + accountsRepo.DEFAULT_COOLDOWN_MS);
+    expect(accountsRepo.getAccount('primary')!.limitedUntil!.toISOString())
+      .toBe(resetAt.toISOString());
   });
 
   /**
@@ -192,7 +191,7 @@ describe('handleUsageLimit', () => {
     const event = failover.handleUsageLimit({
       sessionId: 's1',
       accountId: 'primary',
-      resetAt: null,
+      resetAt: new Date(Date.now() + 4 * HOUR),
       liveAccounts: live({ s1: 'primary', s2: 'primary', elsewhere: 'backup' }),
     });
 
@@ -210,7 +209,7 @@ describe('handleUsageLimit', () => {
     addSession('s1', 'g', 'primary');
 
     const event = failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
     });
 
     expect(event!.to!.id).toBe('third');
@@ -224,7 +223,7 @@ describe('handleUsageLimit', () => {
     addSession('s1', 'g', 'primary');
 
     const event = failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
     });
 
     expect(event!.blocked).toBe('no-healthy-account');
@@ -233,24 +232,28 @@ describe('handleUsageLimit', () => {
   });
 
   /**
-   * Switched off, the cooldown is still worth recording: the panel shows it,
-   * and it keeps the spent account from being picked as somebody else's
-   * failover target.
+   * Switched off, nothing is recorded either.
+   *
+   * When detection is wrong the marking IS the harm — an account shown as
+   * spent and skipped as a target for hours — so the control has to stop it.
    */
-  test('still records the limit when failover is switched off', () => {
+  test('records nothing at all when failover is switched off', () => {
     prefs.set('accountFailoverEnabled', 'false');
     addAccount('primary', 0, true);
     addAccount('backup', 1);
     addGroup('g');
     addSession('s1', 'g', 'primary');
 
-    const event = failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
-    });
-
-    expect(event!.blocked).toBe('disabled');
+    expect(failover.handleUsageLimit({
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
+    })).toBeNull();
     expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('primary');
-    expect(accountsRepo.getAccount('primary')!.limitedUntil).not.toBeNull();
+    expect(accountsRepo.getAccount('primary')!.limitedUntil).toBeNull();
+  });
+
+  test('is on unless explicitly switched off', () => {
+    prefs.clear();
+    expect(failover.isFailoverEnabled()).toBe(true);
   });
 
   /**
@@ -268,7 +271,7 @@ describe('handleUsageLimit', () => {
 
     const event = failover.handleUsageLimit({
       // The pty is still billing 'primary' — that is why it reported the limit.
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
     });
 
     expect(event!.sessionIds).toEqual(['s1']);
@@ -280,7 +283,7 @@ describe('handleUsageLimit', () => {
     addGroup('g');
     addSession('s1', 'g', null);
     expect(failover.handleUsageLimit({
-      sessionId: 's1', accountId: null, resetAt: null, liveAccounts: {},
+      sessionId: 's1', accountId: null, resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: {},
     })).toBeNull();
   });
 });
@@ -299,7 +302,7 @@ describe('going home', () => {
     addSession('s1', 'g', null);
 
     failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
     });
     expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('backup');
 
@@ -324,10 +327,10 @@ describe('going home', () => {
     addSession('s1', 'g', 'primary');
 
     failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
     });
     failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'backup', resetAt: null, liveAccounts: live({ s1: 'backup' }),
+      sessionId: 's1', accountId: 'backup', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'backup' }),
     });
 
     expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('third');
@@ -376,7 +379,7 @@ describe('going home', () => {
     addSession('s1', 'g', 'primary');
 
     failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
     });
     db.prepare("DELETE FROM claude_accounts WHERE id = 'primary'").run();
 
@@ -391,7 +394,7 @@ describe('going home', () => {
     addSession('s1', 'g', 'primary');
 
     failover.handleUsageLimit({
-      sessionId: 's1', accountId: 'primary', resetAt: null, liveAccounts: live({ s1: 'primary' }),
+      sessionId: 's1', accountId: 'primary', resetAt: new Date(Date.now() + 4 * HOUR), liveAccounts: live({ s1: 'primary' }),
     });
     failover.clearFailoverRecord('s1');
     accountsRepo.clearAccountLimit('primary');
@@ -466,7 +469,7 @@ describe('describeFailover', () => {
       from: account('a', 'Personal'),
       to: account('b', 'Work'),
       sessionIds: ['s1', 's2'],
-      resetAt: null,
+      resetAt: new Date(Date.now() + 4 * HOUR),
     });
     expect(title).toContain('Work');
     expect(body).toContain('Personal');
@@ -479,23 +482,10 @@ describe('describeFailover', () => {
       from: account('a', 'Personal'),
       to: null,
       sessionIds: [],
-      resetAt: null,
+      resetAt: new Date(Date.now() + 4 * HOUR),
       blocked: 'no-healthy-account',
     });
     expect(body).toContain('No other account is available');
-    expect(body).not.toContain('moved to');
-  });
-
-  test('never claims a move when the user switched failover off', () => {
-    const { body } = failover.describeFailover({
-      reason: 'limit',
-      from: account('a', 'Personal'),
-      to: null,
-      sessionIds: [],
-      resetAt: null,
-      blocked: 'disabled',
-    });
-    expect(body).toContain('Automatic failover is off');
     expect(body).not.toContain('moved to');
   });
 
@@ -505,7 +495,7 @@ describe('describeFailover', () => {
       from: account('b', 'Work'),
       to: account('a', 'Personal'),
       sessionIds: ['s1'],
-      resetAt: null,
+      resetAt: new Date(Date.now() + 4 * HOUR),
     });
     expect(title).toContain('Personal');
     expect(body).toContain('1 session returned');
@@ -542,7 +532,7 @@ describe('a session that cannot be moved', () => {
       const event = failover.handleUsageLimit({
         sessionId: 's1',
         accountId: 'primary',
-        resetAt: null,
+        resetAt: new Date(Date.now() + 4 * HOUR),
         liveAccounts: live({ bad: 'primary', s1: 'primary' }),
       });
 

@@ -69,13 +69,6 @@ export interface ProviderDefinition {
    */
   waitingPatterns?: readonly RegExp[];
   /**
-   * Provider-specific output that means the ACCOUNT behind the CLI has run out
-   * of quota, as opposed to anything being wrong with the session. Absent on a
-   * provider with no account model, which is also every provider that cannot
-   * fail over — there is nowhere for its sessions to go.
-   */
-  usageLimitPatterns?: readonly RegExp[];
-  /**
    * Direct-API credential support (#99), for providers whose CLI can
    * authenticate via an API-key env var. Absent = API keys don't apply
    * (e.g. a purely local provider) and the vault treats the provider as

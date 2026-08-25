@@ -33,7 +33,7 @@ import {
 } from './repositories/sessions';
 import { getAllAccounts, touchAccount } from './repositories/accounts';
 import { resolveAccountForSession } from './account-resolver';
-import { detectUsageLimit } from './usage-limit';
+import { readQuotaLimit } from './quota-limit';
 import { vaultEnvFor } from './key-vault';
 import { redactEnv } from './redact-env';
 import log from 'electron-log';
@@ -113,6 +113,8 @@ interface PtySession {
    * account it landed on turns out to be exhausted too.
    */
   usageLimitReported: boolean;
+  /** Last time the transcript was consulted, to bound the read rate. */
+  quotaCheckedAt: number;
 }
 
 /**
@@ -175,6 +177,12 @@ const SPAWN_FAILURE_WINDOW_MS = 15_000;
  * floods the first seconds.
  */
 const LAUNCH_OUTPUT_CAP = 256 * 1024;
+
+/**
+ * Floor on how often a session's transcript is consulted for a quota
+ * rejection. Output arrives many times a second; a refusal does not.
+ */
+const QUOTA_CHECK_INTERVAL_MS = 3000;
 
 /**
  * Provider-agnostic "waiting for user input" patterns — generic prompt shapes
@@ -492,6 +500,7 @@ export class PtyManager extends EventEmitter {
       // Regular sessions spawn only after the renderer explicitly called
       // pty:create, so listeners are already attached — no deferral needed.
       usageLimitReported: false,
+      quotaCheckedAt: 0,
       deferEmission: false,
     });
 
@@ -834,6 +843,7 @@ export class PtyManager extends EventEmitter {
       // Spawned before the renderer's Terminal mounts — same race as the
       // login pty (BDHLNDR-33).
       usageLimitReported: false,
+      quotaCheckedAt: 0,
       deferEmission: true,
     });
   }
@@ -950,6 +960,7 @@ export class PtyManager extends EventEmitter {
       // listener and calls primePty — avoids losing claude's startup banner
       // in the IPC-round-trip + React-render gap (BDHLNDR-33).
       usageLimitReported: false,
+      quotaCheckedAt: 0,
       deferEmission: true,
     });
   }
@@ -1294,32 +1305,46 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
-   * Report a usage limit once per pty.
+   * Report a quota rejection once per pty.
+   *
+   * Output is the trigger, never the evidence. Terminal output cannot separate
+   * a CLI announcing a limit from a CLI rendering a conversation about one, so
+   * new output only prompts a look at the transcript, where the agent records
+   * the rejection as a structured entry with an exact reset time.
    *
    * What is emitted is deliberately thin — the account this pty is BILLING
-   * (its live binding, not the database assignment, which may already have
-   * been pointed elsewhere) plus whatever the message said about the reset.
-   * Deciding where the work goes belongs to account-failover, which can see
-   * every account and every other session; this can only see one terminal.
+   * (its live binding, not the database assignment, which may already point
+   * elsewhere) plus the reset. Deciding where the work goes belongs to
+   * account-failover, which can see every account; this sees one terminal.
    */
   private checkUsageLimit(id: string, session: PtySession): void {
     if (session.usageLimitReported) return;
-    const patterns = session.provider?.usageLimitPatterns;
-    if (!patterns?.length) return;
+    if (!session.provider?.capabilities.accounts) return;
 
-    const hit = detectUsageLimit(session.outputBuffer.slice(-1200), patterns);
+    const now = Date.now();
+    if (now - session.quotaCheckedAt < QUOTA_CHECK_INTERVAL_MS) return;
+    session.quotaCheckedAt = now;
+
+    const conversationId = getStoredClaudeSessionId(id);
+    const configDir = session.liveAccount?.configDir;
+    if (!conversationId || !configDir) return;
+
+    // Only a rejection this pty could have caused. A transcript is append-only
+    // and replayed on resume, so an older entry is history, not news.
+    const hit = readQuotaLimit(configDir, conversationId, new Date(session.spawnedAt));
     if (!hit) return;
 
     session.usageLimitReported = true;
     log.warn(
-      `[Accounts] Session ${id} reported a usage limit on account ` +
-      `${session.liveAccount?.accountId ?? 'legacy ~/.claude'}: ${hit.line}`
+      `[Accounts] Session ${id} was refused by quota on account ` +
+      `${session.liveAccount?.accountId ?? 'legacy ~/.claude'} ` +
+      `(${hit.rateLimitType ?? 'unknown window'}, resets ${hit.resetAt.toISOString()})`
     );
     this.emit('usageLimit', {
       id,
       accountId: session.liveAccount?.accountId ?? null,
       resetAt: hit.resetAt,
-      line: hit.line,
+      rateLimitType: hit.rateLimitType,
     });
   }
 

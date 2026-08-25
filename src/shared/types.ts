@@ -337,12 +337,8 @@ export interface AccountFailoverEvent {
   sessionIds: string[];
   /** When `from`'s limit lifts, for the notification copy. Null if unknown. */
   resetAt: Date | null;
-  /**
-   * Why nothing moved, when `to` is null. The two cases read very differently
-   * to the person on the other end — "every account you have is spent" is news,
-   * "you turned this off" is not — so they are not collapsed into one silence.
-   */
-  blocked?: 'disabled' | 'no-healthy-account';
+  /** Why nothing moved, when `to` is null. */
+  blocked?: 'no-healthy-account';
 }
 
 /**

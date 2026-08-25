@@ -17,6 +17,7 @@ export function getDatabase(): Database.Database {
 
   initializeTables(db);
   initializeArenaTables(db);
+  clearCooldownsFromOutputScanning(db);
 
   // Reclaim for the removed code-indexing and memory features. Each drop
   // records its own completion marker, so this branch — including the
@@ -50,6 +51,7 @@ const LEGACY_CODE_SEARCH_TABLES = ['code_chunks', 'symbols', 'indexed_files', 'c
  * work forever and re-run a full VACUUM on every single launch.
  */
 const CODE_SEARCH_CLEANUP_PREF = 'legacyCodeSearchCleanupDone';
+const QUOTA_COOLDOWN_CLEANUP_PREF = 'quotaCooldownsCleared';
 
 function cleanupAlreadyRan(database: Database.Database, pref: string): boolean {
   try {
@@ -572,6 +574,32 @@ function initializeArenaTables(database: Database.Database): void {
     database.exec('ALTER TABLE arena_responses ADD COLUMN round INTEGER NOT NULL DEFAULT 0');
     database.exec('ALTER TABLE arena_responses ADD COLUMN prompt TEXT DEFAULT NULL');
     database.exec('ALTER TABLE arena_responses ADD COLUMN session_ref TEXT DEFAULT NULL');
+  }
+}
+
+/**
+ * Clear every account cooldown once.
+ *
+ * Cooldowns only ever existed under the detector that read them off rendered
+ * terminal output, and that detector marked healthy accounts limited — 86
+ * times on one machine, on text that merely discussed a usage limit. Every row
+ * it left is therefore suspect, and none is worth keeping: an account that is
+ * genuinely out of quota gets marked again within seconds of its next refusal,
+ * now from the CLI's own record rather than from pixels.
+ *
+ * Guarded by a preference rather than a schema check, because nothing about
+ * the columns changed — only the trustworthiness of what was written into them.
+ */
+export function clearCooldownsFromOutputScanning(database: Database.Database): void {
+  if (cleanupAlreadyRan(database, QUOTA_COOLDOWN_CLEANUP_PREF)) return;
+
+  const { changes } = database.prepare(
+    'UPDATE claude_accounts SET limited_until = NULL, limited_at = NULL WHERE limited_until IS NOT NULL'
+  ).run();
+  markCleanupRan(database, QUOTA_COOLDOWN_CLEANUP_PREF, 'quota cooldown');
+
+  if (changes > 0) {
+    log.info(`[Accounts] Cleared ${changes} account cooldown(s) left by the previous detector.`);
   }
 }
 

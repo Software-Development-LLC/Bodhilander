@@ -163,15 +163,6 @@ export function deleteAccount(id: string): void {
 // ---------------------------------------------------------------------------
 
 /**
- * How long an account is held out when the CLI announced a limit without
- * saying when it lifts. Claude's usage windows are rolling five-hour ones, so
- * this is the honest upper bound rather than an optimistic guess — an account
- * released too early just fails over again, but does so after dragging a live
- * session through a restart for nothing.
- */
-export const DEFAULT_COOLDOWN_MS = 5 * 60 * 60 * 1000;
-
-/**
  * Accounts in the order failover tries them: explicit rank first, then the
  * panel's existing order (default, then oldest) for anything unranked.
  *

@@ -63,12 +63,6 @@ describe('FailoverNotice', () => {
     expect(text).not.toContain('moved to');
   });
 
-  test('never claims a move when failover is switched off', () => {
-    const text = notice({ to: null, sessionIds: [], blocked: 'disabled' });
-    expect(text).toContain('Automatic failover is off');
-    expect(text).not.toContain('moved to');
-  });
-
   test('reads as a return, not a switch, on the way home', () => {
     const text = notice({
       reason: 'failback',
