@@ -1027,7 +1027,7 @@ function buildCreateTree() {
   let pick: HTMLElement | null = null;
   if (pendingGroupName) { pick = rows.find((r) => app.groups.find((g) => g.id === r.dataset.gid)?.name === pendingGroupName) || null; pendingGroupName = ''; }
   if (!pick && selGroupId) pick = rows.find((r) => r.dataset.gid === selGroupId) || null;
-  if (!pick) pick = rows[0] ?? null;
+  pick ??= rows[0] ?? null;
   if (pick) selectGroup(pick, pick.dataset.gid!); else { selGroupId = ''; const go = $<HTMLButtonElement>('#crGo'); if (go) go.disabled = true; }
 }
 function addGroupRow(tree: HTMLElement, g: RGroup, isSub: boolean, parent?: RGroup) {
