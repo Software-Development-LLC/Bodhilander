@@ -497,6 +497,12 @@ size with horizontal panning (`overflow-x:auto`, two-axis drag) plus an honest b
 request that surfaces on the owner's desktop as a one-tap `[ Resize once ] [ Keep my size ]`.
 If neither lands, cut phone guests from M5.2 rather than ship an illegible primary surface.
 
+The request travels as `terminal:resize-request {sessionId, cols, rows}`, which requires only
+`view`: it resizes nothing, so a guest role never needs `resize`. The tunnel clamps the size,
+scopes it to a live subscription, throttles it (each one interrupts the owner) and forwards it
+to the renderer, which performs the resize itself on accept. Declining sends nothing back, so
+a refusal reaches the guest as silence and their view is left exactly as it was.
+
 **Ending states get distinct copy**, driven by a reason enum the agent already knows —
 `revoked` / `expired` / `session_ended` / `machine_unlinked`. Telling a guest *"Will revoked
 your access"* when Will merely closed a terminal is a false, socially loaded story.
