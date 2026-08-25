@@ -10,7 +10,7 @@
 // Pinned against the published RFC 8291 §5 vector in the tests, which makes
 // this verified interop rather than a round trip that agrees with itself.
 
-import { createCipheriv, createECDH, hkdfSync, randomBytes, timingSafeEqual } from 'crypto';
+import { createCipheriv, createECDH, hkdfSync, randomBytes } from 'crypto';
 
 /** One record, and every payload we send fits in it. */
 export const RECORD_SIZE = 4096;

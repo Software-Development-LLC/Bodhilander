@@ -15,6 +15,13 @@ export type AttentionState = 'waiting' | 'error';
 /** Matches the LAN dispatcher. See the module header before changing it. */
 export const ATTENTION_DEBOUNCE_MS = 30_000;
 
+/**
+ * Spent windows awaiting a possible `push:throttled`, oldest first. A burst
+ * sends everything in one tick, before any nack returns, so one slot would hand
+ * back one window and lose the rest. Bounded: a relay that never nacks.
+ */
+export const MAX_SPENT_WINDOWS = 64;
+
 /** Soft cap on the in-memory window map; eviction drops the oldest entry. */
 export const MAX_DEBOUNCE_ENTRIES = 256;
 

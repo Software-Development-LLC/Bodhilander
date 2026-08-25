@@ -392,9 +392,11 @@ Two ways past a string check, one of which needed no cleverness at all:
 What is still open: a hostname that *resolves* to a private address. Closing it
 needs resolution-time filtering the runtime does not expose, so it is recorded
 rather than papered over: **do not treat the relay's outbound egress as
-trusted.** Deliveries also carry a 10s timeout, because a deliberately slow
-endpoint otherwise pins a socket and stalls the rest of its batch — including
-the reap re-sync that runs after it.
+trusted.** Each delivery carries a 10s timeout — **per item, not per batch**,
+because the items are sent in sequence: a fan-out of dead-slow endpoints can
+still delay the reap re-sync by the sum of them. Bounding the batch would need
+the sends to run concurrently, which is a change to make deliberately rather
+than as a side effect of a timeout.
 
 ### Debounce, and what is out of scope
 
@@ -421,10 +423,19 @@ sheet says notifications are on, and nothing will ever arrive. `/api/machines`
 now carries `pushCapable` for owned machines — true, false, or null when the
 agent is offline and the relay genuinely does not know — and the client says so.
 
+**The agent holds subscription keys only while connected.** Every path that
+ends a connection releases them — including the ordinary socket drop, which does
+NOT run the client's teardown and so kept them until a spec said otherwise. The
+relay re-states the list on the next `agent:ready`, so nothing is lost, and a
+revocation heard while the agent was away cannot be acted on from a stale copy.
+
 **A refused batch is nacked.** The relay's per-machine rate limit used to drop
 silently, which spent the agent's 30s debounce on a notification that never
 left; those sessions then stayed quiet until their next state change. The relay
-sends `push:throttled` and the agent reopens the window it spent.
+sends `push:throttled` and the agent reopens the window it spent. The agent
+queues those windows rather than holding one: a burst runs every send in a
+single tick, long before the first nack returns, so one slot would hand back one
+window and lose the rest — which is the fleet-restart case this exists for.
 
 **Guests do not get push.** Subscriptions are per user and the relay fans out to
 the machine *owner* only. A guest's client still has the poll, the sorting and

@@ -62,7 +62,7 @@ export function isAllowedPushEndpoint(raw: string): boolean {
   // matched. `URL` preserves it, so `metadata.google.internal.` resolves to the
   // same host as the name the suffix list below refuses — and `localhost.` also
   // slips the bare-name check, because it now contains a dot.
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  const host = url.hostname.toLowerCase().replace(/\.+$/, '');
   if (!host.includes('.')) return false; // bare `localhost`, container names
   if (host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localhost')) return false;
   // Address literals, v4 and v6. `URL` gives IPv6 hosts in brackets, and

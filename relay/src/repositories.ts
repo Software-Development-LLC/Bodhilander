@@ -148,6 +148,7 @@ export interface Repositories {
   setKv(key: string, value: string): void;
   /** Insert-if-absent, returning whatever is stored afterwards. */
   setKvIfAbsent(key: string, value: string): string;
+  deleteKv(key: string): void;
 
   /**
    * Record a browser's push subscription, replacing the keys if that endpoint
@@ -695,6 +696,10 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
         ).run(row.id, row.user_id, row.endpoint, row.p256dh, row.auth, row.created_at);
         return { subscription: row, displacedUserId };
       })();
+    },
+
+    deleteKv(key) {
+      db.query('DELETE FROM kv WHERE key = ?').run(key);
     },
 
     listPushSubscriptions(userId) {

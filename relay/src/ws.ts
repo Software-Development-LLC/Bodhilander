@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from 'bun';
 import type { Logger } from './logger';
-import type { MachineGrant, Repositories } from './repositories';
+import type { Machine, MachineGrant, Repositories } from './repositories';
 import { fromBase64, randomToken, verifyEd25519 } from './crypto';
 import { buildAgentAuthMessage, CAP_GRANTS_V1, CAP_PUSH_V1 } from './protocol';
 import type { RateLimiter } from './rate-limit';
@@ -186,14 +186,9 @@ export function createGateway(ctx: WsGatewayContext) {
       send(ws, { type: 'pong' });
       return;
     }
-    // Route an opaque frame back to a specific client. The target must be bound
-    // to THIS agent's machine — without that check an agent could name any
-    // client id in the table and inject frames into someone else's channel.
     if (msg.type === 'to-client' && typeof msg.clientId === 'string') {
-      const client = clients.get(msg.clientId);
-      if (client && (client.data as ClientSocketData).machineId === data.machineId) {
-        send(client, { type: 'from-agent', payload: msg.payload });
-      }
+      const client = ownClient(msg.clientId, data.machineId);
+      if (client) send(client, { type: 'from-agent', payload: msg.payload });
       return;
     }
 
@@ -210,11 +205,18 @@ export function createGateway(ctx: WsGatewayContext) {
     // Cut one live client without revoking its grant — used for pause and for
     // ending a session the guest was watching.
     if (msg.type === 'client:kick' && typeof msg.clientId === 'string') {
-      const client = clients.get(msg.clientId);
-      if (client && (client.data as ClientSocketData).machineId === data.machineId) {
-        client.close(4403, typeof msg.reason === 'string' ? msg.reason : 'ended');
-      }
+      ownClient(msg.clientId, data.machineId)?.close(4403, typeof msg.reason === 'string' ? msg.reason : 'ended');
     }
+  }
+
+  /**
+   * A live client socket, but only if bound to `machineId`. Without this an
+   * agent could name any client id and reach into someone else's channel.
+   */
+  function ownClient(clientId: string, machineId: string | null): ServerWebSocket<SocketData> | null {
+    const client = clients.get(clientId);
+    if (!client || (client.data as ClientSocketData).machineId !== machineId) return null;
+    return client;
   }
 
   /** Prove which machine is speaking, then publish the socket and sync it. */
@@ -242,12 +244,23 @@ export function createGateway(ctx: WsGatewayContext) {
       ws.close(4404, 'unknown machine');
       return;
     }
+    // Advertised capabilities. Only strings, and only after the signature has
+    // proven who is speaking — an unauthenticated socket must not be able to
+    // claim `grants:v1` for a machine it does not control.
+    const caps = Array.isArray(msg.caps) ? msg.caps.filter((c): c is string => typeof c === 'string') : [];
+    publishAgent(ws, data, machine, caps);
+  }
+
+  /** Adopt a proven agent socket as the live one for its machine, and sync it. */
+  function publishAgent(
+    ws: ServerWebSocket<SocketData>,
+    data: AgentSocketData,
+    machine: Machine,
+    caps: string[],
+  ): void {
     data.authed = true;
     data.machineId = machine.id;
-    // Advertised capabilities. Only strings, and only after the signature
-    // has proven who is speaking — an unauthenticated socket must not be
-    // able to claim `grants:v1` for a machine it does not control.
-    data.caps = Array.isArray(msg.caps) ? msg.caps.filter((c): c is string => typeof c === 'string') : [];
+    data.caps = caps;
     if (data.authTimer) {
       clearTimeout(data.authTimer);
       data.authTimer = null;
@@ -286,7 +299,6 @@ export function createGateway(ctx: WsGatewayContext) {
     // and refreshed whenever the set changes — the agent never asks.
     sendPushSync(ws, machine.user_id);
     logger.info('agent online', { machineId: machine.id });
-    return;
   }
 
   /**
@@ -524,70 +536,7 @@ export function createGateway(ctx: WsGatewayContext) {
     }
     // Open a channel to one of the user's machines.
     if (msg.type === 'client:open' && typeof msg.machineId === 'string') {
-      // One channel per socket. Re-opening would strand the agent's state for
-      // this client id and could re-point the socket at a different machine.
-      if (data.machineId) {
-        ws.close(4400, 'channel already open');
-        return;
-      }
-      const access = repos.getMachineAccess(msg.machineId, data.userId);
-      if (access.relation === 'none') {
-        // A former guest is told which ending their access met — anything
-        // else sends their client into a silent reconnect loop against a
-        // dead grant. A stranger still gets the unrevealing answer.
-        ws.close(4403, repos.endedGrantReason(msg.machineId, data.userId) ?? 'not your machine');
-        return;
-      }
-      const machine = access.machine;
-      const agent = agents.get(machine.id);
-      if (!agent) {
-        send(ws, { type: 'agent:offline' });
-        return;
-      }
-
-      // Version skew is a hard requirement, not an open question. A desktop
-      // build that predates grant enforcement reads only `clientX25519Pub`
-      // from this payload and ignores everything else — so handing it a guest
-      // would grant that guest every command, on a machine whose owner never
-      // opted into sharing. The relay redeploys independently of shipped
-      // Electron builds, so this will genuinely happen; refuse instead.
-      if (access.relation === 'grantee' && !agentSupportsGrants(agent)) {
-        logger.warn('refusing a guest channel to an agent without grant support', { machineId: machine.id });
-        send(ws, { type: 'share:unsupported' });
-        return;
-      }
-
-      data.machineId = machine.id;
-      // Remember which grant let this socket in, so a revocation can cut it
-      // immediately instead of waiting for the guest to reconnect.
-      data.grantId = access.relation === 'grantee' ? access.grant.id : null;
-      if (access.relation === 'grantee') repos.touchGrant(access.grant.id);
-      clients.set(data.clientId, ws);
-      const principalUser = repos.getUser(data.userId);
-      // `principal` is relay-ASSERTED, and named so no branch downstream reads
-      // it as authorization. The agent treats it as a claim to check a
-      // certificate against, never as a grant in itself.
-      //
-      // `userId` only, for now: the GitHub login is fetched during OAuth and
-      // discarded (`displayName` prefers the profile name), so persisting it
-      // needs a column and an auth change. That lands with M5.2, alongside the
-      // approval modal and addressed invites that actually read it — a field
-      // that is always null now would just invite a downstream branch that
-      // never fires.
-      send(agent, {
-        type: 'client:open',
-        clientId: data.clientId,
-        principal: {
-          userId: data.userId,
-          // The handle is what the approval prompt and the presence surfaces
-          // show. A display name is free text the account holder chooses, so
-          // it is carried only as a secondary label, never as the identity.
-          githubLogin: principalUser?.github_login ?? null,
-          displayName: principalUser?.display_name ?? null,
-        },
-        payload: msg.payload,
-      });
-      send(ws, { type: 'channel:open', clientId: data.clientId });
+      openClientChannel(ws, data, msg.machineId, msg.payload);
       return;
     }
     // Route an opaque frame to this client's agent.
@@ -595,5 +544,70 @@ export function createGateway(ctx: WsGatewayContext) {
       const agent = agents.get(data.machineId);
       if (agent) send(agent, { type: 'from-client', clientId: data.clientId, payload: msg.payload });
     }
+  }
+
+  /** Bind one client socket to a machine and introduce it to that agent. */
+  function openClientChannel(
+    ws: ServerWebSocket<SocketData>,
+    data: ClientSocketData,
+    machineId: string,
+    payload: unknown,
+  ): void {
+    // One channel per socket. Re-opening would strand the agent's state for
+    // this client id and could re-point the socket at a different machine.
+    if (data.machineId) {
+      ws.close(4400, 'channel already open');
+      return;
+    }
+    const access = repos.getMachineAccess(machineId, data.userId);
+    if (access.relation === 'none') {
+      // A former guest is told which ending their access met — anything
+      // else sends their client into a silent reconnect loop against a
+      // dead grant. A stranger still gets the unrevealing answer.
+      ws.close(4403, repos.endedGrantReason(machineId, data.userId) ?? 'not your machine');
+      return;
+    }
+    const machine = access.machine;
+    const agent = agents.get(machine.id);
+    if (!agent) {
+      send(ws, { type: 'agent:offline' });
+      return;
+    }
+
+    // Version skew is a hard requirement, not an open question. A build that
+    // predates grant enforcement reads only `clientX25519Pub` and ignores the
+    // rest, so handing it a guest would grant that guest every command on a
+    // machine whose owner never opted into sharing. The relay redeploys
+    // independently of shipped Electron builds; refuse instead.
+    if (access.relation === 'grantee' && !agentSupportsGrants(agent)) {
+      logger.warn('refusing a guest channel to an agent without grant support', { machineId: machine.id });
+      send(ws, { type: 'share:unsupported' });
+      return;
+    }
+
+    data.machineId = machine.id;
+    // Remember which grant let this socket in, so a revocation can cut it
+    // immediately instead of waiting for the guest to reconnect.
+    data.grantId = access.relation === 'grantee' ? access.grant.id : null;
+    if (access.relation === 'grantee') repos.touchGrant(access.grant.id);
+    clients.set(data.clientId, ws);
+    const principalUser = repos.getUser(data.userId);
+    // `principal` is relay-ASSERTED, and named so no branch downstream reads it
+    // as authorization. The agent treats it as a claim to check a certificate
+    // against, never as a grant in itself.
+    send(agent, {
+      type: 'client:open',
+      clientId: data.clientId,
+      principal: {
+        userId: data.userId,
+        // The handle is what the approval prompt and the presence surfaces
+        // show. A display name is free text the account holder chooses, so
+        // it is carried only as a secondary label, never as the identity.
+        githubLogin: principalUser?.github_login ?? null,
+        displayName: principalUser?.display_name ?? null,
+      },
+      payload,
+    });
+    send(ws, { type: 'channel:open', clientId: data.clientId });
   }
 }

@@ -93,24 +93,41 @@ export function subscriptionKeys(sub: PushSubscriptionLike): { p256dh: string; a
  */
 export const REGISTRATION_TIMEOUT_MS = 4000;
 
-/** Sentinel for the race below; never returned to a caller. */
+/** Sentinel for the race below; never leaves this module. */
 const TIMED_OUT = Symbol('registration timed out');
+
+/**
+ * The active registration, or null if it does not arrive in time. EVERY caller
+ * goes through here: `serviceWorker.ready` can stay pending for the life of the
+ * page, and awaiting it bare makes a control that never comes back.
+ */
+async function readyRegistration(deps: PushDeps): Promise<{ pushManager: PushManagerLike } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const registration = await Promise.race([
+      deps.registration(),
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), deps.registrationTimeoutMs ?? REGISTRATION_TIMEOUT_MS);
+      }),
+    ]);
+    return registration === TIMED_OUT ? null : registration;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** What the toggle should show right now. */
 export async function currentPushState(deps: PushDeps): Promise<PushState> {
   if (!deps.supported) return 'unsupported';
   if (deps.permission() === 'denied') return 'denied';
+  const registration = await readyRegistration(deps);
+  // No worker, so nothing can arrive. Offered as "off" rather than "on":
+  // /sw.js can 404 mid-deploy, the first load can be offline, or the browser
+  // can refuse registration outright.
+  if (!registration) return 'off';
   try {
-    const registration = await Promise.race([
-      deps.registration(),
-      new Promise<typeof TIMED_OUT>((resolve) =>
-        setTimeout(() => resolve(TIMED_OUT), deps.registrationTimeoutMs ?? REGISTRATION_TIMEOUT_MS),
-      ),
-    ]);
-    // No worker, so nothing can arrive. Offered as "off" rather than "on":
-    // /sw.js can 404 mid-deploy, the first load can be offline, or the browser
-    // can refuse registration outright.
-    if (registration === TIMED_OUT) return 'off';
     return (await registration.pushManager.getSubscription()) ? 'on' : 'off';
   } catch {
     return 'off';
@@ -150,8 +167,12 @@ export async function enablePush(deps: PushDeps): Promise<PushResult> {
     return { ok: false, reason: 'unavailable' };
   }
 
+  const registration = await readyRegistration(deps);
+  // The worker is what receives the push, so without one there is nothing to
+  // subscribe: better a plain failure than a subscription nothing can deliver.
+  if (!registration) return { ok: false, reason: 'failed' };
+
   try {
-    const registration = await deps.registration();
     const existing = await registration.pushManager.getSubscription();
     // Reuse rather than re-subscribe: a fresh subscription would strand the old
     // endpoint in the relay's table until it happened to come back 410.
@@ -193,8 +214,12 @@ export async function enablePush(deps: PushDeps): Promise<PushResult> {
  */
 export async function disablePush(deps: PushDeps): Promise<boolean> {
   if (!deps.supported) return true;
+  // Bounded, because sign-out awaits this before ending the session. An
+  // unbounded wait here would put a hang in front of the security-relevant act
+  // — the same reason the logout call itself is bounded.
+  const registration = await readyRegistration(deps);
+  if (!registration) return false;
   try {
-    const registration = await deps.registration();
     const sub = await registration.pushManager.getSubscription();
     if (!sub) return true;
 
@@ -241,6 +266,70 @@ export function consumePushTarget(ctx: {
   const rest = params.toString();
   ctx.replace(rest ? `${ctx.pathname}?${rest}` : ctx.pathname);
   return { machineId, sessionId };
+}
+
+/** Everything the notifications control should show for a given state. */
+export interface SwitchView {
+  checked: boolean;
+  /**
+   * Nothing this control can do. Expressed with `aria-disabled`, never the
+   * native attribute: a disabled button takes no focus, so the person who most
+   * needs the sentence explaining why could never reach it.
+   */
+  inert: boolean;
+  note: string;
+  /** Show "this desktop is too old to send notifications". */
+  stale: boolean;
+}
+
+/** Copy for each settled state. `on` says what it means, not just that it is on. */
+export const PUSH_STATE_NOTE: Record<PushState, string> = {
+  on: 'On for this browser. The session name is encrypted end-to-end — the relay only forwards it.',
+  off: 'Off for this browser.',
+  denied: pushFailureCopy('denied'),
+  unsupported: pushFailureCopy('unsupported'),
+};
+
+/**
+ * What the control looks like. Pulled out of main.ts because the last two
+ * defects in this feature were both in that file, which no spec can reach.
+ */
+export function switchView(
+  state: PushState,
+  opts: { pushCapable?: boolean | null; note?: string } = {},
+): SwitchView {
+  return {
+    checked: state === 'on',
+    inert: state === 'denied' || state === 'unsupported',
+    note: opts.note ?? PUSH_STATE_NOTE[state],
+    // Only worth saying when notifications are actually on: a machine that is
+    // offline reports null, which is "we do not know", not a problem.
+    stale: state === 'on' && opts.pushCapable === false,
+  };
+}
+
+/** The elements the control is made of, so this file needs no selectors. */
+export interface SwitchElements {
+  toggle: { setAttribute(k: string, v: string): void; removeAttribute(k: string): void; disabled: boolean };
+  note: { textContent: string | null };
+  stale?: { classList: { toggle(name: string, force: boolean): void } } | null;
+}
+
+/**
+ * Put a view on the control. Lives here, not in main.ts, because both defects
+ * this feature shipped were in that file and no spec can reach it.
+ */
+export function applySwitchView(els: SwitchElements, view: SwitchView): void {
+  els.toggle.setAttribute('aria-checked', String(view.checked));
+  els.toggle.setAttribute('aria-disabled', String(view.inert));
+  // Cleared on EVERY paint. The native attribute is set only while a tap is in
+  // flight; leaving it set stops the control responding to anything at all,
+  // and a disabled button takes no focus either — so an inert state expressed
+  // that way also hides the sentence explaining itself.
+  els.toggle.disabled = false;
+  els.toggle.removeAttribute('aria-busy');
+  els.note.textContent = view.note;
+  els.stale?.classList.toggle('hidden', !view.stale);
 }
 
 /** Copy for every way enabling can fail. Never guesses, never blames. */

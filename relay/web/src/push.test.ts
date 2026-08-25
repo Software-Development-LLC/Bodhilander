@@ -6,6 +6,9 @@
 import { describe, expect, test } from 'bun:test';
 import { MACHINE_PREF_KEY } from './account';
 import {
+  applySwitchView,
+  PUSH_STATE_NOTE,
+  switchView,
   consumePushTarget,
   currentPushState,
   decodeVapidKey,
@@ -172,6 +175,20 @@ describe('currentPushState', () => {
   test('reads as off — not on — when the worker never became ready', async () => {
     const h = harness({ registration: () => Promise.reject(new Error('no active worker')) });
     expect(await currentPushState(h.deps)).toBe('off');
+  });
+
+  test.each([
+    ['enablePush', (d: PushDeps) => enablePush(d)],
+    ['disablePush', (d: PushDeps) => disablePush(d)],
+  ])('%s settles too, rather than hanging on a worker that never arrives', async (_label, run) => {
+    // Every caller goes through the bounded helper. `disablePush` matters most:
+    // sign-out awaits it BEFORE ending the session, so an unbounded wait here
+    // puts a hang in front of the security-relevant act.
+    const h = harness({ permission: 'granted', registration: () => new Promise(() => {}) });
+    const started = Date.now();
+    const result = await run({ ...h.deps, registrationTimeoutMs: 30 });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(result).not.toEqual({ ok: true });
   });
 
   test('settles even though serviceWorker.ready never rejects OR resolves', async () => {
@@ -402,5 +419,106 @@ describe('pushFailureCopy', () => {
     expect(pushFailureCopy('denied')).toContain('site settings');
     // And the iOS case has to name the actual step.
     expect(pushFailureCopy('unsupported')).toContain('Home Screen');
+  });
+});
+
+describe('switchView', () => {
+  test('reflects on and off, and stays operable in both', () => {
+    expect(switchView('on')).toEqual({ checked: true, inert: false, note: PUSH_STATE_NOTE.on, stale: false });
+    expect(switchView('off')).toEqual({ checked: false, inert: false, note: PUSH_STATE_NOTE.off, stale: false });
+  });
+
+  test.each(['denied', 'unsupported'] as const)('is inert but never checked for %s', (state) => {
+    const view = switchView(state);
+    expect(view.inert).toBe(true);
+    expect(view.checked).toBe(false);
+    // Inert is expressed with aria-disabled, not the native attribute: a
+    // disabled button takes no focus, so the person who most needs the
+    // sentence below could never reach it.
+    expect(view.note).toBe(PUSH_STATE_NOTE[state]);
+  });
+
+  test('warns about a desktop too old to send, but only while notifications are on', () => {
+    expect(switchView('on', { pushCapable: false }).stale).toBe(true);
+    expect(switchView('off', { pushCapable: false }).stale).toBe(false);
+    // Null is "the machine is offline, we do not know" — not a problem to raise.
+    expect(switchView('on', { pushCapable: null }).stale).toBe(false);
+    expect(switchView('on', { pushCapable: true }).stale).toBe(false);
+  });
+
+  test('an explicit note wins over the state copy', () => {
+    expect(switchView('off', { note: 'Asking your browser…' }).note).toBe('Asking your browser…');
+  });
+});
+
+// A DOM, however it can be had. The ROOT suite preloads happy-dom via
+// bunfig.toml; the relay suite also runs standalone from `relay/`, where it does
+// not — so it is registered here rather than assumed, and the block skips
+// honestly if it cannot be.
+let hasDom = typeof document !== 'undefined';
+if (!hasDom) {
+  try {
+    const { GlobalRegistrator } = await import('@happy-dom/global-registrator');
+    GlobalRegistrator.register();
+    hasDom = typeof document !== 'undefined';
+  } catch {
+    hasDom = false;
+  }
+}
+
+describe.skipIf(!hasDom)('the notifications control, driven as rendered', () => {
+  /** The switch exactly as `notificationsSection()` emits it. */
+  function render() {
+    document.body.innerHTML = `
+      <button class="switch" id="pushToggle" role="switch" aria-checked="false" aria-labelledby="pushLabel"
+        aria-disabled="true" aria-busy="true"><span class="track"></span></button>
+      <div class="pref-note" id="pushNote" role="status">Checking…</div>
+      <div class="banner warn hidden" id="pushStale"></div>`;
+    return document.getElementById('pushToggle') as HTMLButtonElement;
+  }
+
+  /** Exactly what `paintNotifications` runs — the real function, not a copy. */
+  function paint(toggle: HTMLButtonElement, state: Parameters<typeof switchView>[0]) {
+    applySwitchView(
+      {
+        toggle,
+        note: document.getElementById('pushNote')!,
+        stale: document.getElementById('pushStale'),
+      },
+      switchView(state),
+    );
+  }
+
+  test('a paint re-enables a control left disabled by an in-flight tap', () => {
+    // The regression this pins. The handler sets `disabled` while the request
+    // is in flight; if a paint does not clear it the control is dead for good,
+    // because a `<button disabled>` fires no click and takes no focus.
+    const toggle = render();
+    toggle.disabled = true; // mid-tap: "Asking your browser…"
+
+    paint(toggle, 'off');
+
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute('aria-disabled')).toBe('false');
+    let clicks = 0;
+    toggle.onclick = () => { clicks += 1; };
+    toggle.click();
+    expect(clicks).toBe(1);
+  });
+
+  test('the rendered markup itself never ships the native disabled attribute', () => {
+    const toggle = render();
+    expect(toggle.hasAttribute('disabled')).toBe(false);
+    expect(toggle.getAttribute('aria-disabled')).toBe('true'); // until the first paint
+  });
+
+  test('stays focusable and clickable even when inert, so the reason can be read', () => {
+    const toggle = render();
+    toggle.disabled = true;
+    paint(toggle, 'denied');
+    expect(toggle.getAttribute('aria-disabled')).toBe('true');
+    // Not the native attribute — that is what would hide the explanation from
+    // a screen reader.
+    expect(toggle.disabled).toBe(false);
   });
 });

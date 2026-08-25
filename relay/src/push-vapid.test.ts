@@ -76,12 +76,20 @@ describe('VAPID keys', () => {
     expect(await reopened.publicKey()).toBe(first);
   });
 
-  test('a corrupt stored pair is replaced rather than fatal', async () => {
+  test('a corrupt stored pair is replaced, and the replacement is STORED', async () => {
     const { repos } = ctx();
     repos.setKv(VAPID_KV_KEY, 'not json');
     const vapid = createVapid({ config: base, repos, logger });
     const key = await vapid.publicKey();
     expect(Buffer.from(key, 'base64url').length).toBe(65);
+
+    // The row has to be replaced, not merely ignored. The write is
+    // insert-if-absent, so a corrupt row left in place would swallow every
+    // replacement — minting a fresh unstored key on each restart and orphaning
+    // every subscription, forever. Asserting "65 bytes" alone missed that.
+    expect(repos.getKv(VAPID_KV_KEY)).toContain(key);
+    const restarted = createVapid({ config: base, repos, logger });
+    expect(await restarted.publicKey()).toBe(key);
   });
 
   test('an environment-supplied pair wins, and nothing is written to the database', async () => {

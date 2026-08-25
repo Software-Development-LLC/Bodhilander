@@ -13,7 +13,9 @@ import {
   disablePush,
   enablePush,
   isPushSupported,
+  applySwitchView,
   pushFailureCopy,
+  switchView,
   type PushDeps,
   type PushManagerLike,
   type PushState,
@@ -1243,7 +1245,8 @@ function notificationsSection(): string {
         <div class="pref-name" id="pushLabel">Notifications</div>
         <div class="pref-sub">Get a push when a session needs you — even with this closed.</div>
       </div>
-      <button class="switch" id="pushToggle" role="switch" aria-checked="false" aria-labelledby="pushLabel" disabled>
+      <button class="switch" id="pushToggle" role="switch" aria-checked="false" aria-labelledby="pushLabel"
+        aria-disabled="true" aria-busy="true">
         <span class="track" aria-hidden="true"><span class="knob"></span></span>
       </button>
     </div>
@@ -1254,30 +1257,15 @@ function notificationsSection(): string {
   </div>`;
 }
 
-/** Copy for each settled state. `on` says what it means, not just that it is on. */
-const PUSH_STATE_NOTE: Record<PushState, string> = {
-  on: 'On for this browser. The session name is encrypted end-to-end — the relay only forwards it.',
-  off: 'Off for this browser.',
-  denied: pushFailureCopy('denied'),
-  unsupported: pushFailureCopy('unsupported'),
-};
-
 function paintNotifications(state: PushState, note?: string): void {
   const toggle = $<HTMLButtonElement>('#pushToggle');
   const noteEl = $('#pushNote');
   if (!toggle || !noteEl) return; // the sheet was closed mid-flight
 
-  toggle.setAttribute('aria-checked', String(state === 'on'));
-  // `denied` and `unsupported` are both "there is nothing this control can do".
-  // Kept FOCUSABLE with aria-disabled rather than the disabled attribute: a
-  // disabled button is skipped by a screen reader, so the one person who most
-  // needs the sentence explaining why could never reach it.
-  const inert = state === 'denied' || state === 'unsupported';
-  toggle.setAttribute('aria-disabled', String(inert));
-  noteEl.textContent = note ?? PUSH_STATE_NOTE[state];
-
-  const stale = $('#pushStale');
-  if (stale) stale.classList.toggle('hidden', !(state === 'on' && app.machine?.pushCapable === false));
+  applySwitchView(
+    { toggle, note: noteEl, stale: $('#pushStale') },
+    switchView(state, { pushCapable: app.machine?.pushCapable, note }),
+  );
 }
 
 function wireNotifications(): void {
@@ -1289,8 +1277,9 @@ function wireNotifications(): void {
   toggle.onclick = async () => {
     // Focusable but inert: `denied` and `unsupported` are states this control
     // cannot change, and clicking must not pretend otherwise.
-    if (toggle.getAttribute('aria-disabled') === 'true') return;
+    if (toggle.getAttribute('aria-disabled') === 'true' || toggle.disabled) return;
     const turningOn = toggle.getAttribute('aria-checked') !== 'true';
+    // Only for the moment the request is in flight; every paint clears it.
     toggle.disabled = true;
     const noteEl = $('#pushNote');
     if (noteEl) noteEl.textContent = turningOn ? 'Asking your browser…' : 'Turning off…';

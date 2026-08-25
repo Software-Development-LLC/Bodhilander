@@ -129,7 +129,8 @@ export function createVapid(ctx: {
         logger.info('minted a VAPID keypair and stored it');
       }
     } catch (err) {
-      logger.error('failed to persist the VAPID keypair — subscriptions will not survive a restart', {
+      logger.error('could not settle on a stored VAPID keypair — this one is in memory only, so every ' +
+        'subscription made against it is orphaned at the next restart', {
         err: err instanceof Error ? err.message : String(err),
       });
     }
@@ -150,7 +151,12 @@ export function createVapid(ctx: {
     } catch {
       /* fall through — a corrupt row is replaced rather than fatal */
     }
-    logger.warn('the stored VAPID keypair is unreadable — minting a replacement');
+    // DELETED, not just ignored. The write below is insert-if-absent, so a row
+    // left in place would swallow every replacement and the read-back would
+    // fail again — minting a fresh unstored key on every restart, orphaning
+    // every subscription, forever.
+    repos.deleteKv(VAPID_KV_KEY);
+    logger.warn('the stored VAPID keypair was unreadable — dropped it and minting a replacement');
     return null;
   }
 

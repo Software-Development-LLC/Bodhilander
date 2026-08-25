@@ -9,47 +9,55 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createECDH } from 'crypto';
 
-// --- the module graph relay-client pulls in ------------------------------
+// --- what is replaced, and what deliberately is not -------------------------
+//
+// `mock.module` is process-wide and every neighbouring spec here uses none, so
+// the modules they test are left ALONE: `grants`, `grant-sql` and
+// `session-tunnel` are real. Only leaves are replaced.
 
-// Faithful supersets and no more: each stub exposes what relay-client reaches
-// for. Paths resolve relative to THIS file, a level deeper than the subject.
-// `--isolate` keeps them out of every other file, which is what makes mocking
-// a graph this size acceptable at all.
+// Measured bare, without `--isolate`: this directory was 54 failures with a
+// draft that stubbed the shared modules, and is 0 now.
 
-const prefs = new Map<string, string>();
+import { mkdtempSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const userData = mkdtempSync(join(tmpdir(), 'relay-client-push-'));
+const noop = () => {};
+const bus = { on: noop, once: noop, off: noop, removeAllListeners: noop, handle: noop, send: noop, invoke: async () => undefined };
 mock.module('electron', () => ({
-  powerSaveBlocker: { start: () => 1, stop: () => {}, isStarted: () => true },
+  // A SUPERSET, not just what relay-client reaches for. `mock.module` is
+  // process-wide: a narrow stub here means any other file that imports a name
+  // this object lacks fails to load, in a run that never mentions push.
+  app: { getPath: () => userData, getName: () => 'bodhilander', getVersion: () => '0.0.0', isPackaged: false, on: noop, whenReady: async () => undefined, quit: noop },
+  powerSaveBlocker: { start: () => 1, stop: noop, isStarted: () => true },
+  safeStorage: { isEncryptionAvailable: () => false, encryptString: (s: string) => Buffer.from(s), decryptString: (b: Buffer) => b.toString() },
+  ipcMain: bus,
+  ipcRenderer: bus,
+  contextBridge: { exposeInMainWorld: noop },
+  shell: { openExternal: async () => undefined, openPath: async () => '', showItemInFolder: noop },
+  dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }), showMessageBox: async () => ({ response: 0 }) },
+  clipboard: { writeText: noop, readText: () => '' },
+  nativeTheme: { shouldUseDarkColors: false, on: noop },
+  crashReporter: { start: noop },
+  powerMonitor: { on: noop },
+  Menu: { buildFromTemplate: () => ({}), setApplicationMenu: noop },
+  Tray: class { setToolTip() {} setContextMenu() {} on() {} destroy() {} },
+  BrowserWindow: class { static getAllWindows() { return []; } webContents = bus; on() {} },
+  Notification: class { show() {} on() {} static isSupported() { return false; } },
 }));
-mock.module('electron-log', () => ({
-  default: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
-}));
+
+// The rest of relay-client's graph reaches a real SQLite file through
+// `getDatabase()`, which needs a native binding this runner does not build. The
+// leaf modules are replaced, never the ones a neighbouring spec tests for real:
+// `grants`, `grant-sql` and `session-tunnel` stay untouched on purpose.
+const prefStore = new Map<string, string>();
+mock.module('../../../database', () => ({ getDatabase: () => ({}), closeDatabase: () => {} }));
 mock.module('../../../repositories/preferences', () => ({
-  getPreference: (k: string) => prefs.get(k) ?? null,
-  setPreference: (k: string, v: string) => { prefs.set(k, v); },
-  deletePreference: (k: string) => { prefs.delete(k); },
+  getPreference: (k: string) => prefStore.get(k) ?? null,
+  setPreference: (k: string, v: string) => { prefStore.set(k, v); },
+  deletePreference: (k: string) => { prefStore.delete(k); },
 }));
-mock.module('../../../repositories/sessions', () => ({ getAllSessions: () => [] }));
-mock.module('../../../database', () => ({ getDatabase: () => ({}) }));
-mock.module('../../../pty-manager', () => ({
-  ptyManager: { getSession: () => undefined, scrollbackMark: () => null },
-}));
-mock.module('../relay-identity', () => ({
-  ensureIdentity: () => ({ ed25519Pub: 'ZWQ=', x25519Pub: 'eA==' }),
-  identityFingerprint: () => 'fp',
-  signWithIdentity: () => Buffer.from('sig'),
-}));
-mock.module('../session-tunnel', () => ({
-  SessionTunnel: class {
-    attachedGuests() { return []; }
-    closeAll() {}
-    revokeGrant() {}
-    noteShareMarks() {}
-    open() {}
-    frame() {}
-    closeClient() {}
-  },
-}));
-mock.module('../session-tunnel-deps', () => ({ defaultDeps: () => ({}) }));
 mock.module('../grant-store', () => ({
   GRANT_PREF: { ownerUserId: 'relay.ownerUserId' },
   clearAllGrants: () => {},
@@ -62,7 +70,11 @@ mock.module('../grant-store', () => ({
   revokeGrant: () => {},
   setOwnerUserId: () => {},
 }));
-mock.module('../grant-sql', () => ({ getInviteScope: () => null, recordInviteScope: () => {} }));
+mock.module('../relay-identity', () => ({
+  ensureIdentity: () => ({ ed25519Pub: 'ZWQ=', x25519Pub: 'eA==' }),
+  identityFingerprint: () => 'fp',
+  signWithIdentity: () => Buffer.from('sig'),
+}));
 
 /** Sockets this test opened, so each one's traffic can be read back. */
 const sockets: FakeSocket[] = [];
@@ -88,6 +100,11 @@ class FakeSocket {
 mock.module('ws', () => ({ WebSocket: FakeSocket }));
 
 const { RelayClient } = await import('../relay-client');
+
+const prefs = {
+  clear() { prefStore.clear(); },
+  set(key: string, value: string) { prefStore.set(key, value); },
+};
 
 afterAll(() => {
   mock.restore();
@@ -294,22 +311,58 @@ describe('push:throttled', () => {
     client.stop();
   });
 
-  test('gives back only the window it actually spent', () => {
+  test('gives every refused window back, not just the most recent', () => {
+    const { client, socket } = onlineClient();
+    socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
+    socket.sent.length = 0;
+
+    // A fleet restart: every notifyAttention runs in one tick, long before any
+    // nack comes back. A single slot returns one window and loses the other 9.
+    const ids = Array.from({ length: 10 }, (_, i) => `s-${i}`);
+    for (const sessionId of ids) client.notifyAttention({ ...EVENT, sessionId });
+    expect(pushSends(socket).length).toBe(10);
+
+    for (let i = 0; i < 10; i++) socket.deliver({ type: 'push:throttled' });
+
+    socket.sent.length = 0;
+    for (const sessionId of ids) client.notifyAttention({ ...EVENT, sessionId });
+    // All ten reopened. Without the queue this was one, and the other nine
+    // stayed both undelivered AND debounced for 30 seconds.
+    expect(pushSends(socket).length).toBe(10);
+    client.stop();
+  });
+
+  test('hands back one window per nack, no more', () => {
     const { client, socket } = onlineClient();
     socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
     socket.sent.length = 0;
 
     client.notifyAttention({ ...EVENT, sessionId: 'a' });
     client.notifyAttention({ ...EVENT, sessionId: 'b' });
-    socket.deliver({ type: 'push:throttled' });
+    socket.deliver({ type: 'push:throttled' }); // one refusal, one window back
 
     socket.sent.length = 0;
-    client.notifyAttention({ ...EVENT, sessionId: 'b' }); // reopened
-    client.notifyAttention({ ...EVENT, sessionId: 'a' }); // still debounced
-    const items = pushSends(socket);
-    expect(items.length).toBe(1);
+    client.notifyAttention({ ...EVENT, sessionId: 'a' }); // FIFO: the older one
+    client.notifyAttention({ ...EVENT, sessionId: 'b' }); // still debounced
+    expect(pushSends(socket).length).toBe(1);
     client.stop();
   });
+
+  test('a nack with nothing outstanding reopens nothing', () => {
+    const { client, socket } = onlineClient();
+    socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
+    client.notifyAttention(EVENT);
+    socket.sent.length = 0;
+
+    socket.deliver({ type: 'push:throttled' });
+    socket.deliver({ type: 'push:throttled' });
+    socket.deliver({ type: 'push:throttled' });
+    client.notifyAttention(EVENT);
+    // Only the one window was ever spent, so only one comes back.
+    expect(pushSends(socket).length).toBe(1);
+    client.stop();
+  });
+
 });
 
 beforeEach(() => {

@@ -168,50 +168,14 @@ export function createRouter(ctx: RelayContext) {
         return json({ ok: true, version, uptime: process.uptime() });
       }
 
-      if (pathname === '/auth/github/login' && method === 'GET') {
-        if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
-        const state = randomToken(16);
-        return new Response(null, {
-          status: 302,
-          headers: {
-            location: buildAuthorizeUrl(githubConfig, state, !!config.allowedGithubOrg),
-            'set-cookie': serializeCookie(OAUTH_STATE_COOKIE, state, { secure, maxAgeSeconds: 600 }),
-          },
-        });
-      }
+      const authed = await authRoutes(req, url, pathname, method);
+      if (authed) return authed;
 
-      if (pathname === '/auth/github/callback' && method === 'GET') {
-        return handleOAuthCallback(url, req);
-      }
+      const account = accountRoutes(req, pathname, method);
+      if (account) return account;
 
-      if (pathname === '/auth/logout' && method === 'POST') {
-        const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
-        if (token) repos.deleteSession(token);
-        return new Response(null, {
-          status: 204,
-          headers: { 'set-cookie': clearCookie(SESSION_COOKIE, secure) },
-        });
-      }
-
-      if (pathname === '/api/me' && method === 'GET') {
-        const user = currentUser(req);
-        if (!user) return json({ error: 'unauthorized' }, 401);
-        return json({ user: publicUser(user) });
-      }
-
-      if (pathname === '/api/machines' && method === 'GET') {
-        const user = currentUser(req);
-        if (!user) return json({ error: 'unauthorized' }, 401);
-        return json({ machines: machinesFor(user) });
-      }
-
-      if (pathname === '/link' && method === 'POST') {
-        return limited(req, peerIp, 'link', LINK_PER_IP) ?? (await handleLink(req));
-      }
-
-      if (pathname === '/link/claim' && method === 'POST') {
-        return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
-      }
+      const linked = await linkRoutes(req, peerIp, pathname, method);
+      if (linked) return linked;
 
       const shared = await shareRoutes(req, peerIp, pathname, method);
       if (shared) return shared;
@@ -229,6 +193,53 @@ export function createRouter(ctx: RelayContext) {
       return json({ error: 'internal_error' }, 500);
     }
   };
+
+  /** GitHub OAuth and the session cookie. Null when the path is not one of these. */
+  async function authRoutes(req: Request, url: URL, pathname: string, method: string): Promise<Response | null> {
+    if (pathname === '/auth/github/login' && method === 'GET') {
+      if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
+      const state = randomToken(16);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: buildAuthorizeUrl(githubConfig, state, !!config.allowedGithubOrg),
+          'set-cookie': serializeCookie(OAUTH_STATE_COOKIE, state, { secure, maxAgeSeconds: 600 }),
+        },
+      });
+    }
+    if (pathname === '/auth/github/callback' && method === 'GET') return handleOAuthCallback(url, req);
+    if (pathname === '/auth/logout' && method === 'POST') {
+      const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
+      if (token) repos.deleteSession(token);
+      return new Response(null, { status: 204, headers: { 'set-cookie': clearCookie(SESSION_COOKIE, secure) } });
+    }
+    return null;
+  }
+
+  /** What the signed-in user is and what they can reach. */
+  function accountRoutes(req: Request, pathname: string, method: string): Response | null {
+    if (method !== 'GET') return null;
+    if (pathname !== '/api/me' && pathname !== '/api/machines') return null;
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    return pathname === '/api/me' ? json({ user: publicUser(user) }) : json({ machines: machinesFor(user) });
+  }
+
+  /** Machine linking. Both routes carry a secret, so both are rate limited. */
+  async function linkRoutes(
+    req: Request,
+    peerIp: string | null,
+    pathname: string,
+    method: string,
+  ): Promise<Response | null> {
+    if (pathname === '/link' && method === 'POST') {
+      return limited(req, peerIp, 'link', LINK_PER_IP) ?? (await handleLink(req));
+    }
+    if (pathname === '/link/claim' && method === 'POST') {
+      return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
+    }
+    return null;
+  }
 
   /** Sharing (M5.2). Null when the path is not one of these. */
   async function shareRoutes(

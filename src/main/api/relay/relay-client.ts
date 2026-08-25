@@ -23,7 +23,7 @@ import { SessionTunnel, type Principal } from './session-tunnel';
 import { defaultDeps } from './session-tunnel-deps';
 import { CAP_GRANTS_V1, CAP_PUSH_V1, buildShareCreateMessage } from './grants';
 import type { RelayPushSubscription } from './push-seal';
-import { createAttentionGate, planAttentionPush, type AttentionEvent } from './push-attention';
+import { createAttentionGate, MAX_SPENT_WINDOWS, planAttentionPush, type AttentionEvent } from './push-attention';
 import { ptyManager } from '../../pty-manager';
 import { getDatabase } from '../../database';
 import {
@@ -145,8 +145,12 @@ export class RelayClient extends EventEmitter {
   private pushSubs: RelayPushSubscription[] = [];
   /** Suppresses a push storm from a session flapping in and out of `waiting`. */
   private readonly attentionGate = createAttentionGate();
-  /** The window the most recent `push:send` spent, for a `push:throttled`. */
-  private lastAttention: AttentionEvent | null = null;
+  /**
+   * Windows spent on batches the relay has not answered for yet, oldest first.
+   * A nack pops one: in a burst every send happens before any nack arrives, so
+   * a single slot would hand back one window and silently lose the rest.
+   */
+  private spentWindows: AttentionEvent[] = [];
   /** Routes E2E terminal frames to/from web clients (M3). */
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
@@ -536,7 +540,7 @@ export class RelayClient extends EventEmitter {
    */
   private forgetPushSubscriptions(): void {
     this.pushSubs = [];
-    this.lastAttention = null;
+    this.spentWindows = [];
   }
 
   /**
@@ -572,10 +576,11 @@ export class RelayClient extends EventEmitter {
     });
     if (!planned) return;
 
-    // Remembered so a `push:throttled` can hand the debounce window back. The
-    // relay refusing a batch must not leave those sessions silent until their
-    // next state change.
-    this.lastAttention = planned.spent;
+    // Queued so a `push:throttled` can hand this window back. The relay
+    // refusing a batch must not leave those sessions silent until their next
+    // state change — and in a burst there are many outstanding at once.
+    this.spentWindows.push(planned.spent);
+    if (this.spentWindows.length > MAX_SPENT_WINDOWS) this.spentWindows.shift();
     log.info('[Relay] sending attention push', { state: event.state, devices: planned.message.items.length });
     this.send(planned.message);
   }
@@ -586,8 +591,9 @@ export class RelayClient extends EventEmitter {
    * notification that never left.
    */
   private notePushThrottled(retryAfterSeconds: unknown): void {
-    const spent = this.lastAttention;
-    this.lastAttention = null;
+    // One nack, one window. The relay refuses per message, so the queue and the
+    // refusals stay in step; FIFO because the oldest send is the one refused.
+    const spent = this.spentWindows.shift();
     if (spent) this.attentionGate.forget(spent.sessionId, spent.state);
     log.warn('[Relay] push refused by the relay; debounce reopened', {
       retryAfterSeconds: typeof retryAfterSeconds === 'number' ? retryAfterSeconds : null,
