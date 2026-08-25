@@ -18,5 +18,11 @@
     "useDefineForClassFields": true
   },
   "include": ["src/pwa/**/*.ts", "src/pwa/**/*.tsx", "src/pwa/**/*.d.ts"],
-  "exclude": ["node_modules", "dist", "src/pwa/vite.config.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/pwa/vite.config.ts",
+    "src/pwa/**/*.test.ts",
+    "src/pwa/**/*.test.tsx"
+  ]
 }

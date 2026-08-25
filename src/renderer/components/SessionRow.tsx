@@ -51,6 +51,8 @@ interface SessionRowProps {
   onDragOver: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   onClose: () => void;
+  /** Offered only when the folder is missing: pick where it lives now. */
+  onRelink?: () => void;
 }
 
 function nameOf(account: ClaudeAccount | null): string {
@@ -68,6 +70,77 @@ function accountTitle(
   return `Claude account: ${nameOf(account)}${scope}${suffix}`;
 }
 
+function rowClasses(state: {
+  isActive: boolean;
+  isFocused: boolean;
+  isDragging: boolean;
+  dropPosition: string | null;
+  needsRelink: boolean;
+}): string {
+  return [
+    'session',
+    state.isActive && 'active',
+    state.isFocused && 'item-focused',
+    state.isDragging && 'dragging',
+    state.dropPosition && `drop-${state.dropPosition}`,
+    state.needsRelink && 'needs-relink',
+  ].filter(Boolean).join(' ');
+}
+
+function AccountDot({ account, session, pending }: Readonly<{
+  account: ClaudeAccount;
+  session: Session;
+  pending: { target: ClaudeAccount | null } | null;
+}>): React.JSX.Element {
+  const label = pending
+    ? `Account: ${account.label}, running; assigned to ${nameOf(pending.target)}, restart to apply`
+    : `Account: ${account.label}`;
+  return (
+    <span
+      className="session-account-dot"
+      style={{ background: account.color ?? '#888888' }}
+      title={accountTitle(account, session, pending)}
+      aria-label={label}
+      draggable={false}
+    />
+  );
+}
+
+/**
+ * Decorative while the dot beside it names the account — but when the pty is
+ * on a deleted account there is no dot, and then this is the only thing on the
+ * row with anything to say.
+ */
+function PendingSwitchGlyph({ account, pending }: Readonly<{
+  account: ClaudeAccount | null;
+  pending: { target: ClaudeAccount | null };
+}>): React.JSX.Element {
+  return (
+    <span
+      className="session-account-pending"
+      title="Account switch pending — restart to apply"
+      aria-hidden={account ? true : undefined}
+      role={account ? undefined : 'img'}
+      aria-label={account ? undefined : `Account switch pending; restart to run under ${nameOf(pending.target)}`}
+    >
+      ↻
+    </span>
+  );
+}
+
+/** A glyph AND a count: neither says on its own how many are watching what. */
+function WatchingBadge({ count, names }: Readonly<{ count: number; names?: string[] }>): React.JSX.Element {
+  return (
+    <span
+      className="session-watching"
+      title={names?.length ? `Watching now: ${names.join(', ')}` : `${count} watching now`}
+      aria-label={`${count} watching now`}
+    >
+      👁 {count}
+    </span>
+  );
+}
+
 /**
  * One session row in the sidebar — an `<li>` in the group's session list.
  * Rendered identically under top-level groups and sub-groups; only the drag
@@ -82,15 +155,15 @@ export const SessionRow: React.FC<SessionRowProps> = ({
   session, isActive, isFocused, isDragging, dropPosition, draggable, account,
   pendingSwitch = null, watchingCount, watchingNames,
   isEditing, editingName, onEditingNameChange, onStartEdit, onFinishEdit, onCancelEdit,
-  onSelect, onContextMenu, onDragStart, onDragEnd, onDragOver, onDrop, onClose,
+  onSelect, onContextMenu, onDragStart, onDragEnd, onDragOver, onDrop, onClose, onRelink,
 }) => {
-  const classes = [
-    'session',
-    isActive ? 'active' : '',
-    isFocused ? 'item-focused' : '',
-    isDragging ? 'dragging' : '',
-    dropPosition ? `drop-${dropPosition}` : '',
-  ].filter(Boolean).join(' ');
+  const classes = rowClasses({
+    isActive,
+    isFocused,
+    isDragging,
+    dropPosition,
+    needsRelink: !!session.workingDirMissing,
+  });
 
   const provider = PROVIDER_LABELS[session.provider] ?? session.provider;
   const showProvider = session.shellType === 'claude' && session.provider !== 'claude';
@@ -133,53 +206,12 @@ export const SessionRow: React.FC<SessionRowProps> = ({
           tabIndex={-1}
           title="Double-click anywhere on the row to rename"
         >
-          {account && (
-            <span
-              className="session-account-dot"
-              style={{ background: account.color ?? '#888888' }}
-              title={accountTitle(account, session, pendingSwitch)}
-              aria-label={
-                pendingSwitch
-                  ? `Account: ${account.label}, running; assigned to ${nameOf(pendingSwitch.target)}, restart to apply`
-                  : `Account: ${account.label}`
-              }
-              draggable={false}
-            />
-          )}
-          {/* Accounts registered before #165 are all the same grey and no UI
-              lets a user recolour one, so tinting the dot could never have
-              carried this. Decorative while the dot beside it names the account
-              — but when the pty is on a deleted account there is no dot, and
-              then this is the only thing on the row with anything to say. */}
-          {pendingSwitch && (
-            <span
-              className="session-account-pending"
-              title="Account switch pending — restart to apply"
-              aria-hidden={account ? true : undefined}
-              role={account ? undefined : 'img'}
-              aria-label={account
-                ? undefined
-                : `Account switch pending; restart to run under ${nameOf(pendingSwitch.target)}`}
-            >
-              ↻
-            </span>
-          )}
+          {account && <AccountDot account={account} session={session} pending={pendingSwitch} />}
+          {pendingSwitch && <PendingSwitchGlyph account={account} pending={pendingSwitch} />}
           <span className="session-info">
             <span className="session-name">{session.name}</span>
             {!!watchingCount && watchingCount > 0 && (
-              // A glyph AND a count: an eye alone does not say how many, and a
-              // number alone does not say what it counts.
-              <span
-                className="session-watching"
-                title={
-                  watchingNames?.length
-                    ? `Watching now: ${watchingNames.join(', ')}`
-                    : `${watchingCount} watching now`
-                }
-                aria-label={`${watchingCount} watching now`}
-              >
-                👁 {watchingCount}
-              </span>
+              <WatchingBadge count={watchingCount} names={watchingNames} />
             )}
             <SessionStatsBadge sessionId={session.id} />
           </span>
@@ -189,6 +221,18 @@ export const SessionRow: React.FC<SessionRowProps> = ({
             </span>
           )}
           <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
+        </button>
+      )}
+      {session.workingDirMissing && onRelink && (
+        <button
+          type="button"
+          className="session-relink"
+          draggable={false}
+          title={`${session.workingDir || 'This session has no folder set'} is not on this machine — choose where it lives now`}
+          aria-label={`Relink ${session.name}: working directory not found`}
+          onClick={onRelink}
+        >
+          Relink
         </button>
       )}
       <button

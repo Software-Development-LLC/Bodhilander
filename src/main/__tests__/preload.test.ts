@@ -1,7 +1,7 @@
 /**
- * The context bridge between main's events and the renderer that words a claim
- * from them. It forwards each payload by hand, so a field main added can be
- * dropped here and the renderer would never know it was told anything.
+ * The context bridge. It forwards event payloads by hand, so a field main
+ * added can be dropped here unnoticed; and channel names live here and in
+ * index.ts with nothing joining them, so a rename fails silently at runtime.
  */
 
 // Run with: bun test src/main/__tests__/preload.test.ts
@@ -12,6 +12,7 @@ type Listener = (event: unknown, data: unknown) => void;
 
 let exposed: Record<string, unknown> = {};
 const listeners = new Map<string, Listener[]>();
+const invocations: { channel: string; args: unknown[] }[] = [];
 
 /**
  * Covers what preload reaches for, and no more: it is the only consumer here.
@@ -32,7 +33,10 @@ mock.module('electron', () => ({
       const existing = listeners.get(channel) ?? [];
       listeners.set(channel, existing.filter((l) => l !== listener));
     },
-    invoke: async () => undefined,
+    invoke: async (channel: string, ...args: unknown[]) => {
+      invocations.push({ channel, args });
+      return undefined;
+    },
     send: () => undefined,
   },
 }));
@@ -41,6 +45,15 @@ await import('../preload');
 
 function emit(channel: string, data: unknown): void {
   for (const listener of listeners.get(channel) ?? []) listener({}, data);
+}
+
+/** `exposed` is deliberately untyped — it is whatever preload handed across. */
+function call(name: string, ...args: unknown[]): unknown {
+  return (exposed[name] as (...a: unknown[]) => unknown)(...args);
+}
+
+function lastInvocation(): { channel: string; args: unknown[] } {
+  return invocations[invocations.length - 1];
 }
 
 const onLoginCompleted = () =>
@@ -99,5 +112,37 @@ describe('onAccountLoginCompleted', () => {
     expect(first).toEqual([]);
     expect(second).toHaveLength(1);
     offSecond();
+  });
+});
+
+describe('the import/export bridge', () => {
+  test('exposes an export, an import, and the ClaudeLander shortcut', () => {
+    for (const name of ['exportGroups', 'importGroups', 'importFromClaudeLander']) {
+      expect(typeof exposed[name]).toBe('function');
+    }
+  });
+
+  test('each routes to the channel index.ts registers', () => {
+    call('exportGroups');
+    expect(lastInvocation().channel).toBe('export:groups');
+
+    call('importGroups');
+    expect(lastInvocation().channel).toBe('import:groups');
+
+    call('importFromClaudeLander');
+    expect(lastInvocation().channel).toBe('import:fromClaudeLander');
+  });
+
+  test('the folder picker forwards the directory it should open at', () => {
+    call('selectDirectory', '/some/where');
+
+    expect(lastInvocation().channel).toBe('dialog:selectDirectory');
+    expect(lastInvocation().args).toEqual(['/some/where']);
+  });
+
+  test('updating a session carries its patch through unchanged', () => {
+    call('updateDbSession', 's1', { workingDir: '/moved/here', state: 'stopped' });
+
+    expect(lastInvocation().args).toEqual(['s1', { workingDir: '/moved/here', state: 'stopped' }]);
   });
 });

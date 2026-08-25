@@ -1,24 +1,47 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Session, SessionState, DEFAULT_SESSION_PROVIDER } from '../../shared/types';
 
+/**
+ * Apply a hook's state change to the list. Lifted out of the effect because
+ * the update is a pure function of the previous list — and because nesting it
+ * four callbacks deep made it hard to see that it only touches one row.
+ */
+function applyStateChange(
+  sessions: Session[],
+  sessionId: string,
+  state: SessionState,
+  timestampSeconds: number,
+): Session[] {
+  return sessions.map(s =>
+    s.id === sessionId
+      ? { ...s, state, lastActivityAt: new Date(timestampSeconds * 1000) }
+      : s
+  );
+}
+
 export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load sessions from database on mount
+  /**
+   * Re-read the list from main. Part of what a session reports is derived
+   * there from the filesystem — `workingDirMissing` above all — so no local
+   * merge can produce it, and a stale copy outlives the change it describes.
+   */
+  const refreshSessions = useCallback(async () => {
+    try {
+      const dbSessions = await window.electronAPI.getAllSessions();
+      setSessions(dbSessions);
+    } catch (error) {
+      console.error('Failed to load sessions:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    const loadSessions = async () => {
-      try {
-        const dbSessions = await window.electronAPI.getAllSessions();
-        setSessions(dbSessions);
-      } catch (error) {
-        console.error('Failed to load sessions:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadSessions();
+    void refreshSessions();
 
     // Listen for state changes from hooks
     const cleanupStateChange = window.electronAPI.onStateChange((event) => {
@@ -29,22 +52,25 @@ export function useSessions() {
         return;
       }
 
-      setSessions(prev => prev.map(s =>
-        s.id === event.sessionId
-          ? { ...s, state: event.state as SessionState, lastActivityAt: new Date(event.timestamp * 1000) }
-          : s
-      ));
+      setSessions(prev => applyStateChange(prev, event.sessionId, event.state as SessionState, event.timestamp));
     });
 
     // Reload the list when a session is created remotely (relay / mobile) so the
     // desktop UI stays in sync with sessions started from the web client.
-    const cleanupRefresh = window.electronAPI.onSessionsRefresh(() => { loadSessions(); });
+    const cleanupRefresh = window.electronAPI.onSessionsRefresh(() => { void refreshSessions(); });
+
+    // A working directory can be moved or deleted while the app is running.
+    // Returning to the window is when that matters, and it costs one stat per
+    // distinct folder.
+    const onFocus = () => { void refreshSessions(); };
+    window.addEventListener('focus', onFocus);
 
     return () => {
       cleanupStateChange();
       cleanupRefresh();
+      window.removeEventListener('focus', onFocus);
     };
-  }, []);
+  }, [refreshSessions]);
 
   const createSession = useCallback(async (
     groupId: string,
@@ -117,13 +143,17 @@ export function useSessions() {
   const updateSession = useCallback(async (id: string, updates: Partial<Session>) => {
     try {
       await window.electronAPI.updateDbSession(id, updates);
+      // Merge first so the row reacts immediately, then take main's answer:
+      // the patch cannot carry the derived fields, and relinking a session
+      // changes exactly one of them.
       setSessions(prev => prev.map(s =>
         s.id === id ? { ...s, ...updates } : s
       ));
+      await refreshSessions();
     } catch (error) {
       console.error('Failed to update session:', error);
     }
-  }, []);
+  }, [refreshSessions]);
 
   /**
    * Reassign a session's Claude account (BDHLNDR-31). Goes through the
@@ -217,6 +247,7 @@ export function useSessions() {
     removeSession,
     getSessionsByGroup,
     getStateCounts,
+    refreshSessions,
     reorderSession,
   };
 }

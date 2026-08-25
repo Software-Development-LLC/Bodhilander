@@ -1,5 +1,15 @@
+import * as fs from 'fs';
 import { getDatabase } from '../database';
 import { Session, SessionState } from '../../shared/types';
+
+/**
+ * Whether a session's working directory is on this machine. Derived on every
+ * read rather than stored: `markAllSessionsStopped` rewrites `state` for every
+ * row on each app start, so no marker kept there could survive a restart.
+ */
+export type DirectoryProbe = (dir: string) => boolean;
+
+const directoryOnDisk: DirectoryProbe = (dir) => dir !== '' && fs.existsSync(dir);
 
 export function sessionExists(id: string): boolean {
   const db = getDatabase();
@@ -7,9 +17,28 @@ export function sessionExists(id: string): boolean {
   return !!row;
 }
 
+/**
+ * One probe per distinct directory. Sessions cluster into a handful of
+ * checkouts, so a sidebar refresh costs a few stat calls rather than one per
+ * row. A fresh map per call is the point: a directory can appear or vanish
+ * between reads, and a cache that outlived the call would keep answering for
+ * the world as it was.
+ */
+function memoisedProbe(dirExists: DirectoryProbe): (dir: string) => boolean {
+  const probed = new Map<string, boolean>();
+  return (dir) => {
+    const cached = probed.get(dir);
+    if (cached !== undefined) return cached;
+    const answer = !dirExists(dir);
+    probed.set(dir, answer);
+    return answer;
+  };
+}
+
 /** sessions row → domain object. Shared so a single-row lookup and the full
- *  listing cannot drift in how they read the same columns. */
-function mapSessionRow(row: any): Session {
+ *  listing cannot drift in how they read the same columns. `missing` is passed
+ *  in so the listing can answer once per directory instead of once per row. */
+function mapSessionRow(row: any, missing: (dir: string) => boolean): Session {
   return {
     id: row.id,
     groupId: row.group_id,
@@ -27,13 +56,15 @@ function mapSessionRow(row: any): Session {
     provider: row.provider ?? 'claude',
     failoverFromAccountId: row.failover_from_account_id ?? null,
     failoverPrevAccountId: row.failover_prev_account_id ?? null,
+    workingDirMissing: missing(row.working_dir ?? ''),
   };
 }
 
-export function getAllSessions(): Session[] {
+export function getAllSessions(dirExists: DirectoryProbe = directoryOnDisk): Session[] {
   const db = getDatabase();
   const rows = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
-  return rows.map(mapSessionRow);
+  const missing = memoisedProbe(dirExists);
+  return rows.map(row => mapSessionRow(row, missing));
 }
 
 /**
@@ -44,10 +75,10 @@ export function getAllSessions(): Session[] {
  * and "there are only tens of rows" is a reason it wasn't slow, not a reason
  * for the query to say something other than what it means.
  */
-export function getSession(id: string): Session | null {
+export function getSession(id: string, dirExists: DirectoryProbe = directoryOnDisk): Session | null {
   const db = getDatabase();
   const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
-  return row ? mapSessionRow(row) : null;
+  return row ? mapSessionRow(row, memoisedProbe(dirExists)) : null;
 }
 
 export function createSession(session: Session): void {
@@ -120,6 +151,10 @@ export function updateSession(id: string, updates: Partial<Session>): void {
   if (updates.state !== undefined) {
     fields.push('state = ?');
     values.push(updates.state);
+  }
+  if (updates.workingDir !== undefined) {
+    fields.push('working_dir = ?');
+    values.push(updates.workingDir);
   }
   if (updates.order !== undefined) {
     fields.push('"order" = ?');

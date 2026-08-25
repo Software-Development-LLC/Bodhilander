@@ -659,6 +659,10 @@ const App: React.FC = () => {
 
     const items: MenuItem[] = [
       { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
+      {
+        label: 'Set Working Directory…',
+        onClick: () => { void handleRelinkSession(sessionId, session?.workingDir ?? ''); },
+      },
     ];
 
     // Sharing is entered PER SESSION, which is the whole shape of the feature —
@@ -1109,6 +1113,13 @@ const App: React.FC = () => {
     return map;
   }, [attachedGuests]);
 
+  // A session restored from another machine points at a folder that is not
+  // here. Picking the folder is all it takes to make it launchable again.
+  const handleRelinkSession = useCallback(async (id: string, currentDir: string) => {
+    const chosen = await window.electronAPI.selectDirectory(currentDir || undefined);
+    if (chosen) await updateSession(id, { workingDir: chosen, state: 'stopped' });
+  }, [updateSession]);
+
   const sessionRowProps = useCallback((session: Session, groupId: string) => ({
     session,
     isActive: session.id === activeSessionId,
@@ -1134,12 +1145,13 @@ const App: React.FC = () => {
     onDragOver: (e: React.DragEvent) => handleSessionDragOver(e, session.id, groupId),
     onDrop: (e: React.DragEvent) => handleSessionDrop(e, session.id, groupId),
     onClose: () => handleRemoveSession(session.id),
+    onRelink: () => handleRelinkSession(session.id, session.workingDir),
   }), [
     activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
     isSearching, sidebarAccountFor, editingSessionId, editingSessionName,
     handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
-    handleRemoveSession, guestsBySession]);
+    handleRemoveSession, guestsBySession, handleRelinkSession]);
 
   const getContextShortcuts = useCallback(() => {
     if (sidebarFocused) {
@@ -1693,7 +1705,11 @@ const App: React.FC = () => {
                   cwd={session.workingDir}
                   launchClaude={session.shellType === 'claude'}
                   provider={session.provider}
-                  isStopped={session.state === 'stopped'}
+                  isStopped={session.state === 'stopped' || !!session.workingDirMissing}
+                  blockedReason={session.workingDirMissing
+                    ? `Working directory not found on this machine: ${session.workingDir || '(none set)'}`
+                    : undefined}
+                  onBlockedAction={() => { void handleRelinkSession(session.id, session.workingDir); }}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
                   sessionState={session.state}

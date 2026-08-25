@@ -32,6 +32,12 @@ export interface Session {
    */
   provider: string;
   /**
+   * Derived at read time, never stored: `workingDir` is not on this machine,
+   * so launching would throw. A stored flag could not survive the bulk state
+   * reset every app start performs.
+   */
+  workingDirMissing?: boolean;
+  /**
    * The account this session was moved OFF when failover fired (#207), or null
    * when it is running where it was put. Kept so the session can go back once
    * that account's limit lifts, and so the UI can say why it moved.
@@ -465,4 +471,51 @@ export interface GlobalStats {
   totalDurationSeconds: number;
   eventsPerDay: { date: string; count: number }[];
   toolUseCounts: Record<string, number>;
+}
+
+export interface PortableExportResult {
+  success: boolean;
+  filePath?: string;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  /** Archive size as it was shown before the file was written; bundles only. */
+  sizeLabel?: string;
+}
+
+export interface PortableImportResult {
+  success: boolean;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  skippedGroups?: number;
+  skippedSessions?: number;
+  /** Bundles only: transcripts landed, and sessions whose folder is missing. */
+  transcriptCount?: number;
+  needsRelinkCount?: number;
+}
+
+export interface TransferBundleCounts {
+  groups: number;
+  sessions: number;
+  sessionEvents: number;
+  chatEvents: number;
+  arenaRuns: number;
+  arenaResponses: number;
+  preferences: number;
+  accounts: number;
+  transcripts: number;
+}
+
+export interface TransferBundleManifest {
+  formatVersion: number;
+  sourceApp: string;
+  sourceAppVersion: string;
+  sourcePlatform: string;
+  /** The userData root the bundle came from, recorded for diagnostics. */
+  sourceUserData: string;
+  exportedAt: string;
+  /** Distinct roots across every group and session working directory. */
+  workingDirRoots: string[];
+  counts: TransferBundleCounts;
 }

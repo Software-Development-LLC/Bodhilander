@@ -27,6 +27,13 @@ interface TerminalProps {
   restartKey?: number;
   isActive?: boolean;
   sessionState?: string;
+  /**
+   * Why this session cannot be launched at all. Set, the stopped pane offers
+   * the fix instead of a Start button that would throw in pty-manager.
+   */
+  blockedReason?: string;
+  /** What to do about `blockedReason` — today, pick a working directory. */
+  onBlockedAction?: () => void;
   onStart?: () => void;
   onError?: (error: string) => void;
   /**
@@ -60,7 +67,7 @@ const MIN_ROWS = 2;
 const COPY_SHORTCUT_LABEL = IS_MAC ? 'Cmd+C' : 'Ctrl+Shift+C';
 const PASTE_SHORTCUT_LABEL = IS_MAC ? 'Cmd+V' : 'Ctrl+Shift+V';
 
-const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, provider, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError, externalPty = false }) => {
+const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, provider, isStopped = false, restartKey = 0, isActive = false, sessionState, blockedReason, onBlockedAction, onStart, onError, externalPty = false }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -910,6 +917,20 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
           It will start again on its own. Claude Code can take a few seconds to shut down.
         </p>
       </output>
+    );
+  }
+
+  if (!isRunning && blockedReason) {
+    return (
+      <div className="terminal-stopped terminal-blocked">
+        {installHintUi}
+        <p>{blockedReason}</p>
+        <p className="terminal-blocked-detail">
+          The folder this session ran in is not on this machine — it may have moved, or come from a
+          transfer bundle written elsewhere. Point it at the folder to start it again.
+        </p>
+        {onBlockedAction && <button onClick={onBlockedAction}>Set Working Directory…</button>}
+      </div>
     );
   }
 

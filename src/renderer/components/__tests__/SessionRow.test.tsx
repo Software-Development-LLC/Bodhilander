@@ -240,3 +240,52 @@ describe('SessionRow', () => {
     expect(document.querySelector('.session-provider-badge')).toBeTruthy();
   });
 });
+
+describe('a session whose working directory is not on this machine', () => {
+  const parked = (overrides: Partial<Session> = {}) =>
+    session({ state: 'stopped', workingDir: '/gone/here', workingDirMissing: true, ...overrides });
+
+  test('offers a relink control naming the folder', () => {
+    const relinks: number[] = [];
+    renderRow({ session: parked(), onRelink: () => relinks.push(1) });
+
+    const button = document.querySelector('button.session-relink') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+    expect(button.getAttribute('title')).toContain('/gone/here');
+
+    fireEvent.click(button);
+    expect(relinks).toHaveLength(1);
+  });
+
+  test('the control sits outside the select button, never nested in it', () => {
+    renderRow({ session: parked(), onRelink: noop });
+
+    const button = document.querySelector('button.session-relink')!;
+    expect(button.closest('button.session-select')).toBeNull();
+    expect(selectButton().querySelector('button')).toBeNull();
+  });
+
+  test('selecting the row is not triggered by the relink click', () => {
+    const { calls } = renderRow({ session: parked(), onRelink: noop });
+
+    fireEvent.click(document.querySelector('button.session-relink')!);
+    expect(calls.select).toBe(0);
+  });
+
+  test('the row is marked so it reads as needing attention', () => {
+    renderRow({ session: parked(), onRelink: noop });
+    expect(row().className).toContain('needs-relink');
+  });
+
+  test('the state pill still reports the real state, never a derived one', () => {
+    renderRow({ session: parked(), onRelink: noop });
+    expect(document.querySelector('span.status-pill')!.textContent).toBe('stopped');
+  });
+
+  test('a session whose folder is present gets no relink control', () => {
+    renderRow({ session: session({ state: 'stopped', workingDir: '/here' }), onRelink: noop });
+
+    expect(document.querySelector('button.session-relink')).toBeNull();
+    expect(row().className).not.toContain('needs-relink');
+  });
+});
