@@ -16,6 +16,24 @@ export interface ReconnectScheduler {
   readonly pending: boolean;
 }
 
+/** A command to send, in the order it must be sent. Shaped as a wire frame. */
+export interface ReadyCommand {
+  type: string;
+  sessionId?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * What to send when a channel reports ready. A reconnect is a NEW socket
+ * whose client session has no subscriptions, so an open terminal receives
+ * nothing until it asks again — and a landed guest has no row left to tap.
+ */
+export function readyCommands(activeSessionId: string | null): ReadyCommand[] {
+  const commands: ReadyCommand[] = [{ type: 'groups:list' }, { type: 'sessions:list' }];
+  if (activeSessionId) commands.push({ type: 'terminal:subscribe', sessionId: activeSessionId });
+  return commands;
+}
+
 export function createReconnectScheduler(opts: {
   isAlive: () => boolean;
   reconnect: () => void;

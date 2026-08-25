@@ -106,6 +106,7 @@ beforeEach(() => {
     },
     onPtyData: noopSub,
     onPtyResize: noopSub,
+    onRelayResizeRequest: noopSub,
     onProviderInstallHint: noopSub,
     onMenuCopy: noopSub,
     onMenuPaste: noopSub,

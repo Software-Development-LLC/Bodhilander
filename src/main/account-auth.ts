@@ -1,18 +1,11 @@
 /**
  * Account login-flow orchestration (BDHLNDR-31).
  *
- * Each registered Claude account owns an isolated CLAUDE_CONFIG_DIR under
- * <userData>/claude-accounts/<id>/.claude. This module:
- *   1. Creates that directory and inserts the account row.
- *   2. Spawns an in-app login pty running `claude` with CLAUDE_CONFIG_DIR set.
- *   3. Watches for the credentials file to appear (Linux/Windows) and parses
- *      the account email for display.
- *   4. Cleans up the pty, watcher, row, and directory on cancel/delete.
- *
- * macOS note: Claude Code stores tokens in Keychain rather than a plain file
- * when running on macOS, so the watcher will not fire for the OAuth-login
- * path. The renderer must let the user confirm "I'm logged in" manually on
- * macOS; the pty exit alone isn't sufficient evidence.
+ * Each registered account owns an isolated CLAUDE_CONFIG_DIR under
+ * <userData>/claude-accounts/<id>/.claude. This module creates it, spawns an
+ * in-app login pty against it, watches it for the artifacts that mean a login
+ * landed, and tears all of it down on cancel or delete. What counts as such an
+ * artifact is account-identity's to decide, not this module's.
  */
 
 import * as fs from 'fs';
@@ -25,6 +18,7 @@ import log from 'electron-log';
 // process that loads this file, including the test runner.
 import type { PtyManager } from './pty-manager';
 import * as accountsRepo from './repositories/accounts';
+import { AccountIdentity, LOGIN_ARTIFACTS, resolveAccountIdentity } from './account-identity';
 import { registerHooks } from './mcp-config';
 import { seedLegacyConversations } from './legacy-claude-seed';
 import { ClaudeAccount } from '../shared/types';
@@ -135,14 +129,17 @@ export async function startLoginFlow(
 
   const watcher = fs.watch(configDir, (_eventType, filename) => {
     if (!filename) return;
-    const name = filename.toString();
-    if (name === '.credentials.json' || name === 'auth.json') {
-      const flow = activeFlows.get(ptyId);
-      if (flow && !flow.completed) {
-        flow.completed = true;
-        handleLoginCompleted(ptyId, mainWindow);
-      }
-    }
+    if (!LOGIN_ARTIFACTS.has(filename.toString())) return;
+    const flow = activeFlows.get(ptyId);
+    if (!flow || flow.completed) return;
+    // .claude.json is written from the first run onward, so the write itself
+    // is not the signal — only what the file says once it lands.
+    const identity = resolveAccountIdentity(configDir);
+    if (!identity.loggedIn) return;
+    flow.completed = true;
+    // Hand on what we just read: a re-read here can catch the next rewrite
+    // mid-flight and under-report the login we came in holding.
+    handleLoginCompleted(ptyId, mainWindow, identity);
   });
 
   const exitListener = (event: { id: string; exitCode: number }) => {
@@ -172,47 +169,31 @@ export async function startLoginFlow(
   return { account, ptyId };
 }
 
-function handleLoginCompleted(ptyId: string, mainWindow: BrowserWindow | null): void {
+function handleLoginCompleted(
+  ptyId: string,
+  mainWindow: BrowserWindow | null,
+  known?: AccountIdentity,
+): void {
   const flow = activeFlows.get(ptyId);
   if (!flow) return;
 
-  const email = parseAccountEmail(flow.configDir);
+  const { email, loggedIn } = known ?? resolveAccountIdentity(flow.configDir);
   accountsRepo.updateAccount(flow.accountId, { email });
 
+  // `verified` separates a login the config dir showed us from one the user
+  // asserted with a button, so the renderer never claims more than we know.
   mainWindow?.webContents.send('accounts:login-completed', {
     accountId: flow.accountId,
     email,
+    verified: loggedIn === true,
   });
   log.info(`[Accounts] Login completed for ${flow.accountId}${email ? ` (${email})` : ''}`);
 }
 
 /**
- * Best-effort parse of the logged-in account's email from the credentials file.
- * Shapes vary across Claude Code versions, so we check several common paths
- * and silently return null if none match.
- */
-function parseAccountEmail(configDir: string): string | null {
-  try {
-    const credsPath = path.join(configDir, '.credentials.json');
-    if (!fs.existsSync(credsPath)) return null;
-    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-    return (
-      creds?.claudeAiOauth?.subscriptionEmail ??
-      creds?.claudeAiOauth?.email ??
-      creds?.account?.email ??
-      creds?.email ??
-      null
-    );
-  } catch (err) {
-    log.warn('[Accounts] Failed to parse credentials for email:', err);
-    return null;
-  }
-}
-
-/**
- * Called when the user confirms macOS login manually (where the credentials
- * file doesn't appear because Keychain is used instead). Marks the flow
- * completed and emits the same event as the file watcher path.
+ * The macOS button's override, for a login the watcher did not catch: a Claude
+ * version that records the profile somewhere new, or writes the watch missed.
+ * Emits the same event the watched path does, so the renderer sees one story.
  */
 export function confirmLoginMacOS(
   mainWindow: BrowserWindow | null,

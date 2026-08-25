@@ -148,8 +148,21 @@ describe('accountMenuLabel', () => {
     expect(a).not.toBe(b);
   });
 
-  test('an account with no email says so instead of trailing off', () => {
-    expect(accountMenuLabel(personal, false)).toContain('not yet logged in');
+  test('an account resolved as logged out says so instead of trailing off', () => {
+    const fresh = { ...personal, loggedIn: false } as ClaudeAccount;
+    expect(accountMenuLabel(fresh, false)).toContain('not yet logged in');
+  });
+
+  // A login that records no address is still a login, and on macOS that is the
+  // normal case rather than the exception.
+  test('a logged-in account that recorded no address is not called logged out', () => {
+    const noAddress = { ...personal, loggedIn: true } as ClaudeAccount;
+    expect(accountMenuLabel(noAddress, false)).not.toContain('not yet logged in');
+    expect(accountMenuLabel(noAddress, false)).toContain('Use "Personal"');
+  });
+
+  test('an unresolved account withholds the claim rather than guessing at it', () => {
+    expect(accountMenuLabel(personal, false)).not.toContain('not yet logged in');
   });
 
   test('the default account is marked, and the current one is ticked', () => {

@@ -215,6 +215,11 @@ input, textarea { font-family: inherit; }
 .g-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
 .g-name { font-weight: 600; font-size: 14px; white-space: nowrap; flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
 .g-name.subname { font-weight: 500; }
+/* Machine rows carry no path column, so the name gets the whole width — a
+   person-labelled one ("Will's laptop") is longer than a folder name. */
+.gitem.machine .g-name { flex: 1; max-width: none; }
+/* Whose machines these are. A heading, not an option: skipped by the listbox. */
+.gsection { font-size: 12px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--faint); padding: 10px 11px 4px; }
 .g-dir { flex: 1; min-width: 0; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .g-check { color: var(--accent); font-size: 13px; opacity: 0; flex: none; }
 .gitem[aria-selected="true"] .g-check { opacity: 1; }
@@ -266,7 +271,7 @@ input, textarea { font-family: inherit; }
   line-height: 1.4;
   color: var(--muted);
   background: var(--panel-2, rgba(127, 127, 127, 0.08));
-  border: 1px solid var(--border);
+  border: 1px solid var(--hair);
 }
 
 /* The screen is focusable for guests, so it must show focus. */
@@ -285,12 +290,43 @@ input, textarea { font-family: inherit; }
 }
 
 .wide-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 7px 12px;
   font-size: 12px;
   line-height: 1.4;
   color: var(--muted);
   background: var(--panel-2, rgba(127, 127, 127, 0.08));
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hair);
+}
+
+.wide-text { flex: 1; min-width: 0; }
+
+/* The request half of the sizing story. 44×44 like every other new control. */
+.fitbtn {
+  flex: none;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.fitbtn:active { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* Connection state where a guest who landed in the terminal can see it —
+   they never look at the session list, which is where it used to be said. */
+.conn-strip {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  background: var(--panel-2, rgba(127, 127, 127, 0.08));
+  border-bottom: 1px solid var(--hair);
 }
 
 /* --------------------------------------------------------------------------

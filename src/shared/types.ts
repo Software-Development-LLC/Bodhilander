@@ -148,6 +148,20 @@ export interface RelayStatus {
   pendingShares: RelayPendingShare[];
 }
 
+/**
+ * A guest asking for a session to be resized to fit their screen. Mirrors the
+ * tunnel's `GuestResizeRequest`, and is a request and nothing else: it becomes
+ * a prompt the owner may decline, leaving the guest's view exactly as it was.
+ */
+export interface RelayResizeRequest {
+  sessionId: string;
+  cols: number;
+  rows: number;
+  /** Who is asking. Relay-asserted identity, never authorization. */
+  login: string | null;
+  displayName: string | null;
+}
+
 export interface RelayAttachedGuest {
   clientId: string;
   grantId: string | null;
@@ -262,8 +276,14 @@ export interface ClaudeAccount {
   label: string;
   /** Absolute path to the account's isolated .claude directory. */
   configDir: string;
-  /** Email parsed from credentials after login, for display. */
+  /** Address last recorded for this account, for display. */
   email: string | null;
+  /**
+   * Whether a completed login was found — resolved from the config dir, and
+   * from a recorded address only where that dir could not be read. Undefined
+   * when nothing was consulted, so no surface may call the account logged out.
+   */
+  loggedIn?: boolean;
   /** Hex color for UI badge. */
   color: string;
   /** True for the single account used as the global default fallback. */

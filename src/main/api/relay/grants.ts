@@ -75,6 +75,10 @@ export const COMMAND_CAPS: Readonly<Record<string, Cap>> = Object.freeze({
   'terminal:unsubscribe': 'view',
   'terminal:input': 'input',
   'terminal:resize': 'resize',
+  // ASKING is not resizing. A guest may say "this doesn't fit my screen" and
+  // the owner's desktop decides — so this needs only what watching already
+  // grants, and `resize` stays exactly as narrow as it was.
+  'terminal:resize-request': 'view',
   'session:create': 'create',
   'group:create': 'create',
   'dirs:list': 'browse',

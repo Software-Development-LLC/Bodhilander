@@ -257,6 +257,59 @@
   background: #4dd3e1;
 }
 
+/* A guest asked to be fitted to their screen. Shares the slot with the
+   mobile-resize banner — which is the state accepting produces — so when both
+   are up the question stays above the thing it caused. */
+.resize-request-banner {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md, 6px);
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.resize-request-banner ~ .mobile-resize-banner { top: 62px; }
+
+.resize-request-text { flex: 1; min-width: 240px; }
+
+.resize-request-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.resize-request-actions button {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 12px;
+  cursor: pointer;
+  border: none;
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.resize-request-actions button:hover { background: var(--color-border); }
+
+.resize-request-actions .primary {
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  font-weight: 500;
+}
+
+.resize-request-actions .primary:hover { background: var(--color-accent-hover); }
+
 .provider-install-banner code {
   color: #ffd890;
   background: rgba(0, 0, 0, 0.25);

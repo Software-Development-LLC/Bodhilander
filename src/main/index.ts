@@ -19,6 +19,7 @@ import * as chatEventsRepo from './repositories/chat-events';
 import { ChatParser } from './api/chat-parser';
 import * as accountsRepo from './repositories/accounts';
 import * as accountAuth from './account-auth';
+import { withAccountIdentity } from './account-identity';
 import * as accountSwitch from './account-switch';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
@@ -35,6 +36,7 @@ import { registerHooks, cleanupLegacyMcpServer } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
+import type { GuestResizeRequest } from './api/relay/session-tunnel';
 import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
@@ -526,6 +528,13 @@ function createWindow(): void {
     mainWindow?.webContents.send('relay:status', getRelayClient().getStatus());
   });
 
+  // A guest asked for a session to be resized to fit their screen. No OS
+  // notification: unlike a join request this decides nothing about access,
+  // and the answer is a one-tap prompt on the terminal it is about.
+  getRelayClient().on('resize-request', (request: GuestResizeRequest) => {
+    mainWindow?.webContents.send('relay:resize-request', request);
+  });
+
   getRelayClient().on('status', (status) => {
     mainWindow?.webContents.send('relay:status', status);
   });
@@ -819,8 +828,11 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
 });
 
 // Claude account IPC handlers (BDHLNDR-31)
+// Login state is resolved from each config dir here rather than read off the
+// row: the stored email is a one-shot write from the login flow, so accounts
+// that logged in without producing one present as logged out forever.
 safeHandle('accounts:list', () => {
-  return accountsRepo.getAllAccounts();
+  return accountsRepo.getAllAccounts().map(withAccountIdentity);
 });
 
 safeHandle('accounts:startLogin', (label: string) => {
