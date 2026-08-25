@@ -7,7 +7,7 @@
 // Each was correct by inspection, which is what a comment goes on looking like
 // long after it stops being true. Writing them down found one that was not.
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { createECDH } from 'crypto';
+import { createECDH } from 'node:crypto';
 
 // --- what is replaced, and what deliberately is not -------------------------
 //
@@ -16,11 +16,13 @@ import { createECDH } from 'crypto';
 // `session-tunnel` are real. Only leaves are replaced.
 
 // Measured bare, without `--isolate`: this directory was 54 failures with a
-// draft that stubbed the shared modules, and is 0 now.
+// draft that stubbed the shared modules, and is 0 now. The wider `src/main`
+// scope still costs one collateral failure there.
 
-import { mkdtempSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+// `node:`-prefixed so these cannot collide with a bare-specifier mock elsewhere.
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const userData = mkdtempSync(join(tmpdir(), 'relay-client-push-'));
 const noop = () => {};
@@ -57,6 +59,17 @@ mock.module('../../../repositories/preferences', () => ({
   getPreference: (k: string) => prefStore.get(k) ?? null,
   setPreference: (k: string, v: string) => { prefStore.set(k, v); },
   deletePreference: (k: string) => { prefStore.delete(k); },
+}));
+
+// `relay-client` reaches `pty-manager`, whose head imports `node-pty` — native,
+// with per-platform prebuilds. Left real it passes on whichever machine built
+// one and fails this whole file on CI's Linux runner, silently.
+
+// Only node-pty is replaced: a third-party leaf no spec tests, so `pty-manager`
+// and `session-tunnel` stay real.
+mock.module('node-pty', () => ({
+  spawn: () => { throw new Error('node-pty is not available under the test runner'); },
+  open: () => { throw new Error('node-pty is not available under the test runner'); },
 }));
 mock.module('../grant-store', () => ({
   GRANT_PREF: { ownerUserId: 'relay.ownerUserId' },
@@ -148,6 +161,15 @@ const EVENT = { sessionId: 's-1', sessionName: 'deploy-prod', state: 'waiting' a
 function pushSends(socket: FakeSocket) {
   return socket.messages().filter((m) => m.type === 'push:send');
 }
+
+describe('the module graph', () => {
+  test('never loads the native pty binding', async () => {
+    // The guard for the CI break this file caused: on Linux the real module
+    // throws at import and every assertion below is skipped, silently.
+    const pty = (await import('node-pty')) as { spawn: () => unknown };
+    expect(() => pty.spawn()).toThrow('not available under the test runner');
+  });
+});
 
 describe('agent:auth', () => {
   test('advertises push:v1, or the relay withholds the keys it needs', () => {
@@ -295,56 +317,89 @@ describe('the debounce across a connection lifetime', () => {
 });
 
 describe('push:throttled', () => {
-  test('hands the debounce window back, so the next change notifies', () => {
+  /** The refs the agent stamped on each `push:send`, in order. */
+  function sentRefs(socket: FakeSocket): string[] {
+    return pushSends(socket).map((m) => m.ref as string);
+  }
+
+  test('the refused sessions recover and the delivered ones are left alone', () => {
+    const { client, socket } = onlineClient();
+    socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
+    socket.sent.length = 0;
+
+    // What a fixed-window limiter actually does: admit the first n of a burst
+    // and refuse the rest. The refusals therefore describe the NEWEST sends,
+    // which is the case neither earlier test could see — nacking everything
+    // makes the pairing unobservable.
+    const allowed = 30;
+    const ids = Array.from({ length: 40 }, (_, i) => `s-${i}`);
+    for (const sessionId of ids) client.notifyAttention({ ...EVENT, sessionId });
+
+    const refs = sentRefs(socket);
+    expect(refs.length).toBe(40);
+    for (const ref of refs.slice(allowed)) socket.deliver({ type: 'push:throttled', ref });
+
+    // Which sessions can notify again, one at a time so each is attributable.
+    const reopened = ids.filter((sessionId) => {
+      socket.sent.length = 0;
+      client.notifyAttention({ ...EVENT, sessionId });
+      return pushSends(socket).length > 0;
+    });
+
+    // Exactly the ten refused. Reopening a DELIVERED window is its own defect:
+    // that session buzzes a second time if it flaps back inside the 30s.
+    expect(reopened).toEqual(ids.slice(allowed));
+    client.stop();
+  });
+
+  test('pairs a refusal with its own batch, not with whichever send is at an end', () => {
+    const { client, socket } = onlineClient();
+    socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
+    socket.sent.length = 0;
+
+    client.notifyAttention({ ...EVENT, sessionId: 'delivered' });
+    client.notifyAttention({ ...EVENT, sessionId: 'refused' });
+    const refs = sentRefs(socket);
+
+    // The relay refused only the second batch and says which one.
+    socket.deliver({ type: 'push:throttled', ref: refs[1] });
+
+    socket.sent.length = 0;
+    client.notifyAttention({ ...EVENT, sessionId: 'delivered' }); // still debounced
+    client.notifyAttention({ ...EVENT, sessionId: 'refused' });   // window returned
+    expect(pushSends(socket).length).toBe(1);
+    client.stop();
+  });
+
+  test('falls back to the newest outstanding send when the relay names none', () => {
+    const { client, socket } = onlineClient();
+    socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
+    socket.sent.length = 0;
+
+    client.notifyAttention({ ...EVENT, sessionId: 'first' });
+    client.notifyAttention({ ...EVENT, sessionId: 'last' });
+    // A relay too old to echo a ref. The least-wrong guess is the newest send,
+    // because a fixed window refuses the tail of a burst.
+    socket.deliver({ type: 'push:throttled' });
+
+    socket.sent.length = 0;
+    client.notifyAttention({ ...EVENT, sessionId: 'first' });
+    client.notifyAttention({ ...EVENT, sessionId: 'last' });
+    expect(pushSends(socket).length).toBe(1);
+    client.stop();
+  });
+
+  test('an unknown ref reopens nothing', () => {
     const { client, socket } = onlineClient();
     socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
     socket.sent.length = 0;
 
     client.notifyAttention(EVENT);
-    expect(pushSends(socket).length).toBe(1);
-    // Refused: nothing was delivered, so the window it cost must be returned —
-    // otherwise that session stays silent until it changes state again.
-    socket.deliver({ type: 'push:throttled', retryAfterSeconds: 42 });
+    socket.deliver({ type: 'push:throttled', ref: 'not-a-batch-we-sent' });
 
+    socket.sent.length = 0;
     client.notifyAttention(EVENT);
-    expect(pushSends(socket).length).toBe(2);
-    client.stop();
-  });
-
-  test('gives every refused window back, not just the most recent', () => {
-    const { client, socket } = onlineClient();
-    socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
-    socket.sent.length = 0;
-
-    // A fleet restart: every notifyAttention runs in one tick, long before any
-    // nack comes back. A single slot returns one window and loses the other 9.
-    const ids = Array.from({ length: 10 }, (_, i) => `s-${i}`);
-    for (const sessionId of ids) client.notifyAttention({ ...EVENT, sessionId });
-    expect(pushSends(socket).length).toBe(10);
-
-    for (let i = 0; i < 10; i++) socket.deliver({ type: 'push:throttled' });
-
-    socket.sent.length = 0;
-    for (const sessionId of ids) client.notifyAttention({ ...EVENT, sessionId });
-    // All ten reopened. Without the queue this was one, and the other nine
-    // stayed both undelivered AND debounced for 30 seconds.
-    expect(pushSends(socket).length).toBe(10);
-    client.stop();
-  });
-
-  test('hands back one window per nack, no more', () => {
-    const { client, socket } = onlineClient();
-    socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
-    socket.sent.length = 0;
-
-    client.notifyAttention({ ...EVENT, sessionId: 'a' });
-    client.notifyAttention({ ...EVENT, sessionId: 'b' });
-    socket.deliver({ type: 'push:throttled' }); // one refusal, one window back
-
-    socket.sent.length = 0;
-    client.notifyAttention({ ...EVENT, sessionId: 'a' }); // FIFO: the older one
-    client.notifyAttention({ ...EVENT, sessionId: 'b' }); // still debounced
-    expect(pushSends(socket).length).toBe(1);
+    expect(pushSends(socket)).toEqual([]);
     client.stop();
   });
 
@@ -352,17 +407,16 @@ describe('push:throttled', () => {
     const { client, socket } = onlineClient();
     socket.deliver({ type: 'push:sync', subs: [subscription('phone')] });
     client.notifyAttention(EVENT);
+    const ref = sentRefs(socket)[0]!;
+    socket.deliver({ type: 'push:throttled', ref });
     socket.sent.length = 0;
 
-    socket.deliver({ type: 'push:throttled' });
-    socket.deliver({ type: 'push:throttled' });
-    socket.deliver({ type: 'push:throttled' });
+    // The same refusal replayed must not hand back a window twice.
+    socket.deliver({ type: 'push:throttled', ref });
     client.notifyAttention(EVENT);
-    // Only the one window was ever spent, so only one comes back.
     expect(pushSends(socket).length).toBe(1);
     client.stop();
   });
-
 });
 
 beforeEach(() => {

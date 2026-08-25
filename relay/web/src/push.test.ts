@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { MACHINE_PREF_KEY } from './account';
 import {
   applySwitchView,
+  notificationsSectionHtml,
   PUSH_STATE_NOTE,
   switchView,
   consumePushTarget,
@@ -467,13 +468,9 @@ if (!hasDom) {
 }
 
 describe.skipIf(!hasDom)('the notifications control, driven as rendered', () => {
-  /** The switch exactly as `notificationsSection()` emits it. */
-  function render() {
-    document.body.innerHTML = `
-      <button class="switch" id="pushToggle" role="switch" aria-checked="false" aria-labelledby="pushLabel"
-        aria-disabled="true" aria-busy="true"><span class="track"></span></button>
-      <div class="pref-note" id="pushNote" role="status">Checking…</div>
-      <div class="banner warn hidden" id="pushStale"></div>`;
+  /** The markup main.ts actually renders — the real template, not a copy. */
+  function render(guestOnly = false) {
+    document.body.innerHTML = notificationsSectionHtml({ guestOnly });
     return document.getElementById('pushToggle') as HTMLButtonElement;
   }
 
@@ -506,10 +503,24 @@ describe.skipIf(!hasDom)('the notifications control, driven as rendered', () => 
     expect(clicks).toBe(1);
   });
 
-  test('the rendered markup itself never ships the native disabled attribute', () => {
+  test('the shipped markup never carries the native disabled attribute', () => {
+    // The defect that reached production last round lived in this template, so
+    // the guard has to read the template rather than a copy of it.
+    expect(notificationsSectionHtml({ guestOnly: false })).not.toContain('disabled>');
+    expect(/<button[^>]*\sdisabled(\s|>|=)/.test(notificationsSectionHtml({ guestOnly: false }))).toBe(false);
+
     const toggle = render();
     expect(toggle.hasAttribute('disabled')).toBe(false);
     expect(toggle.getAttribute('aria-disabled')).toBe('true'); // until the first paint
+  });
+
+  test('renders every element the paint reaches for, and the guest note only for guests', () => {
+    render();
+    for (const id of ['pushToggle', 'pushNote', 'pushStale']) {
+      expect(document.getElementById(id)).not.toBeNull();
+    }
+    expect(notificationsSectionHtml({ guestOnly: true })).toContain('Only your own machines');
+    expect(notificationsSectionHtml({ guestOnly: false })).not.toContain('Only your own machines');
   });
 
   test('stays focusable and clickable even when inert, so the reason can be read', () => {

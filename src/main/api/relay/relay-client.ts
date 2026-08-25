@@ -13,6 +13,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { randomUUID } from 'crypto';
 import { powerSaveBlocker } from 'electron';
 import { WebSocket } from 'ws';
 import log from 'electron-log';
@@ -146,11 +147,11 @@ export class RelayClient extends EventEmitter {
   /** Suppresses a push storm from a session flapping in and out of `waiting`. */
   private readonly attentionGate = createAttentionGate();
   /**
-   * Windows spent on batches the relay has not answered for yet, oldest first.
-   * A nack pops one: in a burst every send happens before any nack arrives, so
-   * a single slot would hand back one window and silently lose the rest.
+   * The debounce window each unanswered `push:send` spent, by its batch ref.
+   * A refusal names the batch it refused, so the two are paired exactly rather
+   * than by guessing which send a nack belongs to.
    */
-  private spentWindows: AttentionEvent[] = [];
+  private readonly spentWindows = new Map<string, AttentionEvent>();
   /** Routes E2E terminal frames to/from web clients (M3). */
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
@@ -405,6 +406,7 @@ export class RelayClient extends EventEmitter {
       grants?: PendingGrant[];
       grantId?: string;
       subs?: RelayPushSubscription[];
+      ref?: string;
       retryAfterSeconds?: number;
     };
     try {
@@ -455,7 +457,7 @@ export class RelayClient extends EventEmitter {
     // The relay would not take that batch. Nothing was delivered, so the
     // debounce it cost is given back.
     if (msg.type === 'push:throttled') {
-      this.notePushThrottled(msg.retryAfterSeconds);
+      this.notePushThrottled(msg.ref, msg.retryAfterSeconds);
       return;
     }
 
@@ -540,7 +542,26 @@ export class RelayClient extends EventEmitter {
    */
   private forgetPushSubscriptions(): void {
     this.pushSubs = [];
-    this.spentWindows = [];
+    this.spentWindows.clear();
+  }
+
+  /**
+   * The window a refusal is handing back — by ref when the relay named one.
+   * A relay too old to echo it leaves nothing to pair on, and the least-wrong
+   * guess is the NEWEST send: a fixed window refuses the tail of a burst.
+   */
+  private takeSpentWindow(ref: string | null): AttentionEvent | undefined {
+    if (ref !== null) {
+      const named = this.spentWindows.get(ref);
+      if (named) this.spentWindows.delete(ref);
+      return named;
+    }
+    let newest: string | undefined;
+    for (const key of this.spentWindows.keys()) newest = key;
+    if (newest === undefined) return undefined;
+    const spent = this.spentWindows.get(newest);
+    this.spentWindows.delete(newest);
+    return spent;
   }
 
   /**
@@ -576,13 +597,17 @@ export class RelayClient extends EventEmitter {
     });
     if (!planned) return;
 
-    // Queued so a `push:throttled` can hand this window back. The relay
-    // refusing a batch must not leave those sessions silent until their next
-    // state change — and in a burst there are many outstanding at once.
-    this.spentWindows.push(planned.spent);
-    if (this.spentWindows.length > MAX_SPENT_WINDOWS) this.spentWindows.shift();
+    // Recorded against a ref the relay echoes back if it refuses this batch, so
+    // the window is handed to the right session rather than to whichever send
+    // happened to sit at one end of a queue.
+    const ref = randomUUID();
+    this.spentWindows.set(ref, planned.spent);
+    if (this.spentWindows.size > MAX_SPENT_WINDOWS) {
+      const oldest = this.spentWindows.keys().next().value;
+      if (oldest !== undefined) this.spentWindows.delete(oldest);
+    }
     log.info('[Relay] sending attention push', { state: event.state, devices: planned.message.items.length });
-    this.send(planned.message);
+    this.send({ ...planned.message, ref });
   }
 
   /**
@@ -590,10 +615,8 @@ export class RelayClient extends EventEmitter {
    * change on that session notifies instead of being debounced against a
    * notification that never left.
    */
-  private notePushThrottled(retryAfterSeconds: unknown): void {
-    // One nack, one window. The relay refuses per message, so the queue and the
-    // refusals stay in step; FIFO because the oldest send is the one refused.
-    const spent = this.spentWindows.shift();
+  private notePushThrottled(ref: unknown, retryAfterSeconds: unknown): void {
+    const spent = this.takeSpentWindow(typeof ref === 'string' ? ref : null);
     if (spent) this.attentionGate.forget(spent.sessionId, spent.state);
     log.warn('[Relay] push refused by the relay; debounce reopened', {
       retryAfterSeconds: typeof retryAfterSeconds === 'number' ? retryAfterSeconds : null,

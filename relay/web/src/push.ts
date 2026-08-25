@@ -308,6 +308,30 @@ export function switchView(
   };
 }
 
+/**
+ * The notifications section, markup and all. Here rather than in main.ts so a
+ * test asserts on the string that SHIPS — the regression that reached users was
+ * a `disabled` attribute in this template, invisible to a copy of it.
+ */
+export function notificationsSectionHtml(opts: { guestOnly: boolean }): string {
+  return `<div class="pref">
+    <div class="pref-row">
+      <div class="pref-main">
+        <div class="pref-name" id="pushLabel">Notifications</div>
+        <div class="pref-sub">Get a push when a session needs you — even with this closed.</div>
+      </div>
+      <button class="switch" id="pushToggle" role="switch" aria-checked="false" aria-labelledby="pushLabel"
+        aria-disabled="true" aria-busy="true">
+        <span class="track" aria-hidden="true"><span class="knob"></span></span>
+      </button>
+    </div>
+    <div class="pref-note" id="pushNote" role="status">Checking…</div>
+    <div class="banner warn hidden" id="pushStale" role="status">This machine\u2019s desktop app is too old to send
+      notifications. Update Bodhilander on it — nothing will arrive until you do.</div>
+    ${opts.guestOnly ? '<div class="pref-note">Only your own machines send these. Sessions shared with you don\u2019t, yet.</div>' : ''}
+  </div>`;
+}
+
 /** The elements the control is made of, so this file needs no selectors. */
 export interface SwitchElements {
   toggle: { setAttribute(k: string, v: string): void; removeAttribute(k: string): void; disabled: boolean };

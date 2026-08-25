@@ -360,13 +360,19 @@ describe('push:send — forwarding a sealed body', () => {
 
     const agent = await onlineAgent(server.port, m.pub, m.sign);
     for (let i = 0; i < PUSH_SENDS_PER_MINUTE + 1; i++) {
-      agent.ws.send(JSON.stringify({ type: 'push:send', items: [{ id: sub.id, body: sealed(`x${i}`) }] }));
+      agent.ws.send(
+        JSON.stringify({ type: 'push:send', ref: 'batch-refused', items: [{ id: sub.id, body: sealed(`x${i}`) }] }),
+      );
     }
 
     // Silence here spends the agent's 30s window on a notification that never
     // left the relay, so those sessions go quiet until they change state again.
     const nack = await agent.nextOfType('push:throttled');
     expect(nack.retryAfterSeconds).toBeGreaterThan(0);
+    // The agent's own id for the batch, echoed. Which send a refusal belongs to
+    // must not be inferred from ordering: a fixed window admits the FIRST n and
+    // refuses the rest, so any ordering rule guesses at the limiter's internals.
+    expect(nack.ref).toBe('batch-refused');
     agent.ws.close();
     server.stop(true);
   });
@@ -385,6 +391,23 @@ describe('push:send — forwarding a sealed body', () => {
 
     await Bun.sleep(200);
     expect(sent.length).toBe(PUSH_SENDS_PER_MINUTE);
+    agent.ws.close();
+    server.stop(true);
+  });
+
+  test('echoes a null ref when the agent sent none, rather than inventing one', async () => {
+    const repos = createRepositories(openDb(':memory:'));
+    const m = await registerMachine(repos);
+    const sub = subscribe(repos, m.userId, 'https://push.example.com/send/phone');
+    const { dispatcher } = recordingDispatcher();
+    const { server } = startServer(repos, { push: dispatcher, rateLimiter: createRateLimiter() });
+
+    const agent = await onlineAgent(server.port, m.pub, m.sign);
+    for (let i = 0; i < PUSH_SENDS_PER_MINUTE + 1; i++) {
+      agent.ws.send(JSON.stringify({ type: 'push:send', items: [{ id: sub.id, body: sealed(`x${i}`) }] }));
+    }
+    const nack = await agent.nextOfType('push:throttled');
+    expect(nack.ref).toBeNull();
     agent.ws.close();
     server.stop(true);
   });

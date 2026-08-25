@@ -198,7 +198,7 @@ export function createGateway(ctx: WsGatewayContext) {
     // Sealed push payloads, one per subscription, for the relay to address and
     // forward. The relay cannot read them; see `handlePushSend`.
     if (msg.type === 'push:send' && Array.isArray(msg.items)) {
-      handlePushSend(ws, data.machineId, msg.items);
+      handlePushSend(ws, data.machineId, msg.items, typeof msg.ref === 'string' ? msg.ref : null);
       return;
     }
 
@@ -382,7 +382,12 @@ export function createGateway(ctx: WsGatewayContext) {
    * subscription belongs to this socket's machine owner. Not checked: the
    * contents, which is the point. A 404/410 is reaped here.
    */
-  function handlePushSend(ws: ServerWebSocket<SocketData>, machineId: string | null, items: unknown[]): void {
+  function handlePushSend(
+    ws: ServerWebSocket<SocketData>,
+    machineId: string | null,
+    items: unknown[],
+    ref: string | null,
+  ): void {
     if (!machineId || !ctx.push) return;
     const machine = repos.getMachine(machineId);
     if (!machine) return;
@@ -395,7 +400,11 @@ export function createGateway(ctx: WsGatewayContext) {
         // stay quiet until their next state change — a fleet restart losing
         // alerts with no signal at either end.
         logger.warn('rate limited push:send', { machineId });
-        send(ws, { type: 'push:throttled', retryAfterSeconds: verdict.retryAfter });
+        // The agent's own identifier for the batch, echoed back. Which send a
+        // refusal belongs to must not be inferred from ordering: a fixed window
+        // admits the FIRST n and refuses the rest, so any ordering rule is a
+        // guess about this limiter's internals.
+        send(ws, { type: 'push:throttled', ref, retryAfterSeconds: verdict.retryAfter });
         return;
       }
     }

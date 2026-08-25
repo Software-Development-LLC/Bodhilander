@@ -14,6 +14,7 @@ import {
   enablePush,
   isPushSupported,
   applySwitchView,
+  notificationsSectionHtml,
   pushFailureCopy,
   switchView,
   type PushDeps,
@@ -1239,22 +1240,7 @@ function notificationsSection(): string {
   // A guest with no machines of their own would never get one of these, and
   // saying so is better than a switch that silently does nothing.
   const guestOnly = app.machines.length > 0 && app.machines.every((m) => m.relation === 'grantee');
-  return `<div class="pref">
-    <div class="pref-row">
-      <div class="pref-main">
-        <div class="pref-name" id="pushLabel">Notifications</div>
-        <div class="pref-sub">Get a push when a session needs you — even with this closed.</div>
-      </div>
-      <button class="switch" id="pushToggle" role="switch" aria-checked="false" aria-labelledby="pushLabel"
-        aria-disabled="true" aria-busy="true">
-        <span class="track" aria-hidden="true"><span class="knob"></span></span>
-      </button>
-    </div>
-    <div class="pref-note" id="pushNote" role="status">Checking…</div>
-    <div class="banner warn hidden" id="pushStale" role="status">This machine’s desktop app is too old to send
-      notifications. Update Bodhilander on it — nothing will arrive until you do.</div>
-    ${guestOnly ? '<div class="pref-note">Only your own machines send these. Sessions shared with you don’t, yet.</div>' : ''}
-  </div>`;
+  return notificationsSectionHtml({ guestOnly });
 }
 
 function paintNotifications(state: PushState, note?: string): void {
