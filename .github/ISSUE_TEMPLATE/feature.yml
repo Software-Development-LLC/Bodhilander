@@ -36,7 +36,7 @@ body:
     id: scope
     attributes:
       label: Scope
-      description: Maps to the Jira Major/Minor/New Feature distinction.
+      description: How large a change this is.
       options:
         - Major feature
         - Minor feature
