@@ -46,6 +46,7 @@ export function readQuotaLimit(
   configDir: string,
   conversationId: string,
   since?: Date,
+  now: Date = new Date(),
 ): QuotaLimitHit | null {
   if (!isPathSafeConversationId(conversationId)) return null;
 
@@ -73,7 +74,7 @@ export function readQuotaLimit(
   const lines = tail.split('\n');
   const limit = Math.max(0, lines.length - MAX_LINES);
   for (let i = lines.length - 1; i >= limit; i--) {
-    const hit = parseEntry(lines[i], since);
+    const hit = parseEntry(lines[i], since, now);
     if (hit) return hit;
   }
   return null;
@@ -87,7 +88,7 @@ export function readQuotaLimit(
  * silent. Only `status: 'rejected'` counts: the same shape reports quota that
  * is merely running low, and being warned is not being refused.
  */
-function parseEntry(line: string, since?: Date): QuotaLimitHit | null {
+function parseEntry(line: string, since: Date | undefined, now: Date): QuotaLimitHit | null {
   const trimmed = line.trim();
   if (!trimmed.includes('"quotaLimits"')) return null;
 
@@ -108,7 +109,7 @@ function parseEntry(line: string, since?: Date): QuotaLimitHit | null {
   // resetsAt is seconds; a value already past describes a limit that has since
   // lifted, which is the resumed-transcript case and not something to act on.
   const resetAt = new Date(quota.resetsAt * 1000);
-  if (resetAt.getTime() <= Date.now()) return null;
+  if (resetAt.getTime() <= now.getTime()) return null;
 
   return {
     resetAt,

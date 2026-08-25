@@ -17,6 +17,7 @@ export function getDatabase(): Database.Database {
 
   initializeTables(db);
   initializeArenaTables(db);
+  clearCooldownsFromOutputScanning(db);
 
   // Reclaim for the removed code-indexing and memory features. Each drop
   // records its own completion marker, so this branch — including the
@@ -50,6 +51,7 @@ const LEGACY_CODE_SEARCH_TABLES = ['code_chunks', 'symbols', 'indexed_files', 'c
  * work forever and re-run a full VACUUM on every single launch.
  */
 const CODE_SEARCH_CLEANUP_PREF = 'legacyCodeSearchCleanupDone';
+const QUOTA_COOLDOWN_CLEANUP_PREF = 'quotaCooldownsCleared';
 
 function cleanupAlreadyRan(database: Database.Database, pref: string): boolean {
   try {
@@ -573,8 +575,6 @@ function initializeArenaTables(database: Database.Database): void {
     database.exec('ALTER TABLE arena_responses ADD COLUMN prompt TEXT DEFAULT NULL');
     database.exec('ALTER TABLE arena_responses ADD COLUMN session_ref TEXT DEFAULT NULL');
   }
-
-  clearCooldownsFromOutputScanning(database);
 }
 
 /**
@@ -591,15 +591,12 @@ function initializeArenaTables(database: Database.Database): void {
  * the columns changed — only the trustworthiness of what was written into them.
  */
 export function clearCooldownsFromOutputScanning(database: Database.Database): void {
-  const KEY = 'quotaCooldownsCleared';
-  const done = database.prepare('SELECT 1 FROM preferences WHERE key = ?').get(KEY);
-  if (done) return;
+  if (cleanupAlreadyRan(database, QUOTA_COOLDOWN_CLEANUP_PREF)) return;
 
   const { changes } = database.prepare(
     'UPDATE claude_accounts SET limited_until = NULL, limited_at = NULL WHERE limited_until IS NOT NULL'
   ).run();
-  database.prepare('INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)')
-    .run(KEY, new Date().toISOString());
+  markCleanupRan(database, QUOTA_COOLDOWN_CLEANUP_PREF, 'quota cooldown');
 
   if (changes > 0) {
     log.info(`[Accounts] Cleared ${changes} account cooldown(s) left by the previous detector.`);

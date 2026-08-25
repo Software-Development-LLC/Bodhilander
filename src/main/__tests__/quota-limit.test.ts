@@ -129,6 +129,21 @@ describe('readQuotaLimit', () => {
     expect(readQuotaLimit(dir, UUID)).not.toBeNull();
   });
 
+  /**
+   * The clock is a parameter, so the boundary is testable rather than inferred
+   * from a window measured in hours.
+   */
+  test('judges expiry against the clock it is given', () => {
+    const at = Math.floor(Date.now() / 1000) + 3600;
+    writeTranscript([rejection({
+      quotaLimits: { status: 'rejected', resetsAt: at, rateLimitType: 'five_hour' },
+    })]);
+    const justBefore = new Date((at - 1) * 1000);
+    const justAfter = new Date((at + 1) * 1000);
+    expect(readQuotaLimit(dir, UUID, undefined, justBefore)).not.toBeNull();
+    expect(readQuotaLimit(dir, UUID, undefined, justAfter)).toBeNull();
+  });
+
   test('is null when there is no transcript at all', () => {
     expect(readQuotaLimit(dir, UUID)).toBeNull();
   });
