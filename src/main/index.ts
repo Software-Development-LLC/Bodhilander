@@ -36,6 +36,7 @@ import { registerHooks, cleanupLegacyMcpServer } from './mcp-config';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
+import type { GuestResizeRequest } from './api/relay/session-tunnel';
 import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
@@ -514,6 +515,13 @@ function createWindow(): void {
 
   getRelayClient().on('grants-changed', () => {
     mainWindow?.webContents.send('relay:status', getRelayClient().getStatus());
+  });
+
+  // A guest asked for a session to be resized to fit their screen. No OS
+  // notification: unlike a join request this decides nothing about access,
+  // and the answer is a one-tap prompt on the terminal it is about.
+  getRelayClient().on('resize-request', (request: GuestResizeRequest) => {
+    mainWindow?.webContents.send('relay:resize-request', request);
   });
 
   getRelayClient().on('status', (status) => {

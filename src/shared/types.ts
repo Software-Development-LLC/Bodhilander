@@ -148,6 +148,20 @@ export interface RelayStatus {
   pendingShares: RelayPendingShare[];
 }
 
+/**
+ * A guest asking for a session to be resized to fit their screen. Mirrors the
+ * tunnel's `GuestResizeRequest`, and is a request and nothing else: it becomes
+ * a prompt the owner may decline, leaving the guest's view exactly as it was.
+ */
+export interface RelayResizeRequest {
+  sessionId: string;
+  cols: number;
+  rows: number;
+  /** Who is asking. Relay-asserted identity, never authorization. */
+  login: string | null;
+  displayName: string | null;
+}
+
 export interface RelayAttachedGuest {
   clientId: string;
   grantId: string | null;

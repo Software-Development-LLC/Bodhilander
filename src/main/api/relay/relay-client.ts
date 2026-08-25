@@ -144,6 +144,10 @@ export class RelayClient extends EventEmitter {
       // Presence changes are status changes: the owner's surfaces are driven
       // off the same push everything else uses.
       onPresenceChange: () => this.emitStatus(),
+      // A guest asked to be fitted to their screen. Emitted rather than
+      // stored: the answer is a decision the owner takes at that terminal, and
+      // a request nobody was there to see is one the guest can simply repeat.
+      onResizeRequest: (request) => this.emit('resize-request', request),
     },
   );
 

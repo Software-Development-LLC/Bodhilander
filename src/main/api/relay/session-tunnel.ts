@@ -147,6 +147,12 @@ export interface TunnelDeps {
    * must be able to see who is watching without going looking.
    */
   onPresenceChange?: () => void;
+  /**
+   * A guest asked to be fitted to their screen. A notification, not an action:
+   * the owner's renderer turns it into a prompt and performs the resize itself
+   * on accept, so declining is indistinguishable from silence.
+   */
+  onResizeRequest?: (request: GuestResizeRequest) => void;
   /** The relay origin this agent is connected to, for certificate binding. */
   relayOrigin(): string;
   /** This machine's id as the relay knows it, or null before linking. */
@@ -159,6 +165,20 @@ export interface Principal {
   userId: string;
   githubLogin?: string | null;
   displayName?: string | null;
+}
+
+/**
+ * A guest asking for a session to be resized to fit their screen. A guest
+ * never sends `terminal:resize` — a phone must not reflow the owner's
+ * terminal — so this carries the ask, and nothing happens until they agree.
+ */
+export interface GuestResizeRequest {
+  sessionId: string;
+  cols: number;
+  rows: number;
+  /** Who is asking, for the prompt. Relay-asserted; never authorization. */
+  login: string | null;
+  displayName: string | null;
 }
 
 /** One guest currently attached, as the owner's UI needs to see them. */
@@ -190,6 +210,16 @@ interface ClientSession {
    */
   marks: Map<string, number>;
 }
+
+/**
+ * The shortest gap between two resize requests from the same asker, each of
+ * which raises a prompt. Keyed below by GRANT, not by socket: a guest opens
+ * as many channels as they like, and six is otherwise six prompts at once.
+ */
+const RESIZE_ASK_INTERVAL_MS = 10_000;
+
+/** Wipe viewport and scrollback, so a replay cannot stack on what is shown. */
+const CLEAR_SCREEN = '\x1b[2J\x1b[3J\x1b[H';
 
 /** Decrypted command from a web client (union of every message's fields). */
 interface ClientFrame {
@@ -239,6 +269,8 @@ export class SessionTunnel {
    * create a number that survives the buffer it points into.
    */
   private readonly shareMarks = new Map<string, ShareWindow>();
+  /** Asker → when they last asked to be fitted. See RESIZE_ASK_INTERVAL_MS. */
+  private readonly lastResizeAsk = new Map<string, number>();
   /** Detaches the shared PTY listeners; null when not attached. */
   private detach: (() => void) | null = null;
   private readonly deps: TunnelDeps;
@@ -271,6 +303,7 @@ export class SessionTunnel {
         this.deps.pty.resize(inner.sessionId, size.cols, size.rows);
       }
     },
+    'terminal:resize-request': (clientId, s, inner) => this.handleResizeRequest(clientId, s, inner),
     'session:create': (clientId, s, inner) => this.handleSessionCreate(clientId, s, inner),
     'group:create': (clientId, s, inner) => this.handleGroupCreate(clientId, s, inner),
     'dirs:list': (clientId, s, inner) => this.handleDirsList(clientId, s, inner),
@@ -666,7 +699,7 @@ export class SessionTunnel {
       this.sealTo(clientId, {
         type: 'terminal:output',
         sessionId,
-        data: '\x1b[2J\x1b[3J\x1b[H── shared from here ──\r\n',
+        data: `${CLEAR_SCREEN}── shared from here ──\r\n`,
       });
       if (mark === null) return;
       const since = await this.deps.pty.getSerializedBufferSince(sessionId, mark);
@@ -682,11 +715,54 @@ export class SessionTunnel {
     // shared terminal without the scrollback garbling. Then live output streams.
     // Chunked so a long scrollback can't put a multi-megabyte frame on the wire
     // (xterm.js carries parser state across writes, so splitting is safe).
+    //
+    // Cleared first, like the guest branch above: this frame means "here is the
+    // whole buffer", so a client that subscribes without wiping its own screen
+    // — a reconnect re-subscribing, rather than a tap that cleared first —
+    // would otherwise render the entire scrollback again underneath itself.
+    this.sealTo(clientId, { type: 'terminal:output', sessionId, data: CLEAR_SCREEN });
     const history = await this.deps.pty.getSerializedBuffer(sessionId);
     for (const data of chunkText(history)) {
       // Re-check every chunk: the client may unsubscribe or drop mid-replay.
       if (!s.subs.has(sessionId) || this.sessions.get(clientId) !== s) return;
       this.sealTo(clientId, { type: 'terminal:output', sessionId, data });
+    }
+  }
+
+  /**
+   * A guest asked to be fitted to their screen. Nothing is resized here: the
+   * ask goes to the owner's UI and dies there if they say no. The size is
+   * clamped, and scoped to a session this client is actually watching.
+   */
+  private handleResizeRequest(clientId: string, s: ClientSession, inner: ClientFrame): void {
+    const sessionId = inner.sessionId;
+    const size = sanitizeSize(inner.cols, inner.rows);
+    if (typeof sessionId !== 'string' || !size || !s.subs.has(sessionId)) return;
+
+    // The person, not the socket. A fresh channel per ask would otherwise
+    // reset the throttle, which is a browser refresh away from free.
+    const asker = s.grant.grantId ?? s.principal?.userId ?? clientId;
+    const now = this.deps.now();
+    const last = this.lastResizeAsk.get(asker);
+    if (last !== undefined && now - last < RESIZE_ASK_INTERVAL_MS) {
+      this.deps.log.warn('[Relay] dropped a repeated resize request', { sessionId });
+      return;
+    }
+    this.sweepResizeAsks(now);
+    this.lastResizeAsk.set(asker, now);
+    this.deps.onResizeRequest?.({
+      sessionId,
+      cols: size.cols,
+      rows: size.rows,
+      login: s.principal?.githubLogin ?? null,
+      displayName: s.principal?.displayName ?? null,
+    });
+  }
+
+  /** Forget askers whose interval has passed, so the map cannot grow. */
+  private sweepResizeAsks(now: number): void {
+    for (const [asker, at] of this.lastResizeAsk) {
+      if (now - at >= RESIZE_ASK_INTERVAL_MS) this.lastResizeAsk.delete(asker);
     }
   }
 
