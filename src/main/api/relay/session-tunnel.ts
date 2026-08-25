@@ -212,10 +212,9 @@ interface ClientSession {
 }
 
 /**
- * The shortest gap between two resize requests from the same asker: each
- * raises a prompt on the owner's screen. Keyed below by GRANT, not by socket:
- * a guest may open as many channels as they like, and six under one
- * certificate would otherwise be six prompts in the same instant.
+ * The shortest gap between two resize requests from the same asker, each of
+ * which raises a prompt. Keyed below by GRANT, not by socket: a guest opens
+ * as many channels as they like, and six is otherwise six prompts at once.
  */
 const RESIZE_ASK_INTERVAL_MS = 10_000;
 

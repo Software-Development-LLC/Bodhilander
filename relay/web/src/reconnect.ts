@@ -24,10 +24,9 @@ export interface ReadyCommand {
 }
 
 /**
- * What to send the moment a channel reports ready. A reconnect is a NEW
- * socket whose client session has no subscriptions, so an open terminal
- * receives nothing until it asks again — and a guest who landed directly in
- * one has no row left to tap.
+ * What to send when a channel reports ready. A reconnect is a NEW socket
+ * whose client session has no subscriptions, so an open terminal receives
+ * nothing until it asks again — and a landed guest has no row left to tap.
  */
 export function readyCommands(activeSessionId: string | null): ReadyCommand[] {
   const commands: ReadyCommand[] = [{ type: 'groups:list' }, { type: 'sessions:list' }];
