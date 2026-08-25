@@ -177,7 +177,7 @@ interface ElectronAPI {
   setDefaultAccount: (id: string) => Promise<boolean>;
   assignAccountToSession: (sessionId: string, accountId: string | null) => Promise<AccountSwitchResult>;
   assignAccountToGroup: (groupId: string, accountId: string | null) => Promise<AccountSwitchResult>;
-  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => () => void;
+  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null; verified: boolean }) => void) => () => void;
   onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => () => void;
 
   // Update channel (BDHLNDR-32)

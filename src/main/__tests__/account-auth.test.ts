@@ -222,6 +222,24 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
   throw new Error('condition was never met');
 }
 
+type MainWindow = Parameters<typeof accountAuth.confirmLoginMacOS>[0];
+
+interface SentEvent {
+  channel: string;
+  data: { accountId: string; email: string | null; verified: boolean };
+}
+
+/** Captures what the renderer is told, which is the claim the overlay words. */
+function fakeWindow(): { sent: SentEvent[]; win: MainWindow } {
+  const sent: SentEvent[] = [];
+  const win = {
+    webContents: {
+      send: (channel: string, data: SentEvent['data']) => { sent.push({ channel, data }); },
+    },
+  };
+  return { sent, win: win as unknown as MainWindow };
+}
+
 /**
  * Which writes into the config dir mean "a login landed". The watch used to
  * answer that with the presence of a token file, which a platform holding its
@@ -283,6 +301,39 @@ describe('login detection', () => {
 
     expect(storedEmail(account.id)).toBeNull();
     expect(storedAccounts()).toEqual([{ id: account.id, isDefault: true }]);
+    accountAuth.cancelLoginFlow(pty, ptyId, false);
+  });
+
+  // The button can be pressed before OAuth finishes. Main writes no address in
+  // that case, so it must not let the overlay say the account is signed in
+  // while the panel behind it reads the same empty dir and says otherwise.
+  test('a confirmation main could not corroborate is reported as unverified', async () => {
+    const pty = fakePtyManager();
+    const { win, sent } = fakeWindow();
+    const { ptyId } = await accountAuth.startLoginFlow(pty, win, 'Work');
+
+    accountAuth.confirmLoginMacOS(win, ptyId);
+
+    const completed = sent.filter((e) => e.channel === 'accounts:login-completed');
+    expect(completed).toHaveLength(1);
+    expect(completed[0].data.verified).toBe(false);
+    expect(completed[0].data.email).toBeNull();
+    accountAuth.cancelLoginFlow(pty, ptyId, false);
+  });
+
+  test('a login main found on disk is reported verified, with its email', async () => {
+    const pty = fakePtyManager();
+    const { win, sent } = fakeWindow();
+    const { account, ptyId } = await accountAuth.startLoginFlow(pty, win, 'Work');
+
+    writeConfigFile(account.configDir, '.claude.json', {
+      oauthAccount: { accountUuid: 'u-1', emailAddress: 'will@acme.test' },
+    });
+    accountAuth.confirmLoginMacOS(win, ptyId);
+
+    const completed = sent.filter((e) => e.channel === 'accounts:login-completed');
+    expect(completed[0].data.verified).toBe(true);
+    expect(completed[0].data.email).toBe('will@acme.test');
     accountAuth.cancelLoginFlow(pty, ptyId, false);
   });
 });

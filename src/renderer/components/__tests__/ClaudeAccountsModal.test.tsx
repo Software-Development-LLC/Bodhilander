@@ -16,7 +16,7 @@
 import React from 'react';
 import { describe, expect, test, afterEach } from 'bun:test';
 import { act, render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { AccountRow, ClaudeAccountsPanel } from '../ClaudeAccountsModal';
+import { AccountRow, ClaudeAccountsPanel, LoginHint } from '../ClaudeAccountsModal';
 import { ClaudeAccount } from '../../../shared/types';
 
 afterEach(cleanup);
@@ -175,5 +175,58 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
     await act(async () => { fireEvent.click(screen.getByText('Delete')); });
 
     expect(messages[0]).not.toContain('running session');
+  });
+});
+
+/**
+ * The login overlay's copy. It sits on top of the accounts panel, which reads
+ * the same config dir main just read, so any claim it makes that main could
+ * not confirm puts two answers about one account on screen at once.
+ */
+describe('LoginHint', () => {
+  function hint(props: Partial<React.ComponentProps<typeof LoginHint>> = {}) {
+    render(
+      <LoginHint
+        completed={false}
+        verified={false}
+        exited={false}
+        isMac={false}
+        {...props}
+      />
+    );
+    return document.body.textContent ?? '';
+  }
+
+  test('a login main actually saw is reported as signed in', () => {
+    expect(hint({ completed: true, verified: true })).toContain('signed in');
+  });
+
+  // The user can press "I'm logged in" before OAuth finishes: main resolves no
+  // login, writes no address, and the panel behind renders "Not yet logged in".
+  test('a completion main could not confirm never claims the account is signed in', () => {
+    const text = hint({ completed: true, verified: false, isMac: true });
+    expect(text).not.toContain('signed in');
+    expect(text).toContain('Recorded');
+    expect(text).toContain('/login');
+  });
+
+  test('an exited login is reported as exited, not as completed', () => {
+    const text = hint({ exited: true });
+    expect(text).toContain('exited before credentials were saved');
+    expect(text).not.toContain('signed in');
+  });
+
+  test('a completed login outranks an exit that followed it', () => {
+    expect(hint({ completed: true, verified: true, exited: true })).toContain('signed in');
+  });
+
+  test('macOS is told about the button it alone is shown', () => {
+    expect(hint({ isMac: true })).toContain("I'm logged in");
+  });
+
+  test('every other platform is not offered a button it does not have', () => {
+    const text = hint({ isMac: false });
+    expect(text).not.toContain("I'm logged in");
+    expect(text).toContain('/login');
   });
 });

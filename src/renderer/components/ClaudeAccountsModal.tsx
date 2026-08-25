@@ -318,6 +318,40 @@ interface ClaudeAccountLoginModalProps {
   onCancel: (deleteAccount: boolean) => void;
 }
 
+export interface LoginHintProps {
+  completed: boolean;
+  /** Whether main saw the login in the config dir, rather than being told. */
+  verified: boolean;
+  exited: boolean;
+  isMac: boolean;
+}
+
+/**
+ * What the overlay is allowed to claim. An unverified completion is the user
+ * pressing the button before OAuth finished, and saying "signed in" there
+ * contradicts the panel behind it, which reads the same config dir we just did.
+ */
+export const LoginHint: React.FC<LoginHintProps> = ({ completed, verified, exited, isMac }) => {
+  if (completed && verified) {
+    return <>Login detected{' — '}this account is signed in. You can close this window.</>;
+  }
+  if (completed) {
+    return (
+      <>
+        Recorded{' — '}but no login was found in this account's config directory yet.
+        If OAuth hasn't finished, run <code>/login</code> again before closing.
+      </>
+    );
+  }
+  if (exited) {
+    return <>The login process exited before credentials were saved. Abort and try again, or close this window to keep the empty account.</>;
+  }
+  if (isMac) {
+    return <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window closes itself once the login lands; macOS keeps the tokens in Keychain, so click "I'm logged in" if it doesn't.</>;
+  }
+  return <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>;
+};
+
 const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
   account,
   ptyId,
@@ -325,6 +359,7 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
   onCancel,
 }) => {
   const [completed, setCompleted] = useState(false);
+  const [verified, setVerified] = useState(false);
   const [exited, setExited] = useState(false);
   const isMac = useMemo(() => window.electronAPI.platform === 'darwin', []);
 
@@ -332,6 +367,7 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
     const offCompleted = window.electronAPI.onAccountLoginCompleted((data) => {
       if (data.accountId === account.id) {
         setCompleted(true);
+        setVerified(data.verified);
       }
     });
     const offExited = window.electronAPI.onAccountLoginExited((data) => {
@@ -373,18 +409,12 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
       >
         <h3 id="claude-account-login-title">Log in to "{account.label}"</h3>
         <p className="hint">
-          {completed ? (
-            <>Login detected{' — '}this account is signed in. You can close this window.</>
-          ) : exited ? (
-            <>The login process exited before credentials were saved. Abort and try again, or close this window to keep the empty account.</>
-          ) : isMac ? (
-            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window closes itself once the login lands; macOS keeps the tokens in Keychain, so click "I'm logged in" if it doesn't.</>
-          ) : (
-            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>
-          )}
+          <LoginHint completed={completed} verified={verified} exited={exited} isMac={isMac} />
         </p>
 
-        {completed && <div className="completion-banner">Login saved. It's safe to close this window.</div>}
+        {completed && verified && (
+          <div className="completion-banner">Login saved. It's safe to close this window.</div>
+        )}
 
         <div className="terminal-host">
           <Terminal

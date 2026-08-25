@@ -170,12 +170,15 @@ function handleLoginCompleted(ptyId: string, mainWindow: BrowserWindow | null): 
   const flow = activeFlows.get(ptyId);
   if (!flow) return;
 
-  const { email } = resolveAccountIdentity(flow.configDir);
+  const { email, loggedIn } = resolveAccountIdentity(flow.configDir);
   accountsRepo.updateAccount(flow.accountId, { email });
 
+  // `verified` separates a login the config dir showed us from one the user
+  // asserted with a button, so the renderer never claims more than we know.
   mainWindow?.webContents.send('accounts:login-completed', {
     accountId: flow.accountId,
     email,
+    verified: loggedIn === true,
   });
   log.info(`[Accounts] Login completed for ${flow.accountId}${email ? ` (${email})` : ''}`);
 }

@@ -46,11 +46,11 @@ describe('AccountChip', () => {
   });
 
   test('a padded email renders trimmed, in the text and the tooltip alike', () => {
-    // The stored value is whatever parseAccountEmail read out of the
-    // credentials file, newline and all. The falsiness check below already
-    // treated '   ' as unidentified; rendering the untrimmed string meant a
-    // real address still arrived with its padding attached, so the chip's one
-    // line of room went on whitespace and the tooltip disagreed with the text.
+    // The stored value is whatever was written to the row, padding and all.
+    // The falsiness check below already treats '   ' as unidentified; an
+    // untrimmed real address would still arrive with its padding attached, so
+    // the chip's one line of room goes on whitespace and the tooltip disagrees
+    // with the text beside it.
     render(<AccountChip account={account({ email: '  a@b.com  ' })} />);
     const rendered = document.querySelector('.account-chip-email') as HTMLElement;
     expect(rendered.textContent).toBe('a@b.com');

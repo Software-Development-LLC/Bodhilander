@@ -146,6 +146,25 @@ describe('resolveAccountIdentity', () => {
     expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null });
   });
 
+  // Claude Code rewrites .claude.json about once a minute. On the macOS layout
+  // there is no token file to fall through to, so reading a torn file as
+  // logged out is the reported bug coming back at random.
+  test('a torn read on the macOS layout is unknown, never logged out', () => {
+    fs.writeFileSync(path.join(configDir, '.claude.json'), '{"oauthAccount": {"emai');
+    expect(fs.existsSync(path.join(configDir, '.credentials.json'))).toBe(false);
+    expect(resolveAccountIdentity(configDir).loggedIn).toBeUndefined();
+  });
+
+  test('an unparseable .claude.json is unknown rather than evidence of nothing', () => {
+    fs.writeFileSync(path.join(configDir, '.claude.json'), 'not json at all');
+    expect(resolveAccountIdentity(configDir).loggedIn).toBeUndefined();
+  });
+
+  test('a file holding bare JSON null is no login, not an unreadable one', () => {
+    fs.writeFileSync(path.join(configDir, '.claude.json'), 'null');
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null });
+  });
+
   test('an oauthAccount of the wrong shape is not mistaken for a profile', () => {
     write('.claude.json', { oauthAccount: 'will@acme.test' });
     expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null });
@@ -191,11 +210,32 @@ describe('withAccountIdentity', () => {
     expect(resolved.email).toBeNull();
   });
 
-  test('a stored email keeps an account logged in if the probe finds nothing', () => {
+  // The login flow records an address on every platform now, so every account
+  // will have one. If a stored address could outvote a readable config dir, a
+  // logout would never surface again on any of them.
+  test('a readable dir showing no login outranks the address the row kept', () => {
     writeFreshLayout();
+    const resolved = withAccountIdentity(account({ email: 'stored@acme.test' }));
+    expect(resolved.loggedIn).toBe(false);
+  });
+
+  test('a config dir that is gone is logged out, however healthy the row looks', () => {
+    const resolved = withAccountIdentity(
+      account({ configDir: path.join(configDir, 'moved'), email: 'stored@acme.test' })
+    );
+    expect(resolved.loggedIn).toBe(false);
+  });
+
+  test('a stored email stands in only where the dir could not be read', () => {
+    fs.writeFileSync(path.join(configDir, '.claude.json'), '{"oauthAcc');
     const resolved = withAccountIdentity(account({ email: 'stored@acme.test' }));
     expect(resolved.loggedIn).toBe(true);
     expect(resolved.email).toBe('stored@acme.test');
+  });
+
+  test('an unreadable dir and no stored email makes no claim at all', () => {
+    fs.writeFileSync(path.join(configDir, '.claude.json'), '{"oauthAcc');
+    expect(withAccountIdentity(account({ email: null })).loggedIn).toBeUndefined();
   });
 
   test('a stored blank email is no evidence at all', () => {

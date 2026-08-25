@@ -36,8 +36,8 @@ const DEFAULT_SWATCH = '#888888';
  * One account, named the same way everywhere (#165).
  *
  * An account has no email until a login records one, and not every login
- * does; accounts registered before #165 are all the same grey. So neither the
- * swatch nor the email identifies an account on its own.
+ * does; the oldest accounts are all the same grey. So neither the swatch nor
+ * the email identifies an account on its own.
  * The label always carries the identity; the swatch is decoration (aria-hidden,
  * next to real text) and the email is enrichment.
  *
@@ -59,16 +59,11 @@ export const AccountChip: React.FC<AccountChipProps> = ({
 }) => {
   const label = account ? account.label : emptyLabel;
 
-  // Deliberately not `??`. parseAccountEmail (account-auth.ts) resolves its
-  // candidate paths with a ?? chain, so a credentials file carrying an empty
-  // email yields '' rather than null, and mapAccountRow preserves it. A blank
-  // email is as unidentified as a missing one, so both must reach
-  // noEmailLabel — which nullish coalescing would not do.
-  //
-  // The trimmed value is also what renders. The same parse can hand back an
-  // email with the file's trailing newline still on it, and a chip that has
-  // one line of room for "label email" must not spend it on whitespace — nor
-  // may the tooltip disagree with the text beside it (#165).
+  // Deliberately not `??`, and trimmed. A stored row can carry an empty or
+  // padded address, and a blank one is as unidentified as a missing one, so
+  // both must reach noEmailLabel — which nullish coalescing would not do. The
+  // chip has one line of room for "label email", so it may not spend it on
+  // whitespace, nor let the tooltip disagree with the text beside it.
   const trimmedEmail = account?.email?.trim();
   let emailText = noEmailLabel;
   if (trimmedEmail) emailText = trimmedEmail;

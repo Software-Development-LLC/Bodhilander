@@ -262,12 +262,12 @@ export interface ClaudeAccount {
   label: string;
   /** Absolute path to the account's isolated .claude directory. */
   configDir: string;
-  /** Email of the logged-in profile, for display. */
+  /** Address last recorded for this account, for display. */
   email: string | null;
   /**
-   * Whether the config dir shows a completed login. Resolved from disk when
-   * accounts are listed, and absent on rows read straight from the database —
-   * where nothing was consulted, so nothing may claim the account is logged out.
+   * Whether a completed login was found — resolved from the config dir, and
+   * from a recorded address only where that dir could not be read. Undefined
+   * when nothing was consulted, so no surface may call the account logged out.
    */
   loggedIn?: boolean;
   /** Hex color for UI badge. */
