@@ -490,15 +490,12 @@ export class RelayClient extends EventEmitter {
     // The relay brokers client sessions over this socket; if it drops, they're
     // all gone (and their PTY listeners must be released).
     this.tunnel.closeAll();
-    // Subscription keys are the relay's record, re-sent on every connect.
-    // Dropping them here means a revocation that happened while we were away
-    // can never be acted on with a stale list.
-    //
-    // The debounce windows deliberately SURVIVE this: a socket that bounces
-    // mid-flap is exactly when a reset would let the storm through, and the map
-    // is bounded anyway. `disable()` clears them, because that is a decision
-    // rather than a blip.
+    // Subscription keys are the relay's record, re-sent on every connect, so a
+    // revocation heard while we were away cannot be acted on with a stale list.
     this.pushSubs = [];
+    // The debounce windows deliberately survive a reconnect: a socket bouncing
+    // mid-flap is when a reset would let the storm through. `disable()` clears
+    // them, because that is a decision rather than a blip.
     this.connecting = false;
     this.connected = false;
     if (this.ws) {
@@ -515,11 +512,9 @@ export class RelayClient extends EventEmitter {
   // --- web push (M5.3) ---
 
   /**
-   * Adopt the relay's statement of which browsers are subscribed.
-   *
-   * Replaced wholesale rather than merged: the relay is the authority on what
-   * exists (it is where subscribe, unsubscribe and 410-reaping all land), so a
-   * merge would resurrect a device the owner just turned off.
+   * Adopt the relay's statement of which browsers are subscribed. Replaced
+   * wholesale, never merged: subscribe, unsubscribe and 410-reaping all land
+   * there, so a merge would resurrect a device its owner just switched off.
    */
   private notePushSubscriptions(subs: RelayPushSubscription[]): void {
     this.pushSubs = subs.filter(
@@ -535,16 +530,9 @@ export class RelayClient extends EventEmitter {
   }
 
   /**
-   * A session needs the owner. Seal one notification per subscribed browser and
-   * hand the sealed bodies to the relay to address.
-   *
-   * The session NAME is inside the ciphertext. That is the whole point of doing
-   * the encryption here: the relay forwards a blob it holds no key for, so a
-   * notification can be specific without the relay learning what it says
-   * (design §10).
-   *
-   * Fire-and-forget by contract — a state change must never wait on, or fail
-   * because of, a notification.
+   * A session needs the owner: seal one notification per subscribed browser,
+   * hand the bodies to the relay to address. The name rides inside the
+   * ciphertext (design §10). A state change never waits on a notification.
    */
   notifyAttention(event: AttentionEvent): void {
     // Every decision — the guards, the debounce window the desktop notifier

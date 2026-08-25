@@ -1,10 +1,7 @@
 /**
- * VAPID identity and the endpoint allow-list.
- *
- * The JWT is checked by verifying it with WebCrypto against the very public
- * key the browser subscribes with — which is the whole contract. A signature
- * that only this file can validate would prove nothing about what a push
- * service will accept.
+ * VAPID identity and the endpoint allow-list. The JWT is verified against the
+ * very key a browser subscribes with, which is the whole contract — one only
+ * this file could validate would prove nothing about a real push service.
  */
 import { describe, expect, test } from 'bun:test';
 import { loadConfig } from './config';

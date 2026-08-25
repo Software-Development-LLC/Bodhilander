@@ -1,17 +1,12 @@
 /**
- * What a push notification says, and how often it is allowed to say it.
- *
- * Pure like `push-seal.ts` and for the same reason: no Electron, no
- * repositories, no logger, so the debounce can be driven by a fake clock in a
- * unit test rather than a sleep.
- *
- * The debounce mirrors the LAN dispatcher's semantics
- * (`src/main/api/web-push/dispatcher.ts`): per session AND state, a 30-second
- * window, in a map bounded by oldest-first eviction. Sessions genuinely flap
- * between `waiting` and `working` while a model is mid-stream, and the two
- * paths must agree — one buzzing a phone on a flicker the desktop suppressed
- * would be a bug reported as "notifications are broken", not as a race.
+ * What a push notification says, and how often it is allowed to say it. Pure
+ * like `push-seal.ts`, so the debounce runs on a fake clock, not a sleep.
  */
+
+// The window mirrors the LAN dispatcher (`api/web-push/dispatcher.ts`): per
+// session AND state, 30s, oldest-first eviction. Sessions really do flap
+// between waiting and working mid-stream, and two paths disagreeing about
+// that gets reported as "notifications are broken", not as a race.
 
 import { sealWebPushPayload, type RelayPushSubscription } from './push-seal';
 
@@ -75,11 +70,9 @@ export interface AttentionPayloadInput {
 }
 
 /**
- * The JSON the service worker reads out of a decrypted push.
- *
- * The session NAME is in here, which is the entire reason the agent seals this
- * instead of asking the relay to compose it. Keep this in sync with the `push`
- * handler in `relay/web/sw.js`.
+ * The JSON the service worker reads out of a decrypted push. The session NAME
+ * is in here, which is the entire reason the agent seals it rather than asking
+ * the relay to compose it. Keep in step with the `push` handler in `sw.js`.
  */
 export function buildAttentionPayload(input: AttentionPayloadInput): string {
   // Sliced by CODE POINT, not by UTF-16 unit: cutting an emoji in half leaves a
@@ -120,14 +113,9 @@ export interface PlanAttentionPushInput {
 }
 
 /**
- * Decide whether a state change becomes a push, and build the exact message.
- *
- * The whole trigger lives here rather than in `RelayClient` so it can be tested
- * as a function: the guards, the debounce, what the payload says, and the
- * per-device fan-out are the parts that can be wrong, and none of them should
- * need an Electron app, a socket, or a PTY to exercise.
- *
- * Returns null when nothing should be sent.
+ * Decide whether a state change becomes a push; null when it should not. The
+ * whole trigger lives here rather than in `RelayClient`, so the parts that can
+ * be wrong need no Electron app, socket or PTY to exercise.
  */
 export function planAttentionPush(input: PlanAttentionPushInput): PushSendMessage | null {
   const { connected, machineId, subs, gate, event } = input;

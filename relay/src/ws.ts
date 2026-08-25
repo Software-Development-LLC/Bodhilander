@@ -84,10 +84,8 @@ export const AGENT_AUTH_TIMEOUT_MS = 30_000;
 export const MAX_PUSH_ITEMS = 32;
 
 /**
- * Largest sealed body the relay will forward, base64.
- *
- * Push services cap a payload at 4096 octets; the aes128gcm header and tag come
- * out of that budget, and base64 adds a third. Anything past this would be
+ * Largest sealed body the relay will forward, base64. Push services cap a
+ * payload at 4096 octets and base64 adds a third; anything past this would be
  * refused downstream anyway, so refusing it here keeps it off the wire.
  */
 export const MAX_SEALED_BODY_B64 = 6144;
@@ -326,13 +324,9 @@ export function createGateway(ctx: WsGatewayContext) {
   }
 
   /**
-   * Hand an agent the keys it seals push payloads to.
-   *
-   * The ENDPOINT is deliberately not included. The agent encrypts to
-   * `p256dh`/`auth` and addresses nothing; the relay does the addressing. So
-   * the desktop never learns which push service, and therefore which device
-   * family, its owner reads notifications on — the same minimal-disclosure rule
-   * that keeps session names away from the relay, pointed the other way.
+   * Hand an agent the keys it seals push payloads to. The ENDPOINT is withheld:
+   * the agent encrypts, the relay addresses, so the desktop never learns which
+   * push service its owner reads on. Minimal disclosure, pointed both ways.
    */
   function sendPushSync(agent: ServerWebSocket<SocketData>, userId: string): void {
     if (!agentSupportsPush(agent)) return;
@@ -354,12 +348,9 @@ export function createGateway(ctx: WsGatewayContext) {
   }
 
   /**
-   * Forward sealed payloads from one machine's agent.
-   *
-   * What the relay checks: that each subscription named belongs to the owner of
-   * the machine on the other end of THIS socket. What it cannot check: the
-   * contents, which is the point. A dead endpoint (404/410) is reaped here —
-   * this is the only moment the relay learns a browser is gone.
+   * Forward sealed payloads from one machine's agent. Checked: each named
+   * subscription belongs to this socket's machine owner. Not checked: the
+   * contents, which is the point. A 404/410 is reaped here.
    */
   function handlePushSend(machineId: string | null, items: unknown[]): void {
     if (!machineId || !ctx.push) return;

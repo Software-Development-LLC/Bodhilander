@@ -149,11 +149,8 @@ export interface Repositories {
 
   /**
    * Record a browser's push subscription, replacing the keys if that endpoint
-   * is already known.
-   *
-   * Returns null when the user is already at `MAX_PUSH_SUBSCRIPTIONS_PER_USER`
-   * — a refusal, not an error: the alternative is an unbounded table filled by
-   * anyone able to script a browser.
+   * is known. Null when the user is at `MAX_PUSH_SUBSCRIPTIONS_PER_USER` — a
+   * refusal, not an error; the alternative is an unbounded table.
    */
   upsertPushSubscription(userId: string, input: PushSubscriptionInput): PushSubscription | null;
   listPushSubscriptions(userId: string): PushSubscription[];

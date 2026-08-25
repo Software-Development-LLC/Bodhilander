@@ -49,13 +49,8 @@ export const CAP_GRANTS_V1 = 'grants:v1';
 
 /**
  * Capability an agent advertises to say it can seal web-push payloads itself.
- *
- * Gating on this is minimal disclosure, not version tolerance. `push:sync`
- * carries the subscription keys a payload is encrypted to, and a build that
- * cannot use them has no business holding them — an older agent would simply
- * ignore the message while the keys sat in its process memory and its logs.
- * No capability, no keys, no push; the owner's phone stays quiet until the
- * desktop updates, which is the honest outcome.
+ * Minimal disclosure, not version tolerance: an older agent would ignore
+ * `push:sync` while the keys sat in its memory and logs. No cap, no keys.
  */
 export const CAP_PUSH_V1 = 'push:v1';
 

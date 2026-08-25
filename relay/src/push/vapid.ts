@@ -1,27 +1,16 @@
 /**
- * VAPID — how a push service knows the request came from THIS relay.
- *
- * Web Push splits two jobs that are easy to confuse. **Identification** is
- * VAPID: an ES256 JWT, signed with an application-server key, that the push
- * service checks against the `applicationServerKey` the browser subscribed
- * with. **Confidentiality** is the aes128gcm content encoding, keyed by the
- * subscription's own `p256dh`/`auth`.
- *
- * The relay does the first and never the second. It signs, it addresses, it
- * forwards — the body arrives already sealed by the desktop agent and the
- * relay has no way to read it (design §10). Everything in this file is
- * therefore about the envelope.
- *
- * Key provisioning, in order:
- *   1. `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` from the environment.
- *   2. A pair previously minted here, from the `kv` table.
- *   3. A fresh pair, minted and persisted.
- *
- * The public key is baked into every browser subscription, so it must be
- * STABLE across restarts. Generating one per boot would leave every subscribed
- * device holding a key nothing signs with any more, and the push service would
- * reject each send with a 403 that looks like nothing in particular.
+ * VAPID — how a push service knows a request came from THIS relay. An ES256
+ * JWT checked against the `applicationServerKey` the browser subscribed with.
  */
+
+// Web Push splits identification (this file) from confidentiality (the agent's
+// aes128gcm sealing). The relay signs, addresses and forwards a body it cannot
+// read — design §10 — so everything here is about the envelope.
+
+// Keys come from the environment, else the `kv` table, else a fresh pair that
+// is persisted. The public key is baked into every browser subscription, so it
+// must be STABLE: minting per boot leaves every device holding a key nothing
+// signs with, and the push service answers 403 for no visible reason.
 
 import type { RelayConfig } from '../config';
 import type { Logger } from '../logger';
@@ -189,11 +178,9 @@ async function signJwt(key: CryptoKey, claims: { aud: string; exp: number; sub: 
 }
 
 /**
- * Build a signing key from the base64url pair.
- *
- * Imported as a JWK because WebCrypto has no "raw private scalar" input for
- * ECDSA: the coordinates are carved out of the uncompressed point (`0x04 ‖ x ‖
- * y`) and paired with the scalar as `d`.
+ * Build a signing key from the base64url pair. Imported as a JWK because
+ * WebCrypto has no raw-private-scalar input for ECDSA: the coordinates come out
+ * of the uncompressed point (`0x04 ‖ x ‖ y`) and pair with the scalar as `d`.
  */
 async function importSigningKey(publicKeyB64: string, privateKeyB64: string): Promise<CryptoKey> {
   const point = new Uint8Array(Buffer.from(publicKeyB64, 'base64url'));

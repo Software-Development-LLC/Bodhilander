@@ -1,10 +1,7 @@
 /**
- * The push half of the WebSocket gateway (M5.3).
- *
- * Two directions, and the interesting property of each is what the relay does
- * NOT do. Down: it hands an agent the subscription keys but never the endpoint.
- * Up: it forwards a sealed body it cannot read, to a subscription it has
- * checked belongs to that machine's owner, and reaps whatever comes back dead.
+ * The push half of the WebSocket gateway. What the relay does NOT do is the
+ * point. Down: keys to the agent, never the endpoint. Up: a sealed body it
+ * cannot read, to a subscription it checked, reaping whatever comes back dead.
  */
 import { describe, expect, test } from 'bun:test';
 import { openDb } from './db';

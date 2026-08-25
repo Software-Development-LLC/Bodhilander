@@ -563,11 +563,9 @@ export function createRouter(ctx: RelayContext) {
   // --- web push (M5.3) ---
 
   /**
-   * The application-server public key a browser subscribes with.
-   *
-   * Session-gated, though the value is public: only a signed-in browser has any
-   * use for it, and gating keeps the key off an anonymous surface that would
-   * otherwise be the cheapest way to fingerprint which relay you are talking to.
+   * The application-server public key a browser subscribes with. Session-gated
+   * though the value is public: only a signed-in browser has any use for it,
+   * and an anonymous surface is the cheapest way to fingerprint a relay.
    */
   async function handleVapidKey(req: Request): Promise<Response> {
     if (!currentUser(req)) return json({ error: 'unauthorized' }, 401);

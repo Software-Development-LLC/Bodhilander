@@ -1059,13 +1059,9 @@ const pushDeps: PushDeps = {
 };
 
 /**
- * The notifications row.
- *
- * A switch rather than a button, because this is a setting with two states and
- * a screen reader should hear which one it is in. It renders in a pending state
- * and settles once the browser has been asked — the answer needs the service
- * worker to be ready, and blocking the sheet on that would make opening your
- * account feel broken on a slow connection.
+ * The notifications row. A switch, not a button: two states, and a screen
+ * reader should hear which one. It renders pending and settles once the worker
+ * is ready — blocking the sheet on that would feel broken on a slow link.
  */
 function notificationsSection(): string {
   // A guest with no machines of their own would never get one of these, and
@@ -1417,13 +1413,11 @@ function linkErrorText(error?: string): string {
 
 // Root scope, so the worker covers `/i/*` invite links and carries web push.
 // An updated worker must never take over a page mid-terminal-session; sw.js
-// therefore never calls skipWaiting/clients.claim, and nothing here needs to
-// wait on, prompt about, or reload for an update.
-//
-// The failure is logged rather than swallowed: registration failing is silent
+// never calls skipWaiting/clients.claim, so nothing here waits on an update.
+
+// The failure is logged rather than swallowed. Registration failing is silent
 // from a person's point of view — the app keeps working, offline support and
-// notifications simply never arrive — so without this there is no signal at all
-// that sw.js broke.
+// notifications just never arrive — so otherwise there is no signal at all.
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch((err) => {
     // eslint-disable-next-line no-console

@@ -1,30 +1,14 @@
 /**
- * Sealing a web-push payload on the AGENT (RFC 8291, `aes128gcm`).
- *
- * This is the file that makes push honour the product's promise. A session's
- * name is end-to-end material: the relay routes ciphertext for the terminal and
- * must not learn it through the back door of a notification body. So the
- * desktop performs the content encryption itself, against the browser
- * subscription's own `p256dh`/`auth`, and the relay forwards a blob it has no
- * key for. See `docs/designs/remote-hosting-relay.md` §10.
- *
- * Deliberately **pure** — `node:crypto` and nothing else, no Electron, no
- * repositories, no `electron-log` — for the same reason `grants.ts` is: every
- * branch is unit-testable without `mock.module()`, which is process-wide in bun.
- *
- * The construction, in the order the RFC builds it:
- *
- *   ecdh_secret = ECDH(as_private, ua_public)
- *   IKM   = HKDF(salt = auth_secret, ikm = ecdh_secret,
- *                info = "WebPush: info\0" ‖ ua_public ‖ as_public, L = 32)
- *   CEK   = HKDF(salt, IKM, "Content-Encoding: aes128gcm\0", L = 16)
- *   NONCE = HKDF(salt, IKM, "Content-Encoding: nonce\0",     L = 12)
- *   body  = salt ‖ rs ‖ idlen ‖ as_public ‖ AES128GCM(plaintext ‖ 0x02)
- *
- * `sealWebPushPayload` is pinned against the published RFC 8291 §5 vector in
- * `__tests__/push-seal.test.ts`, so this is verified interop rather than a
- * round trip that only agrees with itself.
+ * Sealing a web-push payload on the AGENT (RFC 8291, `aes128gcm`). The relay
+ * forwards a blob it holds no key for, so a notification can name a session
+ * the relay never learns. Why it is done here: design §10.
  */
+
+// Pure `node:crypto` like `grants.ts` — no Electron, no repositories, no
+// logger — so every branch is testable without `mock.module()`.
+//
+// Pinned against the published RFC 8291 §5 vector in the tests, which makes
+// this verified interop rather than a round trip that agrees with itself.
 
 import { createCipheriv, createECDH, hkdfSync, randomBytes, timingSafeEqual } from 'crypto';
 
@@ -52,13 +36,9 @@ export interface PushSubscriptionKeys {
 }
 
 /**
- * A browser subscription as the relay describes it: the keys to seal to, and
- * an id to name it by.
- *
- * Deliberately no endpoint. The relay does the addressing, so the desktop never
- * learns which push service — and therefore which device family — its owner
- * reads notifications on. The minimal-disclosure rule that keeps session names
- * away from the relay, pointed back the other way.
+ * A browser subscription as the relay describes it: keys, and an id to name
+ * them by. No endpoint — the relay addresses, so the desktop never learns
+ * which push service its owner reads on. Minimal disclosure, both ways.
  */
 export interface RelayPushSubscription extends PushSubscriptionKeys {
   id: string;
@@ -66,9 +46,8 @@ export interface RelayPushSubscription extends PushSubscriptionKeys {
 
 export interface SealOptions {
   /**
-   * Fixed salt and ephemeral key. **Tests only** — supplying either makes the
-   * output deterministic, and a repeated (key, nonce) pair under AES-GCM is a
-   * total loss of confidentiality. Production always takes the random path.
+   * Fixed salt and ephemeral key. **Tests only**: a repeated (key, nonce) pair
+   * under AES-GCM loses confidentiality outright. Production stays random.
    */
   salt?: Buffer;
   senderPrivateKey?: Buffer;
@@ -79,12 +58,9 @@ export class PushSealError extends Error {
 }
 
 /**
- * Encrypt `plaintext` to one subscription, returning the exact bytes that go in
- * the body of the POST to the push service.
- *
- * Throws rather than returning null: a malformed subscription is a bug or a
- * hostile relay, and both deserve to be visible at the call site rather than
- * becoming a notification that silently never arrives.
+ * Encrypt `plaintext` to one subscription: the exact bytes of the POST body.
+ * Throws rather than returning null — a malformed subscription is a bug or a
+ * hostile relay, and both beat a notification that never silently arrives.
  */
 export function sealWebPushPayload(
   keys: PushSubscriptionKeys,
@@ -148,11 +124,8 @@ export function sealWebPushPayload(
 }
 
 /**
- * Whether two subscription key sets are the same.
- *
- * Used to decide whether a `push:sync` actually changed anything. Constant-time
- * because the comparison runs against relay-supplied values and there is no
- * reason to leak a prefix length even in a place this dull.
+ * Whether two subscription key sets are the same. Constant-time: the values
+ * come from the relay, and there is no reason to leak a prefix length.
  */
 export function sameSubscriptionKeys(a: PushSubscriptionKeys, b: PushSubscriptionKeys): boolean {
   return equalStrings(a.p256dh, b.p256dh) && equalStrings(a.auth, b.auth);

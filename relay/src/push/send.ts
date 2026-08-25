@@ -1,10 +1,7 @@
 /**
- * Delivering a sealed push message to a push service.
- *
- * The body handed in here was encrypted by the desktop agent against the
- * subscription's own keys (RFC 8291 `aes128gcm`). The relay adds the envelope
- * — VAPID identity, TTL, urgency — and POSTs it. It never constructs a
- * payload, and could not read one if it tried (design §10).
+ * Delivering a sealed push message. The body was encrypted by the agent against
+ * the subscription's own keys; the relay adds the envelope and POSTs it. It
+ * never constructs a payload and could not read one (design §10).
  */
 
 import type { Vapid } from './vapid';
@@ -29,22 +26,14 @@ export interface PushDispatcher {
 }
 
 /**
- * Whether the relay is willing to POST to this URL.
- *
- * This is the SSRF boundary. The endpoint is chosen by whoever is holding a
- * browser — it arrives in a request body — and the relay then makes an
- * outbound request to it from inside its own network. Without this check,
- * "subscribe" is a general-purpose "make the relay POST arbitrary bytes at a
- * URL of my choosing" primitive, which reaches cloud metadata services and
- * anything else the relay's egress can see.
- *
- * So: HTTPS only, no credentials in the URL, no explicit port, and no
- * address-literal host. A hostname that RESOLVES to a private address still
- * gets through — defending against that needs resolution-time filtering in the
- * fetch layer, which Bun does not expose — so the network the relay runs on
- * should not treat outbound egress as trusted. Recorded rather than papered
- * over; see design §10.
+ * Whether the relay will POST to this URL — the SSRF boundary. The endpoint
+ * arrives in a request body and the relay dials it from inside its own network,
+ * so unchecked this is "make the relay POST bytes at a URL of my choosing".
  */
+
+// HTTPS only, no credentials, no port, no address-literal host. A name that
+// RESOLVES to a private address still gets through: that needs resolution-time
+// filtering Bun does not expose, so outbound egress is not trusted — §10.
 export function isAllowedPushEndpoint(raw: string): boolean {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_ENDPOINT_LENGTH) return false;
 

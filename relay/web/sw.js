@@ -56,11 +56,9 @@ self.addEventListener('fetch', (event) => {
 });
 
 /* --- web push ---
- *
- * The payload arrives encrypted end-to-end from the desktop agent: the relay
- * forwards a body it holds no key for, so the session name below was never
- * visible to it. Shape is written by `buildAttentionPayload` in
- * `src/main/api/relay/push-attention.ts` — keep the two in step. */
+ * The payload arrives encrypted end-to-end from the agent, so the session name
+ * below was never visible to the relay. Shape comes from `buildAttentionPayload`
+ * in `src/main/api/relay/push-attention.ts` — keep the two in step. */
 
 self.addEventListener('push', (event) => {
   let data = {};

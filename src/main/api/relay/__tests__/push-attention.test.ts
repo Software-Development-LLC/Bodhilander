@@ -1,10 +1,7 @@
 /**
- * The agent-side push trigger: when a state change becomes a notification, and
- * what that notification says.
- *
- * `planAttentionPush` is the whole decision, deliberately, so these tests need
- * no Electron app, no socket and no PTY — the guards, the debounce and the
- * fan-out are exercised directly rather than inferred from a mocked one.
+ * The agent-side push trigger: when a state change becomes a notification.
+ * `planAttentionPush` is the whole decision, so these tests exercise the
+ * guards, the debounce and the fan-out directly — no Electron, no socket.
  */
 import { describe, expect, test } from 'bun:test';
 import { createDecipheriv, createECDH, hkdfSync } from 'crypto';

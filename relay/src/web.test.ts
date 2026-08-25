@@ -1,13 +1,11 @@
 /**
  * What the relay serves at which path.
- *
- * The ordering inside `createWebClient` is the point: an exact static-asset
- * allow-list is consulted first, and the SPA shell catches `/` and `/i/*`
- * afterwards. That reads as correct, and it stayed correct through the PWA
- * work — but it was only ever correct by inspection, and the failure mode is
- * quiet: an invite link would start answering with the manifest, or with a 404
- * that sends the guest to a blank page holding a code that does work.
  */
+
+// The ordering in `createWebClient` is the point: exact asset allow-list first,
+// then the SPA shell for `/` and `/i/*`. Correct by inspection and untested
+// until now, and the failure is quiet — an invite link answering with the
+// manifest, or a 404 sending a guest to a blank page holding a working code.
 import { describe, expect, test } from 'bun:test';
 import { loadConfig } from './config';
 import { createWebClient } from './web';

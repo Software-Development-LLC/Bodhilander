@@ -1,22 +1,16 @@
 /**
- * Turning notifications on and off in the browser.
- *
- * Lives apart from main.ts for the same reason account.ts does: main.ts pulls in
- * xterm and runs boot() at import time, so nothing in it is reachable from a
- * unit test. Everything here takes its browser surfaces as arguments instead of
- * reaching for globals, so the whole flow — including the refusals, which are
- * the parts a person actually meets — can be driven in a test.
- *
- * What this file does NOT do is compose the notification. The desktop agent
- * seals every payload against the keys created here, and the relay forwards
- * ciphertext; the text a person reads is written on their own machine and is
- * unreadable to everything in between (design §10).
+ * Turning notifications on and off in the browser. Apart from main.ts for the
+ * reason account.ts is: main.ts imports xterm and boots on import, so nothing
+ * in it is reachable from a test.
  */
 
-import { MACHINE_PREF_KEY } from './account';
+// Browser surfaces arrive as arguments rather than globals, so the whole flow —
+// the refusals included, which are what a person actually meets — is testable.
+//
+// This file does NOT compose the notification. The agent seals every payload
+// against the keys created here and the relay forwards ciphertext (§10).
 
-/** Remembers the last known answer so the toggle renders without a round trip. */
-export const PUSH_HINT_KEY = 'bodhi.push';
+import { MACHINE_PREF_KEY } from './account';
 
 /** The query parameter a notification tap arrives with. */
 export const PUSH_TARGET_PARAM = 'm';
@@ -50,11 +44,9 @@ export interface PushDeps {
 }
 
 /**
- * Whether push is available at all in this browser.
- *
- * All three are needed and iOS is the reason to check rather than assume: Safari
- * exposes `PushManager` only to a page installed to the Home Screen, so a plain
- * tab must be told that rather than shown a toggle that cannot work.
+ * Whether push is available at all here. iOS is why this checks rather than
+ * assumes: Safari exposes `PushManager` only to a page installed to the Home
+ * Screen, so a plain tab needs telling, not a toggle that cannot work.
  */
 export function isPushSupported(scope: {
   navigator?: { serviceWorker?: unknown };
@@ -65,11 +57,9 @@ export function isPushSupported(scope: {
 }
 
 /**
- * The base64url application-server key, as the bytes `subscribe()` wants.
- *
- * `PushManager.subscribe` predates browsers accepting a string here, and the
- * value arrives base64URL while `atob` speaks base64 — so the alphabet is
- * translated and the padding put back rather than hoping.
+ * The base64url application-server key as the bytes `subscribe()` wants. The
+ * value arrives base64URL and `atob` speaks base64, so the alphabet is
+ * translated and the padding put back rather than hoped for.
  */
 export function decodeVapidKey(key: string): Uint8Array {
   const padded = key.padEnd(key.length + ((4 - (key.length % 4)) % 4), '=');
@@ -101,10 +91,9 @@ export async function currentPushState(deps: PushDeps): Promise<PushState> {
 }
 
 /**
- * Ask for permission if needed, subscribe, and register the subscription.
- *
- * Must be called from a user gesture — `requestPermission()` is ignored
- * otherwise — which is why this is wired to the toggle and to nothing else.
+ * Ask for permission if needed, subscribe, and register it. Must be called
+ * from a user gesture (`requestPermission()` is ignored otherwise), which is
+ * why this is wired to the toggle and to nothing else.
  */
 export async function enablePush(deps: PushDeps): Promise<PushResult> {
   if (!deps.supported) return { ok: false, reason: 'unsupported' };
@@ -169,11 +158,9 @@ export async function enablePush(deps: PushDeps): Promise<PushResult> {
 }
 
 /**
- * Drop this browser's subscription, locally and at the relay.
- *
- * The relay is told FIRST. If the order were reversed, a failure between the
- * two would leave a row the relay keeps sealing payloads for while the browser
- * has already thrown away the key to read them.
+ * Drop this browser's subscription, at the relay FIRST. Reversed, a failure
+ * between the two leaves a row the relay keeps sealing payloads for while the
+ * browser has already thrown away the key to read them.
  */
 export async function disablePush(deps: PushDeps): Promise<boolean> {
   if (!deps.supported) return true;
@@ -197,12 +184,9 @@ export async function disablePush(deps: PushDeps): Promise<boolean> {
 }
 
 /**
- * A notification tap names the machine it came from. Adopt it as the current
- * machine and strip it from the URL.
- *
- * Stripping matters: leaving `?m=` in place would re-pin that machine on every
- * later refresh of what is now just "the app", quietly overriding a switch the
- * person made afterwards.
+ * A notification tap names the machine it came from: adopt it, then strip it
+ * from the URL. Left in place, `?m=` would re-pin that machine on every later
+ * refresh, quietly overriding a switch the person made afterwards.
  */
 export function consumePushTarget(ctx: {
   search: string;

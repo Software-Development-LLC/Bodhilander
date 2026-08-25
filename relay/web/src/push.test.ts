@@ -1,10 +1,7 @@
 /**
- * Turning notifications on and off, from the browser's side.
- *
- * The refusals get more attention than the happy path on purpose: "denied",
- * "dismissed" and "this browser can't" are three different situations that look
- * identical to a person unless the code tells them apart, and getting that
- * wrong is how a feature becomes "it just doesn't work on my phone".
+ * Notifications on and off, from the browser's side. The refusals get more
+ * attention than the happy path: "denied", "dismissed" and "this browser
+ * can't" look identical unless the code tells them apart.
  */
 import { describe, expect, test } from 'bun:test';
 import { MACHINE_PREF_KEY } from './account';

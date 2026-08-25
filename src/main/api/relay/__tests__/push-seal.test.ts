@@ -1,13 +1,12 @@
 /**
  * Web-push payload sealing on the agent.
- *
- * The first test is the one that matters: it reproduces the worked example
- * published in RFC 8291 §5 byte for byte. Every other check here is
- * self-consistent — encrypt, then decrypt with the receiver's key — and a
- * matching pair of mistakes would sail through all of them. The RFC vector is
- * an answer nobody in this repository chose, so agreeing with it is real
- * evidence that a browser will be able to read what we send.
  */
+
+// The first test is the one that matters: it reproduces the worked example in
+// RFC 8291 §5 byte for byte. Everything else here is self-consistent, and a
+// matching pair of mistakes would sail through all of it. The RFC vector is an
+// answer nobody here chose, so agreeing with it is evidence a browser can read
+// what we send.
 import { describe, expect, test } from 'bun:test';
 import { createDecipheriv, createECDH, hkdfSync } from 'crypto';
 import {
@@ -47,12 +46,9 @@ function makeSubscription(auth = Buffer.alloc(16, 5)) {
 }
 
 /**
- * The receiving half of RFC 8291, written from the browser's point of view.
- *
- * Independent of the sender in the only way that counts here: it derives from
- * the RECEIVER's private key and reads the sender's key out of the record
- * header, so it cannot accidentally inherit a mistake from the encrypt path's
- * own inputs.
+ * The receiving half of RFC 8291, from the browser's point of view. It derives
+ * from the RECEIVER's key and reads the sender's out of the record header, so
+ * it cannot inherit a mistake from the encrypt path's own inputs.
  */
 function openSealed(body: Buffer, receiverPrivate: Buffer, receiverPublic: Buffer, authSecret: Buffer): string {
   const salt = body.subarray(0, 16);

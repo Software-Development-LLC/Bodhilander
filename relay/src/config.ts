@@ -25,14 +25,9 @@ export interface RelayConfig {
   allowedGithubOrg: string | null;
   vapidSubject: string;
   /**
-   * The Web Push application-server keypair, base64url, in the shape
-   * `npx web-push generate-vapid-keys` prints: a raw uncompressed P-256 point
-   * (65 bytes) and its scalar (32 bytes).
-   *
-   * Both null means "mint one on first use and keep it in the `kv` table" —
-   * see `push/vapid.ts`. Supplying them matters when the relay's volume is
-   * disposable, because the public key is baked into every browser
-   * subscription: losing it silently orphans every subscribed device.
+   * The Web Push application-server keypair, base64url. Both null means "mint
+   * one and keep it in `kv`". Supply them when the volume is disposable: the
+   * public key is baked into every browser subscription. See `push/vapid.ts`.
    */
   vapidPublicKey: string | null;
   vapidPrivateKey: string | null;
@@ -165,18 +160,9 @@ function decodeBase64Url(raw: string): Uint8Array | null {
 }
 
 /**
- * Read the VAPID keypair from the environment.
- *
- * Half a keypair is always a mistake rather than a shorthand, so it fails
- * rather than quietly ignoring the half that was set.
- *
- * Absent entirely is the supported default: the relay mints a pair on first use
- * and keeps it in the database. That is NOT warned about here, deliberately — a
- * deployment with a durable volume is entitled to it, and a warning on every
- * boot of the documented setup is one nobody would still be reading by the time
- * it mattered. The one moment worth saying something is when a pair is actually
- * minted in production, which `push/vapid.ts` does, because that is where the
- * program learns it is happening.
+ * Read the VAPID keypair from the environment. Half a pair is a mistake, not a
+ * shorthand, so it fails rather than ignoring the half that was set. Absent is
+ * the supported default; `push/vapid.ts` warns at the one actionable moment.
  */
 function parseVapidKeys(env: Record<string, string | undefined>): {
   publicKey: string | null;

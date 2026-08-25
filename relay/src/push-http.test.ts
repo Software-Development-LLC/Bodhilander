@@ -1,9 +1,7 @@
 /**
- * The web-push HTTP surface (M5.3).
- *
- * Three routes, and the interesting parts of all three are refusals: who may
- * call them, what an endpoint is allowed to be (this is the SSRF boundary),
- * and what happens when someone tries to fill the table.
+ * The web-push HTTP surface (M5.3). Three routes, and the interesting part of
+ * all three is the refusals: who may call them, what an endpoint is allowed to
+ * be (the SSRF boundary), and what happens when someone fills the table.
  */
 import { describe, expect, test } from 'bun:test';
 import { loadConfig } from './config';

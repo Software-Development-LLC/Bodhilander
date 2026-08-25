@@ -25,10 +25,8 @@ export const CAP_GRANTS_V1 = 'grants:v1';
 
 /**
  * Capability an agent advertises to say it can seal web-push payloads itself.
- *
- * The relay withholds subscription keys from any agent that has not said this,
- * because a build that cannot seal has no use for them. Mirrors `CAP_PUSH_V1`
- * in `relay/src/protocol.ts`.
+ * The relay withholds subscription keys from any agent that has not said so.
+ * Mirrors `CAP_PUSH_V1` in `relay/src/protocol.ts`.
  */
 export const CAP_PUSH_V1 = 'push:v1';
 
