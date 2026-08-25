@@ -1149,4 +1149,10 @@ function linkErrorText(error?: string): string {
   }
 }
 
+// Root scope, so the worker covers `/i/*` invite links and can carry web
+// push. An updated worker must never take over a page mid-terminal-session;
+// sw.js therefore never calls skipWaiting/clients.claim, and nothing here
+// needs to wait on, prompt about, or reload for an update.
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+
 boot();

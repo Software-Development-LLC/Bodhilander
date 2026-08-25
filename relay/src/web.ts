@@ -15,6 +15,22 @@ export function createWebClient(config: RelayConfig) {
   const jsFile = Bun.file(path.join(WEB_DIR, 'dist', 'main.js'));
   const cssFile = Bun.file(path.join(WEB_DIR, 'dist', 'main.css'));
 
+  // What makes the client installable: manifest, root-scoped worker, offline
+  // fallback, icons. Enumerated path by path — this file serves an exact
+  // allow-list, never a directory. Icons may cache for a day; the worker and
+  // manifest must not, or an update would take that long to be discovered.
+  const icon = (name: string) => ({ file: Bun.file(path.join(WEB_DIR, ...name.split('/'))), type: 'image/png', cache: 'public, max-age=86400' });
+  const pwaAssets: Record<string, { file: ReturnType<typeof Bun.file>; type: string; cache: string }> = {
+    '/manifest.webmanifest': { file: Bun.file(path.join(WEB_DIR, 'manifest.webmanifest')), type: 'application/manifest+json', cache: 'no-cache' },
+    '/sw.js': { file: Bun.file(path.join(WEB_DIR, 'sw.js')), type: 'text/javascript; charset=utf-8', cache: 'no-cache' },
+    '/offline.html': { file: Bun.file(path.join(WEB_DIR, 'offline.html')), type: 'text/html; charset=utf-8', cache: 'no-cache' },
+    '/apple-touch-icon.png': icon('apple-touch-icon.png'),
+    '/icons/icon-192.png': icon('icons/icon-192.png'),
+    '/icons/icon-512.png': icon('icons/icon-512.png'),
+    '/icons/icon-maskable-192.png': icon('icons/icon-maskable-192.png'),
+    '/icons/icon-maskable-512.png': icon('icons/icon-maskable-512.png'),
+  };
+
   return function webRoute(req: Request): Response | null {
     const url = new URL(req.url);
     const p = url.pathname;
@@ -26,6 +42,10 @@ export function createWebClient(config: RelayConfig) {
 
     if (p === '/app/main.js') return new Response(jsFile, { headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' } });
     if (p === '/app/main.css') return new Response(cssFile, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'no-cache' } });
+
+    const asset = pwaAssets[p];
+    if (asset) return new Response(asset.file, { headers: { 'content-type': asset.type, 'cache-control': asset.cache } });
+
     // SPA shell at the root, and for invite links.
     //
     // `/i/:code` is a client route: the code lives in the path so it can be

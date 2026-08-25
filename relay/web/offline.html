@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0f14" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f5f7f9" media="(prefers-color-scheme: light)" />
+  <title>Offline — Bodhilander Remote</title>
+  <style>
+    /* Self-contained on purpose: this page renders when nothing else can be
+       fetched, so it borrows no stylesheet. Tokens mirror styles.css. */
+    :root { --bg: #0c0f14; --ink: #e9edf3; --muted: #98a2b1; --accent: #35c2d1; --accent-ink: #04121a; }
+    @media (prefers-color-scheme: light) {
+      :root { --bg: #f5f7f9; --ink: #131820; --muted: #55606f; --accent: #0d8794; --accent-ink: #ffffff; }
+    }
+    body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    main { text-align: center; padding: 32px 24px; max-width: 340px; }
+    .logo { font-size: 40px; }
+    h1 { font-size: 20px; margin: 14px 0 8px; letter-spacing: -.01em; }
+    p { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.5; }
+    button { margin-top: 22px; font: inherit; font-weight: 600; color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 12px; padding: 12px 22px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="logo" aria-hidden="true">📡</div>
+    <h1>Can't reach the relay</h1>
+    <p>You're offline, or the relay is. Your sessions are safe on your machine — they'll be right here once you're connected again.</p>
+    <button onclick="location.reload()">Try again</button>
+  </main>
+</body>
+</html>
