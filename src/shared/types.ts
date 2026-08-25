@@ -149,11 +149,9 @@ export interface RelayStatus {
 }
 
 /**
- * A guest asking for a session to be resized to fit their screen.
- *
- * Mirrors the tunnel's `GuestResizeRequest`. It is a request and nothing else:
- * guests never resize the owner's terminal, so this only ever becomes a prompt
- * the owner may decline — after which the guest's view is exactly as it was.
+ * A guest asking for a session to be resized to fit their screen. Mirrors the
+ * tunnel's `GuestResizeRequest`, and is a request and nothing else: it becomes
+ * a prompt the owner may decline, leaving the guest's view exactly as it was.
  */
 export interface RelayResizeRequest {
   sessionId: string;

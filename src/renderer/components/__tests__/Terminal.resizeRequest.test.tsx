@@ -1,15 +1,7 @@
 /**
- * The owner's end of "Fit to my screen".
- *
- * The rule these hold: a guest's request reaches a prompt and never the PTY,
- * accepting resizes once, and declining is indistinguishable from silence —
- * nothing is sent, and the guest's view is left exactly as it was.
- *
- * xterm and its addons are mocked for the same reason Terminal.restart.test.tsx
- * mocks them: a real xterm wants a canvas and a laid-out container, neither of
- * which happy-dom provides, and none of it is what is under test here.
- *
- * Run with: bun test src/renderer/components/__tests__/Terminal.resizeRequest.test.tsx
+ * The owner's end of "Fit to my screen": a request reaches a prompt and never
+ * the PTY, accepting resizes once, declining sends nothing. xterm is mocked as
+ * in Terminal.restart.test.tsx — a real one wants a canvas we cannot give it.
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';

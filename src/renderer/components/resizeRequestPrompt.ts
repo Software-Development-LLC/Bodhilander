@@ -1,9 +1,7 @@
 /**
  * The owner's side of "Fit to my screen": whether a guest's request is worth
- * asking about, and what the question says.
- *
- * Pure, and apart from Terminal.tsx, so the decision can be tested without a
- * canvas, a laid-out container or an xterm.
+ * asking about, and what the question says. Apart from Terminal.tsx so it can
+ * be tested without a canvas, a laid-out container or an xterm.
  */
 
 import { RelayResizeRequest } from '../../shared/types';
@@ -17,11 +15,9 @@ export interface TerminalSize {
 }
 
 /**
- * Whether to raise the prompt at all.
- *
- * A request for another session belongs to another terminal, and one that
- * already matches this size asks for nothing — interrupting the owner to
- * offer them a no-op spends their attention for nothing.
+ * Whether to raise the prompt at all. A request for another session belongs
+ * to another terminal, and one already at this size asks for nothing —
+ * interrupting the owner with a no-op spends their attention for nothing.
  */
 export function shouldPrompt(
   request: RelayResizeRequest,

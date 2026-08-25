@@ -33,13 +33,9 @@ export function machineLabel(m: ArrivalMachine): string {
 }
 
 /**
- * How to open for this person.
- *
- * A guest holding exactly one grant gets no picker and no session-list detour:
- * choosing between one thing is not a choice, and every step before the
- * terminal is a step away from the session they were actually sent to. Anyone
- * with a machine of their own keeps the pill, because for them it is also the
- * route to linking another.
+ * How to open for this person. One grant and nothing of their own means no
+ * picker and no list: choosing between one thing is not a choice. Anyone with
+ * a machine of their own keeps the pill — it is also how they link another.
  */
 export function planArrival<T extends ArrivalMachine>(machines: T[], preferredId: string | null): Arrival<T> | null {
   if (!machines.length) return null;
@@ -54,11 +50,9 @@ export interface MachineSection<T extends ArrivalMachine = ArrivalMachine> {
 }
 
 /**
- * The picker's rows, split by whose they are.
- *
- * Shared entries are grouped under one heading and each row is named after the
- * person who shared it — "SHARED WITH ME" over "Will's laptop" — so a guest
- * reads the list as people rather than as inventory.
+ * The picker's rows, split by whose they are. Shared rows are named after the
+ * person who shared them — "SHARED WITH ME" over "Will's laptop" — so the
+ * list reads as people rather than as inventory.
  */
 export function machineSections<T extends ArrivalMachine>(machines: T[]): MachineSection<T>[] {
   const mine = machines.filter((m) => !isGuestMachine(m));
@@ -78,11 +72,9 @@ export function machineMenuTitle(machines: ArrivalMachine[]): string {
 }
 
 /**
- * The session to open without being asked, or null when there is a real choice.
- *
- * Only ever for the single-grant guest, and only when their scope holds one
- * session: a grant covering several is a list they have to read, and picking
- * one for them would hide the others.
+ * The session to open without being asked, or null when there is a real
+ * choice: a grant covering several sessions is a list they have to read, and
+ * picking one for them would hide the others.
  */
 export function autoOpenSessionId(arrival: Arrival | null, sessionIds: string[]): string | null {
   if (!arrival?.landInTerminal) return null;

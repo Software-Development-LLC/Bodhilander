@@ -148,11 +148,9 @@ export interface TunnelDeps {
    */
   onPresenceChange?: () => void;
   /**
-   * A guest asked for a session to be resized to fit their screen.
-   *
-   * A notification, not an action: this tunnel resizes nothing on a guest's
-   * word. The owner's renderer turns it into a prompt and performs the resize
-   * itself if they accept, so declining is indistinguishable from silence.
+   * A guest asked to be fitted to their screen. A notification, not an action:
+   * the owner's renderer turns it into a prompt and performs the resize itself
+   * on accept, so declining is indistinguishable from silence.
    */
   onResizeRequest?: (request: GuestResizeRequest) => void;
   /** The relay origin this agent is connected to, for certificate binding. */
@@ -170,12 +168,9 @@ export interface Principal {
 }
 
 /**
- * A guest asking for this session to be resized to fit their screen.
- *
- * The request half of the sizing story: a guest never sends `terminal:resize`,
- * because a phone must not reflow the owner's terminal. This carries the size
- * they would like and who is asking, and nothing happens until the owner says
- * yes on their own machine.
+ * A guest asking for a session to be resized to fit their screen. A guest
+ * never sends `terminal:resize` — a phone must not reflow the owner's
+ * terminal — so this carries the ask, and nothing happens until they agree.
  */
 export interface GuestResizeRequest {
   sessionId: string;
@@ -219,12 +214,9 @@ interface ClientSession {
 }
 
 /**
- * The shortest gap between two of one client's resize requests.
- *
- * Each one raises a prompt on the owner's screen, and a prompt a guest can
- * raise at will is a way to make the desktop unusable. The web client waits
- * far longer than this before offering the ask again, so a well-behaved guest
- * never meets it.
+ * The shortest gap between two of one client's resize requests: each raises a
+ * prompt on the owner's screen, and one a guest can raise at will makes the
+ * desktop unusable. The web client waits far longer before offering it again.
  */
 const RESIZE_ASK_INTERVAL_MS = 10_000;
 
@@ -730,13 +722,9 @@ export class SessionTunnel {
   }
 
   /**
-   * A guest asked to be fitted to their screen.
-   *
-   * Nothing is resized here, and that is the point: the guest's phone must not
-   * reflow the owner's terminal, so the ask is forwarded to the owner's own UI
-   * and dies there if they say no. The size is clamped like any other
-   * network-supplied one, and scoped to a session this client is watching —
-   * asking about a session you cannot see would leak that it exists.
+   * A guest asked to be fitted to their screen. Nothing is resized here: the
+   * ask goes to the owner's UI and dies there if they say no. The size is
+   * clamped, and scoped to a session this client is actually watching.
    */
   private handleResizeRequest(s: ClientSession, inner: ClientFrame): void {
     const sessionId = inner.sessionId;

@@ -1,11 +1,7 @@
 /**
- * What the app says to a guest, in the guest's voice.
- *
- * A guest was invited by a person, so the copy names that person. Owner
- * vocabulary — "this machine", "your sessions" — describes a relationship they
- * do not have, and reads as though the app has mistaken them for someone else.
- * Apart from main.ts so it can be tested: main.ts pulls in xterm and runs
- * boot() at import time.
+ * What the app says to a guest, in the guest's voice: a guest was invited by a
+ * person, so the copy names that person. Owner vocabulary describes a
+ * relationship they do not have. Apart from main.ts so it can be tested.
  */
 
 import { roleWord } from './shares';
@@ -55,10 +51,9 @@ export function waitingCopy(ownerName?: string | null): WaitingCopy {
 }
 
 /**
- * The terminal subtitle: who shared this, and what you can do with it.
- *
- * The role reaches the reader as one of the two words and nothing else —
- * `viewer`, `operator`, `scope` and `grant` are our vocabulary, not theirs.
+ * The terminal subtitle: who shared this, and what you can do with it. The
+ * role reaches the reader as one of the two words and nothing else — `viewer`
+ * and `operator` are our vocabulary, not theirs.
  */
 export function guestSubtitle(ownerName: string | null | undefined, role: string | null | undefined): string {
   const who = ownerName ? `Shared by ${ownerName}` : 'Shared with you';

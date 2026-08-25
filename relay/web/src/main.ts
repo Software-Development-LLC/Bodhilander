@@ -482,8 +482,8 @@ function applyWatchOnly(): void {
 
 /**
  * How long the "asked" state stands before the ask is offered again. The
- * owner may simply not have been at their desk, and a button that claims a
- * request is still live forever is a worse lie than letting them ask twice.
+ * owner may not have been at their desk, and a button claiming a request is
+ * still live forever is a worse lie than letting someone ask twice.
  */
 const FIT_ASK_MS = 45_000;
 let fitAskedAt = 0;
@@ -528,12 +528,9 @@ function updateWideBanner(screenEl: HTMLElement): void {
 }
 
 /**
- * Ask the owner to resize this session to fit our screen.
- *
- * A guest never sends `terminal:resize` — their phone must not reflow somebody
- * else's terminal. This is a request: the owner's desktop turns it into a
- * one-tap prompt, and a declined one changes nothing here, which is why the
- * copy below promises nothing.
+ * Ask the owner to resize this session to fit our screen. A guest never sends
+ * `terminal:resize` — their phone must not reflow somebody else's terminal.
+ * A declined request changes nothing here, so the copy promises nothing.
  */
 function requestFit(): void {
   if (!term || !fitAddon || !app.activeId) return;
@@ -599,11 +596,9 @@ function renderEnded(reason: string): void {
 }
 
 /**
- * The connection's state where a guest can actually see it.
- *
- * A guest who landed straight in the terminal never looks at the session
- * list, so the list's own empty note reaches nobody — the strip sits above
- * their screen instead. Empty text hides it rather than leaving a gap.
+ * The connection's state where a guest can actually see it: one who landed
+ * straight in the terminal never looks at the session list, so that pane's
+ * empty note reaches nobody. Empty text hides the strip rather than gap it.
  */
 function setConnStrip(text: string | null): void {
   const strip = $('#connStrip');
@@ -682,10 +677,8 @@ function onAgentMessage(m: Inner) {
 
 /**
  * The single-grant guest's arrival: open the one session they were sent to.
- *
- * Once only. The list is polled every couple of seconds, so re-deciding on
- * every refresh would drag someone who tapped Back straight into the terminal
- * again — landing is an arrival, not a policy.
+ * Once only — the list is polled, so deciding again on each refresh would
+ * drag someone who tapped Back straight back in. An arrival, not a policy.
  */
 function maybeLandInTerminal(): void {
   if (app.landed || app.activeId) return;
@@ -899,11 +892,9 @@ function syncTermPane() {
 }
 
 /**
- * The subtitle under the session name.
- *
- * A guest is told who shared this and what they can do with it, in the two
- * role words and nothing else. The folder a session lives in is the owner's
- * context, and is not disclosed to a guest anywhere else either.
+ * The subtitle under the session name. A guest is told who shared this and
+ * what they can do with it; the folder it lives in is the owner's context,
+ * and is not disclosed to a guest anywhere else either.
  */
 function termMeta(s: RSession): string {
   if (isGuest()) return esc(guestSubtitle(app.machine?.ownerName, app.machine?.role));
