@@ -424,7 +424,7 @@ export function createRouter(ctx: RelayContext) {
 
     const { invite, code } = repos.createShareInvite({
       machineId,
-      expectedGithubLogin: (expectedGithubLogin as string | null) ?? null,
+      expectedGithubLogin: expectedGithubLogin ?? null,
       role: role as 'viewer' | 'operator',
       label: (label as string | undefined) ?? null,
       grantTtlSeconds,
@@ -597,7 +597,7 @@ function publicMachine(m: Machine) {
   };
 }
 
-async function readJson(req: Request): Promise<unknown | null> {
+async function readJson(req: Request): Promise<unknown> {
   try {
     return await req.json();
   } catch {

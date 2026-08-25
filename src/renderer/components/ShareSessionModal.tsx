@@ -83,7 +83,7 @@ export const ShareSessionModal: React.FC<ShareSessionModalProps> = ({ sessionId,
   );
 
   const submit = useCallback(
-    async (e: React.FormEvent) => {
+    async (e: React.SyntheticEvent) => {
       e.preventDefault();
       if (!sessionId || busy) return;
       setBusy(true);
