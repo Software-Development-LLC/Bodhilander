@@ -65,6 +65,27 @@ describe('detectUsageLimit', () => {
     expect(detectUsageLimit('5-hour limit · resets 9pm', undefined, NOW)).not.toBeNull();
   });
 
+  /**
+   * The accepted false-positive surface, made visible.
+   *
+   * "You've hit your <something> limit" is a sentence other services say too,
+   * and this terminal shows their errors as readily as Claude's. A false
+   * positive is not inert — it restarts live sessions and benches a healthy
+   * account for hours — so the qualifier is an enumerated set of the windows
+   * Anthropic actually meters on, not any word at all.
+   */
+  test('does not treat another service\'s limit as a Claude usage limit', () => {
+    const foreign = [
+      "You've hit your credit limit",
+      "You've reached your spending limit",
+      "You have reached your character limit",
+      "You've hit your context limit",
+    ];
+    for (const line of foreign) {
+      expect(detectUsageLimit(line, undefined, NOW), line).toBeNull();
+    }
+  });
+
   test('ignores ordinary agent output', () => {
     const lines = [
       'Rate limiting the relay to 100 requests per minute',

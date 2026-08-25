@@ -25,7 +25,16 @@ export const CLAUDE_USAGE_LIMIT_PATTERNS: readonly RegExp[] = [
   // got wrong: it required "reached", and the message a real weekly limit
   // produces says "hit". The qualifier is optional too — "You've hit your
   // limit" carries no adjective at all.
-  /(?:You['’]ve|You have) (?:hit|reached|used(?: up)?) your (?:[a-z0-9-]+ )?limit/i,
+  //
+  // The qualifier is an enumerated set rather than "any word", which is the
+  // narrower of two defensible choices. Any-word also matches "You've hit your
+  // credit limit" and "You've reached your spending limit" — sentences another
+  // API's error can put on this terminal — and a false positive here is not
+  // inert: it restarts live sessions and benches a healthy account for hours.
+  // The set covers the windows Anthropic actually meters on, so a wording this
+  // misses would have to be a new one, which is a smaller bet than trusting
+  // that no other service ever says "limit" in the second person.
+  /(?:You['’]ve|You have) (?:hit|reached|used(?: up)?) your (?:(?:usage|weekly|monthly|daily|session|hourly|5-hour) )?limit/i,
   /(?:usage|weekly|5-hour|session) limit reached/i,
   // "Weekly limit · resets Aug 26 at 2pm" — the status-line form, where the
   // limit and its reset are joined by a bullet rather than a sentence, so
