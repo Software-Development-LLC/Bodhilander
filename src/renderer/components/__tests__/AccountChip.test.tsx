@@ -59,15 +59,20 @@ describe('AccountChip', () => {
   });
 
   test('a whitespace-only email is as unidentified as a missing one', () => {
-    render(<AccountChip account={account({ email: '   ' })} noEmailLabel="Not yet logged in" />);
-    expect(screen.getByText('Not yet logged in')).toBeTruthy();
+    render(<AccountChip account={account({ email: '   ' })} />);
+    expect(document.querySelector('.account-chip-email')).toBeNull();
     // And the tooltip agrees — it used to append an empty parenthetical.
     expect(chip().getAttribute('title')).toBe('Claude account: Personal');
   });
 
-  test('a caller that can act on a missing login may name it', () => {
-    render(<AccountChip account={account({ email: null })} noEmailLabel="Not yet logged in" />);
-    expect(screen.getByText('Not yet logged in')).toBeTruthy();
+  // The chip names an account; it never grades one. A login state is resolved
+  // from the config dir and rendered by the caller that can act on it, so no
+  // absent address anywhere can be dressed up as a report about a login.
+  test('a missing address is never rendered as a login state', () => {
+    render(<AccountChip account={account({ email: null })} />);
+    expect(document.body.textContent).not.toContain('logged in');
+    expect(document.body.textContent).not.toContain('signed in');
+    expect(screen.getByText('Personal')).toBeTruthy();
   });
 
   test('the detail can be spoken as well as hovered', () => {

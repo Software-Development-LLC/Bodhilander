@@ -209,16 +209,21 @@ export const AccountRow: React.FC<AccountRowProps> = ({
   const plural = runningSessions === 1 ? 'session' : 'sessions';
   return (
     <li className="account-row">
-      {/* The one surface where "Not yet logged in" describes something the
-          user can act on — this row has the buttons. Keyed to the resolved
-          login state and never to a missing email: an account can be logged in
-          and hold no address, and a row the user runs sessions on must not be
-          told otherwise. */}
-      <AccountChip
-        account={account}
-        size="md"
-        noEmailLabel={account.loggedIn === false ? 'Not yet logged in' : undefined}
-      />
+      <AccountChip account={account} size="md" />
+      {/* The status is a tag beside the address, not a replacement for it: the
+          address is what says WHICH account this is, and the one surface where
+          a signed-out account can be acted on is the one that must still name
+          it. Only an explicit false speaks — undefined means nothing was read,
+          and a working account may never be accused on a failed read. */}
+      {account.loggedIn === false && (
+        <span
+          className="signed-out-tag"
+          title="No completed login found in this account's config directory — log in again before using it"
+          aria-label="Not signed in"
+        >
+          not signed in
+        </span>
+      )}
       {account.isDefault && <span className="default-tag">default</span>}
       {runningSessions > 0 && (
         <span
@@ -352,6 +357,21 @@ export const LoginHint: React.FC<LoginHintProps> = ({ completed, verified, exite
   return <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>;
 };
 
+export interface LoginBannerProps {
+  completed: boolean;
+  verified: boolean;
+}
+
+/**
+ * The most emphatic thing the overlay says, extracted so its gate sits where a
+ * test can hold it: only a login main found in the config dir may be called
+ * saved, because the panel behind reads that same dir.
+ */
+export const LoginBanner: React.FC<LoginBannerProps> = ({ completed, verified }) => {
+  if (!completed || !verified) return null;
+  return <div className="completion-banner">Login saved. It's safe to close this window.</div>;
+};
+
 const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
   account,
   ptyId,
@@ -412,9 +432,7 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
           <LoginHint completed={completed} verified={verified} exited={exited} isMac={isMac} />
         </p>
 
-        {completed && verified && (
-          <div className="completion-banner">Login saved. It's safe to close this window.</div>
-        )}
+        <LoginBanner completed={completed} verified={verified} />
 
         <div className="terminal-host">
           <Terminal

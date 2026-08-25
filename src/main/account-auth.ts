@@ -18,7 +18,7 @@ import log from 'electron-log';
 // process that loads this file, including the test runner.
 import type { PtyManager } from './pty-manager';
 import * as accountsRepo from './repositories/accounts';
-import { LOGIN_ARTIFACTS, resolveAccountIdentity } from './account-identity';
+import { AccountIdentity, LOGIN_ARTIFACTS, resolveAccountIdentity } from './account-identity';
 import { registerHooks } from './mcp-config';
 import { seedLegacyConversations } from './legacy-claude-seed';
 import { ClaudeAccount } from '../shared/types';
@@ -134,9 +134,12 @@ export async function startLoginFlow(
     if (!flow || flow.completed) return;
     // .claude.json is written from the first run onward, so the write itself
     // is not the signal — only what the file says once it lands.
-    if (!resolveAccountIdentity(configDir).loggedIn) return;
+    const identity = resolveAccountIdentity(configDir);
+    if (!identity.loggedIn) return;
     flow.completed = true;
-    handleLoginCompleted(ptyId, mainWindow);
+    // Hand on what we just read: a re-read here can catch the next rewrite
+    // mid-flight and under-report the login we came in holding.
+    handleLoginCompleted(ptyId, mainWindow, identity);
   });
 
   const exitListener = (event: { id: string; exitCode: number }) => {
@@ -166,11 +169,15 @@ export async function startLoginFlow(
   return { account, ptyId };
 }
 
-function handleLoginCompleted(ptyId: string, mainWindow: BrowserWindow | null): void {
+function handleLoginCompleted(
+  ptyId: string,
+  mainWindow: BrowserWindow | null,
+  known?: AccountIdentity,
+): void {
   const flow = activeFlows.get(ptyId);
   if (!flow) return;
 
-  const { email, loggedIn } = resolveAccountIdentity(flow.configDir);
+  const { email, loggedIn } = known ?? resolveAccountIdentity(flow.configDir);
   accountsRepo.updateAccount(flow.accountId, { email });
 
   // `verified` separates a login the config dir showed us from one the user

@@ -16,7 +16,7 @@
 import React from 'react';
 import { describe, expect, test, afterEach } from 'bun:test';
 import { act, render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { AccountRow, ClaudeAccountsPanel, LoginHint } from '../ClaudeAccountsModal';
+import { AccountRow, ClaudeAccountsPanel, LoginBanner, LoginHint } from '../ClaudeAccountsModal';
 import { ClaudeAccount } from '../../../shared/types';
 
 afterEach(cleanup);
@@ -47,6 +47,7 @@ function renderRow(overrides: Partial<ClaudeAccount> = {}, runningSessions = 0) 
 }
 
 const inUse = () => document.querySelector('.in-use-tag') as HTMLElement;
+const signedOut = () => document.querySelector('.signed-out-tag') as HTMLElement;
 
 describe('AccountRow', () => {
   test('names the account through the shared chip', () => {
@@ -61,9 +62,10 @@ describe('AccountRow', () => {
     expect(inUse()).toBeNull();
   });
 
-  test('an account resolved as logged out is the one told to log in', () => {
+  test('an account resolved as signed out is the one told to log in', () => {
     renderRow({ email: null, loggedIn: false });
-    expect(screen.getByText('Not yet logged in')).toBeTruthy();
+    expect(signedOut()).toBeTruthy();
+    expect(signedOut().getAttribute('aria-label')).toBe('Not signed in');
   });
 
   // The status follows the resolved login, not the address: on macOS a healthy
@@ -71,19 +73,29 @@ describe('AccountRow', () => {
   // being told — wrongly — that none of their accounts had ever logged in.
   test('a logged-in account with no address is not told to log in', () => {
     renderRow({ email: null, loggedIn: true });
-    expect(screen.queryByText('Not yet logged in')).toBeNull();
+    expect(signedOut()).toBeNull();
     expect(screen.getByText('Personal')).toBeTruthy();
   });
 
   test('an unresolved account makes no claim about its login either way', () => {
     renderRow({ email: null });
-    expect(screen.queryByText('Not yet logged in')).toBeNull();
+    expect(signedOut()).toBeNull();
   });
 
-  test('an address, once known, outranks the status it would replace', () => {
+  // The address used to outrank the status and hide it. That was a safety net
+  // for a login state that could not be trusted; now that it can, and now that
+  // every login records an address, that rule would hide every logout instead.
+  // The two answer different questions, so the row carries both.
+  test('a signed-out account keeps its address AND says it is signed out', () => {
     renderRow({ email: 'me@example.com', loggedIn: false });
     expect(screen.getByText('me@example.com')).toBeTruthy();
-    expect(screen.queryByText('Not yet logged in')).toBeNull();
+    expect(signedOut()).toBeTruthy();
+  });
+
+  test('the status reads without colour, in the tag and its accessible name', () => {
+    renderRow({ email: 'me@example.com', loggedIn: false });
+    expect(signedOut().textContent).toContain('not signed in');
+    expect(signedOut().getAttribute('title')).toContain('log in again');
   });
 
   test('usage is reported as a number, not a tint', () => {
@@ -228,5 +240,37 @@ describe('LoginHint', () => {
     const text = hint({ isMac: false });
     expect(text).not.toContain("I'm logged in");
     expect(text).toContain('/login');
+  });
+});
+
+/**
+ * The banner is the overlay's most emphatic claim, and the one a user acts on
+ * by closing the window. It may only appear for a login main actually found.
+ */
+describe('LoginBanner', () => {
+  const banner = () => document.querySelector('.completion-banner');
+
+  test('a verified completion is the only thing called saved', () => {
+    render(<LoginBanner completed verified />);
+    expect(banner()!.textContent).toContain('Login saved');
+  });
+
+  // The user can press "I'm logged in" before OAuth finishes. Main then finds
+  // no login, and the panel behind this overlay says so — a banner here would
+  // be the same account described two ways on one screen.
+  test('a completion main could not confirm is never called saved', () => {
+    render(<LoginBanner completed verified={false} />);
+    expect(banner()).toBeNull();
+    expect(document.body.textContent).not.toContain('Login saved');
+  });
+
+  test('nothing is claimed before the login completes at all', () => {
+    render(<LoginBanner completed={false} verified />);
+    expect(banner()).toBeNull();
+  });
+
+  test('an unstarted login claims nothing either', () => {
+    render(<LoginBanner completed={false} verified={false} />);
+    expect(banner()).toBeNull();
   });
 });

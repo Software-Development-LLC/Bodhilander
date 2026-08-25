@@ -17,12 +17,6 @@ export interface AccountChipProps {
   announceDetail?: boolean;
   /** Label used when `account` is null. Default 'Default (~/.claude)'. */
   emptyLabel?: string;
-  /**
-   * Rendered in place of the email for an account that never captured one.
-   * Only the accounts panel passes it: there "Not yet logged in" describes a
-   * row the user can act on. Nowhere else may say it — see below.
-   */
-  noEmailLabel?: string;
 }
 
 /**
@@ -41,13 +35,11 @@ const DEFAULT_SWATCH = '#888888';
  * The label always carries the identity; the swatch is decoration (aria-hidden,
  * next to real text) and the email is enrichment.
  *
- * Which is why a missing email renders nothing at all by default. It used to
- * fall back to "Not yet logged in", and in the session header that produced a
- * chip reading "Work — Not yet logged in" next to a Claude Code that was
- * actively producing output and being billed. On the setup where no email is
- * ever captured that was not an edge case but the normal reading, and on the
- * back of #164 — where a switch silently did nothing — "not logged in" is
- * exactly the wrong thing to tell someone about a session that is working.
+ * Which is why a missing email renders nothing at all. This chip once fell
+ * back to "Not yet logged in", which put that text beside a Claude Code that
+ * was actively producing output and being billed. An absent address is not a
+ * login state, and the two are answered from different places: callers that
+ * want to report a login pass a resolved one and render it themselves.
  */
 export const AccountChip: React.FC<AccountChipProps> = ({
   account,
@@ -55,19 +47,14 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   detail,
   announceDetail = false,
   emptyLabel = 'Default (~/.claude)',
-  noEmailLabel,
 }) => {
   const label = account ? account.label : emptyLabel;
 
-  // Deliberately not `??`, and trimmed. A stored row can carry an empty or
-  // padded address, and a blank one is as unidentified as a missing one, so
-  // both must reach noEmailLabel — which nullish coalescing would not do. The
-  // chip has one line of room for "label email", so it may not spend it on
-  // whitespace, nor let the tooltip disagree with the text beside it.
+  // Trimmed, and blank treated as missing. A stored row can carry an empty or
+  // padded address; the chip has one line of room for "label email", so it may
+  // not spend it on whitespace, nor let the tooltip disagree with the text.
   const trimmedEmail = account?.email?.trim();
-  let emailText = noEmailLabel;
-  if (trimmedEmail) emailText = trimmedEmail;
-  const email = account ? emailText : null;
+  const email = trimmedEmail || null;
 
   // Same reasoning: an account row written with an empty colour falls back to
   // the shared default rather than painting the swatch with nothing.
