@@ -10,6 +10,7 @@ import {
   machineMenuTitle,
   machineSections,
   planArrival,
+  showSectionTitles,
   type ArrivalMachine,
 } from './arrival';
 
@@ -108,7 +109,13 @@ describe('machineSections', () => {
 
 describe('machineMenuTitle', () => {
   test('a guest never reads the word "machines" as though they owned any', () => {
-    expect(machineMenuTitle([shared(), shared({ id: 'g2' })])).toBe('Shared with you');
+    expect(machineMenuTitle([shared(), shared({ id: 'g2' })])).toBe('Shared with me');
+  });
+
+  test('the sheet and the section inside it say the same thing, in one voice', () => {
+    // Two names for one list on one screen reads as two different lists.
+    const machines = [shared(), shared({ id: 'g2' })];
+    expect(machineSections(machines)[0]!.title).toBe(machineMenuTitle(machines));
   });
 
   test('anyone with one of their own gets the owner heading', () => {
@@ -116,23 +123,48 @@ describe('machineMenuTitle', () => {
   });
 });
 
+describe('showSectionTitles', () => {
+  test('headings appear when there is someone else\'s machine to separate', () => {
+    expect(showSectionTitles(machineSections([mine(), shared()]))).toBe(true);
+    expect(showSectionTitles(machineSections([shared(), shared({ id: 'g2' })]))).toBe(true);
+  });
+
+  test('an owner with only their own machines gets no new heading over them', () => {
+    // "MY MACHINES" over the only section labels nothing — it was not there
+    // before sharing existed and it earns nothing now.
+    expect(showSectionTitles(machineSections([mine(), mine({ id: 'm2' })]))).toBe(false);
+  });
+});
+
 describe('autoOpenSessionId', () => {
   const landing = planArrival([shared()], null);
+  const fresh = { landed: false, activeId: null };
 
   test('one grant, one session — open it', () => {
-    expect(autoOpenSessionId(landing, ['s1'])).toBe('s1');
+    expect(autoOpenSessionId(landing, ['s1'], fresh)).toBe('s1');
   });
 
   test('a grant covering several sessions is a list, not a guess', () => {
-    expect(autoOpenSessionId(landing, ['s1', 's2'])).toBeNull();
+    expect(autoOpenSessionId(landing, ['s1', 's2'], fresh)).toBeNull();
   });
 
   test('nothing in scope yet opens nothing', () => {
-    expect(autoOpenSessionId(landing, [])).toBeNull();
+    expect(autoOpenSessionId(landing, [], fresh)).toBeNull();
   });
 
   test('anyone who was offered a picker chose for themselves', () => {
-    expect(autoOpenSessionId(planArrival([mine()], null), ['s1'])).toBeNull();
-    expect(autoOpenSessionId(null, ['s1'])).toBeNull();
+    expect(autoOpenSessionId(planArrival([mine()], null), ['s1'], fresh)).toBeNull();
+    expect(autoOpenSessionId(null, ['s1'], fresh)).toBeNull();
+  });
+
+  test('landing happens once — Back must stay back', () => {
+    // The session list is polled every couple of seconds. Without this the
+    // next refresh reopens the terminal the guest just left, and every one
+    // after it, so leaving is impossible.
+    expect(autoOpenSessionId(landing, ['s1'], { landed: true, activeId: null })).toBeNull();
+  });
+
+  test('a terminal already on screen is not replaced by another landing', () => {
+    expect(autoOpenSessionId(landing, ['s1'], { landed: false, activeId: 's1' })).toBeNull();
   });
 });

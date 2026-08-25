@@ -37,8 +37,12 @@ describe('offlineCopy', () => {
     expect(offlineCopy(false, null)).toBe("This machine is offline. It'll appear here when it reconnects.");
   });
 
-  test('an unknown owner still reads as somebody else\'s machine', () => {
-    expect(offlineCopy(true, null)).toContain('their machine is offline');
+  test('an unknown owner still reads as somebody else\'s machine — and as a sentence', () => {
+    // display_name is nullable on the relay, so this is a real state, not a
+    // defensive branch: it must not open a sentence in lower case.
+    expect(offlineCopy(true, null)).toBe(
+      "Their machine is offline right now. We'll ask again as soon as it's back.",
+    );
   });
 });
 

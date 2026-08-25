@@ -11,6 +11,12 @@ export function ownerPossessive(ownerName?: string | null): string {
   return ownerName ? `${ownerName}'s` : 'their';
 }
 
+/** The same, starting a sentence: `display_name` is nullable in the relay. */
+function openingPossessive(ownerName?: string | null): string {
+  const word = ownerPossessive(ownerName);
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
 /**
  * The offline state. The guest version promises the retry that actually
  * happens — the client keeps re-opening the channel until the agent appears —
@@ -18,7 +24,7 @@ export function ownerPossessive(ownerName?: string | null): string {
  */
 export function offlineCopy(guest: boolean, ownerName?: string | null): string {
   if (!guest) return "This machine is offline. It'll appear here when it reconnects.";
-  return `${ownerPossessive(ownerName)} machine is offline right now. We'll ask again as soon as it's back.`;
+  return `${openingPossessive(ownerName)} machine is offline right now. We'll ask again as soon as it's back.`;
 }
 
 /**

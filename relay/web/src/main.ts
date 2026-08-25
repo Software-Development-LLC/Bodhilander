@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
 import { RelayConnection, type ConnState, type Inner } from './connection';
-import { createReconnectScheduler } from './reconnect';
+import { createReconnectScheduler, readyCommands } from './reconnect';
 import { clearAccountState, INVITE_STASH } from './account';
 import { endedCopy } from './ended';
 import {
@@ -13,6 +13,7 @@ import {
   machineMenuTitle,
   machineSections,
   planArrival,
+  showSectionTitles,
   type Arrival,
 } from './arrival';
 import {
@@ -615,8 +616,10 @@ function onConnState(s: ConnState, detail?: string) {
     reconnector.cancel();
     setConnStrip(null);
     dot?.classList.remove('off');
-    app.conn!.command({ type: 'groups:list' });
-    app.conn!.command({ type: 'sessions:list' });
+    // Including the open terminal's subscription: a reconnect is a new socket
+    // and the agent's new client session has none, so without re-asking the
+    // page reads connected while nothing arrives on it ever again.
+    for (const c of readyCommands(app.activeId)) app.conn!.command(c);
     startPolling(); // keep the list live (new/removed sessions + state changes)
   } else if (s === 'offline') {
     machineOffline = true;
@@ -677,12 +680,11 @@ function onAgentMessage(m: Inner) {
 
 /**
  * The single-grant guest's arrival: open the one session they were sent to.
- * Once only — the list is polled, so deciding again on each refresh would
- * drag someone who tapped Back straight back in. An arrival, not a policy.
+ * Whether this is still owed is `autoOpenSessionId`'s decision, tested there.
  */
 function maybeLandInTerminal(): void {
-  if (app.landed || app.activeId) return;
-  const id = autoOpenSessionId(app.arrival, app.sessions.map((x) => x.id));
+  const opened = { landed: app.landed, activeId: app.activeId };
+  const id = autoOpenSessionId(app.arrival, app.sessions.map((x) => x.id), opened);
   const session = app.sessions.find((x) => x.id === id);
   if (!session) return;
   app.landed = true;
@@ -1159,12 +1161,17 @@ function openAccount() {
       </div>
     </div>
     ${handle}
-    <button class="btn ghost" id="accOut" style="margin-top:18px">Sign out</button>
+    <button class="btn ghost" id="accLink" style="margin-top:18px">Link a machine</button>
+    <button class="btn ghost" id="accOut" style="margin-top:10px">Sign out</button>
   </div>`;
   document.body.appendChild(scrim);
   pushLayer(() => scrim.remove());
   scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
   $('#accx')!.onclick = () => history.back();
+  // The pill's menu is the other way in, and a single-grant guest has no pill.
+  // Someone who owns a machine and was then invited to a session must not lose
+  // the ability to link their own — this sheet is reachable from every screen.
+  $('#accLink')!.onclick = () => openLinkMachine();
   $('#accOut')!.onclick = (e) => void signOut({ btn: e.currentTarget as HTMLButtonElement });
 }
 
@@ -1377,12 +1384,16 @@ function openMachineMenu() {
   const list = $('#mmList')!;
   // Sectioned, and shared rows labelled by the person who shared them:
   // "SHARED WITH ME" over "Will's laptop". A guest reads the list as people.
-  for (const section of machineSections(app.machines)) {
-    const head = document.createElement('li');
-    head.className = 'gsection';
-    head.setAttribute('role', 'presentation');
-    head.textContent = section.title;
-    list.appendChild(head);
+  const sections = machineSections(app.machines);
+  const titled = showSectionTitles(sections);
+  for (const section of sections) {
+    if (titled) {
+      const head = document.createElement('li');
+      head.className = 'gsection';
+      head.setAttribute('role', 'presentation');
+      head.textContent = section.title;
+      list.appendChild(head);
+    }
     for (const m of section.items) {
       const sel = m.id === app.machine?.id;
       const b = h('button', { class: 'gitem machine', role: 'option', 'aria-selected': String(sel) },

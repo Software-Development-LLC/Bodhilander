@@ -254,7 +254,7 @@ input, textarea { font-family: inherit; }
   line-height: 1.4;
   color: var(--muted);
   background: var(--panel-2, rgba(127, 127, 127, 0.08));
-  border: 1px solid var(--border);
+  border: 1px solid var(--hair);
 }
 
 /* The screen is focusable for guests, so it must show focus. */
@@ -281,7 +281,7 @@ input, textarea { font-family: inherit; }
   line-height: 1.4;
   color: var(--muted);
   background: var(--panel-2, rgba(127, 127, 127, 0.08));
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hair);
 }
 
 .wide-text { flex: 1; min-width: 0; }
@@ -309,7 +309,7 @@ input, textarea { font-family: inherit; }
   line-height: 1.4;
   color: var(--muted);
   background: var(--panel-2, rgba(127, 127, 127, 0.08));
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--hair);
 }
 
 /* --------------------------------------------------------------------------

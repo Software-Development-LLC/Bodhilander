@@ -46,6 +46,8 @@ export function planArrival<T extends ArrivalMachine>(machines: T[], preferredId
 
 export interface MachineSection<T extends ArrivalMachine = ArrivalMachine> {
   title: string;
+  /** Whose they are. Drives whether the headings are worth showing at all. */
+  kind: 'mine' | 'shared';
   items: T[];
 }
 
@@ -61,22 +63,49 @@ export function machineSections<T extends ArrivalMachine>(machines: T[]): Machin
     .slice()
     .sort((a, b) => (a.ownerName ?? '').localeCompare(b.ownerName ?? '') || a.name.localeCompare(b.name));
   const sections: MachineSection<T>[] = [];
-  if (mine.length) sections.push({ title: 'My machines', items: mine });
-  if (shared.length) sections.push({ title: 'Shared with me', items: shared });
+  if (mine.length) sections.push({ title: 'My machines', kind: 'mine', items: mine });
+  if (shared.length) sections.push({ title: 'Shared with me', kind: 'shared', items: shared });
   return sections;
 }
 
-/** The picker's own heading. Someone with no machines of their own owns none. */
+/**
+ * Whether the headings earn their place. They separate yours from someone
+ * else's, so with nothing of anyone else's in the list there is nothing to
+ * separate — and "MY MACHINES" over the only section is a label, not an aid.
+ */
+export function showSectionTitles(sections: MachineSection<ArrivalMachine>[]): boolean {
+  return sections.some((section) => section.kind === 'shared');
+}
+
+/**
+ * The picker's own heading. It says the same thing as the section inside it,
+ * in the same voice — two names for one list on one screen is a wobble.
+ */
 export function machineMenuTitle(machines: ArrivalMachine[]): string {
-  return machines.length > 0 && machines.every(isGuestMachine) ? 'Shared with you' : 'Machines';
+  return machines.length > 0 && machines.every(isGuestMachine) ? 'Shared with me' : 'Machines';
+}
+
+/** What the app has already opened, so landing happens once and only once. */
+export interface Opened {
+  /** True once this arrival has landed, even if they have since gone Back. */
+  landed: boolean;
+  /** The terminal on screen right now, if any. */
+  activeId: string | null;
 }
 
 /**
  * The session to open without being asked, or null when there is a real
- * choice: a grant covering several sessions is a list they have to read, and
- * picking one for them would hide the others.
+ * choice: a grant covering several sessions is a list to read, and picking
+ * one would hide the others.
  */
-export function autoOpenSessionId(arrival: Arrival | null, sessionIds: string[]): string | null {
-  if (!arrival?.landInTerminal) return null;
+export function autoOpenSessionId(
+  arrival: Arrival | null,
+  sessionIds: string[],
+  opened: Opened,
+): string | null {
+  // `landed` outlives `activeId` on purpose: going Back clears the terminal
+  // but not the fact of having arrived, and the list is polled every couple of
+  // seconds — without it each refresh would drag the guest straight back in.
+  if (!arrival?.landInTerminal || opened.landed || opened.activeId) return null;
   return sessionIds.length === 1 ? sessionIds[0]! : null;
 }
