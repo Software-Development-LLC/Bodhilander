@@ -19,7 +19,9 @@ mock.module('../../repositories/preferences', () => ({
 }));
 
 // In-memory stand-in mirroring the repo's semantics (round ordering,
-// session_ref persistence) so prepareFollowUp can be exercised for real.
+// session_ref persistence) so prepareFollowUp can be exercised for real. It
+// mirrors the repo's FULL export shape: in a shared-registry run a partial
+// mock namespace reads as "Export named '…' not found" to any later importer.
 const finalized: any[] = [];
 const store = {
   runs: new Map<string, any>(),
@@ -47,6 +49,17 @@ mock.module('../../repositories/arena', () => ({
         error: final.error,
       });
     }
+  },
+  settleInterruptedResponses: () => {
+    let settled = 0;
+    for (const row of store.responses) {
+      if (row.status === 'running') {
+        row.status = 'error';
+        row.error = 'Interrupted by app restart';
+        settled += 1;
+      }
+    }
+    return settled;
   },
   getRun: (id: string) => {
     const run = store.runs.get(id);

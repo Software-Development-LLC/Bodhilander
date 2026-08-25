@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - development
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+# Cancel superseded runs only on pull requests; pushes to development run to
+# completion so the branch's check history stays gap-free.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Exact pin: bun:test module-mock semantics changed between minors
+          # (1.4.0 shares one mock registry across files unless --isolate), so
+          # a floating runtime can flip this gate without any code change.
+          bun-version: 1.4.0
+
+      # --ignore-scripts skips postinstall's electron-rebuild, which needs an
+      # Electron download and a native toolchain. The suites never load a
+      # native module: they use bun:sqlite and mock node-pty.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Install relay dependencies
+        run: bun install --frozen-lockfile
+        working-directory: relay
+
+      # Discovers every *.test.ts(x) under the repo, relay/ included.
+      # --isolate gives each file its own module registry, so one file's
+      # mock.module can never become another file's subject.
+      - name: Run app suite
+        run: bun test --isolate
+
+      # The relay deploys against its own lockfile (relay/bun.lock), so its
+      # suite must also pass standalone from relay/. --isolate for the same
+      # reason as above — the first relay mock.module must not change this.
+      - name: Run relay suite
+        run: bun test --isolate
+        working-directory: relay

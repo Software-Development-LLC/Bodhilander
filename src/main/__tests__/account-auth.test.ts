@@ -4,9 +4,9 @@
  * creation (no await between check and insert), so overlapping calls can't
  * both become the default.
  *
- * electron, mcp-config, pty-manager (node-pty), and the seed helper are all
- * stubbed; the flow's own fs usage (mkdir, watch) runs against a temp userData
- * dir. The accounts repository runs REAL against an in-memory bun:sqlite
+ * electron, mcp-config, and the seed helper are stubbed (pty-manager is only
+ * a type import); the flow's own fs usage (mkdir, watch) runs against a temp
+ * userData dir. The accounts repository runs REAL against an in-memory bun:sqlite
  * standing in for '../database' — the same shape account-switch.test.ts uses.
  * It used to be a hand-rolled array fake, but bun's mock.module patches a
  * specifier for the whole test process, so that fake silently became the
@@ -16,7 +16,7 @@
  *
  * Run with: bun test src/main/__tests__
  */
-import { describe, expect, test, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, test, mock, beforeEach, afterEach, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -26,8 +26,6 @@ import type { PtyManager } from '../pty-manager';
 let userDataDir = '';
 mock.module('electron', () => ({
   app: { getPath: () => userDataDir },
-  // Only referenced in type positions by account-auth; never constructed.
-  BrowserWindow: Object,
 }));
 
 let db: Database;
@@ -74,8 +72,9 @@ function freshDb(): Database {
 // Stubbed so the flow never writes into a real ~/.claude. registerHooks is the
 // only registration left now that the memory MCP server is gone; the calls are
 // recorded so the tests can assert it targets the new account's isolated
-// config dir. cleanupLegacyMcpServer is included because bun's mock.module
-// patches globally and index.ts imports it from here.
+// config dir. The stub covers the module's FULL export shape — a registered
+// mock namespace can never gain names it was created without.
+const realMcpConfig = { ...(await import('../mcp-config')) };
 const hookRegistrations: Array<string | undefined> = [];
 mock.module('../mcp-config', () => ({
   registerHooks: (configDir?: string) => {
@@ -83,10 +82,13 @@ mock.module('../mcp-config', () => ({
     return { success: true, action: 'added' as const };
   },
   cleanupLegacyMcpServer: () => undefined,
+  unregisterMcpServer: () => false,
+  getHooksStatus: () => ({ configured: false }),
 }));
 
 // Seed spy with a controllable delay — a slow copy is exactly what widened
 // the old check-then-act window across an await boundary.
+const realLegacySeed = { ...(await import('../legacy-claude-seed')) };
 const seedCalls: string[] = [];
 let seedDelayMs = 0;
 mock.module('../legacy-claude-seed', () => ({
@@ -97,9 +99,13 @@ mock.module('../legacy-claude-seed', () => ({
   },
 }));
 
-// Keep node-pty out of the test process; the flow only calls methods on the
-// instance we pass in (PtyManager is only referenced in type positions).
-mock.module('../pty-manager', () => ({ PtyManager: Object }));
+// Hand the REAL modules back when this file finishes — mcp-config.test.ts and
+// legacy-claude-seed.test.ts drive them for real, and in a shared-registry run
+// a stub left registered here would silently become their subject.
+afterAll(() => {
+  mock.module('../mcp-config', () => realMcpConfig);
+  mock.module('../legacy-claude-seed', () => realLegacySeed);
+});
 
 const accountAuth = await import('../account-auth');
 

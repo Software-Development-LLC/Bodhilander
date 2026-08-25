@@ -20,6 +20,7 @@
   "main": "dist/main/index.js",
   "scripts": {
     "postinstall": "electron-rebuild -o better-sqlite3,node-pty && node node_modules/node-pty/scripts/post-install.js",
+    "test": "bun test --isolate",
     "build:main": "tsc -p tsconfig.main.json",
     "build:hooks": "esbuild src/hooks/bodhilander-hook.ts --bundle --platform=node --target=node18 --outfile=dist/hooks/bodhilander-hook.js --sourcemap --format=cjs",
     "build:renderer": "webpack --mode production",
