@@ -15,6 +15,14 @@ export interface TerminalSize {
 }
 
 /**
+ * The smallest grid worth offering, mirroring Terminal's own MIN_COLS/MIN_ROWS:
+ * a size this window refuses to send its own PTY must not arrive as a button
+ * that sends it. The wire clamp floors at 2×2, legible to nobody.
+ */
+export const MIN_REQUEST_COLS = 10;
+export const MIN_REQUEST_ROWS = 2;
+
+/**
  * Whether to raise the prompt at all. A request for another session belongs
  * to another terminal, and one already at this size asks for nothing —
  * interrupting the owner with a no-op spends their attention for nothing.
@@ -25,7 +33,7 @@ export function shouldPrompt(
   current: TerminalSize | null,
 ): boolean {
   if (request.sessionId !== sessionId) return false;
-  if (request.cols < 1 || request.rows < 1) return false;
+  if (request.cols < MIN_REQUEST_COLS || request.rows < MIN_REQUEST_ROWS) return false;
   return !current || current.cols !== request.cols || current.rows !== request.rows;
 }
 

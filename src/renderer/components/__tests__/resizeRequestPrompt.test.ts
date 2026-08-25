@@ -6,6 +6,8 @@ import { describe, expect, test } from 'bun:test';
 import { RelayResizeRequest } from '../../../shared/types';
 import {
   KEEP_MY_SIZE,
+  MIN_REQUEST_COLS,
+  MIN_REQUEST_ROWS,
   RESIZE_ONCE,
   resizeRequestCopy,
   shouldPrompt,
@@ -49,6 +51,15 @@ describe('shouldPrompt', () => {
     expect(shouldPrompt(request({ cols: 0 }), 's1', { cols: 164, rows: 48 })).toBe(false);
     expect(shouldPrompt(request({ rows: 0 }), 's1', { cols: 164, rows: 48 })).toBe(false);
   });
+
+  test('a size this window would refuse to send its own PTY never becomes a button', () => {
+    // The wire clamp floors at 2×2. Offering the owner a one-tap way to put
+    // their own terminal there — while they read a number that arrived a
+    // moment earlier — is the shape of the mistake this guard exists for.
+    expect(shouldPrompt(request({ cols: 2, rows: 2 }), 's1', { cols: 164, rows: 48 })).toBe(false);
+    expect(shouldPrompt(request({ cols: 9 }), 's1', { cols: 164, rows: 48 })).toBe(false);
+    expect(shouldPrompt(request({ cols: MIN_REQUEST_COLS, rows: MIN_REQUEST_ROWS }), 's1', null)).toBe(true);
+  });
 });
 
 describe('whoIsAsking', () => {
@@ -79,8 +90,8 @@ describe('resizeRequestCopy', () => {
   });
 
   test('the answers are one-tap and say what they do', () => {
-    // "Resize once" is the whole promise: the next fit of this window takes
-    // the size back, and the button must not imply otherwise.
+    // "Resize once" is one act rather than a standing rule — the owner takes
+    // the size back through the banner, not by alt-tabbing away and back.
     expect(RESIZE_ONCE).toBe('Resize once');
     expect(KEEP_MY_SIZE).toBe('Keep my size');
   });

@@ -14,12 +14,16 @@ class FakeBuffer {
 
 const noop = () => {};
 
+/** The grid this window's container measures to, unchanged all test long. */
+const CONTAINER = { cols: 164, rows: 48 };
+
 /** Resizes xterm was asked to make locally, so a stale render can be spotted. */
 let termResizes: string[] = [];
+let liveTerm: FakeTerm | null = null;
 
 class FakeTerm {
-  cols = 164;
-  rows = 48;
+  cols = CONTAINER.cols;
+  rows = CONTAINER.rows;
   buffer = new FakeBuffer();
   loadAddon = noop;
   open = noop;
@@ -28,15 +32,32 @@ class FakeTerm {
   focus = noop;
   selectAll = noop;
   scrollToBottom = noop;
-  resize = (cols: number, rows: number) => { termResizes.push(`${cols}x${rows}`); };
+  // A real resize MOVES the grid. A double that only records it cannot show a
+  // later fit putting the size back, which is the whole subject here.
+  resize = (cols: number, rows: number) => {
+    termResizes.push(`${cols}x${rows}`);
+    this.cols = cols;
+    this.rows = rows;
+  };
   getSelection = () => '';
   attachCustomKeyEventHandler = noop;
   onData = noop;
   dispose = noop;
+  constructor() { liveTerm = this; }
 }
 
 mock.module('xterm', () => ({ Terminal: FakeTerm }));
-mock.module('xterm-addon-fit', () => ({ FitAddon: class { fit = noop; } }));
+// fit() re-measures the container and reflows the terminal to it — the real
+// behaviour, and the thing that used to undo an accepted fit on any focus.
+mock.module('xterm-addon-fit', () => ({
+  FitAddon: class {
+    fit = () => {
+      if (!liveTerm) return;
+      liveTerm.cols = CONTAINER.cols;
+      liveTerm.rows = CONTAINER.rows;
+    };
+  },
+}));
 mock.module('xterm-addon-webgl', () => ({
   WebglAddon: class { onContextLoss = noop; dispose = noop; },
 }));
@@ -45,6 +66,7 @@ const Terminal = (await import('../Terminal')).default;
 
 let ptyResizes: string[] = [];
 let deliverRequest: ((request: RelayResizeRequest) => void) | null = null;
+let deliverPtyResize: ((id: string, cols: number, rows: number) => void) | null = null;
 
 const request = (over: Partial<RelayResizeRequest> = {}): RelayResizeRequest => ({
   sessionId: 's1',
@@ -55,10 +77,19 @@ const request = (over: Partial<RelayResizeRequest> = {}): RelayResizeRequest => 
   ...over,
 });
 
+/** handleResize measures the container; happy-dom reports every box as zero. */
+let realRect: typeof HTMLElement.prototype.getBoundingClientRect;
+
 beforeEach(() => {
   termResizes = [];
   ptyResizes = [];
   deliverRequest = null;
+  deliverPtyResize = null;
+  liveTerm = null;
+
+  realRect = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = () =>
+    ({ width: 1200, height: 600, top: 0, left: 0, right: 1200, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
 
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
     observe = noop;
@@ -73,7 +104,10 @@ beforeEach(() => {
     primePty: () => {},
     killSession: async () => {},
     onPtyData: noopSub,
-    onPtyResize: noopSub,
+    onPtyResize: (cb: (id: string, cols: number, rows: number) => void) => {
+      deliverPtyResize = cb;
+      return () => { deliverPtyResize = null; };
+    },
     onRelayResizeRequest: (cb: (r: RelayResizeRequest) => void) => {
       deliverRequest = cb;
       return () => { deliverRequest = null; };
@@ -90,6 +124,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  HTMLElement.prototype.getBoundingClientRect = realRect;
   delete (window as unknown as { electronAPI?: unknown }).electronAPI;
 });
 
@@ -158,13 +193,72 @@ describe('a guest asking to be fitted to their screen', () => {
     expect(screen.getByText(/@dana-k/)).toBeTruthy();
   });
 
-  test('a second ask replaces the first rather than stacking prompts', async () => {
+  test('the prompt in front of the owner is the one they answer', async () => {
+    // A second guest asking between the reading and the click must not swap
+    // the number under the button: the owner would agree to a size they never
+    // saw, and sanitizeSize's floor of 2×2 is the worst case of that.
     await renderTerminal();
     await ask();
-    await ask({ cols: 100, rows: 30 });
+    await ask({ cols: 100, rows: 30, login: 'someone-else' });
 
     expect(screen.getAllByText('Resize once')).toHaveLength(1);
+    expect(screen.getByText(/80×24/)).toBeTruthy();
     await act(async () => { screen.getByText('Resize once').click(); });
-    expect(ptyResizes).toEqual(['100x30']);
+    expect(ptyResizes).toEqual(['80x24']);
+  });
+});
+
+describe('an accepted fit is held until the owner takes it back', () => {
+  test('the owner alt-tabbing away and back does not quietly undo it', async () => {
+    // The bug: focus → handleResize → fit() re-measures the unchanged
+    // container → the desktop grid is pushed straight back, the guest is
+    // panning 164 columns again, and nobody is told. One focus event was
+    // enough, and the guest cannot ask again for ten seconds.
+    await renderTerminal();
+    await ask();
+    await act(async () => { screen.getByText('Resize once').click(); });
+    expect(ptyResizes).toEqual(['80x24']);
+
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    await act(async () => { window.dispatchEvent(new Event('resize')); });
+
+    expect(ptyResizes).toEqual(['80x24']);
+    // And the standing offer to take it back is still on screen.
+    expect(screen.getByText('Resume desktop size')).toBeTruthy();
+  });
+
+  test('taking the size back is one deliberate click', async () => {
+    await renderTerminal();
+    await ask();
+    await act(async () => { screen.getByText('Resize once').click(); });
+
+    await act(async () => { screen.getByText('Resume desktop size').click(); });
+
+    expect(ptyResizes).toEqual(['80x24', '164x48']);
+    expect(screen.queryByText('Resume desktop size')).toBeNull();
+  });
+
+  test('a window that granted nothing still re-fits on focus as it always did', async () => {
+    // The hold must be scoped to a granted fit. Breaking the ordinary path —
+    // where focus and window resize keep the PTY matched to the container —
+    // would be a far larger regression than the one being fixed.
+    await renderTerminal();
+
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+
+    expect(ptyResizes).toEqual(['164x48']);
+  });
+
+  test('after the size comes back by another route, re-fitting is allowed again', async () => {
+    // The desktop grid arriving on pty:resized means whatever was held for a
+    // guest is over — otherwise this window would refuse to fit for good.
+    await renderTerminal();
+    await ask();
+    await act(async () => { screen.getByText('Resize once').click(); });
+
+    await act(async () => { deliverPtyResize!('s1', 164, 48); });
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+
+    expect(ptyResizes).toEqual(['80x24', '164x48']);
   });
 });
