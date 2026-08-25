@@ -37,7 +37,9 @@ function freshDb(): Database {
       ended_at TEXT DEFAULT NULL,
       duration_seconds REAL DEFAULT 0,
       claude_account_id TEXT DEFAULT NULL,
-      provider TEXT NOT NULL DEFAULT 'claude'
+      provider TEXT NOT NULL DEFAULT 'claude',
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     )
   `);
   return d;

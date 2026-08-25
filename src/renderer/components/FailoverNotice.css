@@ -1,0 +1,55 @@
+.failover-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 8px 12px 0;
+  border: 1px solid var(--border-color, #3a3a3a);
+  border-left: 3px solid var(--accent-color, #6aa84f);
+  border-radius: 4px;
+  background: var(--bg-secondary, #252526);
+  color: var(--text-primary, #ddd);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Nothing moved. Warmer border so the two outcomes are distinguishable at a
+   glance, without the alarm colouring of an actual error — the app is not
+   broken, the quota is. */
+.failover-notice.blocked {
+  border-left-color: var(--warning-color, #d79c40);
+}
+
+.failover-notice-icon {
+  flex: 0 0 auto;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+.failover-notice-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.failover-notice-link,
+.failover-notice-dismiss {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.failover-notice-link:hover,
+.failover-notice-dismiss:hover {
+  color: var(--text-primary, #ddd);
+  background: var(--bg-hover, #2f2f30);
+}
+
+.failover-notice-dismiss {
+  font-size: 16px;
+  line-height: 1;
+}

@@ -245,6 +245,9 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
         durationSeconds: 0,
         claudeAccountId: null,
         provider: sanitizeImportedProvider(s.provider),
+        // A brand-new session has never been failed over (#207).
+        failoverFromAccountId: null,
+        failoverPrevAccountId: null,
       });
       sessionCount++;
     }
@@ -384,6 +387,9 @@ export async function importFromClaudeLander(): Promise<ImportResult> {
         durationSeconds: 0,
         claudeAccountId: null,
         provider: sanitizeImportedProvider(row.provider),
+        // A brand-new session has never been failed over (#207).
+        failoverFromAccountId: null,
+        failoverPrevAccountId: null,
       });
       sessionCount++;
     }

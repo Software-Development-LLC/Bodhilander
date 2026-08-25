@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { app } from 'electron';
 import { ProviderDefinition, ProviderLaunchConfig, ProviderCommand } from './types';
 import { baseSessionEnv } from './passthrough';
+import { CLAUDE_USAGE_LIMIT_PATTERNS } from '../usage-limit';
 import { claudeParser as claudeArenaParser } from '../arena/parsers';
 
 /** Env var Claude Code reads its isolated config dir from (BDHLNDR-31). */
@@ -33,6 +34,7 @@ export const claudeProvider: ProviderDefinition = {
     accounts: true,
   },
   waitingPatterns: CLAUDE_WAITING_PATTERNS,
+  usageLimitPatterns: CLAUDE_USAGE_LIMIT_PATTERNS,
   apiKey: {
     envVar: 'ANTHROPIC_API_KEY',
     test: {

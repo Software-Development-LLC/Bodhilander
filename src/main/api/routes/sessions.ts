@@ -196,6 +196,9 @@ export function createSessionsRouter(): Router {
           durationSeconds: 0,
           claudeAccountId: null,
           provider: 'claude',
+          // A brand-new session has never been failed over (#207).
+          failoverFromAccountId: null,
+          failoverPrevAccountId: null,
         };
 
         sessionsRepo.createSession(session);
