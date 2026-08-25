@@ -53,7 +53,7 @@ export interface ImportOutcome {
   transcripts: number;
   skippedGroups: number;
   skippedSessions: number;
-  /** Session ids restored into the needs-relink state. */
+  /** Restored sessions whose working directory is not on this machine. */
   needsRelink: string[];
 }
 

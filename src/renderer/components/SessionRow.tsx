@@ -51,7 +51,7 @@ interface SessionRowProps {
   onDragOver: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   onClose: () => void;
-  /** Offered only for a needs-relink session: pick the folder it lives in now. */
+  /** Offered only when the folder is missing: pick where it lives now. */
   onRelink?: () => void;
 }
 

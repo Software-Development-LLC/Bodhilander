@@ -27,6 +27,8 @@ mock.module('electron', () => ({
   app: {
     getVersion: () => '3.5.1-beta.6',
     getPath: (name: string) => (name === 'documents' ? path.join(tmp, 'docs') : userDataDir),
+    // Hook registration resolves its script relative to this.
+    getAppPath: () => path.join(tmp, 'app'),
   },
   dialog: {
     showMessageBox: async (opts: { message?: string; detail?: string }) => {
@@ -62,6 +64,10 @@ beforeEach(() => {
   messageBoxResponses = [];
   openDialogPaths = [];
   saveDialogPath = null;
+
+  // The hook script registerHooks refuses to register without.
+  fs.mkdirSync(path.join(tmp, 'app', 'dist', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'app', 'dist', 'hooks', 'bodhilander-hook.js'), '', 'utf-8');
 
   db = freshDb();
 });
@@ -163,6 +169,21 @@ describe('import', () => {
     expect(row.working_dir).toBe(here);
     expect(row.state).toBe('stopped');
     expect(fs.existsSync(row.working_dir)).toBe(true);
+  });
+
+  test('a restored account gets its hooks registered, not on the next launch', async () => {
+    const bundle = await exportedBundle();
+    const here = path.join(tmp, 'here');
+    fs.mkdirSync(here, { recursive: true });
+    openDialogPaths = [bundle, here];
+    messageBoxResponses = [0];
+
+    await importGroupsAndSessions(legacyDir);
+
+    // Without this the restored account reports no state until a restart.
+    const settings = path.join(userDataDir, 'claude-accounts', 'acct-1', '.claude', 'settings.json');
+    expect(fs.existsSync(settings)).toBe(true);
+    expect(fs.readFileSync(settings, 'utf-8')).toContain('bodhilander-hook.js');
   });
 
   test('leaving a root as it was parks the sessions under it', async () => {
