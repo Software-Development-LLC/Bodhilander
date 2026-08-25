@@ -4,7 +4,7 @@ import type { Machine, MachineGrant, Repositories } from './repositories';
 import { fromBase64, randomToken, verifyEd25519 } from './crypto';
 import { buildAgentAuthMessage, CAP_GRANTS_V1, CAP_PUSH_V1 } from './protocol';
 import type { RateLimiter } from './rate-limit';
-import type { PushDispatcher } from './push/send';
+import type { PushDelivery, PushDispatcher } from './push/send';
 
 /**
  * WebSocket gateway.
@@ -421,36 +421,16 @@ export function createGateway(ctx: WsGatewayContext) {
     const seen = new Set<string>();
 
     for (const raw of items) {
-      const item = raw as { id?: unknown; body?: unknown };
-      if (typeof item.id !== 'string' || typeof item.body !== 'string') continue;
-      if (item.body.length > MAX_SEALED_BODY_B64) {
-        logger.warn('dropped an oversized sealed push body', { userId });
-        continue;
-      }
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      const sub = repos.getPushSubscription(item.id);
-      // Belongs to someone else, or was removed while the agent was sealing.
-      // Either way this agent may not send to it.
-      if (!sub || sub.user_id !== userId) continue;
-
-      const body = fromBase64(item.body);
-      if (!body || body.length === 0) continue;
-
+      const target = resolvePushItem(raw, userId, seen);
+      if (!target) continue;
       try {
-        const result = await dispatcher.deliver(sub.endpoint, body);
+        const result = await dispatcher.deliver(target.endpoint, target.body);
         if (result.gone) {
-          repos.deletePushSubscription(sub.id);
+          repos.deletePushSubscription(target.id);
           reaped = true;
           logger.info('reaped a dead push subscription', { userId, status: result.status });
-        } else if (result.redirected) {
-          // Never followed: see `deliver`. Logged loudly because a push service
-          // that redirects is either broken or not a push service.
-          logger.warn('refused to follow a push endpoint redirect', { status: result.status });
-        } else if (result.status !== null && result.status >= 400) {
-          // Transient from here: a 429 or a 5xx is the push service's problem
-          // and the next attention event retries on its own.
-          logger.warn('push service refused a message', { status: result.status });
+        } else {
+          notePushRefusal(result);
         }
       } catch (err) {
         logger.warn('push delivery failed', { err: err instanceof Error ? err.message : String(err) });
@@ -460,6 +440,49 @@ export function createGateway(ctx: WsGatewayContext) {
     // Only after the whole batch: re-syncing per reap would send the agent a
     // list it is still working through.
     if (reaped) notifyPushSubscriptions(userId);
+  }
+
+  /**
+   * One `push:send` item, resolved to something deliverable, or null. `seen` is
+   * mutated so a repeated id in the same batch is dropped rather than resent.
+   */
+  function resolvePushItem(
+    raw: unknown,
+    userId: string,
+    seen: Set<string>,
+  ): { id: string; endpoint: string; body: Uint8Array } | null {
+    const item = raw as { id?: unknown; body?: unknown };
+    if (typeof item.id !== 'string' || typeof item.body !== 'string') return null;
+    if (item.body.length > MAX_SEALED_BODY_B64) {
+      logger.warn('dropped an oversized sealed push body', { userId });
+      return null;
+    }
+    if (seen.has(item.id)) return null;
+    seen.add(item.id);
+
+    // Belongs to someone else, or was removed while the agent was sealing.
+    // Either way this agent may not send to it.
+    const sub = repos.getPushSubscription(item.id);
+    if (!sub || sub.user_id !== userId) return null;
+
+    const body = fromBase64(item.body);
+    if (!body || body.length === 0) return null;
+    return { id: sub.id, endpoint: sub.endpoint, body };
+  }
+
+  /** Say why a live subscription would not take a message. */
+  function notePushRefusal(result: PushDelivery): void {
+    if (result.redirected) {
+      // Never followed: see `deliver`. Logged loudly because a push service
+      // that redirects is either broken or not a push service.
+      logger.warn('refused to follow a push endpoint redirect', { status: result.status });
+      return;
+    }
+    // Transient from here: a 429 or a 5xx is the push service's problem, and
+    // the next attention event retries on its own.
+    if (result.status !== null && result.status >= 400) {
+      logger.warn('push service refused a message', { status: result.status });
+    }
   }
 
   /**

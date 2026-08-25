@@ -424,42 +424,13 @@ export class RelayClient extends EventEmitter {
     }
 
     if (msg.type === 'challenge' && msg.nonce) {
-      try {
-        const signature = signWithIdentity(buildAgentAuthMessage(msg.nonce)).toString('base64');
-        const identity = ensureIdentity();
-        // Tell the relay this build enforces grant certificates. It refuses to
-        // route a guest to any machine that has not said so, because an older
-        // build ignores the certificate entirely and would hand that guest
-        // every command. `push:v1` is the same shape of promise, pointed the
-        // other way: without it the relay withholds subscription keys.
-        this.send({
-          type: 'agent:auth',
-          ed25519Pub: identity.ed25519Pub,
-          signature,
-          caps: [CAP_GRANTS_V1, CAP_PUSH_V1],
-        });
-      } catch (err) {
-        log.error('[Relay] failed to answer challenge:', err instanceof Error ? err.message : err);
-        this.ws?.close();
-      }
+      this.answerChallenge(msg.nonce);
       return;
     }
 
     if (this.handleShareMessage(msg)) return;
 
-    // The owner's set of subscribed browsers. Sent on connect and whenever it
-    // changes; the relay never asks us for anything back.
-    if (msg.type === 'push:sync' && Array.isArray(msg.subs)) {
-      this.notePushSubscriptions(msg.subs);
-      return;
-    }
-
-    // The relay would not take that batch. Nothing was delivered, so the
-    // debounce it cost is given back.
-    if (msg.type === 'push:throttled') {
-      this.notePushThrottled(msg.ref, msg.retryAfterSeconds);
-      return;
-    }
+    if (this.handlePushMessage(msg)) return;
 
     if (msg.type === 'agent:ready') {
       this.connecting = false;
@@ -562,6 +533,47 @@ export class RelayClient extends EventEmitter {
     const spent = this.spentWindows.get(newest);
     this.spentWindows.delete(newest);
     return spent;
+  }
+
+  /**
+   * Sign the relay's nonce and say what this build can do. `grants:v1` means it
+   * enforces grant certificates, so the relay may route guests here; `push:v1`
+   * is the same promise reversed — without it, no subscription keys.
+   */
+  private answerChallenge(nonce: string): void {
+    try {
+      const signature = signWithIdentity(buildAgentAuthMessage(nonce)).toString('base64');
+      const identity = ensureIdentity();
+      this.send({
+        type: 'agent:auth',
+        ed25519Pub: identity.ed25519Pub,
+        signature,
+        caps: [CAP_GRANTS_V1, CAP_PUSH_V1],
+      });
+    } catch (err) {
+      log.error('[Relay] failed to answer challenge:', err instanceof Error ? err.message : err);
+      this.ws?.close();
+    }
+  }
+
+  /**
+   * The relay's push messages, split out so `handleMessage` stays one dispatch
+   * — the same shape as the sharing branches. Reports whether it was ours.
+   */
+  private handlePushMessage(msg: { type?: string; subs?: RelayPushSubscription[]; ref?: string; retryAfterSeconds?: number }): boolean {
+    // The owner's set of subscribed browsers. Sent on connect and whenever it
+    // changes; the relay never asks us for anything back.
+    if (msg.type === 'push:sync' && Array.isArray(msg.subs)) {
+      this.notePushSubscriptions(msg.subs);
+      return true;
+    }
+    // The relay would not take that batch. Nothing was delivered, so the
+    // debounce it cost is given back.
+    if (msg.type === 'push:throttled') {
+      this.notePushThrottled(msg.ref, msg.retryAfterSeconds);
+      return true;
+    }
+    return false;
   }
 
   /**
