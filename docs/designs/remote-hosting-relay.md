@@ -226,7 +226,8 @@ a clean sequenced PR on this branch, to avoid a window with no remote path.
 | **M1** | Relay skeleton: config, logging, DB + migrations, `/health`, `/ws` stub, Bun + Docker. | **Done** (`relay/`, hardened). |
 | **M2** | GitHub OAuth + cookie sessions; machine linking (§3); desktop keypair generation + keychain storage; agent WSS dial-out with ed25519 challenge auth. | next |
 | **M3** | Live relay protocol (§4): client↔agent pairing, E2E handshake, ciphertext forwarding of the `terminal:*` channel; fingerprint-verification UX. | — |
-| **M4+** | Relay-hosted web client bundle; web-push from the relay; quotas/abuse for hosted mode; (later) Postgres backend. | — |
+| **M4+** | Relay-hosted web client bundle; quotas/abuse for hosted mode; (later) Postgres backend. | — |
+| **M5.3** | Web push (§10) — note this table once said "web-push **from the relay**", and that is precisely what it is not: the agent seals, the relay forwards. | **Done** |
 
 ## 9. Open questions / risks
 
@@ -244,3 +245,150 @@ a clean sequenced PR on this branch, to avoid a window with no remote path.
 5. **Fingerprint UX** is the crux of the hosted trust story — needs real design,
    not just a hex string.
 ```
+
+## 10. Web push, and what the relay is allowed to know (M5.3)
+
+The attention model — "needs you" sorting, the count chip, the banner — was
+driven by a 2.5s poll that died with the tab. Push replaces that for the case
+that matters: the phone is locked, the tab is closed, and a session has stopped
+to ask a question.
+
+This ran straight into §5. A push notification is only useful if it says *which*
+session; session names are end-to-end material, and the relay is the one party
+we have spent this whole design keeping them away from. The issue offered two
+ways out, and the decision was deliberate.
+
+### The decision: the agent seals, the relay forwards
+
+**Option (a)** was relay-composed payloads carrying only what the relay already
+knows: *"A session needs you on **laptop**"*. Cheap, and it gives up the thing
+that makes the notification worth sending.
+
+**Option (b)**, which is what shipped: the **desktop agent** performs the RFC
+8291 `aes128gcm` content encryption itself, against the browser subscription's
+own `p256dh`/`auth`, and the relay forwards a body it holds no key for. The
+notification says `deploy-prod · Waiting for your input`, and the relay never
+learns either half.
+
+Web Push separates two jobs that are easy to run together, and (b) is exactly
+the seam between them:
+
+| | Who does it | Why |
+| --- | --- | --- |
+| **Identification** (VAPID, an ES256 JWT) | relay | the browser subscribed with the relay's application-server key, so only the relay can sign for it |
+| **Confidentiality** (`aes128gcm` content encoding) | **agent** | the payload contains a session name, which the relay must not learn |
+
+So the message is assembled by two parties who each hold exactly what their half
+needs, and neither holds the other's.
+
+### What it cost, honestly
+
+Less than expected, and the reason is worth recording. RFC 8291 is one ECDH, two
+HKDF derivations and one AES-128-GCM record — all of it in Node's `crypto`, no
+new dependency (`src/main/api/relay/push-seal.ts`, ~90 lines). The desktop
+already carried a full `web-push` stack for the legacy LAN PWA, and it was read
+before anything was written; it was **not** reused, for two reasons. It requires
+a subscription *endpoint* to build a request, and the agent is deliberately never
+told one (below). And its VAPID details are module-global state shared with the
+LAN dispatcher in the same process, so suppressing the header it would otherwise
+add is action at a distance rather than a decision the code states.
+
+The thing that made (b) affordable to trust rather than merely to write is that
+RFC 8291 §5 publishes a complete worked example. `push-seal.test.ts` reproduces
+it byte for byte, so the encryption is pinned to an answer nobody in this
+repository chose. A round-trip test — encrypt, then decrypt with the private
+half — would have passed just as happily with a matched pair of mistakes.
+
+### What (b) buys, and what it does not
+
+It buys **confidentiality against the relay as it actually runs**: a push
+payload is ciphertext in the relay's process, in its logs, in its database, and
+in anything an operator or an attacker reads out of them. That is the property
+§5 already claims for terminal frames, extended to the one new channel that
+would otherwise have quietly broken it.
+
+It does **not** make the relay untrusted. The relay holds `p256dh`/`auth`
+because the browser hands them over at subscribe time, so a *malicious* relay
+could seal a payload of its own invention and deliver it as though it came from
+the machine. Push is therefore authenticated no more strongly than the sign-in
+that created the subscription — a notification is a prompt to go and look, never
+evidence of anything. Making push unforgeable would need the agent's ed25519
+identity over the payload and a verification step in the worker, which is a
+larger change than this one and is not pretended to be here.
+
+### Wire vocabulary
+
+Two messages, in the shape §4 and M5.2 already use. Both ride the existing agent
+socket; nothing new is opened.
+
+- **`push:sync`** (relay → agent) — the owner's subscriptions as `{ id, p256dh,
+  auth }`. Sent after `agent:ready` alongside `share:sync`, and again whenever
+  the set changes (subscribe, unsubscribe, or a 410 reaped mid-send). The agent
+  replaces its list wholesale rather than merging: the relay is where every
+  subscription change lands, so a merge would resurrect a device its owner had
+  just switched off.
+
+  **The endpoint is deliberately absent.** The agent encrypts; the relay
+  addresses. This is §5's minimal-disclosure rule pointed the other way — the
+  desktop has no need to learn which push service, and therefore which device
+  family, its owner reads notifications on, so it is not told.
+
+- **`push:send`** (agent → relay) — `{ items: [{ id, body }] }`, one sealed body
+  per subscription, base64. The relay checks each `id` belongs to the owner of
+  the machine on the other end of *that* socket, POSTs it with the VAPID
+  envelope, and reaps the row on 404/410. It cannot check anything about the
+  contents, which is the point.
+
+Gated on a new capability, `push:v1`, advertised in `agent:auth` next to
+`grants:v1`. This is minimal disclosure again rather than version tolerance: an
+older agent would ignore `push:sync` while the subscription keys sat in its
+process memory, so a build that cannot seal is not given keys to hold. No
+capability, no keys, no push — the phone stays quiet until the desktop updates,
+which is the honest outcome.
+
+### Key provisioning
+
+`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (base64url, the shape `npx web-push
+generate-vapid-keys` prints) if set; otherwise the relay mints a P-256 pair on
+first use and keeps it in the `kv` table. `VAPID_SUBJECT` — parsed since M1 and
+read by nothing until now — is the `sub` claim.
+
+The public key is baked into every browser subscription, so **it must be stable
+across restarts**. Minting per boot would leave every subscribed device holding
+a key nothing signs with any more, and the push service would answer 403 in a
+way that looks like nothing in particular from either end. Hence the persistence,
+and hence the production warning when the pair is left to the database: a
+disposable volume silently unsubscribes every device on it.
+
+### The SSRF boundary
+
+`endpoint` arrives in a request body from whoever holds a browser, and the relay
+later makes an outbound POST to it. Unchecked, "subscribe" is a general-purpose
+*make the relay send bytes to a URL of my choosing from inside its network*
+primitive, which reaches cloud metadata services and anything else its egress
+can see. `isAllowedPushEndpoint` therefore requires HTTPS, no credentials, no
+explicit port, and a dotted hostname that is not an address literal, `.local`,
+`.internal` or `.localhost` — checked at subscribe time *and* again at send, so
+a row that predates the rule cannot be used.
+
+A hostname that *resolves* to a private address still gets through. Closing that
+needs resolution-time filtering the runtime does not expose, so it is recorded
+rather than papered over: **do not treat the relay's outbound egress as
+trusted.**
+
+### Debounce, and what is out of scope
+
+The trigger is the same `handleStateChange` hook the desktop notifier and the
+LAN dispatcher already hang off, with the same window: per `(sessionId, state)`,
+30 seconds, in a map bounded by oldest-first eviction. Sessions genuinely flap
+between `waiting` and `working` mid-stream, and two paths disagreeing about that
+would surface as "notifications are broken", not as a race. The windows survive
+a socket reconnect deliberately — a bounce mid-flap is precisely when resetting
+them would let the storm through — and are cleared only when remote hosting is
+switched off, which is a decision rather than a blip.
+
+**Guests do not get push.** Subscriptions are per user and the relay fans out to
+the machine *owner* only. A guest's client still has the poll, the sorting and
+the banner; what they do not get is a locked phone buzzing about someone else's
+machine. Extending it would mean deciding whose sessions a guest may be alerted
+about at all, which is a sharing-policy question rather than a delivery one.
