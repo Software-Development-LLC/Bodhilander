@@ -293,7 +293,9 @@ export function createSessionsRouter(): Router {
     (req: Request, res: Response) => {
       try {
         const id = getStringParam(req.params.id);
-        const { launchClaude } = req.body;
+        // A POST with no JSON body leaves req.body undefined; destructuring it
+        // threw before any of the checks below could answer.
+        const { launchClaude } = req.body ?? {};
 
         const sessions = sessionsRepo.getAllSessions();
         const session = sessions.find(s => s.id === id);
@@ -308,13 +310,22 @@ export function createSessionsRouter(): Router {
           return;
         }
 
+        // createSession throws on a missing cwd. Answering here instead names
+        // the folder, which is the only thing that lets the owner fix it.
+        if (session.workingDirMissing) {
+          res.status(409).json({
+            error: `Working directory not found on this machine: ${session.workingDir || '(none set)'}`,
+          });
+          return;
+        }
+
         ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.provider);
 
         log.info(`[SessionsAPI] Started session: ${id}`);
         res.json({ success: true });
       } catch (error) {
         log.error('[SessionsAPI] Error starting session:', error);
-        res.status(500).json({ error: 'Failed to start session' });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to start session' });
       }
     }
   );

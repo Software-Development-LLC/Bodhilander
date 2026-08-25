@@ -95,9 +95,13 @@ describe('a restored session resumes its conversation', () => {
     expect(launch.args).toEqual(['--resume', CONVERSATION]);
     expect(launch.env[CLAUDE_CONFIG_DIR_ENV]).toBe(account!.configDir);
 
-    // And the bytes --resume reads are the source machine's, unchanged.
-    const resolved = path.join(launch.env[CLAUDE_CONFIG_DIR_ENV]!, 'projects', SLUG, `${CONVERSATION}.jsonl`);
-    expect(fs.readFileSync(resolved, 'utf-8')).toBe(TRANSCRIPT);
+    // The transcript sits under the SOURCE machine's cwd slug — the only slug
+    // in the tree — so resolution cannot be path-derived from the remapped cwd.
+    // --resume finds it by conversation id across slugs (checked against CLI
+    // 2.1.245; unpinned behaviour, so this is what would break if it changed).
+    const projects = path.join(launch.env[CLAUDE_CONFIG_DIR_ENV]!, 'projects');
+    expect(fs.readdirSync(projects)).toEqual([SLUG]);
+    expect(fs.readFileSync(path.join(projects, SLUG, `${CONVERSATION}.jsonl`), 'utf-8')).toBe(TRANSCRIPT);
   });
 
   test('a session with no transcript is left resumable-looking but empty, not broken', async () => {

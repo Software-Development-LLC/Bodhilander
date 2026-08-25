@@ -198,3 +198,50 @@ describe('transcripts', () => {
     expect(build().manifest.counts.transcripts).toBe(0);
   });
 });
+
+describe('the memory ceiling', () => {
+  test('refuses rather than assembling an archive it cannot hold', () => {
+    writeTranscript(accountConfigDir, '-slug', 'conv-1', 'x'.repeat(4096));
+
+    expect(() =>
+      buildTransferBundle(db as never, {
+        sourceAppVersion: '3.5.1',
+        sourcePlatform: 'darwin',
+        sourceUserData: path.join(tmp, 'userData'),
+        legacyConfigDir,
+        maxTranscriptBytes: 1024,
+      }),
+    ).toThrow(/over the .* a transfer bundle can hold/);
+  });
+
+  test('the refusal names both the total and the ceiling', () => {
+    writeTranscript(accountConfigDir, '-slug', 'conv-1', 'x'.repeat(4096));
+
+    try {
+      buildTransferBundle(db as never, {
+        sourceAppVersion: '3.5.1',
+        sourcePlatform: 'darwin',
+        sourceUserData: path.join(tmp, 'userData'),
+        legacyConfigDir,
+        maxTranscriptBytes: 1024,
+      });
+      throw new Error('expected a refusal');
+    } catch (error) {
+      expect((error as Error).message).toContain('4.0 KB');
+      expect((error as Error).message).toContain('1.0 KB');
+    }
+  });
+
+  test('a store under the ceiling is carried as before', () => {
+    writeTranscript(accountConfigDir, '-slug', 'conv-1', 'x'.repeat(4096));
+
+    const built = buildTransferBundle(db as never, {
+      sourceAppVersion: '3.5.1',
+      sourcePlatform: 'darwin',
+      sourceUserData: path.join(tmp, 'userData'),
+      legacyConfigDir,
+      maxTranscriptBytes: 1024 * 1024,
+    });
+    expect(built.manifest.counts.transcripts).toBe(1);
+  });
+});

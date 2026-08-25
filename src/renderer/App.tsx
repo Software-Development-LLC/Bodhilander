@@ -15,7 +15,7 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
-import { ClaudeAccount, NEEDS_RELINK_STATE, Session } from '../shared/types';
+import { ClaudeAccount, Session } from '../shared/types';
 import type { LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -599,6 +599,10 @@ const App: React.FC = () => {
 
     const items: MenuItem[] = [
       { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
+      {
+        label: 'Set Working Directory…',
+        onClick: () => { void handleRelinkSession(sessionId, session?.workingDir ?? ''); },
+      },
     ];
 
     // Sharing is entered PER SESSION, which is the whole shape of the feature —
@@ -1053,7 +1057,7 @@ const App: React.FC = () => {
   // here. Picking the folder is all it takes to make it launchable again.
   const handleRelinkSession = useCallback(async (id: string, currentDir: string) => {
     const chosen = await window.electronAPI.selectDirectory(currentDir || undefined);
-    if (chosen) await updateSession(id, { workingDir: chosen, state: 'idle' });
+    if (chosen) await updateSession(id, { workingDir: chosen, state: 'stopped' });
   }, [updateSession]);
 
   const sessionRowProps = useCallback((session: Session, groupId: string) => ({
@@ -1630,7 +1634,11 @@ const App: React.FC = () => {
                   cwd={session.workingDir}
                   launchClaude={session.shellType === 'claude'}
                   provider={session.provider}
-                  isStopped={session.state === 'stopped' || session.state === NEEDS_RELINK_STATE}
+                  isStopped={session.state === 'stopped' || !!session.workingDirMissing}
+                  blockedReason={session.workingDirMissing
+                    ? `Working directory not found on this machine: ${session.workingDir || '(none set)'}`
+                    : undefined}
+                  onBlockedAction={() => { void handleRelinkSession(session.id, session.workingDir); }}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
                   sessionState={session.state}

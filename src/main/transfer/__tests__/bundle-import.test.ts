@@ -17,7 +17,7 @@ import { freshDb, seedSecrets, seedSourceDb, writeTranscript } from './db-fixtur
 // providers/__tests__/resolve.test.ts — buildCommand is never run here.
 mock.module('electron', () => ({ app: { getPath: () => '/nonexistent-bodhilander-test-userdata' } }));
 
-const { readBundleManifest, restoreTransferBundle, NEEDS_RELINK_STATE } = await import('../bundle-import');
+const { readBundleManifest, restoreTransferBundle } = await import('../bundle-import');
 
 const SOURCE_ROOT = '/src-machine/Work/Repos';
 const SOURCE_DIR = `${SOURCE_ROOT}/Bodhilander`;
@@ -151,7 +151,7 @@ describe('working directories', () => {
 
     const session = destination.prepare('SELECT working_dir, state FROM sessions WHERE id = ?').get('s1') as any;
     expect(session.working_dir).toBe(path.join(destProjects, 'Bodhilander'));
-    expect(session.state).toBe('idle');
+    expect(session.state).toBe('stopped');
 
     const group = destination.prepare('SELECT working_dir FROM groups WHERE id = ?').get('g1') as any;
     expect(group.working_dir).toBe(path.join(destProjects, 'Bodhilander'));
@@ -162,7 +162,7 @@ describe('working directories', () => {
 
     const session = destination.prepare('SELECT working_dir, state FROM sessions WHERE id = ?').get('s1') as any;
     expect(session.working_dir).toBe(SOURCE_DIR);
-    expect(session.state).toBe(NEEDS_RELINK_STATE);
+    expect(fs.existsSync(session.working_dir)).toBe(false);
     expect(outcome.needsRelink).toEqual(['s1']);
   });
 
@@ -171,14 +171,24 @@ describe('working directories', () => {
 
     const session = destination.prepare('SELECT working_dir, state FROM sessions WHERE id = ?').get('s1') as any;
     expect(session.working_dir).toBe(path.join(tmp, 'nowhere', 'Bodhilander'));
-    expect(session.state).toBe(NEEDS_RELINK_STATE);
+    expect(fs.existsSync(session.working_dir)).toBe(false);
     expect(outcome.needsRelink).toEqual(['s1']);
   });
 
-  test('a parked session is never left in a state the launcher would spawn', async () => {
-    await restore(exportBytes(), NO_MAPPING);
+  test('a restored session lands stopped, never in a state that spawns on its own', async () => {
+    await restore(exportBytes(), mappedToDest());
     const row = destination.prepare('SELECT state FROM sessions WHERE id = ?').get('s1') as any;
-    expect(['idle', 'working', 'waiting']).not.toContain(row.state);
+    expect(row.state).toBe('stopped');
+  });
+
+  test('being parked is derived from the directory, not written into state', async () => {
+    const outcome = await restore(exportBytes(), NO_MAPPING);
+
+    // Deliberately identical to the reachable case: nothing distinguishes the
+    // two in the row, because a bulk state reset would erase the difference.
+    const row = destination.prepare('SELECT state FROM sessions WHERE id = ?').get('s1') as any;
+    expect(row.state).toBe('stopped');
+    expect(outcome.needsRelink).toEqual(['s1']);
   });
 });
 
@@ -281,6 +291,18 @@ describe('older files', () => {
 });
 
 describe('idempotence', () => {
+  test('a settings change made after the first import survives the second', async () => {
+    seedSecrets(source);
+    const bytes = exportBytes();
+    await restore(bytes, mappedToDest());
+    destination.prepare("UPDATE preferences SET value = 'light' WHERE key = 'theme'").run();
+
+    await restore(bytes, mappedToDest());
+
+    const row = destination.prepare('SELECT value FROM preferences WHERE key = ?').get('theme') as any;
+    expect(row.value).toBe('light');
+  });
+
   test('re-importing the same bundle duplicates nothing', async () => {
     const bytes = exportBytes();
     await restore(bytes, mappedToDest());
@@ -301,12 +323,11 @@ describe('idempotence', () => {
   test('a second import does not undo a relink the user already did', async () => {
     const bytes = exportBytes();
     await restore(bytes, NO_MAPPING);
-    destination.prepare("UPDATE sessions SET working_dir = ?, state = 'idle' WHERE id = 's1'").run(destProjects);
+    destination.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(destProjects, 's1');
 
     await restore(bytes, NO_MAPPING);
-    const row = destination.prepare('SELECT working_dir, state FROM sessions WHERE id = ?').get('s1') as any;
+    const row = destination.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('s1') as any;
     expect(row.working_dir).toBe(destProjects);
-    expect(row.state).toBe('idle');
   });
 });
 

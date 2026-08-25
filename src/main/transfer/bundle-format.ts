@@ -153,6 +153,7 @@ const EXCLUDED_PREFERENCE_KEYS = new Set([
   'soundCompleteCustomPath',
   'legacyCodeSearchCleanupDone',
   'legacyMemoryCleanupDone',
+  'legacyMemoryMcpCleanupDone',
 ]);
 
 export function isPortablePreferenceKey(key: string): boolean {

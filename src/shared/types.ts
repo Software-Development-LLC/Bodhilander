@@ -1,12 +1,4 @@
-/** 'needs-relink': restored from another machine, working directory not found here. */
-export type SessionState = 'idle' | 'working' | 'waiting' | 'error' | 'stopped' | 'needs-relink';
-
-/**
- * Restored from another machine, working directory not found here. Never
- * launched: PtyManager throws on a missing cwd, and that throw reaches the
- * user as a spawn failure with nothing to act on.
- */
-export const NEEDS_RELINK_STATE: SessionState = 'needs-relink';
+export type SessionState = 'idle' | 'working' | 'waiting' | 'error' | 'stopped';
 
 export interface Session {
   id: string;
@@ -39,6 +31,12 @@ export interface Session {
    * 'claude'; plain shell sessions keep the default.
    */
   provider: string;
+  /**
+   * Derived at read time, never stored: `workingDir` is not on this machine,
+   * so launching would throw. A stored flag could not survive the bulk state
+   * reset every app start performs.
+   */
+  workingDirMissing?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +402,28 @@ export interface GlobalStats {
   totalDurationSeconds: number;
   eventsPerDay: { date: string; count: number }[];
   toolUseCounts: Record<string, number>;
+}
+
+export interface PortableExportResult {
+  success: boolean;
+  filePath?: string;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  /** Archive size as it was shown before the file was written; bundles only. */
+  sizeLabel?: string;
+}
+
+export interface PortableImportResult {
+  success: boolean;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  skippedGroups?: number;
+  skippedSessions?: number;
+  /** Bundles only: transcripts landed, and sessions whose folder is missing. */
+  transcriptCount?: number;
+  needsRelinkCount?: number;
 }
 
 export interface TransferBundleCounts {

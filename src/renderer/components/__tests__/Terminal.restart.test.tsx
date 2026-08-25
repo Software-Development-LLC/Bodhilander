@@ -278,3 +278,58 @@ describe('Terminal restart ordering (#164)', () => {
     expect(createdSessions.length).toBe(createsAfterRestart);
   });
 });
+
+describe('a session whose working directory is not on this machine', () => {
+  const REASON = 'Working directory not found on this machine: /gone/here';
+
+  function renderBlocked(onBlockedAction?: () => void) {
+    return render(
+      <Terminal
+        sessionId="s1"
+        cwd="/gone/here"
+        launchClaude
+        provider="claude"
+        isStopped
+        blockedReason={REASON}
+        onBlockedAction={onBlockedAction}
+        isActive
+      />
+    );
+  }
+
+  test('never spawns a pty on its own', () => {
+    renderBlocked();
+    expect(createdSessions).toEqual([]);
+  });
+
+  test('offers no Start button — that is the manual path into the throw', () => {
+    const { container } = renderBlocked();
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent);
+
+    expect(labels).not.toContain('Start Session');
+    expect(container.textContent).toContain(REASON);
+  });
+
+  test('offers the fix instead, and spawns nothing when it is taken', () => {
+    const asked: number[] = [];
+    const { container } = renderBlocked(() => asked.push(1));
+
+    const button = [...container.querySelectorAll('button')]
+      .find((b) => b.textContent === 'Set Working Directory…')!;
+    expect(button).toBeDefined();
+
+    act(() => { button.click(); });
+    expect(asked).toHaveLength(1);
+    expect(createdSessions).toEqual([]);
+  });
+
+  test('an ordinary stopped session still gets its Start button', () => {
+    const { container } = render(
+      <Terminal sessionId="s1" cwd="/tmp" launchClaude provider="claude" isStopped isActive />
+    );
+    const labels = [...container.querySelectorAll('button')].map((b) => b.textContent);
+
+    expect(labels).toContain('Start Session');
+    expect(createdSessions).toEqual([]);
+  });
+});

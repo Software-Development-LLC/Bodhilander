@@ -89,3 +89,72 @@ describe('remapWorkingDir', () => {
     expect(remapWorkingDir('/a/b', [{ from: '/a', to: '' }])).toBe('/a/b');
   });
 });
+
+describe('UNC destinations', () => {
+  test('a child keeps both leading separators', () => {
+    const mapped = remapWorkingDir('/Users/will/Repos/A', [
+      { from: '/Users/will/Repos', to: '\\\\nas2\\share\\R' },
+    ]);
+    expect(mapped).toBe('\\\\nas2\\share\\R\\A');
+  });
+
+  test('an exact match returns the share path unchanged', () => {
+    const mapped = remapWorkingDir('/Users/will/Repos', [
+      { from: '/Users/will/Repos', to: '\\\\nas2\\share\\R' },
+    ]);
+    expect(mapped).toBe('\\\\nas2\\share\\R');
+  });
+
+  test('a UNC source is surfaced as a root with its server and share intact', () => {
+    const roots = collectWorkingDirRoots(['\\\\nas2\\share\\R\\A', '\\\\nas2\\share\\R\\B']);
+    expect(roots).toEqual(['\\\\nas2\\share\\R']);
+  });
+
+  test('the server and share are never treated as remappable segments', () => {
+    const roots = collectWorkingDirRoots(['\\\\nas2\\share\\only']);
+    expect(roots).toEqual(['\\\\nas2\\share\\only']);
+  });
+
+  test('a UNC subject is rewritten onto a local folder', () => {
+    const mapped = remapWorkingDir('\\\\nas2\\share\\R\\A', [
+      { from: '\\\\nas2\\share\\R', to: '/home/will/src' },
+    ]);
+    expect(mapped).toBe('/home/will/src/A');
+  });
+});
+
+describe('windows case-insensitivity', () => {
+  test('a drive spelled differently is still one root', () => {
+    expect(collectWorkingDirRoots(['D:\\Projects\\a', 'd:\\projects\\b'])).toEqual(['D:\\Projects']);
+  });
+
+  test('a mapping applies regardless of how the drive was typed', () => {
+    const mapped = remapWorkingDir('D:\\Projects\\App', [{ from: 'd:\\projects', to: '/srv' }]);
+    expect(mapped).toBe('/srv/App');
+  });
+
+  test('the tail keeps the spelling the session actually used', () => {
+    const mapped = remapWorkingDir('D:\\Projects\\MyApp', [{ from: 'D:\\projects', to: 'E:\\work' }]);
+    expect(mapped).toBe('E:\\work\\MyApp');
+  });
+
+  test('posix paths stay case-sensitive, because their filesystems are', () => {
+    // Folded, these two would collapse into the single chain /srv/Apps/a.
+    expect(collectWorkingDirRoots(['/srv/Apps/a', '/srv/apps/a'])).toEqual(['/srv']);
+    expect(remapWorkingDir('/srv/Apps', [{ from: '/srv/apps', to: '/mnt' }])).toBe('/srv/Apps');
+  });
+});
+
+describe('volume roots', () => {
+  test('a session at a posix volume root is still offered for mapping', () => {
+    expect(collectWorkingDirRoots(['/'])).toEqual(['/']);
+  });
+
+  test('a session at a windows drive root is still offered for mapping', () => {
+    expect(collectWorkingDirRoots(['C:\\'])).toEqual(['C:\\']);
+  });
+
+  test('a volume root sits beside the deeper roots on the same volume', () => {
+    expect(collectWorkingDirRoots(['C:\\', 'C:\\Work\\a', 'C:\\Work\\b'])).toEqual(['C:\\', 'C:\\Work']);
+  });
+});

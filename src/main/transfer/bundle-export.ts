@@ -10,6 +10,7 @@ import type DatabaseCtor from 'better-sqlite3';
 import {
   BUNDLE_FORMAT_VERSION,
   encodeBundle,
+  formatBytes,
   isPortablePreferenceKey,
   LEGACY_ACCOUNT_KEY,
   TABLES_ENTRY,
@@ -22,6 +23,13 @@ import { collectWorkingDirRoots } from './working-dirs';
 
 type Db = DatabaseCtor.Database;
 
+/**
+ * The archive is assembled in memory so its exact size can be quoted before a
+ * file is written. That trade needs a ceiling: past this, refuse and say so
+ * rather than let a very large transcript store exhaust the heap.
+ */
+export const MAX_TRANSCRIPT_BYTES = 1024 * 1024 * 1024;
+
 export interface ExportOptions {
   sourceAppVersion: string;
   sourcePlatform: string;
@@ -29,6 +37,8 @@ export interface ExportOptions {
   sourceUserData: string;
   /** Pre-accounts `~/.claude`; its transcripts travel under the legacy key. */
   legacyConfigDir: string;
+  /** Overridable so the ceiling can be exercised without a huge fixture. */
+  maxTranscriptBytes?: number;
 }
 
 export interface BuiltBundle {
@@ -135,8 +145,14 @@ function readPortableTables(db: Db): PortableTables {
   };
 }
 
+interface TranscriptFile {
+  entryName: string;
+  filePath: string;
+  size: number;
+}
+
 /** `<configDir>/projects/<slug>/<uuid>.jsonl` — nothing else in the tree. */
-function readTranscripts(configDir: string, accountKey: string): BundleEntry[] {
+function listTranscripts(configDir: string, accountKey: string): TranscriptFile[] {
   const projects = path.join(configDir, 'projects');
   let slugs: fs.Dirent[];
   try {
@@ -145,7 +161,7 @@ function readTranscripts(configDir: string, accountKey: string): BundleEntry[] {
     return [];
   }
 
-  const entries: BundleEntry[] = [];
+  const found: TranscriptFile[] = [];
   for (const slug of slugs) {
     if (!slug.isDirectory()) continue;
     let files: string[];
@@ -156,12 +172,39 @@ function readTranscripts(configDir: string, accountKey: string): BundleEntry[] {
     }
     for (const file of files) {
       if (!file.endsWith('.jsonl')) continue;
+      const filePath = path.join(projects, slug.name, file);
       try {
-        const data = fs.readFileSync(path.join(projects, slug.name, file));
-        entries.push({ name: `${TRANSCRIPT_PREFIX}${accountKey}/${slug.name}/${file}`, data });
+        found.push({
+          entryName: `${TRANSCRIPT_PREFIX}${accountKey}/${slug.name}/${file}`,
+          filePath,
+          size: fs.statSync(filePath).size,
+        });
       } catch {
         continue; // unreadable file: the rest of the archive is still worth writing
       }
+    }
+  }
+  return found;
+}
+
+/** Sizes come from stat, so the ceiling is checked before a byte is read. */
+export class TranscriptVolumeError extends Error {}
+
+function readWithinBudget(files: TranscriptFile[], budget: number): BundleEntry[] {
+  const total = files.reduce((sum, f) => sum + f.size, 0);
+  if (total > budget) {
+    throw new TranscriptVolumeError(
+      `Conversation transcripts total ${formatBytes(total)}, over the ${formatBytes(budget)} ` +
+      'a transfer bundle can hold. Prune older conversations and try again.',
+    );
+  }
+
+  const entries: BundleEntry[] = [];
+  for (const file of files) {
+    try {
+      entries.push({ name: file.entryName, data: fs.readFileSync(file.filePath) });
+    } catch {
+      continue; // raced away since the scan: the rest is still worth writing
     }
   }
   return entries;
@@ -183,7 +226,10 @@ export function buildTransferBundle(db: Db, options: ExportOptions): BuiltBundle
     accountDirs.push({ key: LEGACY_ACCOUNT_KEY, dir: options.legacyConfigDir });
   }
 
-  const transcripts = accountDirs.flatMap((a) => readTranscripts(a.dir, a.key));
+  const transcripts = readWithinBudget(
+    accountDirs.flatMap((a) => listTranscripts(a.dir, a.key)),
+    options.maxTranscriptBytes ?? MAX_TRANSCRIPT_BYTES,
+  );
   const workingDirRoots = collectWorkingDirRoots([
     ...tables.groups.map((g) => g.workingDir),
     ...tables.sessions.map((s) => s.workingDir),

@@ -13,12 +13,15 @@ import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
+import * as accountsRepo from './repositories/accounts';
 import { isKnownProvider, DEFAULT_PROVIDER_ID } from './providers';
 import { getDatabase } from './database';
 import { legacyClaudeConfigDir } from './conversation-transcript';
+import { registerHooks } from './mcp-config';
 import { buildTransferBundle } from './transfer/bundle-export';
 import { readBundleManifest, restoreTransferBundle } from './transfer/bundle-import';
 import { BUNDLE_EXTENSION, formatBytes, looksLikeBundle } from './transfer/bundle-format';
+import type { PortableExportResult, PortableImportResult } from '../shared/types';
 import type { PortableDataV1 as PortableData } from './transfer/bundle-format';
 import type { WorkingDirMapping } from './transfer/working-dirs';
 import log from 'electron-log';
@@ -42,27 +45,9 @@ export function sanitizeImportedProvider(provider: string | null | undefined): s
 // Result shapes
 // ---------------------------------------------------------------------------
 
-interface ExportResult {
-  success: boolean;
-  filePath?: string;
-  error?: string;
-  groupCount?: number;
-  sessionCount?: number;
-  /** Archive size as it was shown before the file was written. */
-  sizeLabel?: string;
-}
+type ExportResult = PortableExportResult;
 
-interface ImportResult {
-  success: boolean;
-  error?: string;
-  groupCount?: number;
-  sessionCount?: number;
-  skippedGroups?: number;
-  skippedSessions?: number;
-  /** Bundle imports only: transcripts landed, and sessions left to relink. */
-  transcriptCount?: number;
-  needsRelinkCount?: number;
-}
+type ImportResult = PortableImportResult;
 
 // ---------------------------------------------------------------------------
 // Export
@@ -85,7 +70,8 @@ async function askExportFormat(): Promise<'bundle' | 'portable' | 'cancel'> {
       'as one transfer bundle for a new machine.\n\n' +
       'Groups & sessions only: the portable JSON older versions and ClaudeLander read.',
   });
-  return response === 0 ? 'bundle' : response === 1 ? 'portable' : 'cancel';
+  const choices = ['bundle', 'portable', 'cancel'] as const;
+  return choices[response] ?? 'cancel';
 }
 
 async function exportTransferBundle(legacyDir: string = legacyClaudeConfigDir()): Promise<ExportResult> {
@@ -242,6 +228,19 @@ async function askRootMappings(roots: string[]): Promise<WorkingDirMapping[] | n
   return mappings;
 }
 
+/**
+ * Hooks are what make a session report its state. Registering them only at
+ * window creation left every restored account silent until the next launch.
+ */
+function registerRestoredAccountHooks(): void {
+  for (const account of accountsRepo.getAllAccounts()) {
+    const result = registerHooks(account.configDir);
+    if (!result.success) {
+      log.warn(`[Import/Export] Hook registration failed for ${account.configDir}:`, result.error);
+    }
+  }
+}
+
 async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<ImportResult> {
   const manifest = readBundleManifest(bytes);
   const mappings = await askRootMappings(manifest?.workingDirRoots ?? []);
@@ -255,6 +254,7 @@ async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<I
       stagingDir,
       mappings,
     });
+    registerRestoredAccountHooks();
     log.info(
       `[Import/Export] Restored ${outcome.groups} group(s), ${outcome.sessions} session(s), ` +
       `${outcome.transcripts} transcript(s); ${outcome.needsRelink.length} need relinking`,

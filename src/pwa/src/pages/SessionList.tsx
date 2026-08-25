@@ -469,6 +469,18 @@ function GroupBlock({
   );
 }
 
+/**
+ * A session the desktop cannot start reports its stored state, which says
+ * nothing about why. The missing folder is what the viewer has to hear, so it
+ * displaces the state pill rather than sitting beside it.
+ */
+export function sessionPill(session: Session): { label: string; className: string } {
+  if (session.workingDirMissing) {
+    return { label: 'Needs folder', className: 'bg-amber-500/20 text-amber-300' };
+  }
+  return STATE_PILL[session.state] ?? STATE_PILL.idle;
+}
+
 function SessionRow({
   session,
   onOpen,
@@ -476,7 +488,7 @@ function SessionRow({
   session: Session;
   onOpen: (id: string) => void;
 }) {
-  const pill = STATE_PILL[session.state] ?? STATE_PILL.idle;
+  const pill = sessionPill(session);
   return (
     <button
       type="button"

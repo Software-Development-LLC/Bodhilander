@@ -161,7 +161,8 @@ describe('import', () => {
 
     const row = db.prepare('SELECT working_dir, state FROM sessions WHERE id = ?').get('s1') as any;
     expect(row.working_dir).toBe(here);
-    expect(row.state).toBe('idle');
+    expect(row.state).toBe('stopped');
+    expect(fs.existsSync(row.working_dir)).toBe(true);
   });
 
   test('leaving a root as it was parks the sessions under it', async () => {
@@ -173,8 +174,8 @@ describe('import', () => {
 
     expect(result.success).toBe(true);
     expect(result.needsRelinkCount).toBe(1);
-    const row = db.prepare('SELECT state FROM sessions WHERE id = ?').get('s1') as any;
-    expect(row.state).toBe('needs-relink');
+    const row = db.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('s1') as any;
+    expect(fs.existsSync(row.working_dir)).toBe(false);
   });
 
   test('cancelling at a root leaves the database untouched', async () => {

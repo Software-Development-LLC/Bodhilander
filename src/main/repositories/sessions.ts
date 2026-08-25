@@ -1,5 +1,15 @@
+import * as fs from 'fs';
 import { getDatabase } from '../database';
 import { Session, SessionState } from '../../shared/types';
+
+/**
+ * Whether a session's working directory is on this machine. Derived on every
+ * read rather than stored: `markAllSessionsStopped` rewrites `state` for every
+ * row on each app start, so no marker kept there could survive a restart.
+ */
+export type DirectoryProbe = (dir: string) => boolean;
+
+const directoryOnDisk: DirectoryProbe = (dir) => dir !== '' && fs.existsSync(dir);
 
 export function sessionExists(id: string): boolean {
   const db = getDatabase();
@@ -7,9 +17,20 @@ export function sessionExists(id: string): boolean {
   return !!row;
 }
 
-export function getAllSessions(): Session[] {
+export function getAllSessions(dirExists: DirectoryProbe = directoryOnDisk): Session[] {
   const db = getDatabase();
   const rows = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
+
+  // Sessions cluster into a handful of checkouts, so one probe per distinct
+  // directory keeps a sidebar refresh to a few stat calls.
+  const probed = new Map<string, boolean>();
+  const missing = (dir: string): boolean => {
+    const cached = probed.get(dir);
+    if (cached !== undefined) return cached;
+    const answer = !dirExists(dir);
+    probed.set(dir, answer);
+    return answer;
+  };
 
   return rows.map(row => ({
     id: row.id,
@@ -26,6 +47,7 @@ export function getAllSessions(): Session[] {
     durationSeconds: row.duration_seconds ?? 0,
     claudeAccountId: row.claude_account_id ?? null,
     provider: row.provider ?? 'claude',
+    workingDirMissing: missing(row.working_dir ?? ''),
   }));
 }
 

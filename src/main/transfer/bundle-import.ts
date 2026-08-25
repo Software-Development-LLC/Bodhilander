@@ -11,7 +11,6 @@ import log from 'electron-log';
 import { carryTranscript, isPathSafeConversationId } from '../conversation-transcript';
 import { seedLegacyConversations } from '../legacy-claude-seed';
 import { DEFAULT_PROVIDER_ID, isKnownProvider } from '../providers';
-import { NEEDS_RELINK_STATE } from '../../shared/types';
 import {
   BUNDLE_FORMAT_VERSION,
   decodeBundle,
@@ -27,7 +26,6 @@ import { remapWorkingDir, type WorkingDirMapping } from './working-dirs';
 
 type Db = DatabaseCtor.Database;
 
-export { NEEDS_RELINK_STATE };
 
 export interface ImportOptions {
   /** This machine's `<userData>/claude-accounts`. */
@@ -136,35 +134,27 @@ interface RowCounts {
   needsRelink: string[];
 }
 
-function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): RowCounts {
-  const exists = options.directoryExists ?? ((dir: string) => fs.existsSync(dir));
-  const counts: RowCounts = {
-    groups: 0, sessions: 0, sessionEvents: 0, chatEvents: 0, arenaRuns: 0,
-    arenaResponses: 0, preferences: 0, accounts: 0, skippedGroups: 0, skippedSessions: 0, needsRelink: [],
-  };
+/** Accounts the restore can legally point a group or session at. */
+function knownAccountIds(db: Db, tables: PortableTables): Set<string> {
+  return new Set([...idsIn(db, 'claude_accounts'), ...tables.accounts.map((a) => a.id)]);
+}
 
-  const existingGroups = idsIn(db, 'groups');
-  const existingSessions = idsIn(db, 'sessions');
-  const existingEvents = idsIn(db, 'session_events');
-  const existingChat = idsIn(db, 'chat_events');
-  const existingRuns = idsIn(db, 'arena_runs');
-  const existingResponses = idsIn(db, 'arena_responses');
-  const existingAccounts = idsIn(db, 'claude_accounts');
-
-  const bundledAccounts = new Set(tables.accounts.map((a) => a.id));
-  const knownAccount = (id: string | null | undefined) =>
-    id != null && (bundledAccounts.has(id) || existingAccounts.has(id)) ? id : null;
-
-  const insertGroup = db.prepare(`
+function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, groupIds: Set<string>) {
+  const accounts = knownAccountIds(db, tables);
+  const insert = db.prepare(`
     INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+
+  let inserted = 0;
+  let skipped = 0;
   for (const group of tables.groups) {
-    if (existingGroups.has(group.id)) {
-      counts.skippedGroups++;
+    if (groupIds.has(group.id)) {
+      skipped++;
       continue;
     }
-    insertGroup.run(
+    const accountId = (group as { claudeAccountId?: string | null }).claudeAccountId;
+    insert.run(
       group.id,
       group.name,
       group.color ?? '#888888',
@@ -173,70 +163,98 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
       group.createdAt,
       group.parentId ?? null,
       group.collapsed ? 1 : 0,
-      knownAccount((group as any).claudeAccountId),
+      accountId && accounts.has(accountId) ? accountId : null,
     );
-    existingGroups.add(group.id);
-    counts.groups++;
+    groupIds.add(group.id);
+    inserted++;
   }
+  return { inserted, skipped };
+}
 
-  const insertSession = db.prepare(`
+function restoreSessions(
+  db: Db,
+  tables: PortableTables,
+  options: ImportOptions,
+  groupIds: Set<string>,
+  sessionIds: Set<string>,
+) {
+  const exists = options.directoryExists ?? ((dir: string) => fs.existsSync(dir));
+  const accounts = knownAccountIds(db, tables);
+  const insert = db.prepare(`
     INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at,
                           last_activity_at, claude_session_id, ended_at, duration_seconds, claude_account_id, provider)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+    VALUES (?, ?, ?, ?, 'stopped', ?, ?, ?, ?, ?, NULL, 0, ?, ?)
   `);
+
+  let inserted = 0;
+  let skipped = 0;
+  const needsRelink: string[] = [];
+
   for (const session of tables.sessions) {
-    if (existingSessions.has(session.id) || !existingGroups.has(session.groupId)) {
-      counts.skippedSessions++;
+    if (sessionIds.has(session.id) || !groupIds.has(session.groupId)) {
+      skipped++;
       continue;
     }
     const workingDir = remapWorkingDir(session.workingDir ?? '', options.mappings);
-    const reachable = workingDir !== '' && exists(workingDir);
-    if (!reachable) counts.needsRelink.push(session.id);
+    if (workingDir === '' || !exists(workingDir)) needsRelink.push(session.id);
 
-    insertSession.run(
+    insert.run(
       session.id,
       session.groupId,
       session.name,
       workingDir,
-      reachable ? 'idle' : NEEDS_RELINK_STATE,
       session.shellType || 'bash',
       session.order ?? 0,
       session.createdAt,
       session.lastActivityAt,
       session.claudeSessionId ?? null,
-      knownAccount(session.claudeAccountId),
+      session.claudeAccountId && accounts.has(session.claudeAccountId) ? session.claudeAccountId : null,
       sanitizeProvider(session.provider),
     );
-    existingSessions.add(session.id);
-    counts.sessions++;
+    sessionIds.add(session.id);
+    inserted++;
   }
+  return { inserted, skipped, needsRelink };
+}
+
+function restoreEvents(db: Db, tables: PortableTables, sessionIds: Set<string>) {
+  const existingEvents = idsIn(db, 'session_events');
+  const existingChat = idsIn(db, 'chat_events');
 
   const insertEvent = db.prepare(
     'INSERT INTO session_events (id, session_id, event_type, event_data, created_at) VALUES (?, ?, ?, ?, ?)',
   );
+  let sessionEvents = 0;
   for (const event of tables.sessionEvents) {
-    if (existingEvents.has(event.id) || !existingSessions.has(event.sessionId)) continue;
+    if (existingEvents.has(event.id) || !sessionIds.has(event.sessionId)) continue;
     insertEvent.run(event.id, event.sessionId, event.eventType, event.eventData ?? null, event.createdAt);
-    counts.sessionEvents++;
+    sessionEvents++;
   }
 
   const insertChat = db.prepare(
     'INSERT INTO chat_events (id, session_id, type, payload, timestamp) VALUES (?, ?, ?, ?, ?)',
   );
+  let chatEvents = 0;
   for (const event of tables.chatEvents) {
-    if (existingChat.has(event.id) || !existingSessions.has(event.sessionId)) continue;
+    if (existingChat.has(event.id) || !sessionIds.has(event.sessionId)) continue;
     insertChat.run(event.id, event.sessionId, event.type, event.payload, event.timestamp);
-    counts.chatEvents++;
+    chatEvents++;
   }
 
-  const insertRun = db.prepare(
-    'INSERT INTO arena_runs (id, prompt, working_dir, created_at) VALUES (?, ?, ?, ?)',
-  );
+  return { sessionEvents, chatEvents };
+}
+
+function restoreArena(db: Db, tables: PortableTables, options: ImportOptions) {
+  const existingRuns = idsIn(db, 'arena_runs');
+  const existingResponses = idsIn(db, 'arena_responses');
+
+  const insertRun = db.prepare('INSERT INTO arena_runs (id, prompt, working_dir, created_at) VALUES (?, ?, ?, ?)');
+  let arenaRuns = 0;
   for (const run of tables.arenaRuns) {
     if (existingRuns.has(run.id)) continue;
     const dir = run.workingDir ? remapWorkingDir(run.workingDir, options.mappings) : null;
     insertRun.run(run.id, run.prompt, dir, run.createdAt);
-    counts.arenaRuns++;
+    arenaRuns++;
   }
 
   const insertResponse = db.prepare(`
@@ -244,6 +262,7 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
                                  input_tokens, output_tokens, cost_usd, error, round, prompt, session_ref)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  let arenaResponses = 0;
   for (const response of tables.arenaResponses) {
     if (existingResponses.has(response.id)) continue;
     insertResponse.run(
@@ -252,24 +271,41 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
       response.outputTokens ?? null, response.costUsd ?? null, response.error ?? null,
       response.round ?? 0, response.prompt ?? null, response.sessionRef ?? null,
     );
-    counts.arenaResponses++;
+    arenaResponses++;
   }
 
-  const upsertPreference = db.prepare(
-    'INSERT INTO preferences (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-  );
+  return { arenaRuns, arenaResponses };
+}
+
+/**
+ * Settings the destination has already chosen are left alone. An overwrite
+ * would make a second import undo whatever the user changed in between, which
+ * is the one thing a restore must never do.
+ */
+function restorePreferences(db: Db, tables: PortableTables): number {
+  const existing = idsIn(db, 'preferences', 'key');
+  const insert = db.prepare('INSERT INTO preferences (key, value) VALUES (?, ?)');
+
+  let inserted = 0;
   for (const preference of tables.preferences) {
-    upsertPreference.run(preference.key, preference.value ?? null);
-    counts.preferences++;
+    if (existing.has(preference.key)) continue;
+    insert.run(preference.key, preference.value ?? null);
+    inserted++;
   }
+  return inserted;
+}
 
-  const insertAccount = db.prepare(`
+function restoreAccounts(db: Db, tables: PortableTables, options: ImportOptions): number {
+  const existing = idsIn(db, 'claude_accounts');
+  const insert = db.prepare(`
     INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at, last_used_at)
     VALUES (?, ?, ?, ?, ?, 0, ?, ?)
   `);
+
+  let inserted = 0;
   for (const account of tables.accounts) {
-    if (existingAccounts.has(account.id)) continue;
-    insertAccount.run(
+    if (existing.has(account.id)) continue;
+    insert.run(
       account.id,
       account.label,
       destinationConfigDir(options.accountsRoot, account.id),
@@ -278,11 +314,35 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
       account.createdAt,
       account.lastUsedAt ?? null,
     );
-    counts.accounts++;
+    inserted++;
   }
 
   promoteDefaultAccount(db, tables);
-  return counts;
+  return inserted;
+}
+
+function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): RowCounts {
+  const groupIds = idsIn(db, 'groups');
+  const sessionIds = idsIn(db, 'sessions');
+
+  const groups = restoreGroups(db, tables, options, groupIds);
+  const sessions = restoreSessions(db, tables, options, groupIds, sessionIds);
+  const events = restoreEvents(db, tables, sessionIds);
+  const arena = restoreArena(db, tables, options);
+
+  return {
+    groups: groups.inserted,
+    sessions: sessions.inserted,
+    sessionEvents: events.sessionEvents,
+    chatEvents: events.chatEvents,
+    arenaRuns: arena.arenaRuns,
+    arenaResponses: arena.arenaResponses,
+    preferences: restorePreferences(db, tables),
+    accounts: restoreAccounts(db, tables, options),
+    skippedGroups: groups.skipped,
+    skippedSessions: sessions.skipped,
+    needsRelink: sessions.needsRelink,
+  };
 }
 
 /** Where an account's config dir lives on THIS machine (see account-auth). */
