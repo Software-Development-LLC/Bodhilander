@@ -87,11 +87,9 @@ export function subscriptionKeys(sub: PushSubscriptionLike): { p256dh: string; a
 }
 
 /**
- * How long to wait for the service worker before giving up on it.
- *
- * `serviceWorker.ready` is specified never to REJECT, so a worker that never
- * registers leaves it pending forever — and a control that never settles reads
- * as a hung app. Raced rather than caught, because there is nothing to catch.
+ * How long to wait for the service worker. `serviceWorker.ready` never REJECTS,
+ * so a worker that fails to register leaves it pending forever — raced rather
+ * than caught, because there is nothing to catch.
  */
 export const REGISTRATION_TIMEOUT_MS = 4000;
 

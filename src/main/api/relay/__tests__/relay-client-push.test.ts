@@ -1,23 +1,20 @@
 /**
- * The push seam inside `RelayClient` — the part `planAttentionPush` cannot see.
- *
- * Three behaviours the design makes claims about and nothing asserted: that a
- * `push:sync` replaces the subscription list wholesale, that the debounce
- * SURVIVES a reconnect but is cleared by `disable()`, and that a relay refusal
- * hands the spent window back. All were correct by inspection, which is exactly
- * the state a comment can keep looking like long after it stops being true.
- *
- * Run with: bun test --isolate src/main/api/relay/__tests__/relay-client-push.test.ts
+ * The push seam inside `RelayClient` — the part `planAttentionPush` cannot see:
+ * that `push:sync` replaces the list wholesale, that the debounce survives a
+ * reconnect but not `disable()`, and that a refusal hands the window back.
  */
+
+// Each was correct by inspection, which is what a comment goes on looking like
+// long after it stops being true. Writing them down found one that was not.
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createECDH } from 'crypto';
 
 // --- the module graph relay-client pulls in ------------------------------
-//
-// Faithful supersets, and no more: each stub exposes the shape relay-client
-// actually reaches for. Paths are relative to THIS file, which is a level
-// deeper than relay-client.ts. `--isolate` keeps these out of every other
-// file, which is what makes mocking this graph acceptable at all.
+
+// Faithful supersets and no more: each stub exposes what relay-client reaches
+// for. Paths resolve relative to THIS file, a level deeper than the subject.
+// `--isolate` keeps them out of every other file, which is what makes mocking
+// a graph this size acceptable at all.
 
 const prefs = new Map<string, string>();
 mock.module('electron', () => ({
