@@ -24,7 +24,7 @@ const { restoreTransferBundle } = await import('../bundle-import');
 const { resolveAccountForSession } = await import('../../account-resolver');
 const { getClaudeSessionId } = await import('../../repositories/sessions');
 const { getAllAccounts } = await import('../../repositories/accounts');
-const { ensureTranscriptInConfigDir, legacyClaudeConfigDir } = await import('../../conversation-transcript');
+const { ensureTranscriptInConfigDir } = await import('../../conversation-transcript');
 const { getProvider, CLAUDE_CONFIG_DIR_ENV } = await import('../../providers');
 
 const SOURCE_ROOT = '/src-machine/Work/Repos';
@@ -79,7 +79,9 @@ describe('a restored session resumes its conversation', () => {
     const storedId = getClaudeSessionId('s1');
     expect(storedId).toBe(CONVERSATION);
 
-    const candidates = [...new Set([legacyClaudeConfigDir(), ...getAllAccounts().map((a) => a.configDir)])];
+    // pty-manager puts the real legacy dir first; a temp one keeps this hermetic.
+    const legacyDir = path.join(tmp, 'dst-home', '.claude');
+    const candidates = [...new Set([legacyDir, ...getAllAccounts().map((a) => a.configDir)])];
     expect(ensureTranscriptInConfigDir(storedId!, account!.configDir, candidates)).toBe('present');
 
     const launch = getProvider('claude').buildCommand({

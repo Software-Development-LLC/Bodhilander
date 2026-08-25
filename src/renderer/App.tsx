@@ -15,7 +15,7 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
-import { ClaudeAccount, Session } from '../shared/types';
+import { ClaudeAccount, NEEDS_RELINK_STATE, Session } from '../shared/types';
 import type { LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -1630,7 +1630,7 @@ const App: React.FC = () => {
                   cwd={session.workingDir}
                   launchClaude={session.shellType === 'claude'}
                   provider={session.provider}
-                  isStopped={session.state === 'stopped'}
+                  isStopped={session.state === 'stopped' || session.state === NEEDS_RELINK_STATE}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
                   sessionState={session.state}

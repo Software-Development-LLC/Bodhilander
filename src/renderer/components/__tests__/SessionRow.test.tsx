@@ -240,3 +240,38 @@ describe('SessionRow', () => {
     expect(document.querySelector('.session-provider-badge')).toBeTruthy();
   });
 });
+
+describe('a restored session that needs relinking', () => {
+  test('offers the relink action in place of the plain state pill', () => {
+    const relinks: number[] = [];
+    renderRow({
+      session: session({ state: 'needs-relink', workingDir: '/gone/here' }),
+      onRelink: () => relinks.push(1),
+    });
+
+    const pill = document.querySelector('button.status-pill.needs-relink') as HTMLButtonElement;
+    expect(pill).not.toBeNull();
+    expect(pill.textContent).toBe('relink');
+    expect(pill.getAttribute('title')).toContain('/gone/here');
+
+    fireEvent.click(pill);
+    expect(relinks).toHaveLength(1);
+  });
+
+  test('selecting the row is not triggered by the relink click', () => {
+    const { calls } = renderRow({
+      session: session({ state: 'needs-relink', workingDir: '/gone/here' }),
+      onRelink: noop,
+    });
+
+    fireEvent.click(document.querySelector('button.status-pill.needs-relink')!);
+    expect(calls.select).toBe(0);
+  });
+
+  test('without a relink handler it stays an ordinary pill', () => {
+    renderRow({ session: session({ state: 'needs-relink', workingDir: '/gone/here' }) });
+
+    expect(document.querySelector('button.status-pill.needs-relink')).toBeNull();
+    expect(document.querySelector('span.status-pill.needs-relink')).not.toBeNull();
+  });
+});

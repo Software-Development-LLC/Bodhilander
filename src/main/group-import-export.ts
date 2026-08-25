@@ -8,12 +8,19 @@
 
 import { dialog, app } from 'electron';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import { isKnownProvider, DEFAULT_PROVIDER_ID } from './providers';
+import { getDatabase } from './database';
+import { legacyClaudeConfigDir } from './conversation-transcript';
+import { buildTransferBundle } from './transfer/bundle-export';
+import { readBundleManifest, restoreTransferBundle } from './transfer/bundle-import';
+import { BUNDLE_EXTENSION, formatBytes, looksLikeBundle } from './transfer/bundle-format';
+import type { WorkingDirMapping } from './transfer/working-dirs';
 import log from 'electron-log';
 
 /**
@@ -74,6 +81,8 @@ interface ExportResult {
   error?: string;
   groupCount?: number;
   sessionCount?: number;
+  /** Archive size as it was shown before the file was written. */
+  sizeLabel?: string;
 }
 
 interface ImportResult {
@@ -83,13 +92,92 @@ interface ImportResult {
   sessionCount?: number;
   skippedGroups?: number;
   skippedSessions?: number;
+  /** Bundle imports only: transcripts landed, and sessions left to relink. */
+  transcriptCount?: number;
+  needsRelinkCount?: number;
 }
 
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
-export async function exportGroupsAndSessions(): Promise<ExportResult> {
+/**
+ * Which of the two formats the user wants. The portable JSON is still what
+ * another app reads; the bundle is the whole machine.
+ */
+async function askExportFormat(): Promise<'bundle' | 'portable' | 'cancel'> {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Everything on this machine…', 'Groups & sessions only…', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Export',
+    message: 'What should the export carry?',
+    detail:
+      'Everything: groups, sessions, history, settings, accounts and conversation transcripts, ' +
+      'as one transfer bundle for a new machine.\n\n' +
+      'Groups & sessions only: the portable JSON older versions and ClaudeLander read.',
+  });
+  return response === 0 ? 'bundle' : response === 1 ? 'portable' : 'cancel';
+}
+
+export async function exportTransferBundle(legacyDir: string = legacyClaudeConfigDir()): Promise<ExportResult> {
+  try {
+    const { bytes, manifest } = buildTransferBundle(getDatabase(), {
+      sourceAppVersion: app.getVersion(),
+      sourcePlatform: process.platform,
+      sourceUserData: app.getPath('userData'),
+      legacyConfigDir: legacyDir,
+    });
+    const sizeLabel = formatBytes(bytes.length);
+
+    const confirm = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['Save Bundle…', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Transfer Bundle',
+      message: `This bundle will be ${sizeLabel}.`,
+      detail:
+        `${manifest.counts.groups} group(s), ${manifest.counts.sessions} session(s), ` +
+        `${manifest.counts.transcripts} conversation transcript(s), ` +
+        `${manifest.counts.accounts} account(s), ${manifest.counts.preferences} setting(s).\n\n` +
+        'API keys, Teams tokens and the relay identity stay here — they cannot be decrypted elsewhere.',
+    });
+    if (confirm.response !== 0) return { success: false, error: 'Export cancelled' };
+
+    const defaultName = `bodhilander-transfer-${new Date().toISOString().slice(0, 10)}.${BUNDLE_EXTENSION}`;
+    const chosen = await dialog.showSaveDialog({
+      title: 'Save Transfer Bundle',
+      defaultPath: path.join(app.getPath('documents'), defaultName),
+      filters: [{ name: 'Bodhilander Bundle', extensions: [BUNDLE_EXTENSION] }],
+    });
+    if (chosen.canceled || !chosen.filePath) return { success: false, error: 'Export cancelled' };
+
+    fs.writeFileSync(chosen.filePath, bytes);
+    log.info(`[Import/Export] Wrote ${sizeLabel} transfer bundle to ${chosen.filePath}`);
+    return {
+      success: true,
+      filePath: chosen.filePath,
+      groupCount: manifest.counts.groups,
+      sessionCount: manifest.counts.sessions,
+      sizeLabel,
+    };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log.error('[Import/Export] Transfer bundle export failed:', msg);
+    return { success: false, error: msg };
+  }
+}
+
+export async function exportGroupsAndSessions(legacyDir?: string): Promise<ExportResult> {
+  const choice = await askExportFormat();
+  if (choice === 'cancel') return { success: false, error: 'Export cancelled' };
+  if (choice === 'bundle') return exportTransferBundle(legacyDir);
+  return exportPortableJson();
+}
+
+async function exportPortableJson(): Promise<ExportResult> {
   try {
     const groups = groupsRepo.getAllGroups();
     const sessions = sessionsRepo.getAllSessions();
@@ -153,11 +241,79 @@ export async function exportGroupsAndSessions(): Promise<ExportResult> {
 // Import
 // ---------------------------------------------------------------------------
 
-export async function importGroupsAndSessions(): Promise<ImportResult> {
+/**
+ * Ask where each of the source machine's working-directory roots lives here.
+ * Null means the user abandoned the import; an empty answer for one root is
+ * allowed and leaves those paths as they were.
+ */
+async function askRootMappings(roots: string[]): Promise<WorkingDirMapping[] | null> {
+  const mappings: WorkingDirMapping[] = [];
+
+  for (const root of roots) {
+    const { response } = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['Choose Folder…', 'Leave As Is', 'Cancel Import'],
+      defaultId: 0,
+      cancelId: 2,
+      title: 'Where does this folder live now?',
+      message: root,
+      detail:
+        'Point this at the same tree on this machine. Left as is, any session under it ' +
+        'whose folder is missing arrives marked for relinking rather than failing to start.',
+    });
+    if (response === 2) return null;
+    if (response !== 0) continue;
+
+    const chosen = await dialog.showOpenDialog({
+      title: `New location for ${root}`,
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (!chosen.canceled && chosen.filePaths.length > 0) {
+      mappings.push({ from: root, to: chosen.filePaths[0] });
+    }
+  }
+  return mappings;
+}
+
+async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<ImportResult> {
+  const manifest = readBundleManifest(bytes);
+  const mappings = await askRootMappings(manifest?.workingDirRoots ?? []);
+  if (mappings === null) return { success: false, error: 'Import cancelled' };
+
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhilander-transfer-'));
+  try {
+    const outcome = await restoreTransferBundle(getDatabase(), bytes, {
+      accountsRoot: path.join(app.getPath('userData'), 'claude-accounts'),
+      legacyConfigDir: legacyDir,
+      stagingDir,
+      mappings,
+    });
+    log.info(
+      `[Import/Export] Restored ${outcome.groups} group(s), ${outcome.sessions} session(s), ` +
+      `${outcome.transcripts} transcript(s); ${outcome.needsRelink.length} need relinking`,
+    );
+    return {
+      success: true,
+      groupCount: outcome.groups,
+      sessionCount: outcome.sessions,
+      skippedGroups: outcome.skippedGroups,
+      skippedSessions: outcome.skippedSessions,
+      transcriptCount: outcome.transcripts,
+      needsRelinkCount: outcome.needsRelink.length,
+    };
+  } finally {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+  }
+}
+
+export async function importGroupsAndSessions(legacyDir: string = legacyClaudeConfigDir()): Promise<ImportResult> {
   try {
     const result = await dialog.showOpenDialog({
       title: 'Import Groups & Sessions',
-      filters: [{ name: 'JSON Files', extensions: ['json'] }],
+      filters: [
+        { name: 'Bodhilander Bundle', extensions: [BUNDLE_EXTENSION] },
+        { name: 'JSON Files', extensions: ['json'] },
+      ],
       properties: ['openFile'],
     });
 
@@ -165,7 +321,10 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
       return { success: false, error: 'Import cancelled' };
     }
 
-    const raw = fs.readFileSync(result.filePaths[0], 'utf-8');
+    const bytes = fs.readFileSync(result.filePaths[0]);
+    if (looksLikeBundle(bytes)) return await importTransferBundle(bytes, legacyDir);
+
+    const raw = bytes.toString('utf-8');
     const data: PortableData = JSON.parse(raw);
 
     if (data.version !== 1 || !Array.isArray(data.groups) || !Array.isArray(data.sessions)) {

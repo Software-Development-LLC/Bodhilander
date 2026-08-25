@@ -1,6 +1,13 @@
 /** 'needs-relink': restored from another machine, working directory not found here. */
 export type SessionState = 'idle' | 'working' | 'waiting' | 'error' | 'stopped' | 'needs-relink';
 
+/**
+ * Restored from another machine, working directory not found here. Never
+ * launched: PtyManager throws on a missing cwd, and that throw reaches the
+ * user as a spawn failure with nothing to act on.
+ */
+export const NEEDS_RELINK_STATE: SessionState = 'needs-relink';
+
 export interface Session {
   id: string;
   groupId: string;

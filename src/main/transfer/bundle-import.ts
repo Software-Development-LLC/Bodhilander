@@ -11,7 +11,7 @@ import log from 'electron-log';
 import { carryTranscript, isPathSafeConversationId } from '../conversation-transcript';
 import { seedLegacyConversations } from '../legacy-claude-seed';
 import { DEFAULT_PROVIDER_ID, isKnownProvider } from '../providers';
-import { NEEDS_RELINK_STATE } from '../session-relink';
+import { NEEDS_RELINK_STATE } from '../../shared/types';
 import {
   BUNDLE_FORMAT_VERSION,
   decodeBundle,

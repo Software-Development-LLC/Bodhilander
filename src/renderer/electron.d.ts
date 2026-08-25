@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, TransferInspectResult, TransferImportResult, TransferRootMapping } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -75,11 +75,6 @@ interface ElectronAPI {
   exportGroups: () => Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }>;
   importGroups: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
   importFromClaudeLander: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
-
-  // Machine transfer bundle
-  exportTransferBundle: () => Promise<{ success: boolean; filePath?: string; error?: string; sizeLabel?: string }>;
-  inspectTransferBundle: () => Promise<TransferInspectResult>;
-  importTransferBundle: (filePath: string, mappings: TransferRootMapping[]) => Promise<TransferImportResult>;
 
   // Preferences
   getPreference: (key: string) => Promise<string | null>;
