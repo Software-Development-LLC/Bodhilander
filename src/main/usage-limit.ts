@@ -20,8 +20,17 @@
  */
 export const CLAUDE_USAGE_LIMIT_PATTERNS: readonly RegExp[] = [
   /Claude (?:AI )?usage limit reached/i,
-  /(?:You['’]ve|You have) reached your (?:usage|weekly|5-hour) limit/i,
+  // "You've hit your weekly limit" / "You have reached your usage limit".
+  // The verb is the part that varies and the part the first version of this
+  // got wrong: it required "reached", and the message a real weekly limit
+  // produces says "hit". The qualifier is optional too — "You've hit your
+  // limit" carries no adjective at all.
+  /(?:You['’]ve|You have) (?:hit|reached|used(?: up)?) your (?:[a-z0-9-]+ )?limit/i,
   /(?:usage|weekly|5-hour|session) limit reached/i,
+  // "Weekly limit · resets Aug 26 at 2pm" — the status-line form, where the
+  // limit and its reset are joined by a bullet rather than a sentence, so
+  // neither "reached" nor "will reset at" appears anywhere in it.
+  /(?:usage|weekly|5-hour|session) limit\b[^\n]{0,24}?\bresets?\b/i,
   /Your limit will reset at/i,
 ] as const;
 
