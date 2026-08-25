@@ -296,9 +296,10 @@ export function describeFailover(event: AccountFailoverEvent): { title: string; 
     };
   }
   if (event.blocked === 'no-healthy-account') {
+    const held = until ? `; ${spent} is held${until}` : '';
     return {
       title: `${spent} hit its usage limit`,
-      body: `No other account is available${until ? `; ${spent} is held${until}` : ''}.`,
+      body: `No other account is available${held}.`,
     };
   }
 

@@ -28,6 +28,21 @@ import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
 
 /**
+ * Of the sessions an automatic account switch moved (#207), the ones with a pty
+ * to replace.
+ *
+ * A stopped session has nothing running under the old account and picks the new
+ * one up whenever it is next started; restarting it here would start a session
+ * the user had deliberately ended.
+ */
+function respawnable(sessionIds: string[], sessions: Session[]): string[] {
+  const stopped = new Set(
+    sessions.filter(session => session.state === 'stopped').map(session => session.id)
+  );
+  return sessionIds.filter(id => !stopped.has(id));
+}
+
+/**
  * Collapse-chevron labels. While a filter is active every row is force-expanded,
  * so the control is disabled and says so rather than lying about state (#141).
  */
@@ -563,13 +578,7 @@ const App: React.FC = () => {
       // Cooldowns and default/rank state both just changed.
       window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
 
-      // A stopped session has no pty to replace and picks the new account up
-      // whenever it is next started — restarting it here would start a session
-      // the user had deliberately ended.
-      const live = event.sessionIds.filter(
-        id => sessionsRef.current.find(s => s.id === id)?.state !== 'stopped'
-      );
-      restartSessions(live);
+      restartSessions(respawnable(event.sessionIds, sessionsRef.current));
     });
   }, [restartSessions]);
 

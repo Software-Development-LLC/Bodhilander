@@ -30,11 +30,7 @@ export const FailoverNotice: React.FC<FailoverNoticeProps> = ({ event, onDismiss
     : `${event.sessionIds.length} sessions`;
 
   return (
-    <div
-      className={`failover-notice ${blocked ? 'blocked' : ''}`}
-      role="status"
-      aria-live="polite"
-    >
+    <output className={`failover-notice ${blocked ? 'blocked' : ''}`} aria-live="polite">
       <span className="failover-notice-icon" aria-hidden="true">{blocked ? '!' : '⇄'}</span>
 
       <div className="failover-notice-body">
@@ -64,7 +60,7 @@ export const FailoverNotice: React.FC<FailoverNoticeProps> = ({ event, onDismiss
       >
         ×
       </button>
-    </div>
+    </output>
   );
 };
 

@@ -20,7 +20,7 @@
  */
 export const CLAUDE_USAGE_LIMIT_PATTERNS: readonly RegExp[] = [
   /Claude (?:AI )?usage limit reached/i,
-  /(?:You(?:'|’)ve|You have) reached your (?:usage|weekly|5-hour) limit/i,
+  /(?:You['’]ve|You have) reached your (?:usage|weekly|5-hour) limit/i,
   /(?:usage|weekly|5-hour|session) limit reached/i,
   /Your limit will reset at/i,
 ] as const;

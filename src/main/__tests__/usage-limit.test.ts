@@ -20,6 +20,9 @@ describe('detectUsageLimit', () => {
     const lines = [
       'Claude usage limit reached. Your limit will reset at 7pm (America/New_York)',
       "You've reached your usage limit.",
+      // Typographic apostrophe — what a CLI rendering prose actually prints,
+      // and the reason the pattern uses a character class rather than one quote.
+      "You’ve reached your weekly limit.",
       'Weekly limit reached',
       '5-hour limit reached · resets 6pm',
       'Claude AI usage limit reached|1787000000',
