@@ -309,6 +309,17 @@ function handleStateChange(sessionId: string, state: string, sessionName?: strin
     }).catch((err) => {
       log.error('[Main] Web Push dispatch failed:', err);
     });
+
+    // The same event, out through the relay to a phone that is nowhere near
+    // this LAN. The session name is sealed HERE and the relay forwards
+    // ciphertext, so a remote notification can be specific without the relay
+    // ever learning what it says. A no-op unless remote hosting is on and a
+    // browser has subscribed.
+    try {
+      getRelayClient().notifyAttention({ sessionId, sessionName: name, state });
+    } catch (err) {
+      log.error('[Main] relay attention push failed:', err);
+    }
   }
 }
 
