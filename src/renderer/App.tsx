@@ -45,18 +45,21 @@ function chevronAriaLabel(collapsed: boolean, filtering: boolean, kind: 'group' 
  *
  * The label alone does not say which login an account is: two accounts both
  * called "Work" are indistinguishable in the menu, and after a login the email
- * is the only thing that tells them apart. Accounts that never wrote an email
- * — the normal case on macOS, where Claude Code keeps its tokens in the
- * Keychain rather than in the config dir — say so, so a blank tail can never be
- * read as "this one has no second account behind it".
+ * is the only thing that tells them apart. Only an account resolved as logged
+ * out says so; one that simply recorded no address trails off, because the tail
+ * is there to identify a login, not to grade it.
  *
  * MenuItem.label is a string, so the swatch that carries colour elsewhere
  * cannot come along; label + email identifies the account without it, which is
  * the accessible baseline the swatch was never allowed to be responsible for.
  */
 export function accountMenuLabel(acc: ClaudeAccount, isCurrent: boolean): string {
+  let tail = '';
+  if (acc.email) tail = ` — ${acc.email}`;
+  else if (acc.loggedIn === false) tail = ' — not yet logged in';
+
   return `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"`
-    + (acc.email ? ` — ${acc.email}` : ' — not yet logged in')
+    + tail
     + (acc.isDefault ? ' (default)' : '');
 }
 

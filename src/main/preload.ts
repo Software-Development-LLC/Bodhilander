@@ -1,8 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, PortableExportResult, PortableImportResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
+
+/** `verified` is false when only the user's button says the login happened. */
+interface LoginCompleted {
+  accountId: string;
+  email: string | null;
+  verified: boolean;
+}
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
@@ -41,6 +48,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('pty:exit', listener);
     return () => {
       ipcRenderer.removeListener('pty:exit', listener);
+    };
+  },
+  // A guest asked for a session to be resized to fit their screen. A request,
+  // not a resize: the prompt it raises is what decides, and declining changes
+  // nothing on either end.
+  onRelayResizeRequest: (callback: (request: RelayResizeRequest) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, request: RelayResizeRequest) => callback(request);
+    ipcRenderer.on('relay:resize-request', listener);
+    return () => {
+      ipcRenderer.removeListener('relay:resize-request', listener);
     };
   },
   // Dynamic sizing: the PTY was resized (possibly by a remote/mobile viewer).
@@ -348,8 +365,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('accounts:assignToSession', sessionId, accountId),
   assignAccountToGroup: (groupId: string, accountId: string | null): Promise<AccountSwitchResult> =>
     ipcRenderer.invoke('accounts:assignToGroup', groupId, accountId),
-  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; email: string | null }) => callback(data);
+  onAccountLoginCompleted: (callback: (data: LoginCompleted) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: LoginCompleted) => callback(data);
     ipcRenderer.on('accounts:login-completed', listener);
     return () => ipcRenderer.removeListener('accounts:login-completed', listener);
   },

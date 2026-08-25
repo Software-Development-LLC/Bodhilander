@@ -209,10 +209,21 @@ export const AccountRow: React.FC<AccountRowProps> = ({
   const plural = runningSessions === 1 ? 'session' : 'sessions';
   return (
     <li className="account-row">
-      {/* The one surface where "Not yet logged in" describes something the
-          user can act on — this row has the buttons. Everywhere else a missing
-          email renders nothing rather than a status about a working session. */}
-      <AccountChip account={account} size="md" noEmailLabel="Not yet logged in" />
+      <AccountChip account={account} size="md" />
+      {/* The status is a tag beside the address, not a replacement for it: the
+          address is what says WHICH account this is, and the one surface where
+          a signed-out account can be acted on is the one that must still name
+          it. Only an explicit false speaks — undefined means nothing was read,
+          and a working account may never be accused on a failed read. */}
+      {account.loggedIn === false && (
+        <span
+          className="signed-out-tag"
+          title="No completed login found in this account's config directory — log in again before using it"
+          aria-label="Not signed in"
+        >
+          not signed in
+        </span>
+      )}
       {account.isDefault && <span className="default-tag">default</span>}
       {runningSessions > 0 && (
         <span
@@ -299,9 +310,10 @@ const AddAccountButton: React.FC<{ onAdd: (label: string) => Promise<void>; disa
 };
 
 // -----------------------------------------------------------------------------
-// Login modal — embeds a Terminal attached to the login pty. Auto-closes when
-// the credentials file appears (Linux/Windows). On macOS, shows an explicit
-// "I'm logged in" button since tokens go to Keychain.
+// Login modal — embeds a Terminal attached to the login pty, and reports the
+// login as soon as main sees one land in the config dir. macOS also gets an
+// explicit "I'm logged in" button, as the platform whose token store is the
+// one main cannot read directly.
 // -----------------------------------------------------------------------------
 
 interface ClaudeAccountLoginModalProps {
@@ -311,6 +323,55 @@ interface ClaudeAccountLoginModalProps {
   onCancel: (deleteAccount: boolean) => void;
 }
 
+export interface LoginHintProps {
+  completed: boolean;
+  /** Whether main saw the login in the config dir, rather than being told. */
+  verified: boolean;
+  exited: boolean;
+  isMac: boolean;
+}
+
+/**
+ * What the overlay is allowed to claim. An unverified completion is the user
+ * pressing the button before OAuth finished, and saying "signed in" there
+ * contradicts the panel behind it, which reads the same config dir we just did.
+ */
+export const LoginHint: React.FC<LoginHintProps> = ({ completed, verified, exited, isMac }) => {
+  if (completed && verified) {
+    return <>Login detected{' — '}this account is signed in. You can close this window.</>;
+  }
+  if (completed) {
+    return (
+      <>
+        Recorded{' — '}but no login was found in this account's config directory yet.
+        If OAuth hasn't finished, run <code>/login</code> again before closing.
+      </>
+    );
+  }
+  if (exited) {
+    return <>The login process exited before credentials were saved. Abort and try again, or close this window to keep the empty account.</>;
+  }
+  if (isMac) {
+    return <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window closes itself once the login lands; macOS keeps the tokens in Keychain, so click "I'm logged in" if it doesn't.</>;
+  }
+  return <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>;
+};
+
+export interface LoginBannerProps {
+  completed: boolean;
+  verified: boolean;
+}
+
+/**
+ * The most emphatic thing the overlay says, extracted so its gate sits where a
+ * test can hold it: only a login main found in the config dir may be called
+ * saved, because the panel behind reads that same dir.
+ */
+export const LoginBanner: React.FC<LoginBannerProps> = ({ completed, verified }) => {
+  if (!completed || !verified) return null;
+  return <div className="completion-banner">Login saved. It's safe to close this window.</div>;
+};
+
 const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
   account,
   ptyId,
@@ -318,6 +379,7 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
   onCancel,
 }) => {
   const [completed, setCompleted] = useState(false);
+  const [verified, setVerified] = useState(false);
   const [exited, setExited] = useState(false);
   const isMac = useMemo(() => window.electronAPI.platform === 'darwin', []);
 
@@ -325,6 +387,7 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
     const offCompleted = window.electronAPI.onAccountLoginCompleted((data) => {
       if (data.accountId === account.id) {
         setCompleted(true);
+        setVerified(data.verified);
       }
     });
     const offExited = window.electronAPI.onAccountLoginExited((data) => {
@@ -366,18 +429,10 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
       >
         <h3 id="claude-account-login-title">Log in to "{account.label}"</h3>
         <p className="hint">
-          {completed ? (
-            <>Login detected{' — '}credentials were saved to this account's isolated config directory. You can close this window.</>
-          ) : exited ? (
-            <>The login process exited before credentials were saved. Abort and try again, or close this window to keep the empty account.</>
-          ) : isMac ? (
-            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. Because macOS stores tokens in Keychain, click "I'm logged in" once you see "Logged in" in the terminal.</>
-          ) : (
-            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>
-          )}
+          <LoginHint completed={completed} verified={verified} exited={exited} isMac={isMac} />
         </p>
 
-        {completed && <div className="completion-banner">Login saved. It's safe to close this window.</div>}
+        <LoginBanner completed={completed} verified={verified} />
 
         <div className="terminal-host">
           <Terminal

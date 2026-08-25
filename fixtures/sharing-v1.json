@@ -58,7 +58,10 @@
       "reachable. 'owner' is NOT a certificate role -- there is deliberately no persisted",
       "owner certificate (§3), so it never appears in mintableRoles.",
       "'create' and 'browse' belong to no guest role, which is what keeps session:create,",
-      "group:create and dirs:list unreachable for any guest, ever (a v1 non-goal)."
+      "group:create and dirs:list unreachable for any guest, ever (a v1 non-goal).",
+      "'terminal:resize-request' requires only 'view' because it resizes nothing: the guest",
+      "asks, and the owner's desktop decides. If it ever needs 'resize', a phone has been",
+      "given the ability to reflow somebody else's terminal and that is the finding."
     ],
     "caps": ["view", "list", "input", "resize", "create", "browse"],
     "roleCaps": {
@@ -74,6 +77,7 @@
       "terminal:unsubscribe": "view",
       "terminal:input": "input",
       "terminal:resize": "resize",
+      "terminal:resize-request": "view",
       "session:create": "create",
       "group:create": "create",
       "dirs:list": "browse"

@@ -1,35 +1,119 @@
 /**
- * The renderer bridge. Channel names live here and in index.ts's handlers with
- * nothing joining them, so a rename on one side fails silently at runtime —
- * these pin the channels the import/export surface actually invokes.
+ * The context bridge. It forwards event payloads by hand, so a field main
+ * added can be dropped here unnoticed; and channel names live here and in
+ * index.ts with nothing joining them, so a rename fails silently at runtime.
  */
-import { describe, expect, mock, test } from 'bun:test';
 
+// Run with: bun test src/main/__tests__/preload.test.ts
+
+import { describe, expect, test, mock } from 'bun:test';
+
+type Listener = (event: unknown, data: unknown) => void;
+
+let exposed: Record<string, unknown> = {};
+const listeners = new Map<string, Listener[]>();
 const invocations: { channel: string; args: unknown[] }[] = [];
-let exposed: Record<string, (...args: unknown[]) => unknown> = {};
 
+/**
+ * Covers what preload reaches for, and no more: it is the only consumer here.
+ * The suite runs under `bun test --isolate`, so this registration cannot become
+ * the subject of a file that drives electron for real.
+ */
 mock.module('electron', () => ({
   contextBridge: {
-    exposeInMainWorld: (_name: string, api: Record<string, (...args: unknown[]) => unknown>) => {
-      exposed = api;
-    },
+    exposeInMainWorld: (_name: string, api: Record<string, unknown>) => { exposed = api; },
   },
   ipcRenderer: {
-    invoke: (channel: string, ...args: unknown[]) => {
-      invocations.push({ channel, args });
-      return Promise.resolve(undefined);
+    on: (channel: string, listener: Listener) => {
+      const existing = listeners.get(channel) ?? [];
+      existing.push(listener);
+      listeners.set(channel, existing);
     },
-    on: () => {},
-    removeListener: () => {},
-    send: () => {},
+    removeListener: (channel: string, listener: Listener) => {
+      const existing = listeners.get(channel) ?? [];
+      listeners.set(channel, existing.filter((l) => l !== listener));
+    },
+    invoke: async (channel: string, ...args: unknown[]) => {
+      invocations.push({ channel, args });
+      return undefined;
+    },
+    send: () => undefined,
   },
 }));
 
 await import('../preload');
 
-function lastChannel(): string {
-  return invocations[invocations.length - 1].channel;
+function emit(channel: string, data: unknown): void {
+  for (const listener of listeners.get(channel) ?? []) listener({}, data);
 }
+
+/** `exposed` is deliberately untyped — it is whatever preload handed across. */
+function call(name: string, ...args: unknown[]): unknown {
+  return (exposed[name] as (...a: unknown[]) => unknown)(...args);
+}
+
+function lastInvocation(): { channel: string; args: unknown[] } {
+  return invocations[invocations.length - 1];
+}
+
+const onLoginCompleted = () =>
+  exposed.onAccountLoginCompleted as (
+    cb: (data: { accountId: string; email: string | null; verified: boolean }) => void,
+  ) => () => void;
+
+describe('onAccountLoginCompleted', () => {
+  test('hands the renderer the whole payload, verification included', () => {
+    const seen: unknown[] = [];
+    const off = onLoginCompleted()((data) => { seen.push(data); });
+
+    emit('accounts:login-completed', {
+      accountId: 'a1',
+      email: 'will@acme.test',
+      verified: true,
+    });
+
+    expect(seen).toEqual([{ accountId: 'a1', email: 'will@acme.test', verified: true }]);
+    off();
+  });
+
+  // The renderer decides between "signed in" and "could not confirm" on this
+  // one field, so a bridge that dropped it would leave the overlay asserting
+  // the confident wording on every login.
+  test('an unverified completion arrives unverified, not merely absent', () => {
+    const seen: { verified: boolean }[] = [];
+    const off = onLoginCompleted()((data) => { seen.push(data); });
+
+    emit('accounts:login-completed', { accountId: 'a1', email: null, verified: false });
+
+    expect(seen[0].verified).toBe(false);
+    expect('verified' in seen[0]).toBe(true);
+    off();
+  });
+
+  test('the returned unsubscribe detaches the listener it registered', () => {
+    const seen: unknown[] = [];
+    const off = onLoginCompleted()((data) => { seen.push(data); });
+
+    off();
+    emit('accounts:login-completed', { accountId: 'a1', email: null, verified: true });
+
+    expect(seen).toEqual([]);
+  });
+
+  test('two subscribers are independent, so closing one overlay keeps the panel fed', () => {
+    const first: unknown[] = [];
+    const second: unknown[] = [];
+    const offFirst = onLoginCompleted()((d) => { first.push(d); });
+    const offSecond = onLoginCompleted()((d) => { second.push(d); });
+
+    offFirst();
+    emit('accounts:login-completed', { accountId: 'a1', email: null, verified: true });
+
+    expect(first).toEqual([]);
+    expect(second).toHaveLength(1);
+    offSecond();
+  });
+});
 
 describe('the import/export bridge', () => {
   test('exposes an export, an import, and the ClaudeLander shortcut', () => {
@@ -39,28 +123,26 @@ describe('the import/export bridge', () => {
   });
 
   test('each routes to the channel index.ts registers', () => {
-    exposed.exportGroups();
-    expect(lastChannel()).toBe('export:groups');
+    call('exportGroups');
+    expect(lastInvocation().channel).toBe('export:groups');
 
-    exposed.importGroups();
-    expect(lastChannel()).toBe('import:groups');
+    call('importGroups');
+    expect(lastInvocation().channel).toBe('import:groups');
 
-    exposed.importFromClaudeLander();
-    expect(lastChannel()).toBe('import:fromClaudeLander');
+    call('importFromClaudeLander');
+    expect(lastInvocation().channel).toBe('import:fromClaudeLander');
   });
 
   test('the folder picker forwards the directory it should open at', () => {
-    exposed.selectDirectory('/some/where');
+    call('selectDirectory', '/some/where');
 
-    const call = invocations[invocations.length - 1];
-    expect(call.channel).toBe('dialog:selectDirectory');
-    expect(call.args).toEqual(['/some/where']);
+    expect(lastInvocation().channel).toBe('dialog:selectDirectory');
+    expect(lastInvocation().args).toEqual(['/some/where']);
   });
 
   test('updating a session carries its patch through unchanged', () => {
-    exposed.updateDbSession('s1', { workingDir: '/moved/here', state: 'stopped' });
+    call('updateDbSession', 's1', { workingDir: '/moved/here', state: 'stopped' });
 
-    const call = invocations[invocations.length - 1];
-    expect(call.args).toEqual(['s1', { workingDir: '/moved/here', state: 'stopped' }]);
+    expect(lastInvocation().args).toEqual(['s1', { workingDir: '/moved/here', state: 'stopped' }]);
   });
 });

@@ -2,8 +2,9 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebglAddon } from 'xterm-addon-webgl';
-import { ProviderInstallHint } from '../../shared/types';
+import { ProviderInstallHint, RelayResizeRequest } from '../../shared/types';
 import { ProviderInstallModal } from './ProviderInstallModal';
+import { KEEP_MY_SIZE, RESIZE_ONCE, resizeRequestCopy, shouldPrompt } from './resizeRequestPrompt';
 // The keyboard scheme lives in one place — see the table at the top of
 // useKeyboardShortcuts.ts. Importing the predicates (instead of re-deriving
 // them here) is what keeps the xterm allowlist and the app handler in sync.
@@ -100,6 +101,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // unrequested) from our own.
   const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const [mobileSize, setMobileSize] = useState<{ cols: number; rows: number } | null>(null);
+  // A guest asked to be fitted to their screen. Held until the owner answers:
+  // guests never resize this PTY themselves, so nothing has happened yet.
+  const [resizeRequest, setResizeRequest] = useState<RelayResizeRequest | null>(null);
+  // Whether this window is currently holding a size it granted to a guest.
+  const heldFitRef = useRef(false);
 
   // Track isActive in a ref so handleResize (set up in the main effect which
   // does NOT depend on isActive) can skip background sessions without a layout
@@ -142,6 +148,12 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     // early-out spares the layout flush below for every background session on
     // each window resize.
     if (!isActiveRef.current) return;
+    // A fit granted to a guest is held until this window takes it back on
+    // purpose. Without this the next focus, window resize or session switch
+    // re-measures an unchanged container and pushes the desktop grid back —
+    // silently, and with no message to the guest, who cannot ask again for
+    // ten seconds and is panning a 164-column terminal in the meantime.
+    if (heldFitRef.current) return;
     // …but isActive only tracks which SESSION is selected; it says nothing
     // about which CONTENT VIEW is showing. App.tsx hides the whole
     // .terminal-area with display:none while Analytics or Arena is active, and
@@ -183,8 +195,10 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     }
   }, [sessionId]);
 
-  // Resume the desktop's own size (undo a mobile viewer's shrink).
+  // Resume the desktop's own size (undo a mobile viewer's shrink, or a fit
+  // this window granted to a guest — taking it back is a deliberate act).
   const resumeDesktopSize = useCallback(() => {
+    heldFitRef.current = false;
     setMobileSize(null);
     handleResize();
   }, [handleResize]);
@@ -199,6 +213,9 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       const desk = desktopSizeRef.current;
       if (!desk) return; // haven't fit yet — nothing to compare against
       if (cols === desk.cols && rows === desk.rows) {
+        // Back at this window's own size by some other route — whatever was
+        // being held for a guest is over, so re-fitting is allowed again.
+        heldFitRef.current = false;
         setMobileSize(null);
         return;
       }
@@ -208,6 +225,37 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       }
     });
   }, [sessionId]);
+
+  // A guest asked for this session to be fitted to their screen. It is a
+  // request and only a request: it reaches a prompt, never the PTY.
+  useEffect(() => {
+    return window.electronAPI.onRelayResizeRequest((request) => {
+      if (!shouldPrompt(request, sessionId, desktopSizeRef.current)) return;
+      // The prompt in front of the owner is the one they answer. Replacing it
+      // means the size they read is not the size they agree to — a second
+      // guest asking between the reading and the click would resize this
+      // terminal to a number nobody ever saw.
+      setResizeRequest((pending) => pending ?? request);
+    });
+  }, [sessionId]);
+
+  // Accepting resizes once — one act, not a standing rule. The size is then
+  // HELD against this window's own re-fits until the owner takes it back
+  // through the banner below, because a fit that dies at the next focus is a
+  // promise to the guest that this window quietly breaks.
+  const acceptResizeRequest = useCallback(() => {
+    const request = resizeRequest;
+    setResizeRequest(null);
+    if (!request) return;
+    heldFitRef.current = true;
+    setMobileSize({ cols: request.cols, rows: request.rows });
+    try { xtermRef.current?.resize(request.cols, request.rows); } catch { /* disposed */ }
+    window.electronAPI.resizeSession(sessionId, request.cols, request.rows);
+  }, [resizeRequest, sessionId]);
+
+  // Declining tells the guest nothing and changes nothing: their view stays
+  // exactly as it was, and they may ask again later.
+  const declineResizeRequest = useCallback(() => setResizeRequest(null), []);
 
   // Surface provider launch failures (spawn ENOENT / command not found)
   // detected by main for this session's pty.
@@ -903,6 +951,17 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         className="terminal-container"
         onContextMenu={handleContextMenu}
       />
+      {resizeRequest && (
+        <output className="resize-request-banner">
+          <span className="resize-request-text">
+            👀 {resizeRequestCopy(resizeRequest, desktopSizeRef.current)}
+          </span>
+          <div className="resize-request-actions">
+            <button className="primary" onClick={acceptResizeRequest}>{RESIZE_ONCE}</button>
+            <button onClick={declineResizeRequest}>{KEEP_MY_SIZE}</button>
+          </div>
+        </output>
+      )}
       {mobileSize && (
         <div className="mobile-resize-banner">
           <span className="mobile-resize-banner-text">

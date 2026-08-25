@@ -4,9 +4,27 @@ import { Terminal } from '@xterm/xterm';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { FitAddon } from '@xterm/addon-fit';
 import { RelayConnection, type ConnState, type Inner } from './connection';
-import { createReconnectScheduler } from './reconnect';
+import { createReconnectScheduler, readyCommands } from './reconnect';
 import { clearAccountState, INVITE_STASH } from './account';
 import { endedCopy } from './ended';
+import {
+  autoOpenSessionId,
+  machineLabel,
+  machineMenuTitle,
+  machineSections,
+  planArrival,
+  showSectionTitles,
+  type Arrival,
+} from './arrival';
+import {
+  connectionProblemCopy,
+  FIT_ACTION,
+  fitAskedCopy,
+  guestSubtitle,
+  offlineCopy,
+  waitingCopy,
+  wideBannerCopy,
+} from './guest-copy';
 import {
   confirmCopy,
   guestShareRows,
@@ -84,7 +102,7 @@ function toggleTheme() { const d = !isDark(); root.setAttribute('data-theme', d 
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
-const app = { conn: null as RelayConnection | null, user: null as Me | null, machine: null as Machine | null, machines: [] as Machine[], sessions: [] as RSession[], groups: [] as RGroup[], activeId: null as string | null, fp: '', fpVerified: false, devLogin: false };
+const app = { conn: null as RelayConnection | null, user: null as Me | null, machine: null as Machine | null, machines: [] as Machine[], sessions: [] as RSession[], groups: [] as RGroup[], activeId: null as string | null, fp: '', fpVerified: false, devLogin: false, arrival: null as Arrival<Machine> | null, landed: false };
 const rootEl = document.getElementById('root')!;
 
 // history-layer nav so Back works within the app
@@ -237,25 +255,51 @@ async function renderRedeem(code: string): Promise<void> {
     return;
   }
 
+  const grant = (await res.json().catch(() => ({}))) as { grant?: { id?: string } };
   history.replaceState(null, '', '/');
-  renderWaitingForApproval();
+  renderWaitingForApproval(grant.grant?.id ?? null);
 }
 
 /**
  * The most-travelled path in the whole feature, and the guest's entire first
  * impression. It must say what is happening, that it is normal, and what to
  * do — a spinner alone reads as broken.
+ *
+ * The person is named as soon as we know who they are, which is not at
+ * redemption: `/api/machines` lists only countersigned grants, so the owner's
+ * name comes from the guest's own share list instead. Until it lands the copy
+ * says the same thing without inventing a name.
  */
-function renderWaitingForApproval(): void {
-  rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
-    <div class="logo">⏳</div>
-    <h1>Waiting to be let in…</h1>
-    <p>They'll get a prompt on their machine. Keep this page open — it'll update on its own.</p>
-    <div class="spinner" style="margin:18px auto"></div>
-    <button class="btn ghost" id="checkNow">Check now</button>
-  </div></div>`;
-  $('#checkNow')!.onclick = () => void pollForGrant(true);
+function renderWaitingForApproval(grantId: string | null): void {
+  const paint = (ownerName: string | null) => {
+    const copy = waitingCopy(ownerName);
+    rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
+      <div class="logo">⏳</div>
+      <h1>${esc(copy.title)}</h1>
+      <p>${esc(copy.body)}</p>
+      <div class="spinner" style="margin:18px auto"></div>
+      <button class="btn ghost" id="checkNow">Check now</button>
+    </div></div>`;
+    $('#checkNow')!.onclick = () => void pollForGrant(true);
+  };
+  paint(null);
+  // Repaint only if this screen is still the one on show — the owner may have
+  // answered while the lookup was in flight, and the terminal must not be
+  // replaced by a waiting screen that is no longer true.
+  if (grantId) void nameTheOwner(grantId).then((name) => { if (name && $('#checkNow')) paint(name); });
   void pollForGrant(false);
+}
+
+/** Who the guest is waiting on, from their own share list. Null if unknown. */
+async function nameTheOwner(grantId: string): Promise<string | null> {
+  try {
+    const res = await api('/api/shares');
+    if (!res.ok) return null;
+    const body = (await res.json()) as { grants: WireMyShare[] };
+    return body.grants.find((g) => g.id === grantId)?.ownerName ?? null;
+  } catch {
+    return null;
+  }
 }
 
 let waitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -321,13 +365,22 @@ function renderApp(machines: Machine[]) {
     return;
   }
   // Pick the last machine the user chose here, else the first. A machine
-  // switcher (the pill) lets them change it or link another.
-  //
-  // A guest with exactly one grant should never see a picker: choosing
-  // between one thing is not a choice, and "machine" is owner vocabulary
-  // anyway — they were invited to a session by a person.
-  const preferredId = localStorage.getItem('bodhi.machineId');
-  app.machine = machines.find((m) => m.id === preferredId) ?? machines[0]!;
+  // switcher (the pill) lets them change it or link another — except for the
+  // single-grant guest, who is offered neither: choosing between one thing is
+  // not a choice, and "machine" is owner vocabulary anyway. They were invited
+  // to a session by a person, so that is where they land.
+  app.arrival = planArrival(machines, localStorage.getItem('bodhi.machineId'));
+  app.machine = app.arrival!.machine;
+  app.landed = false;
+  // No pill at all for the single-grant guest: it would be a switcher with
+  // nothing to switch to, over a word ("machine") that describes a
+  // relationship they don't have. The connection state reaches them through
+  // the terminal's own strip instead — that is the pane they land on.
+  const pill = app.arrival!.showPicker
+    ? `<button class="machine-pill" id="machineBtn"><span class="dot off" id="mdot"></span> <span>${esc(
+        machineLabel(app.machine),
+      )}</span></button>`
+    : '';
 
   rootEl.innerHTML = `
   <div class="app">
@@ -337,11 +390,7 @@ function renderApp(machines: Machine[]) {
         <button class="iconbtn" id="theme" aria-label="Toggle light/dark theme">◐</button>
         ${accountButton()}
       </header>
-      <div class="pill-row"><button class="machine-pill" id="machineBtn"><span class="dot off" id="mdot"></span> <span>${esc(
-        app.machine.relation === 'grantee' && app.machine.ownerName
-          ? `${app.machine.ownerName}'s ${app.machine.name}`
-          : app.machine.name,
-      )}</span></button><button class="sharebtn" id="shareBtn"><span aria-hidden="true">🤝</span> ${isGuest() ? 'Your access' : 'Sharing'}</button></div>
+      <div class="pill-row">${pill}<button class="sharebtn" id="shareBtn"><span aria-hidden="true">🤝</span> ${isGuest() ? 'Your access' : 'Sharing'}</button></div>
       <div class="list-head"><h2>Sessions</h2><span class="attn-count hidden" id="attn"></span></div>
       <ul class="sessions" id="sessions"><li class="empty-note"><div class="spinner"></div><p style="margin-top:14px">Connecting securely…</p></li></ul>
       <button class="fab" id="fab" aria-label="New session">＋</button>
@@ -353,6 +402,7 @@ function renderApp(machines: Machine[]) {
         <div class="term-title grow"><div class="t-name" id="tName">—</div><div class="t-meta" id="tMeta"></div></div>
         <button class="iconbtn" id="fpBtn2" aria-label="Connection details">🔒</button>
       </header>
+      <div class="conn-strip hidden" id="connStrip" role="status"></div>
       <div class="screen" id="screen"></div>
       <div class="compose">
         <div class="attn-banner hidden" id="attnBanner">✻ This session is waiting for your response</div>
@@ -372,11 +422,16 @@ function renderApp(machines: Machine[]) {
   $('#acct')!.onclick = openAccount;
   $('#fab')!.onclick = openCreate;
   $('#fpBtn')!.onclick = openFp; $('#fpBtn2')!.onclick = openFp;
-  $('#machineBtn')!.onclick = openMachineMenu;
+  const machineBtn = $('#machineBtn');
+  if (machineBtn) machineBtn.onclick = openMachineMenu;
   $('#shareBtn')!.onclick = () => (isGuest() ? openMyShares() : openSharing());
   $('#back')!.onclick = () => history.back();
-  if (isGuest()) applyWatchOnly();
-  else { buildKeys(); setupCompose(); }
+  if (isGuest()) {
+    applyWatchOnly();
+    // Creating sessions belongs to no guest role, so the button could only
+    // ever produce a refusal. Offering it is a promise the machine will break.
+    $('#fab')?.remove();
+  } else { buildKeys(); setupCompose(); }
   connect();
 }
 
@@ -427,8 +482,18 @@ function applyWatchOnly(): void {
 }
 
 /**
- * Tell a guest their view is wider than their screen, and whose screen it is
- * sized for. Without this the horizontal cut-off reads as a rendering bug.
+ * How long the "asked" state stands before the ask is offered again. The
+ * owner may not have been at their desk, and a button claiming a request is
+ * still live forever is a worse lie than letting someone ask twice.
+ */
+const FIT_ASK_MS = 45_000;
+let fitAskedAt = 0;
+let wideBannerKey = '';
+
+/**
+ * Tell a guest their view is wider than their screen, whose screen it is
+ * sized for, and offer the one thing they can do about it. Without this the
+ * horizontal cut-off reads as a rendering bug.
  */
 function updateWideBanner(screenEl: HTMLElement): void {
   const id = 'wideBanner';
@@ -437,15 +502,46 @@ function updateWideBanner(screenEl: HTMLElement): void {
   let banner = document.getElementById(id);
 
   if (!overflows || !cols) {
+    // It fits — which is also what an accepted request looks like from here.
     banner?.remove();
+    wideBannerKey = '';
+    fitAskedAt = 0;
     return;
   }
   if (!banner) {
     banner = h('div', { id, class: 'wide-banner', role: 'status' });
     screenEl.parentElement?.insertBefore(banner, screenEl);
+    wideBannerKey = '';
   }
-  const owner = app.machine?.ownerName;
-  banner.textContent = `Sized for ${owner ? `${owner}'s` : 'their'} screen (${cols} columns). Drag sideways to read.`;
+  const owner = app.machine?.ownerName ?? null;
+  const asked = Date.now() - fitAskedAt < FIT_ASK_MS;
+  // Rebuilt only when it would actually read differently: this runs on every
+  // resize and every terminal:size, and replacing the markup underneath a
+  // finger takes the button away mid-press.
+  const key = `${asked}|${cols}|${owner ?? ''}`;
+  if (key === wideBannerKey) return;
+  wideBannerKey = key;
+  banner.innerHTML = `<span class="wide-text">${esc(asked ? fitAskedCopy(owner) : wideBannerCopy(owner, cols))}</span>${
+    asked ? '' : `<button class="fitbtn" id="fitBtn">${esc(FIT_ACTION)}</button>`
+  }`;
+  const fit = $<HTMLButtonElement>('#fitBtn');
+  if (fit) fit.onclick = requestFit;
+}
+
+/**
+ * Ask the owner to resize this session to fit our screen. A guest never sends
+ * `terminal:resize` — their phone must not reflow somebody else's terminal.
+ * A declined request changes nothing here, so the copy promises nothing.
+ */
+function requestFit(): void {
+  if (!term || !fitAddon || !app.activeId) return;
+  const dims = fitAddon.proposeDimensions();
+  if (!dims?.cols || !dims.rows || !isFinite(dims.cols) || !isFinite(dims.rows)) return;
+  app.conn?.command({ type: 'terminal:resize-request', sessionId: app.activeId, cols: dims.cols, rows: dims.rows });
+  fitAskedAt = Date.now();
+  const refresh = () => { const el = $<HTMLElement>('#screen'); if (el) updateWideBanner(el); };
+  refresh();
+  setTimeout(refresh, FIT_ASK_MS + 500); // unanswered long enough — offer the ask again
 }
 
 // ---------------------------------------------------------------------------
@@ -500,29 +596,51 @@ function renderEnded(reason: string): void {
   </div></div>`;
 }
 
+/**
+ * The connection's state where a guest can actually see it: one who landed
+ * straight in the terminal never looks at the session list, so that pane's
+ * empty note reaches nobody. Empty text hides the strip rather than gap it.
+ */
+function setConnStrip(text: string | null): void {
+  const strip = $('#connStrip');
+  if (!strip) return;
+  strip.textContent = text ?? '';
+  strip.classList.toggle('hidden', !text);
+}
+
 function onConnState(s: ConnState, detail?: string) {
   if (s === 'denied') return renderEnded(detail ?? 'revoked');
   const dot = $('#mdot'); const list = $('#sessions');
   if (s === 'ready') {
     machineOffline = false;
     reconnector.cancel();
+    setConnStrip(null);
     dot?.classList.remove('off');
-    app.conn!.command({ type: 'groups:list' });
-    app.conn!.command({ type: 'sessions:list' });
+    // Including the open terminal's subscription: a reconnect is a new socket
+    // and the agent's new client session has none, so without re-asking the
+    // page reads connected while nothing arrives on it ever again.
+    for (const c of readyCommands(app.activeId)) app.conn!.command(c);
     startPolling(); // keep the list live (new/removed sessions + state changes)
   } else if (s === 'offline') {
     machineOffline = true;
     stopPolling(); dot?.classList.add('off');
-    if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">🌙</div><p>This machine is offline. It'll appear here when it reconnects.</p></li>`;
+    // Whose machine it is, and that we keep asking — a guest cannot go and
+    // look at the desktop, so "it'll appear here" is advice for its owner.
+    const offline = offlineCopy(isGuest(), app.machine?.ownerName);
+    if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">🌙</div><p>${esc(offline)}</p></li>`;
+    setConnStrip(offline);
     reconnector.schedule(3000); // agent not connected yet — keep polling until it appears
   } else if (s === 'error') {
     // A hard error (e.g. identity-verification failure) should surface, not retry.
     // Cancel any reconnect queued by a prior offline/closed so it can't fire on top.
     reconnector.cancel();
     stopPolling(); dot?.classList.add('off');
-    if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">⚠️</div><p>${esc(detail || 'Connection problem.')}</p></li>`;
+    const problem = connectionProblemCopy(isGuest(), app.machine?.ownerName, detail);
+    if (list) list.innerHTML = `<li class="empty-note"><div style="font-size:28px">⚠️</div><p>${esc(problem)}</p></li>`;
+    setConnStrip(problem);
   } else if (s === 'closed') {
     stopPolling(); dot?.classList.add('off');
+    setConnStrip('Reconnecting…');
     reconnector.schedule(3000); // socket dropped — reconnect
   }
 }
@@ -537,6 +655,7 @@ function onAgentMessage(m: Inner) {
     lastSessionsJson = j;
     app.sessions = list;
     renderSessions();
+    maybeLandInTerminal();
     updateTermHeader(); // keep the open terminal's state chip / attention banner live
     return;
   }
@@ -557,6 +676,19 @@ function onAgentMessage(m: Inner) {
   }
   if (m.type === 'terminal:exit') { if (m.sessionId === app.activeId && term) term.write('\r\n\x1b[90m[session exited]\x1b[0m\r\n'); return; }
   if (m.type === 'error') { /* surface transient errors */ console.warn('agent error:', m.message); }
+}
+
+/**
+ * The single-grant guest's arrival: open the one session they were sent to.
+ * Whether this is still owed is `autoOpenSessionId`'s decision, tested there.
+ */
+function maybeLandInTerminal(): void {
+  const opened = { landed: app.landed, activeId: app.activeId };
+  const id = autoOpenSessionId(app.arrival, app.sessions.map((x) => x.id), opened);
+  const session = app.sessions.find((x) => x.id === id);
+  if (!session) return;
+  app.landed = true;
+  openTerminal(session);
 }
 
 // ---------------------------------------------------------------------------
@@ -761,13 +893,23 @@ function syncTermPane() {
   tp.style.top = vv.offsetTop + 'px';
 }
 
+/**
+ * The subtitle under the session name. A guest is told who shared this and
+ * what they can do with it; the folder it lives in is the owner's context,
+ * and is not disclosed to a guest anywhere else either.
+ */
+function termMeta(s: RSession): string {
+  if (isGuest()) return esc(guestSubtitle(app.machine?.ownerName, app.machine?.role));
+  const gp = groupPath(s.groupId);
+  return `<span>${s.state === 'waiting' ? '● waiting for you' : esc(s.state)}</span> · ${esc(gp.label)}`;
+}
+
 function updateTermHeader() {
   if (!app.activeId) return;
   const s = app.sessions.find((x) => x.id === app.activeId);
   const meta = $('#tMeta'); const banner = $('#attnBanner');
   if (!s || !meta) return;
-  const gp = groupPath(s.groupId);
-  meta.innerHTML = `<span>${s.state === 'waiting' ? '● waiting for you' : esc(s.state)}</span> · ${esc(gp.label)}`;
+  meta.innerHTML = termMeta(s);
   banner?.classList.toggle('hidden', s.state !== 'waiting');
 }
 
@@ -776,8 +918,7 @@ function openTerminal(s: RSession) {
   ensureTerm();
   term!.clear();
   $('#tName')!.textContent = s.name;
-  const gp = groupPath(s.groupId);
-  $('#tMeta')!.innerHTML = `<span class="${s.state === 'waiting' ? '' : ''}">${s.state === 'waiting' ? '● waiting for you' : s.state}</span> · ${esc(gp.label)}`;
+  $('#tMeta')!.innerHTML = termMeta(s);
   $('#attnBanner')!.classList.toggle('hidden', s.state !== 'waiting');
   document.body.setAttribute('data-view', 'term');
   syncTermPane();
@@ -1020,12 +1161,17 @@ function openAccount() {
       </div>
     </div>
     ${handle}
-    <button class="btn ghost" id="accOut" style="margin-top:18px">Sign out</button>
+    <button class="btn ghost" id="accLink" style="margin-top:18px">Link a machine</button>
+    <button class="btn ghost" id="accOut" style="margin-top:10px">Sign out</button>
   </div>`;
   document.body.appendChild(scrim);
   pushLayer(() => scrim.remove());
   scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
   $('#accx')!.onclick = () => history.back();
+  // The pill's menu is the other way in, and a single-grant guest has no pill.
+  // Someone who owns a machine and was then invited to a session must not lose
+  // the ability to link their own — this sheet is reachable from every screen.
+  $('#accLink')!.onclick = () => openLinkMachine();
   $('#accOut')!.onclick = (e) => void signOut({ btn: e.currentTarget as HTMLButtonElement });
 }
 
@@ -1223,11 +1369,12 @@ async function del(path: string): Promise<number | null> {
 // Machine switching + linking
 // ---------------------------------------------------------------------------
 function openMachineMenu() {
+  const title = machineMenuTitle(app.machines);
   const scrim = document.createElement('div');
   scrim.className = 'sheet-scrim open';
   scrim.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="mmh">
-    <div class="sheet-head"><h3 id="mmh">Machines</h3><button class="iconbtn" id="mmx" aria-label="Close">✕</button></div>
-    <ul class="grouptree" id="mmList" role="listbox" aria-label="Choose a machine"></ul>
+    <div class="sheet-head"><h3 id="mmh">${esc(title)}</h3><button class="iconbtn" id="mmx" aria-label="Close">✕</button></div>
+    <ul class="grouptree" id="mmList" role="listbox" aria-label="${escAttr(title)}"></ul>
     <button class="newgroup" id="mmLink">＋ Link another machine</button>
   </div>`;
   document.body.appendChild(scrim);
@@ -1235,16 +1382,29 @@ function openMachineMenu() {
   scrim.onclick = (e) => { if (e.target === scrim) history.back(); };
   $('#mmx')!.onclick = () => history.back();
   const list = $('#mmList')!;
-  for (const m of app.machines) {
-    const sel = m.id === app.machine?.id;
-    const b = h('button', { class: 'gitem', role: 'option', 'aria-selected': String(sel) },
-      `<span class="g-dot" style="background:${sel ? 'var(--idle)' : 'var(--stop)'}"></span><span class="g-name">${esc(m.name)}</span><span class="g-check">✓</span>`);
-    b.onclick = () => {
-      if (sel) { history.back(); return; }
-      localStorage.setItem('bodhi.machineId', m.id);
-      location.reload();
-    };
-    const li = document.createElement('li'); li.appendChild(b); list.appendChild(li);
+  // Sectioned, and shared rows labelled by the person who shared them:
+  // "SHARED WITH ME" over "Will's laptop". A guest reads the list as people.
+  const sections = machineSections(app.machines);
+  const titled = showSectionTitles(sections);
+  for (const section of sections) {
+    if (titled) {
+      const head = document.createElement('li');
+      head.className = 'gsection';
+      head.setAttribute('role', 'presentation');
+      head.textContent = section.title;
+      list.appendChild(head);
+    }
+    for (const m of section.items) {
+      const sel = m.id === app.machine?.id;
+      const b = h('button', { class: 'gitem machine', role: 'option', 'aria-selected': String(sel) },
+        `<span class="g-dot" style="background:${sel ? 'var(--idle)' : 'var(--stop)'}"></span><span class="g-name">${esc(machineLabel(m))}</span><span class="g-check">✓</span>`);
+      b.onclick = () => {
+        if (sel) { history.back(); return; }
+        localStorage.setItem('bodhi.machineId', m.id);
+        location.reload();
+      };
+      const li = document.createElement('li'); li.appendChild(b); list.appendChild(li);
+    }
   }
   // Stack the link sheet on top of the menu (like the create → new-group
   // flow). Do NOT history.back() first: popstate is async and would fire
