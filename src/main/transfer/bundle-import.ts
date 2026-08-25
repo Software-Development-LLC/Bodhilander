@@ -286,7 +286,7 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
 }
 
 /** Where an account's config dir lives on THIS machine (see account-auth). */
-export function destinationConfigDir(accountsRoot: string, accountId: string): string {
+function destinationConfigDir(accountsRoot: string, accountId: string): string {
   return path.join(accountsRoot, accountId, '.claude');
 }
 

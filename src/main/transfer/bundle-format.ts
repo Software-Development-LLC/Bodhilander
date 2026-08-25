@@ -7,7 +7,7 @@
 import * as zlib from 'zlib';
 import type { TransferBundleCounts, TransferBundleManifest } from '../../shared/types';
 
-export const BUNDLE_MAGIC = 'BDHLBNDL';
+const BUNDLE_MAGIC = 'BDHLBNDL';
 export const BUNDLE_FORMAT_VERSION = 2;
 export const BUNDLE_EXTENSION = 'bodhilander-bundle';
 
@@ -207,8 +207,6 @@ export interface DecodedBundle {
   entryNames(): string[];
   /** Uncompressed bytes of one entry, or null when it is not in the archive. */
   read(name: string): Buffer | null;
-  /** Uncompressed size of one entry without decompressing it. */
-  rawLengthOf(name: string): number | null;
 }
 
 export function looksLikeBundle(buffer: Buffer): boolean {
@@ -249,7 +247,6 @@ export function decodeBundle(buffer: Buffer): DecodedBundle {
   return {
     manifest: header.manifest,
     entryNames: () => header.entries.map((e) => e.name),
-    rawLengthOf: (name) => byName.get(name)?.rawLength ?? null,
     read(name) {
       const entry = byName.get(name);
       if (!entry) return null;

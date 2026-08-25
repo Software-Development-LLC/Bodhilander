@@ -430,28 +430,3 @@ export interface TransferBundleManifest {
   workingDirRoots: string[];
   counts: TransferBundleCounts;
 }
-
-export interface TransferRootMapping {
-  from: string;
-  to: string;
-}
-
-export interface TransferInspectResult {
-  success: boolean;
-  filePath?: string;
-  sizeLabel?: string;
-  error?: string;
-  /** Null for an older portable JSON, which carries no manifest. */
-  manifest?: TransferBundleManifest | null;
-}
-
-export interface TransferImportResult {
-  success: boolean;
-  error?: string;
-  groups?: number;
-  sessions?: number;
-  transcripts?: number;
-  needsRelink?: number;
-  skippedGroups?: number;
-  skippedSessions?: number;
-}

@@ -1,9 +1,8 @@
 /**
- * Group & Session Import/Export
+ * Group & session import/export, and the whole-machine transfer bundle.
  *
- * Portable JSON format for transferring groups and sessions between
- * Bodhilander and ClaudeLander (or any compatible app). Sessions carry their
- * claudeSessionId so Claude Code conversations can be resumed after import.
+ * The portable JSON is what ClaudeLander and older versions read; the bundle
+ * adds history, settings, accounts and the transcripts `--resume` reads.
  */
 
 import { dialog, app } from 'electron';
@@ -20,6 +19,7 @@ import { legacyClaudeConfigDir } from './conversation-transcript';
 import { buildTransferBundle } from './transfer/bundle-export';
 import { readBundleManifest, restoreTransferBundle } from './transfer/bundle-import';
 import { BUNDLE_EXTENSION, formatBytes, looksLikeBundle } from './transfer/bundle-format';
+import type { PortableDataV1 as PortableData } from './transfer/bundle-format';
 import type { WorkingDirMapping } from './transfer/working-dirs';
 import log from 'electron-log';
 
@@ -39,41 +39,8 @@ export function sanitizeImportedProvider(provider: string | null | undefined): s
 }
 
 // ---------------------------------------------------------------------------
-// Portable format types
+// Result shapes
 // ---------------------------------------------------------------------------
-
-interface PortableGroup {
-  id: string;
-  name: string;
-  color: string;
-  workingDir: string;
-  parentId: string | null;
-  collapsed: boolean;
-  order: number;
-  createdAt: string; // ISO 8601
-}
-
-interface PortableSession {
-  id: string;
-  groupId: string;
-  name: string;
-  workingDir: string;
-  shellType: string;
-  claudeSessionId: string | null;
-  order: number;
-  createdAt: string;
-  lastActivityAt: string;
-  /** Agent provider registry id (#96); absent in exports from older versions. */
-  provider?: string;
-}
-
-interface PortableData {
-  version: 1;
-  sourceApp: string;
-  exportedAt: string;
-  groups: PortableGroup[];
-  sessions: PortableSession[];
-}
 
 interface ExportResult {
   success: boolean;
@@ -121,7 +88,7 @@ async function askExportFormat(): Promise<'bundle' | 'portable' | 'cancel'> {
   return response === 0 ? 'bundle' : response === 1 ? 'portable' : 'cancel';
 }
 
-export async function exportTransferBundle(legacyDir: string = legacyClaudeConfigDir()): Promise<ExportResult> {
+async function exportTransferBundle(legacyDir: string = legacyClaudeConfigDir()): Promise<ExportResult> {
   try {
     const { bytes, manifest } = buildTransferBundle(getDatabase(), {
       sourceAppVersion: app.getVersion(),

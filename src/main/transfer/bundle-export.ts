@@ -52,7 +52,7 @@ interface AccountRow {
  * adds. `claude_accounts.config_dir` is deliberately not among them: it is an
  * absolute path into the source machine's userData and is rebuilt on import.
  */
-export function readPortableTables(db: Db): PortableTables {
+function readPortableTables(db: Db): PortableTables {
   const groups = db.prepare('SELECT * FROM groups ORDER BY "order", created_at, id').all() as any[];
   const sessions = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at, id').all() as any[];
   const accounts = db.prepare('SELECT * FROM claude_accounts ORDER BY created_at, id').all() as AccountRow[];
