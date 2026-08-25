@@ -33,6 +33,7 @@ import {
 } from './repositories/sessions';
 import { getAllAccounts, touchAccount } from './repositories/accounts';
 import { resolveAccountForSession } from './account-resolver';
+import { detectUsageLimit } from './usage-limit';
 import { vaultEnvFor } from './key-vault';
 import { redactEnv } from './redact-env';
 import log from 'electron-log';
@@ -103,6 +104,15 @@ interface PtySession {
    * single 'data' event first, guaranteeing ordered delivery.
    */
   deferEmission: boolean;
+  /**
+   * Set once this pty has reported a usage limit, so the TUI repainting the
+   * same message forty times a second produces one failover and not forty.
+   *
+   * Per-pty, not per-session: the flag lives and dies with the process, so the
+   * replacement pty spawned by a failover can report its own limit if the
+   * account it landed on turns out to be exhausted too.
+   */
+  usageLimitReported: boolean;
 }
 
 /**
@@ -481,6 +491,7 @@ export class PtyManager extends EventEmitter {
       launchOutput: '',
       // Regular sessions spawn only after the renderer explicitly called
       // pty:create, so listeners are already attached — no deferral needed.
+      usageLimitReported: false,
       deferEmission: false,
     });
 
@@ -822,6 +833,7 @@ export class PtyManager extends EventEmitter {
       launchOutput: '',
       // Spawned before the renderer's Terminal mounts — same race as the
       // login pty (BDHLNDR-33).
+      usageLimitReported: false,
       deferEmission: true,
     });
   }
@@ -937,6 +949,7 @@ export class PtyManager extends EventEmitter {
       // Login ptys defer event emission until the renderer attaches its
       // listener and calls primePty — avoids losing claude's startup banner
       // in the IPC-round-trip + React-render gap (BDHLNDR-33).
+      usageLimitReported: false,
       deferEmission: true,
     });
   }
@@ -1280,6 +1293,36 @@ export class PtyManager extends EventEmitter {
     }, 300); // Wait 300ms of sustained output
   }
 
+  /**
+   * Report a usage limit once per pty.
+   *
+   * What is emitted is deliberately thin — the account this pty is BILLING
+   * (its live binding, not the database assignment, which may already have
+   * been pointed elsewhere) plus whatever the message said about the reset.
+   * Deciding where the work goes belongs to account-failover, which can see
+   * every account and every other session; this can only see one terminal.
+   */
+  private checkUsageLimit(id: string, session: PtySession): void {
+    if (session.usageLimitReported) return;
+    const patterns = session.provider?.usageLimitPatterns;
+    if (!patterns?.length) return;
+
+    const hit = detectUsageLimit(session.outputBuffer.slice(-1200), patterns);
+    if (!hit) return;
+
+    session.usageLimitReported = true;
+    log.warn(
+      `[Accounts] Session ${id} reported a usage limit on account ` +
+      `${session.liveAccount?.accountId ?? 'legacy ~/.claude'}: ${hit.line}`
+    );
+    this.emit('usageLimit', {
+      id,
+      accountId: session.liveAccount?.accountId ?? null,
+      resetAt: hit.resetAt,
+      line: hit.line,
+    });
+  }
+
   private detectAgentState(id: string, data: string): void {
     const session = this.sessions.get(id);
     if (!session) return;
@@ -1340,6 +1383,17 @@ export class PtyManager extends EventEmitter {
     }
     session.recentOutputBytes += printableContent.length;
     session.lastOutputTime = now;
+
+    // Did the CLI just say the account is out of quota? Checked before the
+    // waiting-state work below because the two are not alternatives: a limited
+    // Claude usually parks at its prompt, so this would otherwise be read as an
+    // ordinary "waiting for input" and nothing would ever move.
+    //
+    // A wider slice than the waiting check gets: the announcement and its
+    // "resets at" clause can be a couple of wrapped lines apart, and the reset
+    // time is the whole difference between a five-hour default cooldown and
+    // the real one.
+    this.checkUsageLimit(id, session);
 
     // Detect waiting for user input patterns (check recent buffer).
     // Generic prompt shapes plus whatever the session's provider knows about

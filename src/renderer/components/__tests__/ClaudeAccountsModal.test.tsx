@@ -150,6 +150,12 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
       setDefaultAccount: async () => true,
       startAccountLogin: async () => ({ account: listed[0], ptyId: 'p' }),
       cancelAccountLogin: async () => {},
+      // Failover surface (#207): the panel reads the toggles and
+      // can reorder or release accounts.
+      getAllPreferences: async () => ({}),
+      setPreference: async () => {},
+      setAccountFallbackOrder: async () => {},
+      clearAccountLimit: async () => {},
       platform: 'darwin',
       homedir: '/home',
     };

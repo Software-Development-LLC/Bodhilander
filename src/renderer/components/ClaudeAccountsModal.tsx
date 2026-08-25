@@ -69,6 +69,33 @@ export const ClaudeAccountsPanel: React.FC = () => {
     await refresh();
   }, [refresh]);
 
+  /**
+   * Move an account up or down the failover queue.
+   *
+   * Buttons rather than drag-and-drop. The list is three or four rows on any
+   * real setup, keyboard and screen-reader users get the same affordance as
+   * everyone else for free, and the whole order is rewritten on each move so
+   * an estate that was half-ranked comes out fully ranked.
+   */
+  const handleMove = useCallback(async (id: string, direction: -1 | 1) => {
+    const index = accounts.findIndex(a => a.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= accounts.length) return;
+
+    const reordered = [...accounts];
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+    // Optimistic: the reorder is instant and local, and a failed write is
+    // corrected by the refresh that follows.
+    setAccounts(reordered);
+    await window.electronAPI.setAccountFallbackOrder(reordered.map(a => a.id));
+    await refresh();
+  }, [accounts, refresh]);
+
+  const handleClearLimit = useCallback(async (id: string) => {
+    await window.electronAPI.clearAccountLimit(id);
+    await refresh();
+  }, [refresh]);
+
   // The panel computes "N sessions are running on this account" two inches
   // above this button, and deleting removes the on-disk config dir out from
   // under those live ptys (#165). Withholding the number here while the dialog
@@ -137,11 +164,13 @@ export const ClaudeAccountsPanel: React.FC = () => {
         login, so sessions assigned to different accounts can run at the same time.
       </p>
 
+      <FailoverSettings />
+
       {accounts.length === 0 ? (
         <div className="empty">{emptyText}</div>
       ) : (
         <ul className="account-list">
-          {accounts.map(acc => {
+          {accounts.map((acc, index) => {
             // Live ptys, not DB assignments — an unapplied switch must not be
             // reported as usage, and this keeps the panel and the session
             // header telling the same story.
@@ -152,6 +181,12 @@ export const ClaudeAccountsPanel: React.FC = () => {
                 key={acc.id}
                 account={acc}
                 runningSessions={runningSessions}
+                position={index + 1}
+                canMoveUp={index > 0}
+                canMoveDown={index < accounts.length - 1}
+                onMoveUp={() => handleMove(acc.id, -1)}
+                onMoveDown={() => handleMove(acc.id, 1)}
+                onClearLimit={() => handleClearLimit(acc.id)}
                 onMakeDefault={() => handleSetDefault(acc.id)}
                 onDelete={() => handleDelete(acc.id, acc.label, runningSessions)}
               />
@@ -187,8 +222,34 @@ export interface AccountRowProps {
   account: ClaudeAccount;
   /** Running ptys currently spawned under this account (#165). 0 renders no badge. */
   runningSessions: number;
+  /** 1-based place in the failover queue (#207). */
+  position: number;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  /** Hand the account back before its recorded cooldown expires. */
+  onClearLimit: () => void;
   onMakeDefault: () => void;
   onDelete: () => void;
+}
+
+/**
+ * Whether a recorded cooldown is still in force.
+ *
+ * Decided against the clock here rather than trusted from the row, because
+ * nothing sweeps the column when a limit expires — a stale `limitedUntil` is
+ * the normal state of a healthy account, not a bug.
+ */
+export function isLimited(account: ClaudeAccount, now: Date = new Date()): boolean {
+  return account.limitedUntil !== null && new Date(account.limitedUntil).getTime() > now.getTime();
+}
+
+/** "9:30 PM", or "Tue 9:30 PM" when it is not today. */
+function formatReset(resetAt: Date, now: Date = new Date()): string {
+  const time = resetAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (resetAt.toDateString() === now.toDateString()) return time;
+  return `${resetAt.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
 }
 
 /**
@@ -203,12 +264,22 @@ export interface AccountRowProps {
 export const AccountRow: React.FC<AccountRowProps> = ({
   account,
   runningSessions,
+  position,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+  onClearLimit,
   onMakeDefault,
   onDelete,
 }) => {
   const plural = runningSessions === 1 ? 'session' : 'sessions';
+  const limited = isLimited(account);
   return (
-    <li className="account-row">
+    <li className={`account-row ${limited ? 'limited' : ''}`}>
+      {/* The queue position is the whole point of the ordering, so it is text
+          in the row and not a tooltip on an arrow. */}
+      <span className="failover-position" aria-hidden="true">{position}</span>
       <AccountChip account={account} size="md" />
       {/* The status is a tag beside the address, not a replacement for it: the
           address is what says WHICH account this is, and the one surface where
@@ -234,7 +305,41 @@ export const AccountRow: React.FC<AccountRowProps> = ({
           in use · {runningSessions}
         </span>
       )}
+      {limited && account.limitedUntil && (
+        <span
+          className="limited-tag"
+          title="This account hit its usage limit. It won't be picked for failover until then."
+        >
+          limited · back {formatReset(new Date(account.limitedUntil))}
+        </span>
+      )}
       <div className="row-actions">
+        <button
+          className="move-btn"
+          onClick={onMoveUp}
+          disabled={!canMoveUp}
+          title="Try this account earlier when another one runs out"
+          aria-label={`Move ${account.label} up the failover order`}
+        >
+          ↑
+        </button>
+        <button
+          className="move-btn"
+          onClick={onMoveDown}
+          disabled={!canMoveDown}
+          title="Try this account later when another one runs out"
+          aria-label={`Move ${account.label} down the failover order`}
+        >
+          ↓
+        </button>
+        {limited && (
+          <button
+            onClick={onClearLimit}
+            title="Mark this account available again — use it if the reset time was a guess and your quota is already back"
+          >
+            Clear limit
+          </button>
+        )}
         {!account.isDefault && (
           <button onClick={onMakeDefault} title="Use as the default account when a group or session doesn't specify one">
             Make default
@@ -245,6 +350,73 @@ export const AccountRow: React.FC<AccountRowProps> = ({
         </button>
       </div>
     </li>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// Failover switches (#207).
+// -----------------------------------------------------------------------------
+
+/** Preference keys, matching account-failover.ts. Absent means enabled. */
+const FAILOVER_PREF = 'accountFailoverEnabled';
+const FAILBACK_PREF = 'accountFailbackEnabled';
+
+/**
+ * The two things a user might want to turn off about automatic switching.
+ *
+ * They are separate switches because they answer different worries. Failover
+ * spends a second subscription without being asked; fail-back restarts a
+ * session that was working fine. Somebody can reasonably want the first and
+ * not the second, and collapsing them into one control would make refusing the
+ * restart cost them the whole feature.
+ */
+const FailoverSettings: React.FC = () => {
+  const [failover, setFailover] = useState(true);
+  const [failback, setFailback] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI.getAllPreferences().then(prefs => {
+      if (cancelled) return;
+      setFailover(prefs[FAILOVER_PREF] !== 'false');
+      setFailback(prefs[FAILBACK_PREF] !== 'false');
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggle = (key: string, next: boolean, apply: (value: boolean) => void) => {
+    apply(next);
+    window.electronAPI.setPreference(key, next ? 'true' : 'false').catch(() => {});
+  };
+
+  return (
+    <div className="failover-settings">
+      <label className="failover-toggle">
+        <input
+          type="checkbox"
+          checked={failover}
+          onChange={e => toggle(FAILOVER_PREF, e.target.checked, setFailover)}
+        />
+        <span>
+          <strong>Switch accounts when one hits its usage limit.</strong>{' '}
+          Every session running on the spent account moves to the next one in the
+          order below and resumes its conversation.
+        </span>
+      </label>
+      <label className="failover-toggle">
+        <input
+          type="checkbox"
+          checked={failback}
+          disabled={!failover}
+          onChange={e => toggle(FAILBACK_PREF, e.target.checked, setFailback)}
+        />
+        <span>
+          <strong>Move them back when the limit lifts.</strong>{' '}
+          Only while a session is idle, so a switch back never interrupts a turn
+          in progress. Without this, sessions stay on the backup account.
+        </span>
+      </label>
+    </div>
   );
 };
 

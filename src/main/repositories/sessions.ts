@@ -7,11 +7,10 @@ export function sessionExists(id: string): boolean {
   return !!row;
 }
 
-export function getAllSessions(): Session[] {
-  const db = getDatabase();
-  const rows = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
-
-  return rows.map(row => ({
+/** sessions row → domain object. Shared so a single-row lookup and the full
+ *  listing cannot drift in how they read the same columns. */
+function mapSessionRow(row: any): Session {
+  return {
     id: row.id,
     groupId: row.group_id,
     name: row.name,
@@ -26,14 +25,36 @@ export function getAllSessions(): Session[] {
     durationSeconds: row.duration_seconds ?? 0,
     claudeAccountId: row.claude_account_id ?? null,
     provider: row.provider ?? 'claude',
-  }));
+    failoverFromAccountId: row.failover_from_account_id ?? null,
+    failoverPrevAccountId: row.failover_prev_account_id ?? null,
+  };
+}
+
+export function getAllSessions(): Session[] {
+  const db = getDatabase();
+  const rows = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
+  return rows.map(mapSessionRow);
+}
+
+/**
+ * One session by id, or null.
+ *
+ * Hits the primary key rather than loading the table and filtering: the
+ * failover and fail-back sweeps call this per session, on the main process,
+ * and "there are only tens of rows" is a reason it wasn't slow, not a reason
+ * for the query to say something other than what it means.
+ */
+export function getSession(id: string): Session | null {
+  const db = getDatabase();
+  const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+  return row ? mapSessionRow(row) : null;
 }
 
 export function createSession(session: Session): void {
   const db = getDatabase();
   db.prepare(`
-    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at, claude_session_id, ended_at, duration_seconds, claude_account_id, provider)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at, claude_session_id, ended_at, duration_seconds, claude_account_id, provider, failover_from_account_id, failover_prev_account_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id,
     session.groupId,
@@ -48,7 +69,9 @@ export function createSession(session: Session): void {
     session.endedAt ? session.endedAt.toISOString() : null,
     session.durationSeconds ?? 0,
     session.claudeAccountId ?? null,
-    session.provider ?? 'claude'
+    session.provider ?? 'claude',
+    session.failoverFromAccountId ?? null,
+    session.failoverPrevAccountId ?? null
   );
 }
 
@@ -117,6 +140,14 @@ export function updateSession(id: string, updates: Partial<Session>): void {
   if (updates.claudeAccountId !== undefined) {
     fields.push('claude_account_id = ?');
     values.push(updates.claudeAccountId);
+  }
+  if (updates.failoverFromAccountId !== undefined) {
+    fields.push('failover_from_account_id = ?');
+    values.push(updates.failoverFromAccountId);
+  }
+  if (updates.failoverPrevAccountId !== undefined) {
+    fields.push('failover_prev_account_id = ?');
+    values.push(updates.failoverPrevAccountId);
   }
   if (updates.provider !== undefined) {
     // Changing provider invalidates any stored conversation UUID — it belongs
