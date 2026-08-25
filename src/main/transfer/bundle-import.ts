@@ -134,6 +134,29 @@ interface RowCounts {
   needsRelink: string[];
 }
 
+/**
+ * An account id becomes a directory name on THIS machine — `<userData>/
+ * claude-accounts/<id>/.claude` — and after the restore commits, hooks are
+ * registered into every account's config dir, which writes `settings.json`
+ * there. A bundle is untrusted input that may have been handed to the user,
+ * so it does not get to choose that path: an id shaped like `../../.claude`
+ * would put the hook wiring somewhere of the bundle author's choosing.
+ *
+ * The app mints UUIDs, so this accepts that shape and anything equally inert.
+ * It refuses separators, `..`, a leading dot and drive letters — the same rule
+ * conversation ids already follow in conversation-transcript.ts.
+ */
+const PATH_SAFE_ACCOUNT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function assertRestorableAccountId(id: unknown): asserts id is string {
+  if (typeof id === 'string' && PATH_SAFE_ACCOUNT_ID.test(id)) return;
+  // Fail the whole import rather than dropping the account: the restore is one
+  // transaction, a legitimate bundle never trips this, and a half-applied
+  // bundle would leave groups and sessions pointing at an account that is gone.
+  const shown = typeof id === 'string' ? id.slice(0, 60) : typeof id;
+  throw new Error(`Transfer bundle contains an unusable account id (${JSON.stringify(shown)}); refusing to import it.`);
+}
+
 /** Accounts the restore can legally point a group or session at. */
 function knownAccountIds(db: Db, tables: PortableTables): Set<string> {
   return new Set([...idsIn(db, 'claude_accounts'), ...tables.accounts.map((a) => a.id)]);
@@ -304,6 +327,7 @@ function restoreAccounts(db: Db, tables: PortableTables, options: ImportOptions)
 
   let inserted = 0;
   for (const account of tables.accounts) {
+    assertRestorableAccountId(account.id);
     if (existing.has(account.id)) continue;
     insert.run(
       account.id,
@@ -322,6 +346,11 @@ function restoreAccounts(db: Db, tables: PortableTables, options: ImportOptions)
 }
 
 function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): RowCounts {
+  // Up front, before a single row is written: an account id from the bundle
+  // becomes a directory name, so the whole payload is checked before any of it
+  // is trusted, rather than at the point of use partway through the restore.
+  for (const account of tables.accounts) assertRestorableAccountId(account.id);
+
   const groupIds = idsIn(db, 'groups');
   const sessionIds = idsIn(db, 'sessions');
 

@@ -214,7 +214,20 @@ export function looksLikeBundle(buffer: Buffer): boolean {
   return buffer.subarray(0, MAGIC_BYTES.length).equals(MAGIC_BYTES);
 }
 
-export function decodeBundle(buffer: Buffer): DecodedBundle {
+/**
+ * Ceiling on what one entry may expand to. A bundle is untrusted at import —
+ * gzip happily turns a few kilobytes into gigabytes, and the export-side
+ * transcript budget bounds only bundles this app wrote. Matched to that budget
+ * so nothing we produce can trip it.
+ */
+export const MAX_ENTRY_OUTPUT_BYTES = 1024 * 1024 * 1024;
+
+export interface DecodeOptions {
+  /** Override the per-entry ceiling. Exists so the limit itself is testable. */
+  maxEntryBytes?: number;
+}
+
+export function decodeBundle(buffer: Buffer, options: DecodeOptions = {}): DecodedBundle {
   if (!looksLikeBundle(buffer)) {
     throw new Error('This file is not a Bodhilander transfer bundle.');
   }
@@ -252,7 +265,16 @@ export function decodeBundle(buffer: Buffer): DecodedBundle {
       const entry = byName.get(name);
       if (!entry) return null;
       const start = bodyStart + entry.offset;
-      return zlib.gunzipSync(buffer.subarray(start, start + entry.length));
+      try {
+        return zlib.gunzipSync(buffer.subarray(start, start + entry.length), {
+          maxOutputLength: options.maxEntryBytes ?? MAX_ENTRY_OUTPUT_BYTES,
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === 'ERR_BUFFER_TOO_LARGE') {
+          throw new Error(`Transfer bundle entry "${name}" expands past the size this app will read.`);
+        }
+        throw err;
+      }
     },
   };
 }

@@ -118,6 +118,34 @@ describe('the preference exclusion policy', () => {
   });
 });
 
+describe('an entry that expands far beyond its compressed size', () => {
+  /** ~5 MB of zeros compresses to a few KB — the shape of a zip bomb. */
+  function bomb(): Buffer {
+    return encodeBundle(manifest(), [
+      { name: TABLES_ENTRY, data: Buffer.alloc(5 * 1024 * 1024, 0) },
+    ]);
+  }
+
+  test('is refused rather than decompressed, because import is untrusted input', () => {
+    const bytes = bomb();
+    // Compressed, it is small enough to look harmless in a file listing.
+    expect(bytes.length).toBeLessThan(256 * 1024);
+
+    const decoded = decodeBundle(bytes, { maxEntryBytes: 1024 * 1024 });
+    expect(() => decoded.read(TABLES_ENTRY)).toThrow(/expands past the size/);
+  });
+
+  test('an entry under the ceiling still reads back whole', () => {
+    const decoded = decodeBundle(bomb(), { maxEntryBytes: 8 * 1024 * 1024 });
+    expect(decoded.read(TABLES_ENTRY)?.length).toBe(5 * 1024 * 1024);
+  });
+
+  test('the shipped ceiling passes anything this app writes', () => {
+    const decoded = decodeBundle(bomb());
+    expect(decoded.read(TABLES_ENTRY)?.length).toBe(5 * 1024 * 1024);
+  });
+});
+
 describe('formatBytes', () => {
   test('reports a size a person can read', () => {
     expect(formatBytes(512)).toBe('512 B');

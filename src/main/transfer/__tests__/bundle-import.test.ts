@@ -374,6 +374,65 @@ describe('transcripts', () => {
     expect(fs.existsSync(path.join(tmp, 'evil'))).toBe(false);
   });
 
+  test('an account id shaped like a traversal is refused, and nothing is written', async () => {
+    const bytes = exportBytes();
+    const manifest = readBundleManifest(bytes) as TransferManifest;
+    const tables = {
+      version: BUNDLE_FORMAT_VERSION, sourceApp: 'bodhilander', exportedAt: 'x',
+      groups: [], sessions: [], sessionEvents: [], chatEvents: [], arenaRuns: [], arenaResponses: [],
+      preferences: [],
+      // Where this lands without the guard: `<accountsRoot>/../../evil/.claude`,
+      // and registerRestoredAccountHooks then writes settings.json into it —
+      // the file that wires up hook execution for the real Claude Code CLI.
+      accounts: [{ id: '../../evil', label: 'Hostile', email: null, color: '#888888', createdAt: 'x', lastUsedAt: null }],
+    };
+    const hostile = encodeBundle(manifest, [
+      { name: TABLES_ENTRY, data: Buffer.from(JSON.stringify(tables)) },
+    ]);
+
+    await expect(restore(hostile, mappedToDest())).rejects.toThrow(/unusable account id/);
+
+    expect(fs.existsSync(path.join(path.dirname(path.dirname(destAccountsRoot)), 'evil'))).toBe(false);
+    expect((destination.prepare('SELECT COUNT(*) AS n FROM claude_accounts').get() as any).n).toBe(0);
+  });
+
+  test('a separator in an account id is refused too', async () => {
+    const bytes = exportBytes();
+    const manifest = readBundleManifest(bytes) as TransferManifest;
+    for (const id of ['a/b', 'a\\b', '..', '.hidden', '']) {
+      const tables = {
+        version: BUNDLE_FORMAT_VERSION, sourceApp: 'bodhilander', exportedAt: 'x',
+        groups: [], sessions: [], sessionEvents: [], chatEvents: [], arenaRuns: [], arenaResponses: [],
+        preferences: [],
+        accounts: [{ id, label: 'Hostile', email: null, color: '#888888', createdAt: 'x', lastUsedAt: null }],
+      };
+      const hostile = encodeBundle(manifest, [
+        { name: TABLES_ENTRY, data: Buffer.from(JSON.stringify(tables)) },
+      ]);
+      await expect(restore(hostile, mappedToDest())).rejects.toThrow(/unusable account id/);
+    }
+  });
+
+  test('the uuid the app actually mints is still accepted', async () => {
+    const bytes = exportBytes();
+    const manifest = readBundleManifest(bytes) as TransferManifest;
+    const id = '3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b';
+    const tables = {
+      version: BUNDLE_FORMAT_VERSION, sourceApp: 'bodhilander', exportedAt: 'x',
+      groups: [], sessions: [], sessionEvents: [], chatEvents: [], arenaRuns: [], arenaResponses: [],
+      preferences: [],
+      accounts: [{ id, label: 'Real', email: null, color: '#888888', createdAt: 'x', lastUsedAt: null }],
+    };
+    const benign = encodeBundle(manifest, [
+      { name: TABLES_ENTRY, data: Buffer.from(JSON.stringify(tables)) },
+    ]);
+
+    await restore(benign, mappedToDest());
+
+    const row = destination.prepare('SELECT config_dir FROM claude_accounts WHERE id = ?').get(id) as any;
+    expect(row.config_dir).toBe(path.join(destAccountsRoot, id, '.claude'));
+  });
+
   test('the staging area does not survive the import', async () => {
     writeTranscript(sourceConfigDir, '-slug', 'conv-1', '{"type":"user"}\n');
     await restore(exportBytes(), mappedToDest());
