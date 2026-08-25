@@ -468,8 +468,7 @@ function applyWatchOnly(): void {
 
   // The existing scroll path is a touch-only touchmove handler, so without
   // this a keyboard user cannot move through the scrollback at all.
-  screen.addEventListener('keydown', (e) => {
-    const ev = e as KeyboardEvent;
+  screen.addEventListener('keydown', (ev) => {
     if (!term) return;
     const page = Math.max(1, term.rows - 1);
     if (ev.key === 'PageUp') { term.scrollLines(-page); ev.preventDefault(); }
@@ -646,7 +645,7 @@ function onConnState(s: ConnState, detail?: string) {
 }
 
 function onAgentMessage(m: Inner) {
-  if (m.type === 'groups') { app.groups = (m.groups as RGroup[]) || []; renderSessions(); if ($('#gtree')) buildCreateTree(); return; }
+  if (m.type === 'groups') { app.groups = (m.groups as RGroup[]) || []; renderSessions(); if ($('#gtree')) { buildCreateTree(); } return; }
   if (m.type === 'dirs') { onDirs?.({ path: String(m.path), entries: (m.entries as string[]) || [] }); return; }
   if (m.type === 'sessions') {
     const list = (m.sessions as RSession[]) || [];
@@ -674,7 +673,7 @@ function onAgentMessage(m: Inner) {
     if (m.sessionId === app.activeId && term) term.write(String(m.data));
     return;
   }
-  if (m.type === 'terminal:exit') { if (m.sessionId === app.activeId && term) term.write('\r\n\x1b[90m[session exited]\x1b[0m\r\n'); return; }
+  if (m.type === 'terminal:exit') { if (m.sessionId === app.activeId && term) { term.write('\r\n\x1b[90m[session exited]\x1b[0m\r\n'); } return; }
   if (m.type === 'error') { /* surface transient errors */ console.warn('agent error:', m.message); }
 }
 
@@ -724,7 +723,7 @@ function renderSessions() {
   for (const s of sorted) {
     const b = BADGE[s.state]; const gp = groupPath(s.groupId);
     const li = document.createElement('li');
-    li.innerHTML = `<button class="session s-${s.state === 'working' ? 'work' : s.state === 'waiting' ? 'wait' : s.state === 'error' ? 'err' : s.state === 'idle' ? 'idle' : 'stop'} ${s.state === 'waiting' ? 'attn' : ''}" aria-label="${escAttr(s.name)}, ${b.label}">
+    li.innerHTML = `<button class="session s-${b.cls} ${s.state === 'waiting' ? 'attn' : ''}" aria-label="${escAttr(s.name)}, ${b.label}">
       <span class="state-rail" aria-hidden="true"></span>
       <span class="s-main"><span class="s-title"><span class="s-name">${esc(s.name)}</span><span class="provider">${esc(s.shellType === 'bash' ? 'shell' : s.provider)}</span></span>
       <span class="s-sub"><span class="gd" style="background:${gp.color}"></span>${esc(gp.label)}</span></span>
@@ -756,7 +755,7 @@ function assertMobileSize() {
   if (isGuest()) return;
   if (!term || !fitAddon || !isMobileView() || !app.activeId) return;
   const dims = fitAddon.proposeDimensions();
-  if (!dims || !dims.cols || !dims.rows || !isFinite(dims.cols) || !isFinite(dims.rows)) return;
+  if (!dims?.cols || !dims.rows || !isFinite(dims.cols) || !isFinite(dims.rows)) return;
   // No-op if the PTY is already our size (term.cols/rows track the last
   // terminal:size). If the desktop reclaimed a bigger size, this differs and we
   // re-assert — that's how the phone takes the size back when it's active again.
@@ -769,7 +768,7 @@ function assertMobileSize() {
 // and owns a larger size, we render THAT size and scale it down so it stays clean
 // (not garbled/clipped) until we reclaim the size on the next interaction.
 function scaleTerm() {
-  const xtermEl = term?.element as HTMLElement | undefined;
+  const xtermEl = term?.element;
   const screenEl = $<HTMLElement>('#screen');
   if (!xtermEl || !screenEl) return;
 
@@ -922,7 +921,7 @@ function openTerminal(s: RSession) {
   $('#attnBanner')!.classList.toggle('hidden', s.state !== 'waiting');
   document.body.setAttribute('data-view', 'term');
   syncTermPane();
-  pushLayer(() => { document.body.removeAttribute('data-view'); if (app.activeId) app.conn?.command({ type: 'terminal:unsubscribe', sessionId: app.activeId }); app.activeId = null; });
+  pushLayer(() => { document.body.removeAttribute('data-view'); if (app.activeId) { app.conn?.command({ type: 'terminal:unsubscribe', sessionId: app.activeId }); } app.activeId = null; });
   requestAnimationFrame(() => {
     syncTermPane();
     term!.focus();
@@ -1007,7 +1006,7 @@ function openCreate() {
   $('#crx')!.onclick = () => history.back();
   selGroupId = ''; buildCreateTree();
   selProvider = 'claude';
-  $('#prov')!.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('.pchip'); if (!b) return; selProvider = b.getAttribute('data-p')!; $('#prov')!.querySelectorAll('.pchip').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); });
+  $('#prov')!.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('.pchip'); if (!b) { return; } selProvider = b.getAttribute('data-p')!; $('#prov')!.querySelectorAll('.pchip').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); });
   $('#newGroupBtn')!.onclick = openNewGroup;
   $('#crGo')!.onclick = () => {
     if (!selGroupId) return;
@@ -1028,7 +1027,7 @@ function buildCreateTree() {
   let pick: HTMLElement | null = null;
   if (pendingGroupName) { pick = rows.find((r) => app.groups.find((g) => g.id === r.dataset.gid)?.name === pendingGroupName) || null; pendingGroupName = ''; }
   if (!pick && selGroupId) pick = rows.find((r) => r.dataset.gid === selGroupId) || null;
-  if (!pick) pick = rows[0] || null;
+  pick ??= rows[0] ?? null;
   if (pick) selectGroup(pick, pick.dataset.gid!); else { selGroupId = ''; const go = $<HTMLButtonElement>('#crGo'); if (go) go.disabled = true; }
 }
 function addGroupRow(tree: HTMLElement, g: RGroup, isSub: boolean, parent?: RGroup) {
@@ -1045,7 +1044,7 @@ function selectGroup(el: HTMLElement, id: string) { selGroupId = id; el.closest(
 let ngParent = '__top'; let ngPath = '~'; let ngColor = GROUP_COLORS[0];
 function openNewGroup() {
   const sel = app.groups.find((x) => x.id === selGroupId);
-  ngParent = sel ? (sel.parentId || sel.id) : '__top';
+  ngParent = sel ? (sel.parentId ?? sel.id) : '__top';
   ngColor = GROUP_COLORS[0];
   const tops = app.groups.filter((g) => !g.parentId);
   const sheet = $('#newGroupSheet')!;
@@ -1068,12 +1067,13 @@ function openNewGroup() {
   $('#ngx')!.onclick = () => history.back();
   const colorField = $('#ngColorField')!;
   const syncColor = () => { colorField.style.display = ngParent === '__top' ? 'block' : 'none'; };
-  $('#ngPlace')!.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('.pchip'); if (!b) return; ngParent = b.getAttribute('data-parent')!; $('#ngPlace')!.querySelectorAll('.pchip').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); syncColor(); });
+  $('#ngPlace')!.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('.pchip'); if (!b) { return; } ngParent = b.getAttribute('data-parent')!; $('#ngPlace')!.querySelectorAll('.pchip').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); syncColor(); });
   const sw = $('#ngSw')!;
   GROUP_COLORS.forEach((c, i) => { const b = h('button', { class: 'sw', 'aria-pressed': String(i === 0), 'aria-label': 'color' }); b.style.background = c; b.onclick = () => { ngColor = c; sw.querySelectorAll('.sw').forEach((x) => x.setAttribute('aria-pressed', 'false')); b.setAttribute('aria-pressed', 'true'); }; sw.appendChild(b); });
   syncColor();
   onDirs = renderDirs;
-  browseDir((sel ? (sel.parentId ? app.groups.find((g) => g.id === sel.parentId)?.workingDir : sel.workingDir) : '') || '~');
+  const parentDir = sel?.parentId ? app.groups.find((g) => g.id === sel.parentId)?.workingDir : sel?.workingDir;
+  browseDir(parentDir || '~');
   $('#ngGo')!.onclick = () => {
     const name = ($<HTMLInputElement>('#ngName')!.value || '').trim() || 'Group';
     pendingGroupName = name;
@@ -1089,7 +1089,8 @@ function renderDirs(d: { path: string; entries: string[] }) {
   const parts = d.path === '/' ? [''] : d.path.replace(/\/$/, '').split('/');
   let acc = '';
   parts.forEach((seg, i) => {
-    acc = i === 0 ? (seg || '/') : (acc === '/' ? '' : acc) + '/' + seg;
+    const base = acc === '/' ? '' : acc;
+    acc = i === 0 ? (seg || '/') : base + '/' + seg;
     const p = acc;
     const b = h('button', { class: 'crumb' + (i === parts.length - 1 ? ' last' : '') }, esc(seg || '/'));
     b.onclick = () => browseDir(p);
@@ -1333,11 +1334,12 @@ function renderShareRows(
   for (const r of rows) {
     const li = document.createElement('li');
     li.className = 'share-row';
+    const actionLabel = `${r.action} — ${r.person}`;
     li.innerHTML = `<div class="share-main">
       <div class="share-who">${esc(r.person)}</div>
       <div class="share-meta"><span class="share-role">${esc(r.roleWord)}</span>${r.pending ? '<span class="share-pend">Pending</span>' : ''}</div>
       <div class="share-detail">${esc(r.detail)}</div></div>
-      <button class="share-x" aria-label="${escAttr(`${r.action} — ${r.person}`)}">${esc(r.action)}</button>`;
+      <button class="share-x" aria-label="${escAttr(actionLabel)}">${esc(r.action)}</button>`;
     const btn = li.querySelector<HTMLButtonElement>('button')!;
     btn.onclick = () => act(r, btn);
     list.appendChild(li);
