@@ -46,11 +46,11 @@ describe('AccountChip', () => {
   });
 
   test('a padded email renders trimmed, in the text and the tooltip alike', () => {
-    // The stored value is whatever parseAccountEmail read out of the
-    // credentials file, newline and all. The falsiness check below already
-    // treated '   ' as unidentified; rendering the untrimmed string meant a
-    // real address still arrived with its padding attached, so the chip's one
-    // line of room went on whitespace and the tooltip disagreed with the text.
+    // The stored value is whatever was written to the row, padding and all.
+    // The falsiness check below already treats '   ' as unidentified; an
+    // untrimmed real address would still arrive with its padding attached, so
+    // the chip's one line of room goes on whitespace and the tooltip disagrees
+    // with the text beside it.
     render(<AccountChip account={account({ email: '  a@b.com  ' })} />);
     const rendered = document.querySelector('.account-chip-email') as HTMLElement;
     expect(rendered.textContent).toBe('a@b.com');
@@ -59,15 +59,30 @@ describe('AccountChip', () => {
   });
 
   test('a whitespace-only email is as unidentified as a missing one', () => {
-    render(<AccountChip account={account({ email: '   ' })} noEmailLabel="Not yet logged in" />);
-    expect(screen.getByText('Not yet logged in')).toBeTruthy();
+    render(<AccountChip account={account({ email: '   ' })} />);
+    expect(document.querySelector('.account-chip-email')).toBeNull();
     // And the tooltip agrees — it used to append an empty parenthetical.
     expect(chip().getAttribute('title')).toBe('Claude account: Personal');
   });
 
-  test('a caller that can act on a missing login may name it', () => {
-    render(<AccountChip account={account({ email: null })} noEmailLabel="Not yet logged in" />);
-    expect(screen.getByText('Not yet logged in')).toBeTruthy();
+  // '' is a value, not an absence, so it survives every nullish check on the
+  // way here. It still identifies nothing, so the chip must render no address
+  // rather than an empty one, and must not widen its tooltip for it either.
+  test('an empty-string email renders no address, not an empty one', () => {
+    render(<AccountChip account={account({ email: '' })} />);
+    expect(document.querySelector('.account-chip-email')).toBeNull();
+    expect(chip().getAttribute('title')).toBe('Claude account: Personal');
+    expect(document.querySelector('.account-chip-text')!.textContent).toBe('Personal');
+  });
+
+  // The chip names an account; it never grades one. A login state is resolved
+  // from the config dir and rendered by the caller that can act on it, so no
+  // absent address anywhere can be dressed up as a report about a login.
+  test('a missing address is never rendered as a login state', () => {
+    render(<AccountChip account={account({ email: null })} />);
+    expect(document.body.textContent).not.toContain('logged in');
+    expect(document.body.textContent).not.toContain('signed in');
+    expect(screen.getByText('Personal')).toBeTruthy();
   });
 
   test('the detail can be spoken as well as hovered', () => {

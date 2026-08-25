@@ -4,6 +4,13 @@ import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount,
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
 
+/** `verified` is false when only the user's button says the login happened. */
+interface LoginCompleted {
+  accountId: string;
+  email: string | null;
+  verified: boolean;
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   homedir,
@@ -348,8 +355,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('accounts:assignToSession', sessionId, accountId),
   assignAccountToGroup: (groupId: string, accountId: string | null): Promise<AccountSwitchResult> =>
     ipcRenderer.invoke('accounts:assignToGroup', groupId, accountId),
-  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; email: string | null }) => callback(data);
+  onAccountLoginCompleted: (callback: (data: LoginCompleted) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: LoginCompleted) => callback(data);
     ipcRenderer.on('accounts:login-completed', listener);
     return () => ipcRenderer.removeListener('accounts:login-completed', listener);
   },

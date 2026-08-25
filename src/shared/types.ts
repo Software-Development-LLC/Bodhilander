@@ -262,8 +262,14 @@ export interface ClaudeAccount {
   label: string;
   /** Absolute path to the account's isolated .claude directory. */
   configDir: string;
-  /** Email parsed from credentials after login, for display. */
+  /** Address last recorded for this account, for display. */
   email: string | null;
+  /**
+   * Whether a completed login was found — resolved from the config dir, and
+   * from a recorded address only where that dir could not be read. Undefined
+   * when nothing was consulted, so no surface may call the account logged out.
+   */
+  loggedIn?: boolean;
   /** Hex color for UI badge. */
   color: string;
   /** True for the single account used as the global default fallback. */
