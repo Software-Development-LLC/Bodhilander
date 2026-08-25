@@ -306,45 +306,59 @@ export function createGateway(ctx: WsGatewayContext) {
    * one of these, so the caller can carry on looking if it was not.
    */
   function handleAgentShare(machineId: string, msg: Record<string, unknown>): boolean {
-    // The owner approved: attach the countersigned certificate. Scoped to this
-    // agent's own machine, so an agent cannot bind a grant on someone else's.
     if (msg.type === 'share:bind' && typeof msg.grantId === 'string' && typeof msg.certificate === 'string') {
-      const grant = repos.getGrant(msg.grantId);
-      if (!grant || grant.machine_id !== machineId) return true;
-      const expiresAt = typeof msg.expiresAt === 'number' ? msg.expiresAt : 0;
-      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return true;
-      if (repos.bindGrantCertificate(msg.grantId, msg.certificate, expiresAt)) {
-        logger.info('grant bound', { machineId, grantId: msg.grantId });
-      }
+      bindGrant(machineId, msg.grantId, msg.certificate, msg.expiresAt);
       return true;
     }
-
-    // The owner said no, or the machine cannot honour it.
     if (msg.type === 'share:deny' && typeof msg.grantId === 'string') {
-      const grant = repos.getGrant(msg.grantId);
-      if (!grant || grant.machine_id !== machineId) return true;
-      repos.revokeGrant(msg.grantId);
-      kickGrant(msg.grantId, typeof msg.reason === 'string' ? msg.reason : 'denied');
-      logger.info('grant denied', { machineId, grantId: msg.grantId });
+      denyGrant(machineId, msg.grantId, msg.reason);
       return true;
     }
-
-    // The desktop is the authority on revocation, so its list wins. Anything
-    // the relay still holds for this machine that the agent does not name is a
-    // ghost — from a relay restore, or a revocation queued while offline.
     if (msg.type === 'share:reconcile' && Array.isArray(msg.activeGrantIds)) {
-      const live = new Set(msg.activeGrantIds.filter((id): id is string => typeof id === 'string'));
-      let dropped = 0;
-      for (const grant of repos.listGrantsForMachine(machineId)) {
-        if (live.has(grant.id)) continue;
-        repos.revokeGrant(grant.id);
-        kickGrant(grant.id, 'revoked');
-        dropped += 1;
-      }
-      if (dropped > 0) logger.info('reconciled away stale grants', { machineId, dropped });
+      reconcileGrants(machineId, msg.activeGrantIds);
       return true;
     }
     return false;
+  }
+
+  /**
+   * The owner approved: attach the countersigned certificate. Scoped to this
+   * agent's own machine, so an agent cannot bind a grant on someone else's.
+   */
+  function bindGrant(machineId: string, grantId: string, certificate: string, rawExpiry: unknown): void {
+    const grant = repos.getGrant(grantId);
+    if (!grant || grant.machine_id !== machineId) return;
+    const expiresAt = typeof rawExpiry === 'number' ? rawExpiry : 0;
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return;
+    if (repos.bindGrantCertificate(grantId, certificate, expiresAt)) {
+      logger.info('grant bound', { machineId, grantId });
+    }
+  }
+
+  /** The owner said no, or the machine cannot honour it. */
+  function denyGrant(machineId: string, grantId: string, rawReason: unknown): void {
+    const grant = repos.getGrant(grantId);
+    if (!grant || grant.machine_id !== machineId) return;
+    repos.revokeGrant(grantId);
+    kickGrant(grantId, typeof rawReason === 'string' ? rawReason : 'denied');
+    logger.info('grant denied', { machineId, grantId });
+  }
+
+  /**
+   * The desktop is the authority on revocation, so its list wins. Anything the
+   * relay still holds for this machine that the agent does not name is a ghost
+   * — from a relay restore, or a revocation queued while offline.
+   */
+  function reconcileGrants(machineId: string, activeGrantIds: unknown[]): void {
+    const live = new Set(activeGrantIds.filter((id): id is string => typeof id === 'string'));
+    let dropped = 0;
+    for (const grant of repos.listGrantsForMachine(machineId)) {
+      if (live.has(grant.id)) continue;
+      repos.revokeGrant(grant.id);
+      kickGrant(grant.id, 'revoked');
+      dropped += 1;
+    }
+    if (dropped > 0) logger.info('reconciled away stale grants', { machineId, dropped });
   }
 
 
