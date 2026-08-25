@@ -363,7 +363,10 @@ function initializeTables(database: Database.Database): void {
       color TEXT DEFAULT '#888888',
       is_default INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      last_used_at TEXT
+      last_used_at TEXT,
+      fallback_rank INTEGER DEFAULT NULL,
+      limited_until TEXT DEFAULT NULL,
+      limited_at TEXT DEFAULT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_accounts_single_default
       ON claude_accounts(is_default) WHERE is_default = 1;
@@ -416,6 +419,29 @@ function initializeTables(database: Database.Database): void {
   }
   if (!sessionColsBdhlndr17.includes('claude_account_id')) {
     database.exec("ALTER TABLE sessions ADD COLUMN claude_account_id TEXT DEFAULT NULL");
+  }
+
+  // Migration: automatic failover between Claude accounts.
+  //
+  // Three facts the pre-failover schema had nowhere to put:
+  //   fallback_rank  — the order accounts are tried in. NULL sorts last, so an
+  //                    unranked estate keeps the panel's existing order.
+  //   limited_until  — when a recorded usage limit lifts. NULL = healthy. No
+  //                    sweeper clears it; expiry is decided at read time.
+  //   limited_at     — when the limit was seen, for the UI's "since" copy.
+  // On sessions, the two columns that make the move reversible: which account
+  // we moved OFF, and what the session's own override held before we wrote to
+  // it (NULL there means "inherit from the group", which is why it can't also
+  // mean "not failed over" — failover_from_account_id carries that).
+  const accountColumns = database.prepare('PRAGMA table_info(claude_accounts)').all() as { name: string }[];
+  if (!accountColumns.some(col => col.name === 'fallback_rank')) {
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN fallback_rank INTEGER DEFAULT NULL');
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN limited_until TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN limited_at TEXT DEFAULT NULL');
+  }
+  if (!sessionColsBdhlndr17.includes('failover_from_account_id')) {
+    database.exec('ALTER TABLE sessions ADD COLUMN failover_from_account_id TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE sessions ADD COLUMN failover_prev_account_id TEXT DEFAULT NULL');
   }
 
   // Migration: Add provider column to sessions (#96, epic #94).

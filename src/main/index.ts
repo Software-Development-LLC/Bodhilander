@@ -21,6 +21,7 @@ import * as accountsRepo from './repositories/accounts';
 import * as accountAuth from './account-auth';
 import { withAccountIdentity } from './account-identity';
 import * as accountSwitch from './account-switch';
+import * as accountFailover from './account-failover';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
 import { StateMonitor } from './state-monitor';
@@ -29,7 +30,7 @@ import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChanne
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { Group, Session, SessionState } from '../shared/types';
+import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/types';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer } from './mcp-config';
@@ -40,6 +41,15 @@ import type { GuestResizeRequest } from './api/relay/session-tunnel';
 import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
+
+/**
+ * How often parked sessions are reconsidered for going home (#207).
+ *
+ * A minute is far finer than the thing it is waiting on — usage limits reset on
+ * the hour scale — and the sweep is a couple of indexed reads over a table with
+ * tens of rows, so the cost of checking often is not worth optimising away.
+ */
+const FAILBACK_SWEEP_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Logging & crash reporting configuration
@@ -342,6 +352,84 @@ function registerHooksEverywhere(): void {
   }
 }
 
+/**
+ * Tell the renderer and the user about one account switch (#207).
+ *
+ * The renderer gets the session ids because it is the only side that can act
+ * on them; the notification goes out regardless of whether a window is
+ * focused, because this happened without being asked for.
+ */
+function publishFailover(event: AccountFailoverEvent, sessionId?: string): void {
+  // The assignment rows moved under the renderer's feet. Without this its
+  // cached sessions keep the old claudeAccountId, and every account badge in
+  // the sidebar names the account the session just left.
+  if (event.sessionIds.length > 0) mainWindow?.webContents.send('sessions:refresh');
+  mainWindow?.webContents.send('accounts:failover', event);
+  const { title, body } = accountFailover.describeFailover(event);
+  notificationManager.showAccountNotification({ title, body, sessionId });
+}
+
+/**
+ * Return parked sessions to their own account once its limit lifts.
+ *
+ * Called from every state change AND from a timer, because the two miss
+ * different cases: a session that went idle an hour before the reset never
+ * emits another state change, and a session working straight through the reset
+ * never becomes eligible until it stops. Between them, every parked session is
+ * reconsidered at the first moment interrupting it is free.
+ */
+function sweepFailbacks(): void {
+  if (!accountFailover.isFailbackEnabled()) return;
+  try {
+    for (const candidate of accountFailover.failbackCandidates()) {
+      const session = sessionsRepo.getSession(candidate.sessionId);
+      if (!session || !accountFailover.canFailBackNow(session.state)) continue;
+      const event = accountFailover.failBackSession(candidate.sessionId);
+      if (event) publishFailover(event, candidate.sessionId);
+    }
+  } catch (err) {
+    log.error('[Failover] Fail-back sweep failed:', err);
+  }
+}
+
+/**
+ * Subscribe to usage limits and start the fail-back timer, exactly once.
+ *
+ * createWindow runs again on 'activate' and after a renderer crash, so wiring
+ * registered from inside it is wiring registered twice — and a second
+ * subscription here would run the whole failover for one limit twice, sending
+ * the user two notifications about a single event. The window is not this
+ * feature's lifetime; the app is.
+ */
+let failoverWired = false;
+function registerFailoverWiring(): void {
+  if (failoverWired) return;
+  failoverWired = true;
+
+  // The pty only reports the observation; where the work goes is
+  // account-failover's call, and applying the move is the renderer's — a switch
+  // reaches the CLI as CLAUDE_CONFIG_DIR, which is fixed at spawn, so it takes a
+  // respawn and only the renderer owns those.
+  ptyManager.on('usageLimit', ({ id, accountId, resetAt }) => {
+    try {
+      const event = accountFailover.handleUsageLimit({
+        sessionId: id,
+        accountId,
+        resetAt,
+        liveAccounts: ptyManager.getLiveAccounts(),
+      });
+      if (event) publishFailover(event, id);
+    } catch (err) {
+      // A failed failover must never take the data pipeline down with it: the
+      // session is limited, not broken, and the user can still switch by hand.
+      log.error('[Failover] Could not handle a usage limit:', err);
+    }
+  });
+
+  const failbackTimer = setInterval(sweepFailbacks, FAILBACK_SWEEP_MS);
+  app.on('will-quit', () => clearInterval(failbackTimer));
+}
+
 function createWindow(): void {
   // BDHLNDR-44: never construct a BrowserWindow before app 'ready' — defends
   // the rapid-relaunch race that produced "Cannot create BrowserWindow before
@@ -407,6 +495,9 @@ function createWindow(): void {
     logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
+    // A session that just went idle may be one parked off its own account,
+    // waiting for a free moment to go back (#207).
+    sweepFailbacks();
   });
 
   // Restore saved window bounds or use defaults
@@ -618,6 +709,8 @@ function createWindow(): void {
     mainWindow?.webContents.send('pty:live-account', id, binding);
   });
 
+  registerFailoverWiring();
+
   // PTY state detection forwarding
   ptyManager.on('stateChange', (event) => {
     mainWindow?.webContents.send('state:change', event);
@@ -634,6 +727,10 @@ function createWindow(): void {
     logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
+    // The pty's own idle detection is the main way a session becomes safe to
+    // move back to its own account (#207) — the hook-driven monitor
+    // above sees Claude's own stop events, this sees the terminal go quiet.
+    sweepFailbacks();
     // Broadcast to mobile clients
     getApiServer().broadcastSessionState(event.sessionId, event.state, event.event);
   });
@@ -821,7 +918,11 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
 // row: the stored email is a one-shot write from the login flow, so accounts
 // that logged in without producing one present as logged out forever.
 safeHandle('accounts:list', () => {
-  return accountsRepo.getAllAccounts().map(withAccountIdentity);
+  // Failover order, not insertion order (#207). With no ranks set this is
+  // byte-for-byte the old ordering (default first, then oldest), so nothing
+  // moves for an estate whose owner has never touched the order — and once
+  // they have, the list they arranged is the list they see everywhere.
+  return accountsRepo.getAccountsInFallbackOrder().map(withAccountIdentity);
 });
 
 safeHandle('accounts:startLogin', (label: string) => {
@@ -853,12 +954,41 @@ safeHandle('accounts:setDefault', (id: string) => {
   return accountsRepo.setDefaultAccount(id);
 });
 
+// Failover order and cooldowns (#207).
+safeHandle('accounts:setFallbackOrder', (orderedIds: string[]) => {
+  if (!Array.isArray(orderedIds) || orderedIds.some(id => typeof id !== 'string')) {
+    throw new Error('A fallback order must be a list of account ids');
+  }
+  accountsRepo.setFallbackOrder(orderedIds);
+});
+
+/**
+ * Hand an account back before its recorded cooldown expires.
+ *
+ * Worth having as a user action because the cooldown is a guess whenever the
+ * CLI's message named no reset time: five hours is the honest upper bound for a
+ * rolling window, not a measurement, and someone who knows their quota is back
+ * should not have to wait out an estimate.
+ */
+safeHandle('accounts:clearLimit', (id: string) => {
+  accountsRepo.clearAccountLimit(id);
+});
+
+/** Which account failover would pick next, for the accounts panel to show. */
+safeHandle('accounts:nextInLine', (excludeId: string | null) => {
+  return accountFailover.nextHealthyAccount(excludeId ?? null);
+});
+
 // Assigning an account is routed through account-switch (not db:sessions:update)
 // so the conversation transcript follows the session into the new account's
 // config dir, and the renderer learns which ptys to respawn — CLAUDE_CONFIG_DIR
 // is fixed at spawn time, so a live session ignores the column write otherwise.
 safeHandle('accounts:assignToSession', (sessionId: string, accountId: string | null) => {
   const result = accountSwitch.assignSessionAccount(sessionId, accountId);
+  // The user has just said where this session belongs, which retires any
+  // pending fail-back: moving it again later, on the strength of a decision the
+  // app made hours ago, would be the app overruling them (#207).
+  accountFailover.clearFailoverRecord(sessionId);
   getApiServer().broadcastSessionsUpdated();
   return result;
 });

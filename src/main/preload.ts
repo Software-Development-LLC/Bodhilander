@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -361,6 +361,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('accounts:update', id, updates),
   setDefaultAccount: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('accounts:setDefault', id),
+  setAccountFallbackOrder: (orderedIds: string[]): Promise<void> =>
+    ipcRenderer.invoke('accounts:setFallbackOrder', orderedIds),
+  clearAccountLimit: (id: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:clearLimit', id),
+  nextAccountInLine: (excludeId: string | null): Promise<ClaudeAccount | null> =>
+    ipcRenderer.invoke('accounts:nextInLine', excludeId),
   assignAccountToSession: (sessionId: string, accountId: string | null): Promise<AccountSwitchResult> =>
     ipcRenderer.invoke('accounts:assignToSession', sessionId, accountId),
   assignAccountToGroup: (groupId: string, accountId: string | null): Promise<AccountSwitchResult> =>
@@ -374,6 +380,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; exitCode: number }) => callback(data);
     ipcRenderer.on('accounts:login-exited', listener);
     return () => ipcRenderer.removeListener('accounts:login-exited', listener);
+  },
+  // An account hit its usage limit and its sessions were moved (or couldn't be).
+  onAccountFailover: (callback: (event: AccountFailoverEvent) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, event: AccountFailoverEvent) => callback(event);
+    ipcRenderer.on('accounts:failover', listener);
+    return () => ipcRenderer.removeListener('accounts:failover', listener);
   },
 
   // Update channel (BDHLNDR-32) — opt-in beta builds

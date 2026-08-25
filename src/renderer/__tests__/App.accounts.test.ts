@@ -16,7 +16,7 @@
  * Run with: bun test src/renderer/__tests__/App.accounts.test.ts
  */
 import { describe, expect, test } from 'bun:test';
-import { accountMenuLabel, resolveAccountIndicator } from '../App';
+import { accountMenuLabel, resolveAccountIndicator, respawnable } from '../App';
 import type { ClaudeAccount, LiveAccountBinding, Session } from '../../shared/types';
 
 const work = {
@@ -174,5 +174,41 @@ describe('accountMenuLabel', () => {
   test('the label stays quoted, so an account named after a verb still reads', () => {
     const odd = { ...work, label: 'Use' } as ClaudeAccount;
     expect(accountMenuLabel(odd, false)).toContain('Use "Use"');
+  });
+});
+
+/**
+ * Which of the sessions an automatic switch moved actually get their pty
+ * replaced (#207).
+ *
+ * Both directions are mistakes the user sees. Restarting a stopped session
+ * starts something they deliberately ended; skipping a live one leaves it
+ * billing the account that just ran dry, which is the entire thing failover
+ * exists to stop.
+ */
+describe('respawnable', () => {
+  const session = (id: string, state: string) => ({ id, state } as Session);
+
+  test('keeps the sessions that still have a pty', () => {
+    const sessions = [session('a', 'working'), session('b', 'waiting'), session('c', 'idle')];
+    expect(respawnable(['a', 'b', 'c'], sessions)).toEqual(['a', 'b', 'c']);
+  });
+
+  test('drops a stopped session rather than starting it back up', () => {
+    const sessions = [session('a', 'working'), session('b', 'stopped')];
+    expect(respawnable(['a', 'b'], sessions)).toEqual(['a']);
+  });
+
+  /**
+   * A moved session the renderer has not heard of yet is restarted, not
+   * dropped. Only an explicit 'stopped' is evidence there is nothing to
+   * replace; absence is evidence of nothing.
+   */
+  test('keeps an id the renderer has no row for', () => {
+    expect(respawnable(['ghost'], [session('a', 'working')])).toEqual(['ghost']);
+  });
+
+  test('moves nothing when nothing moved', () => {
+    expect(respawnable([], [session('a', 'working')])).toEqual([]);
   });
 });

@@ -46,7 +46,9 @@ function freshDb(): Database {
       ended_at TEXT DEFAULT NULL,
       duration_seconds REAL DEFAULT 0,
       claude_account_id TEXT DEFAULT NULL,
-      provider TEXT NOT NULL DEFAULT 'claude'
+      provider TEXT NOT NULL DEFAULT 'claude',
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
     CREATE TABLE groups (
       id TEXT PRIMARY KEY,
@@ -57,7 +59,9 @@ function freshDb(): Database {
       created_at TEXT,
       parent_id TEXT DEFAULT NULL,
       collapsed INTEGER DEFAULT 0,
-      claude_account_id TEXT DEFAULT NULL
+      claude_account_id TEXT DEFAULT NULL,
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
     CREATE TABLE claude_accounts (
       id TEXT PRIMARY KEY,
@@ -67,7 +71,10 @@ function freshDb(): Database {
       color TEXT,
       is_default INTEGER DEFAULT 0,
       created_at TEXT,
-      last_used_at TEXT
+      last_used_at TEXT,
+      fallback_rank INTEGER DEFAULT NULL,
+      limited_until TEXT DEFAULT NULL,
+      limited_at TEXT DEFAULT NULL
     );
   `);
   return d;

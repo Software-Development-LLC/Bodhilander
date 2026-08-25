@@ -97,6 +97,9 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
     durationSeconds: 0,
     claudeAccountId: null,
     provider: opts.provider,
+    // A brand-new session has never been failed over (#207).
+    failoverFromAccountId: null,
+    failoverPrevAccountId: null,
   };
 
   // Step 1 — persist the row, log the start event, notify LAN clients.

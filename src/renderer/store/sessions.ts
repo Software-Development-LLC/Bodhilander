@@ -82,6 +82,9 @@ export function useSessions() {
           durationSeconds: 0,
           claudeAccountId: null,
           provider,
+          // A brand-new session has never been failed over (#207).
+          failoverFromAccountId: null,
+          failoverPrevAccountId: null,
         };
 
         // Activate immediately so the Terminal mounts in a visible container.

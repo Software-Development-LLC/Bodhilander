@@ -1,9 +1,0 @@
-name: jira-key-prefix
-on:
-  issues:
-    types: [opened]
-jobs:
-  prefix:
-    uses: Software-Development-LLC/org-standards/.github/workflows/jira-key-prefix.yml@v1
-    with:
-      key: B

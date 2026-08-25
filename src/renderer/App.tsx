@@ -15,7 +15,8 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
-import { ClaudeAccount, Session } from '../shared/types';
+import { FailoverNotice } from './components/FailoverNotice';
+import { AccountFailoverEvent, ClaudeAccount, Session } from '../shared/types';
 import type { LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -25,6 +26,21 @@ import { useActiveOnlyPreference } from './hooks/useActiveOnlyPreference';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
+
+/**
+ * Of the sessions an automatic account switch moved (#207), the ones with a pty
+ * to replace.
+ *
+ * A stopped session has nothing running under the old account and picks the new
+ * one up whenever it is next started; restarting it here would start a session
+ * the user had deliberately ended.
+ */
+export function respawnable(sessionIds: string[], sessions: Session[]): string[] {
+  const stopped = new Set(
+    sessions.filter(session => session.state === 'stopped').map(session => session.id)
+  );
+  return sessionIds.filter(id => !stopped.has(id));
+}
 
 /**
  * Collapse-chevron labels. While a filter is active every row is force-expanded,
@@ -173,6 +189,13 @@ const App: React.FC = () => {
   // a Settings tab, so App needs to be able to open Settings straight to it.
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('general');
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  /**
+   * The most recent automatic account switch, until the user dismisses it
+   * (#207). One at a time: these arrive seconds apart at most —
+   * one account running dry moves every session on it in a single event — and
+   * a stack of banners would push the terminal off screen.
+   */
+  const [failoverNotice, setFailoverNotice] = useState<AccountFailoverEvent | null>(null);
   // Which account each running pty ACTUALLY spawned under (#165), keyed by
   // session id. Absent id = no pty running for that session.
   const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
@@ -524,6 +547,40 @@ const App: React.FC = () => {
       return next;
     });
   }, []);
+
+  /**
+   * Latest sessions, readable from a subscription that must not re-subscribe
+   * every time one of them changes state.
+   *
+   * The failover listener below needs to know which of the moved sessions are
+   * actually running, and session state changes on almost every keystroke of
+   * agent output. Putting `sessions` in that effect's dependencies would tear
+   * down and re-register the IPC listener continuously, and a failover event
+   * arriving in the gap would be dropped — the one event this feature exists
+   * to act on.
+   */
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+
+  /**
+   * Apply an account switch the app made on its own (#207).
+   *
+   * Main has already written the assignments and carried the conversations;
+   * what it cannot do is respawn the ptys, because a pty's CLAUDE_CONFIG_DIR is
+   * fixed at spawn and only this side owns the terminals. Until the respawn the
+   * sessions are still billing the account that just ran dry, so this is not
+   * cosmetic follow-up — it is the half of the switch that makes it real.
+   */
+  useEffect(() => {
+    return window.electronAPI.onAccountFailover((event) => {
+      setFailoverNotice(event);
+
+      // Cooldowns and default/rank state both just changed.
+      window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
+
+      restartSessions(respawnable(event.sessionIds, sessionsRef.current));
+    });
+  }, [restartSessions]);
 
   /**
    * The header account indicator for one session (#165).
@@ -1590,6 +1647,17 @@ const App: React.FC = () => {
 
       <main className="main">
         <ViewSwitcher value={contentView} onChange={setContentView} shortcutPrefix={appMod} />
+        {failoverNotice && (
+          <FailoverNotice
+            event={failoverNotice}
+            onDismiss={() => setFailoverNotice(null)}
+            onOpenAccounts={() => {
+              setSettingsInitialTab('accounts');
+              setSettingsOpen(true);
+              setFailoverNotice(null);
+            }}
+          />
+        )}
         {contentView === 'analytics' && (
           <AnalyticsPanel
             onClose={() => setContentView('terminal')}

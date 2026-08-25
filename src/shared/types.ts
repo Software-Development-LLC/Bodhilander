@@ -37,6 +37,18 @@ export interface Session {
    * reset every app start performs.
    */
   workingDirMissing?: boolean;
+  /**
+   * The account this session was moved OFF when failover fired (#207), or null
+   * when it is running where it was put. Kept so the session can go back once
+   * that account's limit lifts, and so the UI can say why it moved.
+   */
+  failoverFromAccountId: string | null;
+  /**
+   * The value `claudeAccountId` held before failover overwrote it. NULL means
+   * "inherited from the group", which is why it cannot double as the "no
+   * failover in progress" signal — `failoverFromAccountId` is that signal.
+   */
+  failoverPrevAccountId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +308,47 @@ export interface ClaudeAccount {
   isDefault: boolean;
   createdAt: Date;
   lastUsedAt: Date | null;
+  /**
+   * Position in the failover order (#207): when an account hits its usage
+   * limit, its live sessions move to the lowest-ranked healthy account. Null
+   * for accounts that have never been ranked, which sort after every ranked
+   * one in the list order the accounts panel already uses.
+   */
+  fallbackRank: number | null;
+  /**
+   * When this account's usage limit is expected to lift, or null when it is
+   * not currently limited (#207). An account is skipped as a failover target
+   * until this passes. Parsed out of the CLI's own "resets at" line where it
+   * says one, otherwise a conservative default window.
+   */
+  limitedUntil: Date | null;
+  /** When the limit was observed. Null whenever limitedUntil is null. */
+  limitedAt: Date | null;
+}
+
+/**
+ * One automatic account switch (#207), reported to the renderer so it can
+ * respawn the ptys and say what happened.
+ *
+ * `to` is null when there was nowhere to go: every other account is limited
+ * too, or none is registered. That is not a failure to report as an error —
+ * the session stays where it is and the user is told the wall is real.
+ */
+export interface AccountFailoverEvent {
+  /** 'limit' = moved off an exhausted account; 'failback' = returned to it. */
+  reason: 'limit' | 'failback';
+  from: ClaudeAccount | null;
+  to: ClaudeAccount | null;
+  /** Sessions whose pty must be respawned for the switch to take effect. */
+  sessionIds: string[];
+  /** When `from`'s limit lifts, for the notification copy. Null if unknown. */
+  resetAt: Date | null;
+  /**
+   * Why nothing moved, when `to` is null. The two cases read very differently
+   * to the person on the other end — "every account you have is spent" is news,
+   * "you turned this off" is not — so they are not collapsed into one silence.
+   */
+  blocked?: 'disabled' | 'no-healthy-account';
 }
 
 /**
