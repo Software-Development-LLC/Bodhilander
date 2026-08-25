@@ -47,7 +47,7 @@ export interface PortableSession {
   order: number;
   createdAt: string;
   lastActivityAt: string;
-  /** Agent provider registry id (#96); absent in exports from older versions. */
+  /** Agent provider registry id; absent in exports from older versions. */
   provider?: string;
   /** Account the session runs under; resolved to a restored account on import. */
   claudeAccountId?: string | null;

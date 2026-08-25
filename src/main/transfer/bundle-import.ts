@@ -108,7 +108,7 @@ export function readBundleManifest(bytes: Buffer): TransferManifest | null {
   return parseBundle(bytes).manifest;
 }
 
-/** Unknown ids — a bundle from a newer build — must never reach the DB (#96). */
+/** Unknown ids — a bundle from a newer build — must never reach the DB. */
 function sanitizeProvider(provider: string | null | undefined): string {
   const id = provider ?? DEFAULT_PROVIDER_ID;
   return isKnownProvider(id) ? id : DEFAULT_PROVIDER_ID;

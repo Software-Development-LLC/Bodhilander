@@ -204,6 +204,25 @@ describe('import', () => {
     expect(messageBoxes).toHaveLength(0);
   });
 
+  test('a portable JSON this exporter just wrote imports again', async () => {
+    seedWithTranscript();
+    saveDialogPath = path.join(tmp, 'roundtrip.json');
+    messageBoxResponses = [1]; // "Groups & sessions only"
+    expect((await exportGroupsAndSessions(legacyDir)).success).toBe(true);
+
+    db.close();
+    db = freshDb();
+    openDialogPaths = [saveDialogPath];
+
+    const result = await importGroupsAndSessions(legacyDir);
+
+    expect(result.success).toBe(true);
+    expect(result.groupCount).toBe(1);
+    expect(result.sessionCount).toBe(1);
+    const row = db.prepare('SELECT claude_session_id FROM sessions').get() as any;
+    expect(row.claude_session_id).toBe('conv-1');
+  });
+
   test('cancelling the file picker changes nothing', async () => {
     openDialogPaths = [];
     expect(await importGroupsAndSessions(legacyDir)).toEqual({ success: false, error: 'Import cancelled' });
