@@ -1035,6 +1035,52 @@ describe('a guest asking to be fitted to their screen', () => {
     expect(requests[0]!.cols).toBe(80);
   });
 
+  test('six sockets under one certificate are still one asker', () => {
+    // The relay mints a fresh clientId per socket and nothing caps how many a
+    // guest may open, so a throttle kept on the socket is a browser refresh
+    // away from free — six channels, six prompts, same instant.
+    const requests: GuestResizeRequest[] = [];
+    const h = harness({ grantRow: storedGrant(), onResizeRequest: (r) => requests.push(r) });
+
+    for (let i = 0; i < 6; i++) {
+      const id = `c${i}`;
+      const key = h.openChannel(id, { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+      h.send(id, key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+      h.send(id, key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80 + i, rows: 24 });
+    }
+
+    expect(requests).toHaveLength(1);
+  });
+
+  test('two different people are not throttled against each other', () => {
+    // The key is the grant, not a global bucket: one guest asking must not
+    // silence another guest's first ask.
+    const requests: GuestResizeRequest[] = [];
+    const other = storedGrant({ id: 'grant-2', granteeUserId: 'guest-two' });
+    const h = harness({
+      onResizeRequest: (r) => requests.push(r),
+      grants: {
+        get: (id) => (id === 'grant-2' ? other : storedGrant()),
+        ownerUserId: () => OWNER_ID,
+        enforced: () => true,
+        latch: () => {},
+      },
+    });
+
+    const one = h.openChannel('c1', { principal: { userId: GUEST_ID }, certificate: mintCertificate() })!;
+    h.send('c1', one, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    h.send('c1', one, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80, rows: 24 });
+
+    const two = h.openChannel('c2', {
+      principal: { userId: 'guest-two' },
+      certificate: mintCertificate({ grantId: 'grant-2', granteeUserId: 'guest-two' }),
+    })!;
+    h.send('c2', two, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    h.send('c2', two, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 90, rows: 30 });
+
+    expect(requests.map((r) => r.cols)).toEqual([80, 90]);
+  });
+
   test('after the interval they may ask again — a decline is not a ban', () => {
     const { h, key, requests, advance } = askHarness();
     h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80, rows: 24 });

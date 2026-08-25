@@ -209,14 +209,13 @@ interface ClientSession {
    * the whole scrollback instead.
    */
   marks: Map<string, number>;
-  /** When this client last asked to be fitted to its screen. See the throttle. */
-  lastResizeAsk: number;
 }
 
 /**
- * The shortest gap between two of one client's resize requests: each raises a
- * prompt on the owner's screen, and one a guest can raise at will makes the
- * desktop unusable. The web client waits far longer before offering it again.
+ * The shortest gap between two resize requests from the same asker: each
+ * raises a prompt on the owner's screen. Keyed below by GRANT, not by socket:
+ * a guest may open as many channels as they like, and six under one
+ * certificate would otherwise be six prompts in the same instant.
  */
 const RESIZE_ASK_INTERVAL_MS = 10_000;
 
@@ -268,6 +267,8 @@ export class SessionTunnel {
    * create a number that survives the buffer it points into.
    */
   private readonly shareMarks = new Map<string, ShareWindow>();
+  /** Asker → when they last asked to be fitted. See RESIZE_ASK_INTERVAL_MS. */
+  private readonly lastResizeAsk = new Map<string, number>();
   /** Detaches the shared PTY listeners; null when not attached. */
   private detach: (() => void) | null = null;
   private readonly deps: TunnelDeps;
@@ -300,7 +301,7 @@ export class SessionTunnel {
         this.deps.pty.resize(inner.sessionId, size.cols, size.rows);
       }
     },
-    'terminal:resize-request': (_clientId, s, inner) => this.handleResizeRequest(s, inner),
+    'terminal:resize-request': (clientId, s, inner) => this.handleResizeRequest(clientId, s, inner),
     'session:create': (clientId, s, inner) => this.handleSessionCreate(clientId, s, inner),
     'group:create': (clientId, s, inner) => this.handleGroupCreate(clientId, s, inner),
     'dirs:list': (clientId, s, inner) => this.handleDirsList(clientId, s, inner),
@@ -438,7 +439,6 @@ export class SessionTunnel {
         grant,
         principal: principal ?? null,
         marks,
-        lastResizeAsk: 0,
       };
       this.sessions.set(clientId, session);
       this.startListening();
@@ -726,17 +726,22 @@ export class SessionTunnel {
    * ask goes to the owner's UI and dies there if they say no. The size is
    * clamped, and scoped to a session this client is actually watching.
    */
-  private handleResizeRequest(s: ClientSession, inner: ClientFrame): void {
+  private handleResizeRequest(clientId: string, s: ClientSession, inner: ClientFrame): void {
     const sessionId = inner.sessionId;
     const size = sanitizeSize(inner.cols, inner.rows);
     if (typeof sessionId !== 'string' || !size || !s.subs.has(sessionId)) return;
 
+    // The person, not the socket. A fresh channel per ask would otherwise
+    // reset the throttle, which is a browser refresh away from free.
+    const asker = s.grant.grantId ?? s.principal?.userId ?? clientId;
     const now = this.deps.now();
-    if (now - s.lastResizeAsk < RESIZE_ASK_INTERVAL_MS) {
+    const last = this.lastResizeAsk.get(asker);
+    if (last !== undefined && now - last < RESIZE_ASK_INTERVAL_MS) {
       this.deps.log.warn('[Relay] dropped a repeated resize request', { sessionId });
       return;
     }
-    s.lastResizeAsk = now;
+    this.sweepResizeAsks(now);
+    this.lastResizeAsk.set(asker, now);
     this.deps.onResizeRequest?.({
       sessionId,
       cols: size.cols,
@@ -744,6 +749,13 @@ export class SessionTunnel {
       login: s.principal?.githubLogin ?? null,
       displayName: s.principal?.displayName ?? null,
     });
+  }
+
+  /** Forget askers whose interval has passed, so the map cannot grow. */
+  private sweepResizeAsks(now: number): void {
+    for (const [asker, at] of this.lastResizeAsk) {
+      if (now - at >= RESIZE_ASK_INTERVAL_MS) this.lastResizeAsk.delete(asker);
+    }
   }
 
   private handleDirsList(clientId: string, _s: ClientSession, inner: ClientFrame): void {
