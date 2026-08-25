@@ -1,9 +1,0 @@
-name: pr-title
-on:
-  pull_request:
-    types: [opened, edited]
-jobs:
-  title:
-    uses: Software-Development-LLC/org-standards/.github/workflows/pr-title.yml@v1
-    with:
-      key: B
