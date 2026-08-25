@@ -573,6 +573,37 @@ function initializeArenaTables(database: Database.Database): void {
     database.exec('ALTER TABLE arena_responses ADD COLUMN prompt TEXT DEFAULT NULL');
     database.exec('ALTER TABLE arena_responses ADD COLUMN session_ref TEXT DEFAULT NULL');
   }
+
+  clearCooldownsFromOutputScanning(database);
+}
+
+/**
+ * Clear every account cooldown once.
+ *
+ * Cooldowns only ever existed under the detector that read them off rendered
+ * terminal output, and that detector marked healthy accounts limited — 86
+ * times on one machine, on text that merely discussed a usage limit. Every row
+ * it left is therefore suspect, and none is worth keeping: an account that is
+ * genuinely out of quota gets marked again within seconds of its next refusal,
+ * now from the CLI's own record rather than from pixels.
+ *
+ * Guarded by a preference rather than a schema check, because nothing about
+ * the columns changed — only the trustworthiness of what was written into them.
+ */
+export function clearCooldownsFromOutputScanning(database: Database.Database): void {
+  const KEY = 'quotaCooldownsCleared';
+  const done = database.prepare('SELECT 1 FROM preferences WHERE key = ?').get(KEY);
+  if (done) return;
+
+  const { changes } = database.prepare(
+    'UPDATE claude_accounts SET limited_until = NULL, limited_at = NULL WHERE limited_until IS NOT NULL'
+  ).run();
+  database.prepare('INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)')
+    .run(KEY, new Date().toISOString());
+
+  if (changes > 0) {
+    log.info(`[Accounts] Cleared ${changes} account cooldown(s) left by the previous detector.`);
+  }
 }
 
 export function closeDatabase(): void {

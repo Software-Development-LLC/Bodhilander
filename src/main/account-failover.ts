@@ -46,8 +46,8 @@ export interface UsageLimitReport {
   sessionId: string;
   /** Account that pty was BILLING — its live binding, not its assignment. */
   accountId: string | null;
-  /** Exact reset, off the CLI's own entry. Null only if it carried none. */
-  resetAt: Date | null;
+  /** Exact reset, off the CLI's own entry. */
+  resetAt: Date;
   /** The CLI's name for the window, e.g. 'five_hour', 'seven_day'. */
   rateLimitType?: string | null;
   /** Which accounts running ptys are currently bound to. */
@@ -87,7 +87,7 @@ export function handleUsageLimit(report: UsageLimitReport): AccountFailoverEvent
   // for hours. A switch that leaves the damaging half running is not a switch.
   if (!isFailoverEnabled()) return null;
 
-  const resetAt = report.resetAt ?? new Date(Date.now() + accountsRepo.DEFAULT_COOLDOWN_MS);
+  const { resetAt } = report;
   accountsRepo.markAccountLimited(from.id, resetAt);
   log.info(
     `[Failover] ${from.label} hit its ${describeRateLimitType(report.rateLimitType ?? null)} ` +
