@@ -147,6 +147,14 @@ export interface TunnelDeps {
    * must be able to see who is watching without going looking.
    */
   onPresenceChange?: () => void;
+  /**
+   * A guest asked for a session to be resized to fit their screen.
+   *
+   * A notification, not an action: this tunnel resizes nothing on a guest's
+   * word. The owner's renderer turns it into a prompt and performs the resize
+   * itself if they accept, so declining is indistinguishable from silence.
+   */
+  onResizeRequest?: (request: GuestResizeRequest) => void;
   /** The relay origin this agent is connected to, for certificate binding. */
   relayOrigin(): string;
   /** This machine's id as the relay knows it, or null before linking. */
@@ -159,6 +167,23 @@ export interface Principal {
   userId: string;
   githubLogin?: string | null;
   displayName?: string | null;
+}
+
+/**
+ * A guest asking for this session to be resized to fit their screen.
+ *
+ * The request half of the sizing story: a guest never sends `terminal:resize`,
+ * because a phone must not reflow the owner's terminal. This carries the size
+ * they would like and who is asking, and nothing happens until the owner says
+ * yes on their own machine.
+ */
+export interface GuestResizeRequest {
+  sessionId: string;
+  cols: number;
+  rows: number;
+  /** Who is asking, for the prompt. Relay-asserted; never authorization. */
+  login: string | null;
+  displayName: string | null;
 }
 
 /** One guest currently attached, as the owner's UI needs to see them. */
@@ -189,7 +214,19 @@ interface ClientSession {
    * the whole scrollback instead.
    */
   marks: Map<string, number>;
+  /** When this client last asked to be fitted to its screen. See the throttle. */
+  lastResizeAsk: number;
 }
+
+/**
+ * The shortest gap between two of one client's resize requests.
+ *
+ * Each one raises a prompt on the owner's screen, and a prompt a guest can
+ * raise at will is a way to make the desktop unusable. The web client waits
+ * far longer than this before offering the ask again, so a well-behaved guest
+ * never meets it.
+ */
+const RESIZE_ASK_INTERVAL_MS = 10_000;
 
 /** Decrypted command from a web client (union of every message's fields). */
 interface ClientFrame {
@@ -271,6 +308,7 @@ export class SessionTunnel {
         this.deps.pty.resize(inner.sessionId, size.cols, size.rows);
       }
     },
+    'terminal:resize-request': (_clientId, s, inner) => this.handleResizeRequest(s, inner),
     'session:create': (clientId, s, inner) => this.handleSessionCreate(clientId, s, inner),
     'group:create': (clientId, s, inner) => this.handleGroupCreate(clientId, s, inner),
     'dirs:list': (clientId, s, inner) => this.handleDirsList(clientId, s, inner),
@@ -408,6 +446,7 @@ export class SessionTunnel {
         grant,
         principal: principal ?? null,
         marks,
+        lastResizeAsk: 0,
       };
       this.sessions.set(clientId, session);
       this.startListening();
@@ -688,6 +727,35 @@ export class SessionTunnel {
       if (!s.subs.has(sessionId) || this.sessions.get(clientId) !== s) return;
       this.sealTo(clientId, { type: 'terminal:output', sessionId, data });
     }
+  }
+
+  /**
+   * A guest asked to be fitted to their screen.
+   *
+   * Nothing is resized here, and that is the point: the guest's phone must not
+   * reflow the owner's terminal, so the ask is forwarded to the owner's own UI
+   * and dies there if they say no. The size is clamped like any other
+   * network-supplied one, and scoped to a session this client is watching —
+   * asking about a session you cannot see would leak that it exists.
+   */
+  private handleResizeRequest(s: ClientSession, inner: ClientFrame): void {
+    const sessionId = inner.sessionId;
+    const size = sanitizeSize(inner.cols, inner.rows);
+    if (typeof sessionId !== 'string' || !size || !s.subs.has(sessionId)) return;
+
+    const now = this.deps.now();
+    if (now - s.lastResizeAsk < RESIZE_ASK_INTERVAL_MS) {
+      this.deps.log.warn('[Relay] dropped a repeated resize request', { sessionId });
+      return;
+    }
+    s.lastResizeAsk = now;
+    this.deps.onResizeRequest?.({
+      sessionId,
+      cols: size.cols,
+      rows: size.rows,
+      login: s.principal?.githubLogin ?? null,
+      displayName: s.principal?.displayName ?? null,
+    });
   }
 
   private handleDirsList(clientId: string, _s: ClientSession, inner: ClientFrame): void {

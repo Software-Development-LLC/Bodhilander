@@ -17,7 +17,14 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import crypto from 'crypto';
 import { SessionTunnel } from '../session-tunnel';
-import type { Principal, TunnelDeps, TunnelSessionRow, TunnelGroupRow, TunnelStoredGrant } from '../session-tunnel';
+import type {
+  GuestResizeRequest,
+  Principal,
+  TunnelDeps,
+  TunnelSessionRow,
+  TunnelGroupRow,
+  TunnelStoredGrant,
+} from '../session-tunnel';
 import { deriveSessionKey, sealJson, openJson, buildHandshakeProof } from '../e2e';
 import { COMMAND_CAPS } from '../grants';
 
@@ -929,5 +936,126 @@ describe('a refused command is not an ended session', () => {
     const seen = h.opened('c1', key);
     expect(seen.some((m) => m.type === 'denied' && m.reason === 'revoked')).toBe(true);
     expect(seen.some((m) => m.type === 'command:denied')).toBe(false);
+  });
+});
+
+describe('a guest asking to be fitted to their screen', () => {
+  /** A harness whose clock the test can move, plus the requests it forwarded. */
+  function askHarness() {
+    const requests: GuestResizeRequest[] = [];
+    const resizes: string[] = [];
+    let now = NOW;
+    const h = harness({
+      grantRow: storedGrant(),
+      now: () => now,
+      onResizeRequest: (request) => requests.push(request),
+    });
+    h.deps.pty.resize = (id, cols, rows) => resizes.push(`${id}:${cols}x${rows}`);
+    const key = h.openChannel('c1', { principal: { userId: GUEST_ID, githubLogin: 'dana-k' }, certificate: mintCertificate() })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+    return { h, key, requests, resizes, advance: (ms: number) => { now += ms; } };
+  }
+
+  test('a viewer may ask — and the ask resizes nothing', () => {
+    // The whole point of a request message: a phone must never reflow the
+    // owner's terminal, so this reaches the owner's UI and stops there.
+    const { h, key, requests, resizes } = askHarness();
+
+    h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80, rows: 24 });
+
+    expect(requests).toEqual([
+      { sessionId: 's1', cols: 80, rows: 24, login: 'dana-k', displayName: null },
+    ]);
+    expect(resizes).toEqual([]);
+    expect(h.opened('c1', key).some((m) => m.type === 'command:denied')).toBe(false);
+  });
+
+  test('a client with no grant cannot ask at all', () => {
+    // DENY_ALL holds no capabilities, so the gate refuses this like anything
+    // else — asking is not a back door around having been let in.
+    const { h, key, requests } = askHarness();
+    h.tunnel.revokeClient('c1');
+
+    h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80, rows: 24 });
+
+    expect(requests).toEqual([]);
+    expect(h.opened('c1', key).some((m) => m.type === 'command:denied' && m.command === 'terminal:resize-request')).toBe(true);
+  });
+
+  test('a session outside the grant is refused before the owner is disturbed', () => {
+    const { h, key, requests } = askHarness();
+
+    h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's2', cols: 80, rows: 24 });
+
+    expect(requests).toEqual([]);
+    expect(h.opened('c1', key).some((m) => m.type === 'command:denied' && m.command === 'terminal:resize-request')).toBe(true);
+  });
+
+  test('a session in scope but not being watched raises nothing', () => {
+    // Same rule as terminal:input: the ask is about the session in front of
+    // them, and a request for one they are not attached to is malformed.
+    const { h, key, requests } = askHarness();
+    h.send('c1', key, 1, { type: 'terminal:unsubscribe', sessionId: 's1' });
+
+    h.send('c1', key, 2, { type: 'terminal:resize-request', sessionId: 's1', cols: 80, rows: 24 });
+
+    expect(requests).toEqual([]);
+  });
+
+  test('a made-up size is clamped before it reaches the prompt', () => {
+    // The number lands in copy the owner reads and in a native resize if they
+    // accept, so it is sanitised on the way in like any other remote size.
+    const { h, key, requests } = askHarness();
+
+    h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 999_999, rows: 0.5 });
+
+    expect(requests).toEqual([
+      { sessionId: 's1', cols: 1000, rows: 2, login: 'dana-k', displayName: null },
+    ]);
+  });
+
+  test('a non-numeric size is dropped rather than clamped into something', () => {
+    const { h, key, requests } = askHarness();
+
+    h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 'wide', rows: null });
+
+    expect(requests).toEqual([]);
+  });
+
+  test('a flood of asks raises one prompt, not one per frame', () => {
+    // Each request interrupts the owner. A prompt a guest can raise at will
+    // is a way to make the desktop unusable.
+    const { h, key, requests } = askHarness();
+
+    for (let i = 0; i < 20; i++) {
+      h.send('c1', key, i + 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80 + i, rows: 24 });
+    }
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.cols).toBe(80);
+  });
+
+  test('after the interval they may ask again — a decline is not a ban', () => {
+    const { h, key, requests, advance } = askHarness();
+    h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80, rows: 24 });
+
+    advance(11_000);
+    h.send('c1', key, 2, { type: 'terminal:resize-request', sessionId: 's1', cols: 90, rows: 30 });
+
+    expect(requests.map((r) => r.cols)).toEqual([80, 90]);
+  });
+
+  test('the owner learns who asked, by the identity they cannot change', () => {
+    const requests: GuestResizeRequest[] = [];
+    const h = harness({ grantRow: storedGrant(), onResizeRequest: (r) => requests.push(r) });
+    const key = h.openChannel('c1', {
+      principal: { userId: GUEST_ID, githubLogin: null, displayName: 'Dana K' },
+      certificate: mintCertificate(),
+    })!;
+    h.send('c1', key, 0, { type: 'terminal:subscribe', sessionId: 's1' });
+
+    h.send('c1', key, 1, { type: 'terminal:resize-request', sessionId: 's1', cols: 80, rows: 24 });
+
+    expect(requests[0]).toMatchObject({ login: null, displayName: 'Dana K' });
   });
 });
