@@ -23,7 +23,7 @@ export function useSessions() {
     // Listen for state changes from hooks
     const cleanupStateChange = window.electronAPI.onStateChange((event) => {
       // Validate state is a valid SessionState
-      const validStates: SessionState[] = ['idle', 'working', 'waiting', 'error', 'stopped'];
+      const validStates: SessionState[] = ['idle', 'working', 'waiting', 'error', 'stopped', 'needs-relink'];
       if (!validStates.includes(event.state as SessionState)) {
         console.error('Invalid session state received:', event.state);
         return;

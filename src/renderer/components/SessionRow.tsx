@@ -51,6 +51,8 @@ interface SessionRowProps {
   onDragOver: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   onClose: () => void;
+  /** Offered only for a needs-relink session: pick the folder it lives in now. */
+  onRelink?: () => void;
 }
 
 function nameOf(account: ClaudeAccount | null): string {
@@ -82,7 +84,7 @@ export const SessionRow: React.FC<SessionRowProps> = ({
   session, isActive, isFocused, isDragging, dropPosition, draggable, account,
   pendingSwitch = null, watchingCount, watchingNames,
   isEditing, editingName, onEditingNameChange, onStartEdit, onFinishEdit, onCancelEdit,
-  onSelect, onContextMenu, onDragStart, onDragEnd, onDragOver, onDrop, onClose,
+  onSelect, onContextMenu, onDragStart, onDragEnd, onDragOver, onDrop, onClose, onRelink,
 }) => {
   const classes = [
     'session',
@@ -188,7 +190,19 @@ export const SessionRow: React.FC<SessionRowProps> = ({
               {provider}
             </span>
           )}
-          <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
+          {session.state === 'needs-relink' && onRelink ? (
+            <button
+              type="button"
+              className="status-pill needs-relink"
+              draggable={false}
+              title={`${session.workingDir || 'This folder'} is not on this machine — choose where it lives now`}
+              onClick={(e) => { e.stopPropagation(); onRelink(); }}
+            >
+              relink
+            </button>
+          ) : (
+            <span className={`status-pill ${session.state}`} draggable={false}>{session.state}</span>
+          )}
         </button>
       )}
       <button

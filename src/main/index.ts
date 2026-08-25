@@ -22,6 +22,13 @@ import * as accountAuth from './account-auth';
 import * as accountSwitch from './account-switch';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
+import {
+  exportTransferBundle,
+  importTransferBundle,
+  inspectTransferBundle,
+} from './transfer/bundle-commands';
+import { launchBlockReason } from './session-relink';
+import type { WorkingDirMapping } from './transfer/working-dirs';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
@@ -706,6 +713,11 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     const sessions = sessionsRepo.getAllSessions();
     const session = sessions.find(s => s.id === id);
 
+    // A session restored from another machine may point at a folder that is
+    // not here; PtyManager throws on that, with nothing the user can act on.
+    const blocked = launchBlockReason(session);
+    if (blocked) throw new Error(blocked);
+
     // The persisted row is authoritative (#96); the explicit providerId (#98)
     // only bridges first launches where the terminal mounted before the row
     // was persisted. Unknown ids degrade to the default inside
@@ -884,6 +896,19 @@ safeHandle('export:sessions', (format: ExportFormat, since?: string) =>
 safeHandle('export:groups', () => exportGroupsAndSessions());
 safeHandle('import:groups', () => importGroupsAndSessions());
 safeHandle('import:fromClaudeLander', () => importFromClaudeLander());
+
+// Whole-machine transfer bundle. Import is two calls so the renderer can ask
+// about each working-directory root between reading the manifest and writing.
+safeHandle('transfer:export', () => exportTransferBundle());
+safeHandle('transfer:inspect', () => inspectTransferBundle());
+safeHandle('transfer:import', async (filePath: string, mappings: WorkingDirMapping[]) => {
+  const result = await importTransferBundle(filePath, mappings ?? []);
+  if (result.success) {
+    getApiServer().broadcastGroupsUpdated();
+    getApiServer().broadcastSessionsUpdated();
+  }
+  return result;
+});
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {

@@ -907,6 +907,12 @@ body {
   color: #666;
 }
 
+.status-pill.needs-relink {
+  background: #4d3a26;
+  color: #e0a05c;
+  cursor: pointer;
+}
+
 .session-close {
   background: none;
   border: none;
@@ -2120,4 +2126,43 @@ body {
   background: rgba(105, 173, 255, 0.14);
   border: 1px solid rgba(105, 173, 255, 0.3);
   white-space: nowrap;
+}
+
+/* Settings → Data → transfer bundle import */
+.transfer-import-panel {
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 12px;
+  margin: 8px 0 12px;
+  background: #232323;
+}
+
+.transfer-import-header {
+  margin-bottom: 8px;
+}
+
+.transfer-root-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+}
+
+.transfer-root-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  flex-wrap: wrap;
+}
+
+.transfer-root-row code {
+  font-size: 11px;
+  background: #1c1c1c;
+  padding: 2px 6px;
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
+
+.transfer-root-unmapped {
+  color: #e0a05c;
 }

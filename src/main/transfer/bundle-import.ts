@@ -14,6 +14,7 @@ import log from 'electron-log';
 import { carryTranscript, isPathSafeConversationId } from '../conversation-transcript';
 import { seedLegacyConversations } from '../legacy-claude-seed';
 import { DEFAULT_PROVIDER_ID, isKnownProvider } from '../providers';
+import { NEEDS_RELINK_STATE } from '../session-relink';
 import {
   BUNDLE_FORMAT_VERSION,
   decodeBundle,
@@ -29,12 +30,7 @@ import { remapWorkingDir, type WorkingDirMapping } from './working-dirs';
 
 type Db = DatabaseCtor.Database;
 
-/**
- * A session whose working directory is not on this machine. Kept out of every
- * state the launcher will spawn, because `PtyManager.createSession` throws on
- * a missing cwd rather than degrading.
- */
-export const NEEDS_RELINK_STATE = 'needs-relink';
+export { NEEDS_RELINK_STATE };
 
 export interface ImportOptions {
   /** This machine's `<userData>/claude-accounts`. */

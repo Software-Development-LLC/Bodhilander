@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, TransferInspectResult, TransferImportResult, TransferRootMapping } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -192,6 +192,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('import:groups'),
   importFromClaudeLander: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
     ipcRenderer.invoke('import:fromClaudeLander'),
+
+  // Machine transfer bundle
+  exportTransferBundle: (): Promise<{ success: boolean; filePath?: string; error?: string; sizeLabel?: string }> =>
+    ipcRenderer.invoke('transfer:export'),
+  inspectTransferBundle: (): Promise<TransferInspectResult> =>
+    ipcRenderer.invoke('transfer:inspect'),
+  importTransferBundle: (filePath: string, mappings: TransferRootMapping[]): Promise<TransferImportResult> =>
+    ipcRenderer.invoke('transfer:import', filePath, mappings),
 
   // Preferences
   getPreference: (key: string): Promise<string | null> =>

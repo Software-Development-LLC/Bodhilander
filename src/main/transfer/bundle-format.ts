@@ -6,6 +6,7 @@
  */
 
 import * as zlib from 'zlib';
+import type { TransferBundleCounts, TransferBundleManifest } from '../../shared/types';
 
 export const BUNDLE_MAGIC = 'BDHLBNDL';
 export const BUNDLE_FORMAT_VERSION = 2;
@@ -127,29 +128,8 @@ export interface PortableTables extends Omit<PortableDataV1, 'version'> {
   accounts: PortableAccount[];
 }
 
-export interface TransferCounts {
-  groups: number;
-  sessions: number;
-  sessionEvents: number;
-  chatEvents: number;
-  arenaRuns: number;
-  arenaResponses: number;
-  preferences: number;
-  accounts: number;
-  transcripts: number;
-}
-
-export interface TransferManifest {
-  formatVersion: typeof BUNDLE_FORMAT_VERSION;
-  sourceApp: 'bodhilander';
-  sourceAppVersion: string;
-  sourcePlatform: string;
-  sourceUserData: string;
-  exportedAt: string;
-  /** Distinct roots across every group and session working directory. */
-  workingDirRoots: string[];
-  counts: TransferCounts;
-}
+export type TransferCounts = TransferBundleCounts;
+export type TransferManifest = TransferBundleManifest;
 
 // ---------------------------------------------------------------------------
 // Exclusion policy — enforced here, at export, never at import

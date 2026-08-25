@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { TransferBundleSettings } from './TransferBundleSettings';
 import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
@@ -514,6 +515,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
                 <div className="settings-group">
                   <h4>Data</h4>
+                  <TransferBundleSettings />
                   <div className="settings-row">
                     <label>Import / Export:</label>
                     <div style={{ display: 'flex', gap: '8px' }}>

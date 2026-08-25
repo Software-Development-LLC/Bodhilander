@@ -1,4 +1,5 @@
-export type SessionState = 'idle' | 'working' | 'waiting' | 'error' | 'stopped';
+/** 'needs-relink': restored from another machine, working directory not found here. */
+export type SessionState = 'idle' | 'working' | 'waiting' | 'error' | 'stopped' | 'needs-relink';
 
 export interface Session {
   id: string;
@@ -396,4 +397,54 @@ export interface GlobalStats {
   totalDurationSeconds: number;
   eventsPerDay: { date: string; count: number }[];
   toolUseCounts: Record<string, number>;
+}
+
+export interface TransferBundleCounts {
+  groups: number;
+  sessions: number;
+  sessionEvents: number;
+  chatEvents: number;
+  arenaRuns: number;
+  arenaResponses: number;
+  preferences: number;
+  accounts: number;
+  transcripts: number;
+}
+
+export interface TransferBundleManifest {
+  formatVersion: number;
+  sourceApp: string;
+  sourceAppVersion: string;
+  sourcePlatform: string;
+  /** The userData root the bundle came from, recorded for diagnostics. */
+  sourceUserData: string;
+  exportedAt: string;
+  /** Distinct roots across every group and session working directory. */
+  workingDirRoots: string[];
+  counts: TransferBundleCounts;
+}
+
+export interface TransferRootMapping {
+  from: string;
+  to: string;
+}
+
+export interface TransferInspectResult {
+  success: boolean;
+  filePath?: string;
+  sizeLabel?: string;
+  error?: string;
+  /** Null for an older portable JSON, which carries no manifest. */
+  manifest?: TransferBundleManifest | null;
+}
+
+export interface TransferImportResult {
+  success: boolean;
+  error?: string;
+  groups?: number;
+  sessions?: number;
+  transcripts?: number;
+  needsRelink?: number;
+  skippedGroups?: number;
+  skippedSessions?: number;
 }

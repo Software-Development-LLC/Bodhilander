@@ -98,6 +98,10 @@ export function updateSession(id: string, updates: Partial<Session>): void {
     fields.push('state = ?');
     values.push(updates.state);
   }
+  if (updates.workingDir !== undefined) {
+    fields.push('working_dir = ?');
+    values.push(updates.workingDir);
+  }
   if (updates.order !== undefined) {
     fields.push('"order" = ?');
     values.push(updates.order);
