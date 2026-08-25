@@ -2,7 +2,9 @@ import type { ServerWebSocket } from 'bun';
 import type { Logger } from './logger';
 import type { MachineGrant, Repositories } from './repositories';
 import { fromBase64, randomToken, verifyEd25519 } from './crypto';
-import { buildAgentAuthMessage, CAP_GRANTS_V1 } from './protocol';
+import { buildAgentAuthMessage, CAP_GRANTS_V1, CAP_PUSH_V1 } from './protocol';
+import type { RateLimiter } from './rate-limit';
+import type { PushDispatcher } from './push/send';
 
 /**
  * WebSocket gateway.
@@ -63,10 +65,35 @@ export interface WsGatewayContext {
    * asserted rather than only the timer plumbing.
    */
   authTimeoutMs?: number;
+  /**
+   * Sends a sealed push body to a push service. Absent means push is not
+   * configured on this relay, and `push:send` is dropped rather than queued.
+   */
+  push?: PushDispatcher;
+  /** Shared with the HTTP router, so `push:send` is bounded like a route is. */
+  rateLimiter?: RateLimiter;
 }
 
 /** How long an agent socket may sit unauthenticated before it is closed. */
 export const AGENT_AUTH_TIMEOUT_MS = 30_000;
+
+/**
+ * Ceiling on one `push:send`. A fan-out is bounded by the owner's device count
+ * (`MAX_PUSH_SUBSCRIPTIONS_PER_USER`), so anything larger is not a fan-out.
+ */
+export const MAX_PUSH_ITEMS = 32;
+
+/**
+ * Largest sealed body the relay will forward, base64.
+ *
+ * Push services cap a payload at 4096 octets; the aes128gcm header and tag come
+ * out of that budget, and base64 adds a third. Anything past this would be
+ * refused downstream anyway, so refusing it here keeps it off the wire.
+ */
+export const MAX_SEALED_BODY_B64 = 6144;
+
+/** Sends one machine's agent may make per minute, across every subscription. */
+export const PUSH_SENDS_PER_MINUTE = 30;
 
 /** Per-connection state for an agent (`server.upgrade(req, { data })`). */
 export function newAgentSocketData(): AgentSocketData {
@@ -120,6 +147,8 @@ export function createGateway(ctx: WsGatewayContext) {
     /** HTTP-side seams: a guest redeemed, or a grant was revoked over REST. */
     notifyGrantRedeemed,
     notifyGrantRevoked,
+    /** HTTP-side seam: this user subscribed or unsubscribed a browser. */
+    notifyPushSubscriptions,
 
     close(ws: ServerWebSocket<SocketData>) {
       if (ws.data.role === 'agent') {
@@ -208,6 +237,10 @@ export function createGateway(ctx: WsGatewayContext) {
       // and a desktop reinstall leaves guests connecting to a DENY_ALL with no
       // explanation.
       sendShareSync(ws, machine.id);
+      // The agent seals every push payload itself, so it needs the owner's
+      // subscription keys before it can send anything. Handed over on connect
+      // and refreshed whenever the set changes — the agent never asks.
+      sendPushSync(ws, machine.user_id);
       logger.info('agent online', { machineId: machine.id });
       return;
     }
@@ -270,6 +303,13 @@ export function createGateway(ctx: WsGatewayContext) {
       return;
     }
 
+    // Sealed push payloads, one per subscription, for the relay to address and
+    // forward. The relay cannot read them; see `handlePushSend`.
+    if (msg.type === 'push:send' && Array.isArray(msg.items)) {
+      handlePushSend(data.machineId, msg.items);
+      return;
+    }
+
     // Cut one live client without revoking its grant — used for pause and for
     // ending a session the guest was watching.
     if (msg.type === 'client:kick' && typeof msg.clientId === 'string') {
@@ -283,6 +323,99 @@ export function createGateway(ctx: WsGatewayContext) {
   /** Tell an agent about every grant the relay currently holds for its machine. */
   function sendShareSync(agent: ServerWebSocket<SocketData>, machineId: string): void {
     send(agent, { type: 'share:sync', grants: repos.listGrantsForMachine(machineId).map(wireGrant) });
+  }
+
+  /**
+   * Hand an agent the keys it seals push payloads to.
+   *
+   * The ENDPOINT is deliberately not included. The agent encrypts to
+   * `p256dh`/`auth` and addresses nothing; the relay does the addressing. So
+   * the desktop never learns which push service, and therefore which device
+   * family, its owner reads notifications on — the same minimal-disclosure rule
+   * that keeps session names away from the relay, pointed the other way.
+   */
+  function sendPushSync(agent: ServerWebSocket<SocketData>, userId: string): void {
+    if (!agentSupportsPush(agent)) return;
+    send(agent, {
+      type: 'push:sync',
+      subs: repos.listPushSubscriptions(userId).map((s) => ({ id: s.id, p256dh: s.p256dh, auth: s.auth })),
+    });
+  }
+
+  /**
+   * A user's subscriptions changed — re-sync every machine they own that is
+   * online. Called from the HTTP routes and after a reap.
+   */
+  function notifyPushSubscriptions(userId: string): void {
+    for (const machine of repos.listMachines(userId)) {
+      const agent = agents.get(machine.id);
+      if (agent) sendPushSync(agent, userId);
+    }
+  }
+
+  /**
+   * Forward sealed payloads from one machine's agent.
+   *
+   * What the relay checks: that each subscription named belongs to the owner of
+   * the machine on the other end of THIS socket. What it cannot check: the
+   * contents, which is the point. A dead endpoint (404/410) is reaped here —
+   * this is the only moment the relay learns a browser is gone.
+   */
+  function handlePushSend(machineId: string | null, items: unknown[]): void {
+    if (!machineId || !ctx.push) return;
+    const machine = repos.getMachine(machineId);
+    if (!machine) return;
+
+    if (ctx.rateLimiter) {
+      const allowed = ctx.rateLimiter.check(`push:machine:${machineId}`, PUSH_SENDS_PER_MINUTE, 60_000).allowed;
+      if (!allowed) {
+        logger.warn('rate limited push:send', { machineId });
+        return;
+      }
+    }
+
+    void deliverPushItems(machine.user_id, items.slice(0, MAX_PUSH_ITEMS));
+  }
+
+  async function deliverPushItems(userId: string, items: unknown[]): Promise<void> {
+    const dispatcher = ctx.push;
+    if (!dispatcher) return;
+    let reaped = false;
+
+    for (const raw of items) {
+      const item = raw as { id?: unknown; body?: unknown };
+      if (typeof item.id !== 'string' || typeof item.body !== 'string') continue;
+      if (item.body.length > MAX_SEALED_BODY_B64) {
+        logger.warn('dropped an oversized sealed push body', { userId });
+        continue;
+      }
+      const sub = repos.getPushSubscription(item.id);
+      // Belongs to someone else, or was removed while the agent was sealing.
+      // Either way this agent may not send to it.
+      if (!sub || sub.user_id !== userId) continue;
+
+      const body = fromBase64(item.body);
+      if (!body || body.length === 0) continue;
+
+      try {
+        const result = await dispatcher.deliver(sub.endpoint, body);
+        if (result.gone) {
+          repos.deletePushSubscription(sub.id);
+          reaped = true;
+          logger.info('reaped a dead push subscription', { userId, status: result.status });
+        } else if (result.status !== null && result.status >= 400) {
+          // Transient from here: a 429 or a 5xx is the push service's problem
+          // and the next attention event retries on its own.
+          logger.warn('push service refused a message', { status: result.status });
+        }
+      } catch (err) {
+        logger.warn('push delivery failed', { err: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // Only after the whole batch: re-syncing per reap would send the agent a
+    // list it is still working through.
+    if (reaped) notifyPushSubscriptions(userId);
   }
 
   /**
@@ -341,6 +474,12 @@ export function createGateway(ctx: WsGatewayContext) {
   function agentSupportsGrants(agent: ServerWebSocket<SocketData>): boolean {
     const data = agent.data;
     return data.role === 'agent' && data.caps.includes(CAP_GRANTS_V1);
+  }
+
+  /** Whether this agent build can seal push payloads — see `CAP_PUSH_V1`. */
+  function agentSupportsPush(agent: ServerWebSocket<SocketData>): boolean {
+    const data = agent.data;
+    return data.role === 'agent' && data.caps.includes(CAP_PUSH_V1);
   }
 
   function handleClient(ws: ServerWebSocket<SocketData>, data: ClientSocketData, msg: Record<string, unknown>) {

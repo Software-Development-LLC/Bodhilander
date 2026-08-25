@@ -6,6 +6,8 @@ import { createRepositories } from './repositories';
 import { createGateway, newAgentSocketData, newClientSocketData } from './ws';
 import { parseCookies, SESSION_COOKIE } from './auth/cookies';
 import { createRateLimiter } from './rate-limit';
+import { createVapid } from './push/vapid';
+import { createPushDispatcher } from './push/send';
 
 /** How often expired sessions / link codes / rate-limit windows are swept. */
 const REAP_INTERVAL_MS = 10 * 60 * 1000;
@@ -31,17 +33,27 @@ function main(): void {
 
   const repos = createRepositories(db);
   const rateLimiter = createRateLimiter();
+  // Web push identity. The keypair is resolved lazily, on the first request
+  // that needs it, so a start-up with no push traffic touches no crypto.
+  const vapid = createVapid({ config, repos, logger });
   // The gateway is built first so the router can call into it. HTTP and
-  // WebSocket are separate surfaces; these two callbacks are the only seam
+  // WebSocket are separate surfaces; these callbacks are the only seam
   // between them, rather than a shared mutable table either side can corrupt.
-  const gateway = createGateway({ repos, logger });
+  const gateway = createGateway({
+    repos,
+    logger,
+    rateLimiter,
+    push: createPushDispatcher({ vapid }),
+  });
   const route = createRouter({
     config,
     logger,
     repos,
     rateLimiter,
+    vapid,
     onGrantRedeemed: (grant) => gateway.notifyGrantRedeemed(grant),
     onGrantRevoked: (grant) => gateway.notifyGrantRevoked(grant),
+    onPushSubscriptionsChanged: (userId) => gateway.notifyPushSubscriptions(userId),
   });
 
   const server = Bun.serve({

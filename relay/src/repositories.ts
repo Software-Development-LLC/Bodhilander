@@ -140,7 +140,52 @@ export interface Repositories {
   listDeadShareGrants(): MachineGrant[];
   /** Expired or revoked grants and dead invites, dropped by the reaper. */
   purgeDeadShares(): number;
+
+  // --- web push (M5.3) ---
+
+  /** Small durable server-side settings. Today: the minted VAPID keypair. */
+  getKv(key: string): string | null;
+  setKv(key: string, value: string): void;
+
+  /**
+   * Record a browser's push subscription, replacing the keys if that endpoint
+   * is already known.
+   *
+   * Returns null when the user is already at `MAX_PUSH_SUBSCRIPTIONS_PER_USER`
+   * — a refusal, not an error: the alternative is an unbounded table filled by
+   * anyone able to script a browser.
+   */
+  upsertPushSubscription(userId: string, input: PushSubscriptionInput): PushSubscription | null;
+  listPushSubscriptions(userId: string): PushSubscription[];
+  getPushSubscription(id: string): PushSubscription | null;
+  deletePushSubscription(id: string): boolean;
+  /** Scoped by user so an endpoint alone cannot unsubscribe someone else. */
+  deletePushSubscriptionByEndpoint(userId: string, endpoint: string): boolean;
 }
+
+export interface PushSubscription {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  /** The subscription's public key, base64url — an uncompressed P-256 point. */
+  p256dh: string;
+  /** The subscription's 16-byte auth secret, base64url. */
+  auth: string;
+  created_at: number;
+}
+
+export interface PushSubscriptionInput {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+/**
+ * Per-account ceiling on stored subscriptions. A person has a handful of
+ * devices; anything past this is churn (a browser that re-subscribes with a
+ * fresh endpoint on every profile wipe) or abuse.
+ */
+export const MAX_PUSH_SUBSCRIPTIONS_PER_USER = 20;
 
 export interface ShareInvite {
   id: string;
@@ -566,6 +611,77 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
         .query("DELETE FROM share_invites WHERE status != 'redeemed' AND expires_at <= ?")
         .run(ts);
       return Number(grants.changes ?? 0) + Number(invites.changes ?? 0);
+    },
+
+    // --- web push (M5.3) ---
+
+    getKv(key) {
+      const row = db.query('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | null;
+      return row?.value ?? null;
+    },
+
+    setKv(key, value) {
+      db.query('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+        key,
+        value,
+      );
+    },
+
+    upsertPushSubscription(userId, input) {
+      const existing = db.query('SELECT * FROM push_subscriptions WHERE endpoint = ?').get(input.endpoint) as
+        | PushSubscription
+        | null;
+
+      if (existing) {
+        // Re-subscribing refreshes the keys and takes ownership: a browser that
+        // signs in as someone else keeps the same endpoint, and leaving the row
+        // pointed at the previous account would send that account's alerts to a
+        // device it no longer belongs to.
+        db.query('UPDATE push_subscriptions SET user_id = ?, p256dh = ?, auth = ? WHERE id = ?').run(
+          userId,
+          input.p256dh,
+          input.auth,
+          existing.id,
+        );
+        return { ...existing, user_id: userId, p256dh: input.p256dh, auth: input.auth };
+      }
+
+      const count = db.query('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(userId) as {
+        n: number;
+      };
+      if (count.n >= MAX_PUSH_SUBSCRIPTIONS_PER_USER) return null;
+
+      const row: PushSubscription = {
+        id: crypto.randomUUID(),
+        user_id: userId,
+        endpoint: input.endpoint,
+        p256dh: input.p256dh,
+        auth: input.auth,
+        created_at: now(),
+      };
+      db.query(
+        'INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(row.id, row.user_id, row.endpoint, row.p256dh, row.auth, row.created_at);
+      return row;
+    },
+
+    listPushSubscriptions(userId) {
+      return db
+        .query('SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY created_at')
+        .all(userId) as PushSubscription[];
+    },
+
+    getPushSubscription(id) {
+      return (db.query('SELECT * FROM push_subscriptions WHERE id = ?').get(id) as PushSubscription | null) ?? null;
+    },
+
+    deletePushSubscription(id) {
+      return Number(db.query('DELETE FROM push_subscriptions WHERE id = ?').run(id).changes ?? 0) > 0;
+    },
+
+    deletePushSubscriptionByEndpoint(userId, endpoint) {
+      const result = db.query('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').run(userId, endpoint);
+      return Number(result.changes ?? 0) > 0;
     },
   };
 }

@@ -48,6 +48,18 @@ export function buildAgentAuthMessage(nonce: string): Uint8Array {
 export const CAP_GRANTS_V1 = 'grants:v1';
 
 /**
+ * Capability an agent advertises to say it can seal web-push payloads itself.
+ *
+ * Gating on this is minimal disclosure, not version tolerance. `push:sync`
+ * carries the subscription keys a payload is encrypted to, and a build that
+ * cannot use them has no business holding them — an older agent would simply
+ * ignore the message while the keys sat in its process memory and its logs.
+ * No capability, no keys, no push; the owner's phone stays quiet until the
+ * desktop updates, which is the honest outcome.
+ */
+export const CAP_PUSH_V1 = 'push:v1';
+
+/**
  * Canonical message an agent signs to create a share invite.
  *
  * Signed rather than session-authenticated because invites originate on the

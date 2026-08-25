@@ -21,6 +21,8 @@ import {
 import { createDevRoutes } from './dev';
 import { createWebClient } from './web';
 import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
+import { isAllowedPushEndpoint } from './push/send';
+import type { Vapid } from './push/vapid';
 
 /**
  * HTTP surface of the relay (M2), as a `fetch`-style handler for `Bun.serve`.
@@ -41,6 +43,9 @@ import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
  *   POST /api/shares/redeem           — guest redeems a code (session)
  *   GET  /api/shares                  — guest lists their grants (session)
  *   DEL  /api/shares/:grantId         — owner OR grantee ends a grant (session)
+ *   GET  /api/push/vapid-key          — application-server key to subscribe with
+ *   POST /api/push/subscribe          — register this browser (session)
+ *   POST /api/push/unsubscribe        — drop this browser (session)
  */
 export interface RelayContext {
   config: RelayConfig;
@@ -58,6 +63,17 @@ export interface RelayContext {
   onGrantRedeemed?: (grant: MachineGrant) => void;
   /** Called when a grant is revoked over HTTP, so live sockets can be cut. */
   onGrantRevoked?: (grant: MachineGrant) => void;
+  /**
+   * The application-server identity for web push. Absent in tests that don't
+   * exercise it; the push routes then answer 503 rather than pretending.
+   */
+  vapid?: Vapid;
+  /**
+   * A user's set of push subscriptions changed. The gateway re-sends it to that
+   * user's online agents, which are the things that actually seal payloads —
+   * same HTTP↔WebSocket seam as the grant callbacks above.
+   */
+  onPushSubscriptionsChanged?: (userId: string) => void;
 }
 
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
@@ -70,6 +86,14 @@ const LINK_PER_KEY = 5;
 const CLAIM_PER_IP = 20;
 /** Minting invites is cheap for an owner and pointless to do in bulk. */
 const SHARE_PER_IP = 20;
+/**
+ * Subscribing is a once-per-device act. The window is generous enough for a
+ * browser that re-subscribes on every launch and tight enough that a script
+ * cannot walk the per-user cap with a stream of throwaway endpoints.
+ */
+const PUSH_PER_IP = 30;
+/** Reading the public key is free and idempotent — this is anti-hammering only. */
+const PUSH_KEY_PER_IP = 120;
 
 /**
  * Ceilings on what an invite may ask for. The desktop offers far shorter
@@ -81,7 +105,7 @@ const MAX_GRANT_TTL_SECONDS = 24 * 60 * 60;
 const MAX_INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function createRouter(ctx: RelayContext) {
-  const { config, logger, repos, onGrantRedeemed, onGrantRevoked } = ctx;
+  const { config, logger, repos, onGrantRedeemed, onGrantRevoked, onPushSubscriptionsChanged } = ctx;
   const limiter = ctx.rateLimiter ?? createRateLimiter();
   const version = pkg.version ?? '0.0.0';
   const secure = config.isProduction || config.trustProxy;
@@ -207,6 +231,18 @@ export function createRouter(ctx: RelayContext) {
 
       const grantId = matchShareGrant(pathname);
       if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
+
+      // --- web push (M5.3) ---
+
+      if (pathname === '/api/push/vapid-key' && method === 'GET') {
+        return limited(req, peerIp, 'push:key', PUSH_KEY_PER_IP) ?? (await handleVapidKey(req));
+      }
+      if (pathname === '/api/push/subscribe' && method === 'POST') {
+        return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushSubscribe(req));
+      }
+      if (pathname === '/api/push/unsubscribe' && method === 'POST') {
+        return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushUnsubscribe(req));
+      }
 
       return json({ error: 'not_found' }, 404);
     } catch (err) {
@@ -523,6 +559,86 @@ export function createRouter(ctx: RelayContext) {
     onGrantRevoked?.(grant);
     return new Response(null, { status: 204 });
   }
+
+  // --- web push (M5.3) ---
+
+  /**
+   * The application-server public key a browser subscribes with.
+   *
+   * Session-gated, though the value is public: only a signed-in browser has any
+   * use for it, and gating keeps the key off an anonymous surface that would
+   * otherwise be the cheapest way to fingerprint which relay you are talking to.
+   */
+  async function handleVapidKey(req: Request): Promise<Response> {
+    if (!currentUser(req)) return json({ error: 'unauthorized' }, 401);
+    if (!ctx.vapid) return json({ error: 'push_unavailable' }, 503);
+    return json({ key: await ctx.vapid.publicKey() });
+  }
+
+  async function handlePushSubscribe(req: Request): Promise<Response> {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+
+    const body = await readJson(req);
+    if (!body) return json({ error: 'invalid_json' }, 400);
+    const { endpoint, keys } = body as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+    const p256dh = keys?.p256dh;
+    const auth = keys?.auth;
+
+    if (typeof endpoint !== 'string' || typeof p256dh !== 'string' || typeof auth !== 'string') {
+      return json({ error: 'invalid_request' }, 400);
+    }
+    // The endpoint is a URL this server will later make a request TO, so it is
+    // checked before it is stored, not before it is used. See `isAllowedPushEndpoint`.
+    if (!isAllowedPushEndpoint(endpoint)) return json({ error: 'invalid_endpoint' }, 400);
+    // Sized here so a malformed pair fails at subscribe time — where a person
+    // can see it — rather than as an unexplained delivery failure much later.
+    if (!isUncompressedP256Point(p256dh)) return json({ error: 'invalid_keys' }, 400);
+    if (!isAuthSecret(auth)) return json({ error: 'invalid_keys' }, 400);
+
+    const saved = repos.upsertPushSubscription(user.id, { endpoint, p256dh, auth });
+    if (!saved) {
+      logger.warn('push subscription refused: per-user cap reached', { userId: user.id });
+      return json({ error: 'too_many_subscriptions' }, 409);
+    }
+
+    logger.info('push subscription registered', { userId: user.id });
+    onPushSubscriptionsChanged?.(user.id);
+    return new Response(null, { status: 204 });
+  }
+
+  async function handlePushUnsubscribe(req: Request): Promise<Response> {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+
+    const body = await readJson(req);
+    const endpoint = body && typeof (body as { endpoint?: unknown }).endpoint === 'string'
+      ? (body as { endpoint: string }).endpoint
+      : null;
+    if (!endpoint) return json({ error: 'invalid_request' }, 400);
+
+    // 204 either way. The browser has already dropped its end by the time it
+    // calls this, so "there was nothing to remove" is a success from where the
+    // caller stands — and distinguishing the two would confirm whether a given
+    // endpoint is registered to the signed-in account.
+    if (repos.deletePushSubscriptionByEndpoint(user.id, endpoint)) {
+      logger.info('push subscription removed', { userId: user.id });
+      onPushSubscriptionsChanged?.(user.id);
+    }
+    return new Response(null, { status: 204 });
+  }
+}
+
+/** The subscription's public key: an uncompressed P-256 point, base64url. */
+function isUncompressedP256Point(value: string): boolean {
+  const bytes = fromBase64(value);
+  return !!bytes && bytes.length === 65 && bytes[0] === 0x04;
+}
+
+/** The subscription's auth secret: 16 bytes, base64url (RFC 8291 §3.2). */
+function isAuthSecret(value: string): boolean {
+  const bytes = fromBase64(value);
+  return !!bytes && bytes.length === 16;
 }
 
 /** `/api/machines/:machineId/shares[/:inviteId]` */
