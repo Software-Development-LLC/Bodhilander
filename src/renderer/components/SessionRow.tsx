@@ -87,11 +87,11 @@ function rowClasses(state: {
   ].filter(Boolean).join(' ');
 }
 
-function AccountDot({ account, session, pending }: {
+function AccountDot({ account, session, pending }: Readonly<{
   account: ClaudeAccount;
   session: Session;
   pending: { target: ClaudeAccount | null } | null;
-}): React.JSX.Element {
+}>): React.JSX.Element {
   const label = pending
     ? `Account: ${account.label}, running; assigned to ${nameOf(pending.target)}, restart to apply`
     : `Account: ${account.label}`;
@@ -111,10 +111,10 @@ function AccountDot({ account, session, pending }: {
  * on a deleted account there is no dot, and then this is the only thing on the
  * row with anything to say.
  */
-function PendingSwitchGlyph({ account, pending }: {
+function PendingSwitchGlyph({ account, pending }: Readonly<{
   account: ClaudeAccount | null;
   pending: { target: ClaudeAccount | null };
-}): React.JSX.Element {
+}>): React.JSX.Element {
   return (
     <span
       className="session-account-pending"
@@ -129,7 +129,7 @@ function PendingSwitchGlyph({ account, pending }: {
 }
 
 /** A glyph AND a count: neither says on its own how many are watching what. */
-function WatchingBadge({ count, names }: { count: number; names?: string[] }): React.JSX.Element {
+function WatchingBadge({ count, names }: Readonly<{ count: number; names?: string[] }>): React.JSX.Element {
   return (
     <span
       className="session-watching"

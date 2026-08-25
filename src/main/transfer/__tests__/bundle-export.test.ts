@@ -67,7 +67,7 @@ describe('the manifest', () => {
       workingDirs: ['/Users/will/Work/Repos/A', '/Users/will/Work/Repos/B', '/opt/scratch/C'],
     });
 
-    expect(build().manifest.workingDirRoots).toEqual(['/Users/will/Work/Repos', '/opt/scratch/C']);
+    expect(build().manifest.workingDirRoots).toEqual(['/opt/scratch/C', '/Users/will/Work/Repos']);
   });
 
   test('counts what travelled', () => {

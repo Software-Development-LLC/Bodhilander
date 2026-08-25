@@ -60,9 +60,18 @@ function renderDir(parsed: ParsedDir, segments: string[]): string {
   return parsed.absolute ? `${parsed.separator}${body}` : body;
 }
 
-/** Comparison key for one path component. */
-function fold(segment: string, windows: boolean): string {
-  return windows ? segment.toLowerCase() : segment;
+/**
+ * How one path component is compared. Windows matches case-insensitively and
+ * POSIX does not, so the rule is chosen once per path and then applied — the
+ * caller holds a folder rather than re-deciding at every component.
+ */
+type Fold = (segment: string) => string;
+
+const foldExact: Fold = (segment) => segment;
+const foldCaseless: Fold = (segment) => segment.toLowerCase();
+
+function folderFor(windows: boolean): Fold {
+  return windows ? foldCaseless : foldExact;
 }
 
 interface TrieNode {
@@ -102,7 +111,8 @@ export function collectWorkingDirRoots(dirs: string[]): string[] {
     const parsed = parseDir(dir);
     if (!parsed) continue;
 
-    const key = `${fold(parsed.prefix, parsed.windows)}|${parsed.absolute}|${parsed.windows}`;
+    const folder = folderFor(parsed.windows);
+    const key = `${folder(parsed.prefix)}|${parsed.absolute}|${parsed.windows}`;
     const bucket = buckets.get(key) ?? { sample: parsed, trie: emptyNode(), volumeRoot: false };
     buckets.set(key, bucket);
 
@@ -115,7 +125,7 @@ export function collectWorkingDirRoots(dirs: string[]): string[] {
 
     let node = bucket.trie;
     for (const segment of parsed.segments) {
-      const folded = fold(segment, parsed.windows);
+      const folded = folder(segment);
       const next = node.children.get(folded) ?? { display: segment, node: emptyNode() };
       node.children.set(folded, next);
       node = next.node;
@@ -130,15 +140,18 @@ export function collectWorkingDirRoots(dirs: string[]): string[] {
       roots.push(renderDir(sample, segments));
     }
   }
-  return [...new Set(roots)].sort();
+  // A fixed locale, not the host's: an export written on one machine is read
+  // on another, and the roots the user is asked about should come back in the
+  // same order on both.
+  return [...new Set(roots)].sort((a, b) => a.localeCompare(b, 'en'));
 }
 
 /** Whether `subject` sits at or under `from`, compared component by component. */
-function startsWithDir(subject: ParsedDir, from: ParsedDir, windows: boolean): boolean {
-  if (fold(subject.prefix, windows) !== fold(from.prefix, windows)) return false;
+function startsWithDir(subject: ParsedDir, from: ParsedDir, folder: Fold): boolean {
+  if (folder(subject.prefix) !== folder(from.prefix)) return false;
   if (subject.absolute !== from.absolute) return false;
   if (subject.segments.length < from.segments.length) return false;
-  return from.segments.every((s, i) => fold(s, windows) === fold(subject.segments[i], windows));
+  return from.segments.every((s, i) => folder(s) === folder(subject.segments[i]));
 }
 
 /**
@@ -157,8 +170,8 @@ export function remapWorkingDir(dir: string, mappings: WorkingDirMapping[]): str
     .sort((a, b) => b.from.segments.length - a.from.segments.length);
 
   for (const { mapping, from } of candidates) {
-    const windows = from.windows || subject.windows;
-    if (!startsWithDir(subject, from, windows)) continue;
+    const folder = folderFor(from.windows || subject.windows);
+    if (!startsWithDir(subject, from, folder)) continue;
 
     const tail = subject.segments.slice(from.segments.length);
     if (tail.length === 0) return mapping.to;

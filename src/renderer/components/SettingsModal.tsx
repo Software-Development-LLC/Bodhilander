@@ -540,8 +540,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
                 <div className="settings-group">
                   <h4>Data</h4>
-                  <div className="settings-row">
-                    <label>Move to Another Machine:</label>
+                  {/* Two buttons, not one control — so this names the pair as
+                      a group rather than pretending to label a single input. */}
+                  <div className="settings-row" role="group" aria-labelledby="move-machine-label">
+                    <span className="settings-row-label" id="move-machine-label">Move to Another Machine:</span>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <button
                         className="settings-button"

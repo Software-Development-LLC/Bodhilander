@@ -20,9 +20,11 @@ describe('collectWorkingDirRoots', () => {
     ]);
   });
 
-  test('unrelated trees each get a root', () => {
+  test('unrelated trees each get a root, ordered for a human to read', () => {
     const roots = collectWorkingDirRoots(['/Users/will/code/a', '/opt/services/b']);
-    expect(roots).toEqual(['/Users/will/code/a', '/opt/services/b']);
+    // Alphabetical, not by code point: the user reads this list to say where
+    // each root went, so `/opt` sorting before `/Users` is the point.
+    expect(roots).toEqual(['/opt/services/b', '/Users/will/code/a']);
   });
 
   test('a directory that is itself a parent of another stops the descent', () => {

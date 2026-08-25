@@ -1451,7 +1451,8 @@ body {
   margin-bottom: 16px;
 }
 
-.settings-row label {
+.settings-row label,
+.settings-row .settings-row-label {
   min-width: 150px;
   flex-shrink: 0;
   color: #888;

@@ -1,6 +1,24 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Session, SessionState, DEFAULT_SESSION_PROVIDER } from '../../shared/types';
 
+/**
+ * Apply a hook's state change to the list. Lifted out of the effect because
+ * the update is a pure function of the previous list — and because nesting it
+ * four callbacks deep made it hard to see that it only touches one row.
+ */
+function applyStateChange(
+  sessions: Session[],
+  sessionId: string,
+  state: SessionState,
+  timestampSeconds: number,
+): Session[] {
+  return sessions.map(s =>
+    s.id === sessionId
+      ? { ...s, state, lastActivityAt: new Date(timestampSeconds * 1000) }
+      : s
+  );
+}
+
 export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -34,11 +52,7 @@ export function useSessions() {
         return;
       }
 
-      setSessions(prev => prev.map(s =>
-        s.id === event.sessionId
-          ? { ...s, state: event.state as SessionState, lastActivityAt: new Date(event.timestamp * 1000) }
-          : s
-      ));
+      setSessions(prev => applyStateChange(prev, event.sessionId, event.state as SessionState, event.timestamp));
     });
 
     // Reload the list when a session is created remotely (relay / mobile) so the
