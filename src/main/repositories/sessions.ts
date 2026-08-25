@@ -7,11 +7,10 @@ export function sessionExists(id: string): boolean {
   return !!row;
 }
 
-export function getAllSessions(): Session[] {
-  const db = getDatabase();
-  const rows = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
-
-  return rows.map(row => ({
+/** sessions row → domain object. Shared so a single-row lookup and the full
+ *  listing cannot drift in how they read the same columns. */
+function mapSessionRow(row: any): Session {
+  return {
     id: row.id,
     groupId: row.group_id,
     name: row.name,
@@ -28,12 +27,27 @@ export function getAllSessions(): Session[] {
     provider: row.provider ?? 'claude',
     failoverFromAccountId: row.failover_from_account_id ?? null,
     failoverPrevAccountId: row.failover_prev_account_id ?? null,
-  }));
+  };
 }
 
-/** One session by id, or null. Same row mapping as getAllSessions. */
+export function getAllSessions(): Session[] {
+  const db = getDatabase();
+  const rows = db.prepare('SELECT * FROM sessions ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
+  return rows.map(mapSessionRow);
+}
+
+/**
+ * One session by id, or null.
+ *
+ * Hits the primary key rather than loading the table and filtering: the
+ * failover and fail-back sweeps call this per session, on the main process,
+ * and "there are only tens of rows" is a reason it wasn't slow, not a reason
+ * for the query to say something other than what it means.
+ */
 export function getSession(id: string): Session | null {
-  return getAllSessions().find(session => session.id === id) ?? null;
+  const db = getDatabase();
+  const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id);
+  return row ? mapSessionRow(row) : null;
 }
 
 export function createSession(session: Session): void {

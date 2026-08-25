@@ -35,7 +35,7 @@ import ErrorBoundary from './components/ErrorBoundary';
  * one up whenever it is next started; restarting it here would start a session
  * the user had deliberately ended.
  */
-function respawnable(sessionIds: string[], sessions: Session[]): string[] {
+export function respawnable(sessionIds: string[], sessions: Session[]): string[] {
   const stopped = new Set(
     sessions.filter(session => session.state === 'stopped').map(session => session.id)
   );

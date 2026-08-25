@@ -112,9 +112,19 @@ export function handleUsageLimit(report: UsageLimitReport): AccountFailoverEvent
   // the one session we have direct evidence about.
   stranded.add(report.sessionId);
 
+  // Per-session, because a throw here used to cost more than the session it
+  // came from. handleUsageLimit's caller catches, so one failing move meant
+  // publishFailover was never reached for ANY of them: the sessions already
+  // reassigned stayed reassigned in the database, the renderer never got its
+  // refresh, no pty was respawned onto the new account, and nothing was said.
+  // The failure of one session is now worth exactly one session.
   const sessionIds: string[] = [];
   for (const sessionId of stranded) {
-    if (moveSession(sessionId, from, to)) sessionIds.push(sessionId);
+    try {
+      if (moveSession(sessionId, from, to)) sessionIds.push(sessionId);
+    } catch (err) {
+      log.error(`[Failover] Could not move ${sessionId} off ${from.label}:`, err);
+    }
   }
 
   log.info(

@@ -40,6 +40,12 @@ const prefsModule = () => ({
 });
 mock.module('../repositories/preferences', prefsModule);
 
+const realAccountSwitch = await import('../account-switch');
+// A direct function reference, captured before anything re-mocks the module.
+// `realAccountSwitch.assignSessionAccount` is a LIVE binding: read after
+// mock.module it resolves to the mock, so a mock that reached through the
+// namespace to reach "the real one" would call itself until the stack died.
+const realAssignSessionAccount = realAccountSwitch.assignSessionAccount;
 const failover = await import('../account-failover');
 const accountsRepo = await import('../repositories/accounts');
 const sessionsRepo = await import('../repositories/sessions');
@@ -440,5 +446,114 @@ describe('cooldown bookkeeping', () => {
 
     accountsRepo.setFallbackOrder(['c', 'a', 'b']);
     expect(accountsRepo.getAccountsInFallbackOrder().map(a => a.id)).toEqual(['c', 'a', 'b']);
+  });
+});
+
+/**
+ * The desktop notification's wording.
+ *
+ * Tested for the same failure its in-window counterpart is: a sentence that
+ * claims sessions moved when none did. The notification is the harder case of
+ * the two — it is often the only account of the switch a user ever sees, since
+ * the window may be behind something when it fires.
+ */
+describe('describeFailover', () => {
+  const account = (id: string, label: string) => ({ id, label } as any);
+
+  test('names the new account and how many sessions moved', () => {
+    const { title, body } = failover.describeFailover({
+      reason: 'limit',
+      from: account('a', 'Personal'),
+      to: account('b', 'Work'),
+      sessionIds: ['s1', 's2'],
+      resetAt: null,
+    });
+    expect(title).toContain('Work');
+    expect(body).toContain('Personal');
+    expect(body).toContain('2 sessions moved to Work');
+  });
+
+  test('never claims a move when there was nowhere to go', () => {
+    const { body } = failover.describeFailover({
+      reason: 'limit',
+      from: account('a', 'Personal'),
+      to: null,
+      sessionIds: [],
+      resetAt: null,
+      blocked: 'no-healthy-account',
+    });
+    expect(body).toContain('No other account is available');
+    expect(body).not.toContain('moved to');
+  });
+
+  test('never claims a move when the user switched failover off', () => {
+    const { body } = failover.describeFailover({
+      reason: 'limit',
+      from: account('a', 'Personal'),
+      to: null,
+      sessionIds: [],
+      resetAt: null,
+      blocked: 'disabled',
+    });
+    expect(body).toContain('Automatic failover is off');
+    expect(body).not.toContain('moved to');
+  });
+
+  test('reads as a return on the way home', () => {
+    const { title, body } = failover.describeFailover({
+      reason: 'failback',
+      from: account('b', 'Work'),
+      to: account('a', 'Personal'),
+      sessionIds: ['s1'],
+      resetAt: null,
+    });
+    expect(title).toContain('Personal');
+    expect(body).toContain('1 session returned');
+  });
+});
+
+/**
+ * One session failing to move must cost exactly one session.
+ *
+ * This is not a hypothetical tidy-up. handleUsageLimit's caller catches, so a
+ * throw part-way through the loop used to mean publishFailover was never
+ * reached for ANY of them: the sessions already reassigned stayed reassigned in
+ * the database, the renderer never got its refresh, no pty was respawned onto
+ * the new account, and the user was told nothing — while their sessions went on
+ * billing the account that had just run dry.
+ */
+describe('a session that cannot be moved', () => {
+  test('does not silence the switch for the ones that can', () => {
+    addAccount('primary', 0, true);
+    addAccount('backup', 1);
+    addGroup('g');
+    addSession('bad', 'g', 'primary');
+    addSession('s1', 'g', 'primary');
+
+    mock.module('../account-switch', () => ({
+      assignSessionAccount: (sessionId: string, accountId: string | null) => {
+        if (sessionId === 'bad') throw new Error('assign blew up');
+        return realAssignSessionAccount(sessionId, accountId);
+      },
+    }));
+
+    try {
+      // 'bad' is iterated first, so the throw lands before the good move.
+      const event = failover.handleUsageLimit({
+        sessionId: 's1',
+        accountId: 'primary',
+        resetAt: null,
+        liveAccounts: live({ bad: 'primary', s1: 'primary' }),
+      });
+
+      expect(event).not.toBeNull();
+      expect(event!.sessionIds).toEqual(['s1']);
+      expect(event!.to!.id).toBe('backup');
+      expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('backup');
+      // The one that threw is left where it was, not half-moved.
+      expect(sessionsRepo.getSession('bad')!.claudeAccountId).toBe('primary');
+    } finally {
+      mock.module('../account-switch', () => ({ assignSessionAccount: realAssignSessionAccount }));
+    }
   });
 });

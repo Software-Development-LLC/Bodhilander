@@ -36,9 +36,13 @@ export const CLAUDE_USAGE_LIMIT_PATTERNS: readonly RegExp[] = [
  * indistinguishable from the CLI's own chrome — so the check is for the shape
  * of quoted code and prose, not for a trusted source.
  *
- * It cannot be complete, and does not have to be: everything it misses is
- * still bounded downstream, where failover refuses to fire twice for the same
- * account inside a short window and never targets an account already cooling.
+ * It cannot be complete. What actually bounds what it misses is narrower than
+ * it might look, and worth stating exactly: a pty reports at most once in its
+ * life, failover never targets an account already cooling down, and a move is
+ * idempotent because assigning a session to the account it is already on
+ * reports nothing to restart. There is deliberately NO per-account debounce —
+ * two ptys on the same account can each report the same limit, and both
+ * reports are real. Do not read a protection here that isn't written down.
  */
 const QUOTED_MARKERS: readonly RegExp[] = [
   /\/[gimsuy]*,\s*$/,        // trailing regex-literal flags, e.g. `/i,`

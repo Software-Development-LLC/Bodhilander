@@ -321,18 +321,6 @@ export interface ClaudeAccount {
 }
 
 /**
- * An account and whether it can take work right now (#207). `limitedUntil` in
- * the past is not a limited account — nothing sweeps the column on a timer, so
- * expiry is decided at read time and every reader must agree on that. Hence
- * this shape rather than each caller re-deriving it from the raw column.
- */
-export interface AccountHealth {
-  account: ClaudeAccount;
-  /** False only while a recorded limit is still in force. */
-  healthy: boolean;
-}
-
-/**
  * One automatic account switch (#207), reported to the renderer so it can
  * respawn the ptys and say what happened.
  *
