@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -19,6 +19,8 @@ interface ElectronAPI {
   onPtyData: (callback: (id: string, data: string) => void) => () => void;
   onPtyExit: (callback: (id: string, exitCode: number) => void) => () => void;
   onPtyResize: (callback: (id: string, cols: number, rows: number) => void) => () => void;
+  /** A guest asked to be fitted to their screen — a request the owner answers. */
+  onRelayResizeRequest: (callback: (request: RelayResizeRequest) => void) => () => void;
   onStateChange: (callback: (event: { sessionId: string; state: string; event: string; timestamp: number }) => void) => () => void;
   onSessionsRefresh: (callback: () => void) => () => void;
   onGroupsRefresh: (callback: () => void) => () => void;

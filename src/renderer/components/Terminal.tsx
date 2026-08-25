@@ -2,8 +2,9 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { WebglAddon } from 'xterm-addon-webgl';
-import { ProviderInstallHint } from '../../shared/types';
+import { ProviderInstallHint, RelayResizeRequest } from '../../shared/types';
 import { ProviderInstallModal } from './ProviderInstallModal';
+import { KEEP_MY_SIZE, RESIZE_ONCE, resizeRequestCopy, shouldPrompt } from './resizeRequestPrompt';
 // The keyboard scheme lives in one place — see the table at the top of
 // useKeyboardShortcuts.ts. Importing the predicates (instead of re-deriving
 // them here) is what keeps the xterm allowlist and the app handler in sync.
@@ -93,6 +94,9 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // unrequested) from our own.
   const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const [mobileSize, setMobileSize] = useState<{ cols: number; rows: number } | null>(null);
+  // A guest asked to be fitted to their screen. Held until the owner answers:
+  // guests never resize this PTY themselves, so nothing has happened yet.
+  const [resizeRequest, setResizeRequest] = useState<RelayResizeRequest | null>(null);
 
   // Track isActive in a ref so handleResize (set up in the main effect which
   // does NOT depend on isActive) can skip background sessions without a layout
@@ -201,6 +205,30 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       }
     });
   }, [sessionId]);
+
+  // A guest asked for this session to be fitted to their screen. It is a
+  // request and only a request: it reaches a prompt, never the PTY.
+  useEffect(() => {
+    return window.electronAPI.onRelayResizeRequest((request) => {
+      if (!shouldPrompt(request, sessionId, desktopSizeRef.current)) return;
+      setResizeRequest(request);
+    });
+  }, [sessionId]);
+
+  // Once. The size this window asks for on its next fit is unchanged, which is
+  // exactly what "Resize once" promises — and the mobile-resize banner that
+  // follows is the standing offer to take it back.
+  const acceptResizeRequest = useCallback(() => {
+    const request = resizeRequest;
+    setResizeRequest(null);
+    if (!request) return;
+    try { xtermRef.current?.resize(request.cols, request.rows); } catch { /* disposed */ }
+    window.electronAPI.resizeSession(sessionId, request.cols, request.rows);
+  }, [resizeRequest, sessionId]);
+
+  // Declining tells the guest nothing and changes nothing: their view stays
+  // exactly as it was, and they may ask again later.
+  const declineResizeRequest = useCallback(() => setResizeRequest(null), []);
 
   // Surface provider launch failures (spawn ENOENT / command not found)
   // detected by main for this session's pty.
@@ -882,6 +910,17 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         className="terminal-container"
         onContextMenu={handleContextMenu}
       />
+      {resizeRequest && (
+        <div className="resize-request-banner" role="status">
+          <span className="resize-request-text">
+            👀 {resizeRequestCopy(resizeRequest, desktopSizeRef.current)}
+          </span>
+          <div className="resize-request-actions">
+            <button className="primary" onClick={acceptResizeRequest}>{RESIZE_ONCE}</button>
+            <button onClick={declineResizeRequest}>{KEEP_MY_SIZE}</button>
+          </div>
+        </div>
+      )}
       {mobileSize && (
         <div className="mobile-resize-banner">
           <span className="mobile-resize-banner-text">
