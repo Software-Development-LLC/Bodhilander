@@ -89,7 +89,7 @@ export function readQuotaLimit(
  */
 function parseEntry(line: string, since?: Date): QuotaLimitHit | null {
   const trimmed = line.trim();
-  if (!trimmed || !trimmed.includes('"quotaLimits"')) return null;
+  if (!trimmed.includes('"quotaLimits"')) return null;
 
   let entry: any;
   try {
