@@ -78,11 +78,19 @@ describe('the container', () => {
   });
 });
 
-describe('the preference exclusion policy', () => {
+describe('the preference portability policy', () => {
+  // These used to be 'theme', 'soundEnabled', 'betaChannel' and 'apiPort' —
+  // none of which this app has ever written. The assertion passed under the
+  // old denylist for the same reason any unknown string did, so it proved
+  // nothing about real settings. They are real keys now (#227).
   test('keeps the ordinary settings a user would want back', () => {
-    for (const key of ['theme', 'closeToTray', 'soundEnabled', 'betaChannel', 'apiPort']) {
+    for (const key of ['fontSize', 'closeToTray', 'soundVolume', 'updateChannel', 'webglRenderer']) {
       expect(isPortablePreferenceKey(key)).toBe(true);
     }
+  });
+
+  test('a key nobody has classified stays home instead of travelling', () => {
+    expect(isPortablePreferenceKey('somePreferenceAddedLater')).toBe(false);
   });
 
   test('refuses every safeStorage-sealed key', () => {
