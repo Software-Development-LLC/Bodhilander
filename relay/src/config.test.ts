@@ -22,6 +22,14 @@ describe('handoff storage limits', () => {
     expect(loadConfig({ ...BASE, HANDOFF_DIR: '/elsewhere' }).config.handoffDir).toBe('/elsewhere');
   });
 
+  test('refuse an in-memory database with nowhere named to put the bundles', () => {
+    // There is no directory to sit beside, and the obvious stand-in — a fixed
+    // name under the system temp directory — is a world-writable path holding
+    // other people's sealed bundles. Say so instead of picking it.
+    expect(() => loadConfig({ ...BASE, DB_PATH: ':memory:' })).toThrow(ConfigError);
+    expect(loadConfig({ ...BASE, DB_PATH: ':memory:', HANDOFF_DIR: '/elsewhere' }).config.handoffDir).toBe('/elsewhere');
+  });
+
   test('are overridable per deployment', () => {
     const { config } = loadConfig({ ...BASE, HANDOFF_TTL_SECONDS: '3600', HANDOFF_MAX_BYTES: '1048576' });
     expect(config.handoffTtlSeconds).toBe(3600);

@@ -6,7 +6,6 @@
  * env map explicitly so tests can exercise it without touching `process.env`.
  */
 
-import os from 'node:os';
 import path from 'node:path';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -140,11 +139,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   const dbPath = env.DB_PATH ?? './data/relay.db';
   // Beside the database, which is what the deployment puts on a volume. An
-  // in-memory database has no directory to sit beside, so tests say where.
+  // in-memory database has no directory to sit beside, so the caller must say
+  // where — a fixed name under the system temp directory would be a
+  // world-writable path holding other people's sealed bundles, and one nobody
+  // chose. Every caller here already passes HANDOFF_DIR alongside `:memory:`.
   const handoffDir =
     env.HANDOFF_DIR ??
     (dbPath === ':memory:'
-      ? path.join(os.tmpdir(), 'bodhilander-relay-handoffs')
+      ? fail('HANDOFF_DIR must be set when DB_PATH is :memory:, since there is no database directory to sit beside')
       : path.join(path.dirname(path.resolve(dbPath)), 'handoffs'));
 
   return {
