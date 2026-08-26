@@ -84,6 +84,8 @@ function main(): void {
       // its own record, so nothing dropped here is the audit trail.
       const shares = repos.purgeDeadShares();
       if (shares > 0) logger.debug('reaped dead shares', { count: shares });
+      const handoffs = repos.purgeExpiredHandoffBundles();
+      if (handoffs > 0) logger.debug('reaped expired handoffs', { count: handoffs });
       rateLimiter.sweep();
       if (codes > 0) logger.debug('reaped expired link codes', { count: codes });
       // Only non-zero when someone is holding MAX_WINDOWS buckets at their

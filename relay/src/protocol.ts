@@ -238,3 +238,57 @@ export function parseCertificate(cert: unknown): ParsedCertificate | null {
 
   return { payload, signature, parts };
 }
+
+// --- machine handoff ---
+
+/**
+ * The four verbs a linked machine may sign to reach its user's handoff slot.
+ * One version string each: a signature captured off a download must not be
+ * replayable as the delete that throws the bundle away.
+ */
+export const HANDOFF_PUT_VERSION = 'handoff-put:v1';
+export const HANDOFF_META_VERSION = 'handoff-meta:v1';
+export const HANDOFF_GET_VERSION = 'handoff-get:v1';
+export const HANDOFF_DELETE_VERSION = 'handoff-delete:v1';
+
+/**
+ * Covers a digest declared in a header, not the ciphertext: the relay can then
+ * refuse an unsigned upload before buffering the body, and refuse a body whose
+ * hash is not the digest it verified.
+ */
+export function buildHandoffPutMessage(p: {
+  machineId: string;
+  ciphertextSha256Hex: string;
+  issuedAt: number;
+}): Uint8Array {
+  const line = [HANDOFF_PUT_VERSION, p.machineId, p.ciphertextSha256Hex, String(p.issuedAt)].join('\n');
+  return new TextEncoder().encode(line);
+}
+
+export function buildHandoffMetaMessage(p: { machineId: string; issuedAt: number }): Uint8Array {
+  return new TextEncoder().encode([HANDOFF_META_VERSION, p.machineId, String(p.issuedAt)].join('\n'));
+}
+
+export function buildHandoffGetMessage(p: { machineId: string; issuedAt: number }): Uint8Array {
+  return new TextEncoder().encode([HANDOFF_GET_VERSION, p.machineId, String(p.issuedAt)].join('\n'));
+}
+
+/**
+ * Binds the bundle id, so an acknowledgement of the bundle a machine restored
+ * cannot delete a newer one the source machine prepared in the meantime.
+ */
+export function buildHandoffDeleteMessage(p: {
+  machineId: string;
+  handoffId: string;
+  issuedAt: number;
+}): Uint8Array {
+  const line = [HANDOFF_DELETE_VERSION, p.machineId, p.handoffId, String(p.issuedAt)].join('\n');
+  return new TextEncoder().encode(line);
+}
+
+/** Headers carrying the signature, so the same scheme covers GET and DELETE. */
+export const HANDOFF_SIGNATURE_HEADER = 'x-bodhi-signature';
+export const HANDOFF_ISSUED_AT_HEADER = 'x-bodhi-issued-at';
+export const HANDOFF_DIGEST_HEADER = 'x-bodhi-content-sha256';
+/** Named on the bundle response, so the acknowledgement cannot name another. */
+export const HANDOFF_ID_HEADER = 'x-bodhi-handoff-id';

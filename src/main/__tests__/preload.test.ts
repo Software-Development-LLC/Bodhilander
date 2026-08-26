@@ -133,6 +133,26 @@ describe('the import/export bridge', () => {
     expect(lastInvocation().channel).toBe('import:fromClaudeLander');
   });
 
+  test('exposes the four steps of a handoff, on the channels index.ts registers', () => {
+    for (const name of ['handoffPrepare', 'handoffPeek', 'handoffRestore', 'handoffDecline']) {
+      expect(typeof exposed[name]).toBe('function');
+    }
+
+    call('handoffPrepare');
+    expect(lastInvocation().channel).toBe('handoff:prepare');
+
+    call('handoffPeek');
+    expect(lastInvocation().channel).toBe('handoff:peek');
+
+    call('handoffRestore', 'agent album alloy');
+    expect(lastInvocation().channel).toBe('handoff:restore');
+    expect(lastInvocation().args).toEqual(['agent album alloy']);
+
+    call('handoffDecline', 'handoff-1');
+    expect(lastInvocation().channel).toBe('handoff:decline');
+    expect(lastInvocation().args).toEqual(['handoff-1']);
+  });
+
   test('the folder picker forwards the directory it should open at', () => {
     call('selectDirectory', '/some/where');
 

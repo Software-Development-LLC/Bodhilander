@@ -199,7 +199,7 @@ async function exportPortableJson(): Promise<ExportResult> {
  * Null means the user abandoned the import; an empty answer for one root is
  * allowed and leaves those paths as they were.
  */
-async function askRootMappings(roots: string[]): Promise<WorkingDirMapping[] | null> {
+export async function askRootMappings(roots: string[]): Promise<WorkingDirMapping[] | null> {
   const mappings: WorkingDirMapping[] = [];
 
   for (const root of roots) {
@@ -232,7 +232,7 @@ async function askRootMappings(roots: string[]): Promise<WorkingDirMapping[] | n
  * Hooks are what make a session report its state. Registering them only at
  * window creation left every restored account silent until the next launch.
  */
-function registerRestoredAccountHooks(): void {
+export function registerRestoredAccountHooks(): void {
   for (const account of accountsRepo.getAllAccounts()) {
     const result = registerHooks(account.configDir);
     if (!result.success) {

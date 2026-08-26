@@ -18,6 +18,10 @@ export interface RelayConfig {
   /** Extra allowed web origins; empty = same-origin only. */
   allowedOrigins: string[];
   linkCodeTtlSeconds: number;
+  /** How long a prepared machine handoff stays available to be restored. */
+  handoffTtlSeconds: number;
+  /** Ceiling on one handoff's sealed bytes. Larger states move by file instead. */
+  handoffMaxBytes: number;
   /** GitHub OAuth app credentials — consumed in M2, optional for now. */
   githubClientId: string | null;
   githubClientSecret: string | null;
@@ -115,6 +119,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ? parsePositiveInt('LINK_CODE_TTL_SECONDS', env.LINK_CODE_TTL_SECONDS)
     : 600;
 
+  const handoffTtlSeconds = env.HANDOFF_TTL_SECONDS
+    ? parsePositiveInt('HANDOFF_TTL_SECONDS', env.HANDOFF_TTL_SECONDS)
+    : 7 * 24 * 60 * 60;
+
+  const handoffMaxBytes = env.HANDOFF_MAX_BYTES
+    ? parsePositiveInt('HANDOFF_MAX_BYTES', env.HANDOFF_MAX_BYTES)
+    : 64 * 1024 * 1024;
+
   return {
     config: {
       port,
@@ -125,6 +137,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       trustProxy,
       allowedOrigins,
       linkCodeTtlSeconds,
+      handoffTtlSeconds,
+      handoffMaxBytes,
       githubClientId: env.GITHUB_CLIENT_ID || null,
       githubClientSecret: env.GITHUB_CLIENT_SECRET || null,
       allowedGithubOrg: env.ALLOWED_GITHUB_ORG?.trim() || null,

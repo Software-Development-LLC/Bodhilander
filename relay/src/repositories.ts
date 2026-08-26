@@ -140,6 +140,31 @@ export interface Repositories {
   listDeadShareGrants(): MachineGrant[];
   /** Expired or revoked grants and dead invites, dropped by the reaper. */
   purgeDeadShares(): number;
+
+  /** Store this user's handoff, replacing whatever they had prepared before. */
+  putHandoffBundle(input: PutHandoffInput): HandoffBundle;
+  /** The user's live handoff, or null when there is none or it has lapsed. */
+  getHandoffBundle(userId: string): HandoffBundle | null;
+  /** Drop the named handoff once its destination has restored from it. */
+  deleteHandoffBundle(userId: string, handoffId: string): boolean;
+  purgeExpiredHandoffBundles(): number;
+}
+
+export interface HandoffBundle {
+  id: string;
+  user_id: string;
+  source_machine_id: string;
+  ciphertext: Uint8Array;
+  byte_size: number;
+  created_at: number;
+  expires_at: number;
+}
+
+export interface PutHandoffInput {
+  userId: string;
+  sourceMachineId: string;
+  ciphertext: Uint8Array;
+  ttlSeconds: number;
 }
 
 export interface ShareInvite {
@@ -566,6 +591,55 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
         .query("DELETE FROM share_invites WHERE status != 'redeemed' AND expires_at <= ?")
         .run(ts);
       return Number(grants.changes ?? 0) + Number(invites.changes ?? 0);
+    },
+
+    putHandoffBundle(input) {
+      const ts = now();
+      const row: HandoffBundle = {
+        id: crypto.randomUUID(),
+        user_id: input.userId,
+        source_machine_id: input.sourceMachineId,
+        ciphertext: input.ciphertext,
+        byte_size: input.ciphertext.byteLength,
+        created_at: ts,
+        expires_at: ts + input.ttlSeconds * 1000,
+      };
+      // Upsert on the user, so preparing a second handoff replaces the first
+      // rather than leaving two claims on one slot. The id changes with it:
+      // a destination that declined the old bundle must be offered this one.
+      db.query(
+        `INSERT INTO handoff_bundles (id, user_id, source_machine_id, ciphertext, byte_size, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           id = excluded.id,
+           source_machine_id = excluded.source_machine_id,
+           ciphertext = excluded.ciphertext,
+           byte_size = excluded.byte_size,
+           created_at = excluded.created_at,
+           expires_at = excluded.expires_at`,
+      ).run(row.id, row.user_id, row.source_machine_id, toBuf(row.ciphertext), row.byte_size, row.created_at, row.expires_at);
+      return row;
+    },
+
+    getHandoffBundle(userId) {
+      // Filtered on expiry rather than trusted to the reaper, which runs every
+      // ten minutes — otherwise a lapsed bundle keeps being offered until it
+      // happens to be swept.
+      return (
+        (db
+          .query('SELECT * FROM handoff_bundles WHERE user_id = ? AND expires_at > ?')
+          .get(userId, now()) as HandoffBundle | null) ?? null
+      );
+    },
+
+    deleteHandoffBundle(userId, handoffId) {
+      const result = db.query('DELETE FROM handoff_bundles WHERE user_id = ? AND id = ?').run(userId, handoffId);
+      return Number(result.changes ?? 0) > 0;
+    },
+
+    purgeExpiredHandoffBundles() {
+      const result = db.query('DELETE FROM handoff_bundles WHERE expires_at <= ?').run(now());
+      return Number(result.changes ?? 0);
     },
   };
 }

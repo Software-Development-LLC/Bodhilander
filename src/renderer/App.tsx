@@ -7,6 +7,7 @@ import { OwnerConfirmModal, type PendingOwner } from './components/OwnerConfirmM
 import { ShareSessionModal } from './components/ShareSessionModal';
 import { GuestJoinRequestModal } from './components/GuestJoinRequestModal';
 import { SettingsModal, SettingsTab } from './components/SettingsModal';
+import { HandoffRestoreOffer } from './components/MachineHandoff';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
 import { SessionRow } from './components/SessionRow';
@@ -1909,6 +1910,9 @@ const App: React.FC = () => {
         initialTab={settingsInitialTab}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {/* Raised once when this account has state waiting from another machine. */}
+      <HandoffRestoreOffer onRestored={() => window.location.reload()} />
 
       {/* Destructive action confirmation dialog */}
       {confirmAction && (

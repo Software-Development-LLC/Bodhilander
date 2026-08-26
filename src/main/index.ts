@@ -24,6 +24,12 @@ import * as accountSwitch from './account-switch';
 import * as accountFailover from './account-failover';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
+import {
+  declineMachineHandoff,
+  prepareMachineHandoff,
+  readHandoffOffer,
+  restoreMachineHandoff,
+} from './machine-handoff';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
@@ -1027,6 +1033,14 @@ safeHandle('export:sessions', (format: ExportFormat, since?: string) =>
 safeHandle('export:groups', () => exportGroupsAndSessions());
 safeHandle('import:groups', () => importGroupsAndSessions());
 safeHandle('import:fromClaudeLander', () => importFromClaudeLander());
+
+// Machine handoff, over the relay rather than a file
+safeHandle('handoff:prepare', () => prepareMachineHandoff(getRelayClient().handoffTransport()));
+safeHandle('handoff:peek', () => readHandoffOffer(getRelayClient().handoffTransport()));
+safeHandle('handoff:restore', (phrase: string) =>
+  restoreMachineHandoff(getRelayClient().handoffTransport(), phrase)
+);
+safeHandle('handoff:decline', (handoffId: string) => declineMachineHandoff(handoffId));
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {
