@@ -219,8 +219,17 @@ function writeConfigFile(configDir: string, name: string, contents: unknown): vo
   fs.writeFileSync(path.join(configDir, name), JSON.stringify(contents));
 }
 
-/** fs.watch delivers asynchronously, so the assertion has to outlast it. */
-async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+/**
+ * fs.watch delivers asynchronously, so the assertion has to outlast it. This
+ * ceiling must stay below the per-test timeout the watch-driven tests declare,
+ * or the two race and a real failure reports a bare timeout instead of the
+ * message below, which says what was actually being waited on.
+ */
+const WATCH_TIMEOUT_MS = 15_000;
+/** Per-test ceiling for the watch-driven tests; must exceed WATCH_TIMEOUT_MS. */
+const WATCH_TEST_TIMEOUT_MS = 20_000;
+
+async function waitFor(predicate: () => boolean, timeoutMs = WATCH_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return;
@@ -273,7 +282,7 @@ describe('login detection', () => {
     expect(fs.existsSync(path.join(account.configDir, '.credentials.json'))).toBe(false);
 
     accountAuth.cancelLoginFlow(pty, ptyId, false);
-  });
+  }, WATCH_TEST_TIMEOUT_MS);
 
   test('a token file appearing still completes the flow', async () => {
     const pty = fakePtyManager();
@@ -285,7 +294,7 @@ describe('login detection', () => {
     await waitFor(() => storedEmail(account.id) === 'will@linux.test');
 
     accountAuth.cancelLoginFlow(pty, ptyId, false);
-  });
+  }, WATCH_TEST_TIMEOUT_MS);
 
   test('the manual confirmation records the email the watch would have', async () => {
     const pty = fakePtyManager();

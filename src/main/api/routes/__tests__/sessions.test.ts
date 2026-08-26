@@ -78,6 +78,19 @@ function insertSession(id: string, workingDir = '/tmp'): void {
   `).run(id, workingDir);
 }
 
+/**
+ * Wait until `predicate` holds rather than for a fixed number of milliseconds.
+ * This one waits for an in-flight fetch to reach the route. The deadline is a
+ * backstop; it returns as soon as the condition holds, and missing it fails on
+ * the assertion that follows rather than on a bare timeout.
+ */
+async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
+
 function sessionRowCount(id: string): number {
   return (db.prepare('SELECT COUNT(*) AS c FROM sessions WHERE id = ?').get(id) as { c: number }).c;
 }
@@ -137,7 +150,8 @@ describe('POST /sessions/:id/stop', () => {
     const pending = fetch(`${baseUrl}/sessions/${id}/stop`, { method: 'POST' });
     let settled = false;
     const tracked = pending.then((r) => { settled = true; return r; });
-    await new Promise((r) => setTimeout(r, 25));
+    // Wait for the route to actually ask for the kill, not for 25ms and hope.
+    await until(() => killCalls.length > 0);
     // The kill has been asked for but has not settled: no response yet, so
     // success can only ever mean the process is really gone.
     expect(killCalls).toEqual([id]);

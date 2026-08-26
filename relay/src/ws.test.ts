@@ -10,6 +10,15 @@ import { toArrayBuffer } from './crypto';
 const logger = createLogger('error');
 const b64 = (b: Uint8Array) => Buffer.from(b).toString('base64');
 
+/**
+ * Auth window for the reaper tests. Large enough that a loaded machine can
+ * finish a real handshake inside it, since a window the handshake cannot meet
+ * tests the machine's speed rather than the reaper.
+ */
+const REAPER_WINDOW_MS = 500;
+/** How far past the window a disarmed socket must survive to prove the point. */
+const REAPER_MARGIN_MS = 300;
+
 function startServer(repos: Repositories, authTimeoutMs?: number) {
   const gateway = createGateway({ repos, logger, authTimeoutMs });
   return Bun.serve({
@@ -213,12 +222,14 @@ describe('agent WebSocket handshake', () => {
   });
 
   test('answering the challenge disarms the reaper', async () => {
-    // The mirror of the test above: with a 50ms timeout, an authenticated
-    // socket that stays quiet well past it must still be alive. Without the
-    // clearTimeout in the auth path this fails.
+    // The mirror of the test above: an authenticated socket that stays quiet
+    // well past the timeout must still be alive. Without the clearTimeout in
+    // the auth path this fails. The window has to outlast the handshake it is
+    // disarmed by — a connect, a challenge round-trip and a signature — or the
+    // reaper fires first and the test measures the machine, not the reaper.
     const repos = freshRepos();
     const { pub, sign, machineId } = await registerMachine(repos);
-    const server = startServer(repos, 50);
+    const server = startServer(repos, REAPER_WINDOW_MS);
     try {
       const c = connect(`ws://127.0.0.1:${server.port}/ws`);
       await c.opened;
@@ -229,7 +240,7 @@ describe('agent WebSocket handshake', () => {
 
       // Prove liveness after the window rather than sleeping blind: a ping
       // round-trip that completes can only happen on an open socket.
-      await Bun.sleep(120);
+      await Bun.sleep(REAPER_WINDOW_MS + REAPER_MARGIN_MS);
       c.ws.send(JSON.stringify({ type: 'ping' }));
       expect(await c.nextOfType('pong')).toMatchObject({ type: 'pong' });
     } finally {

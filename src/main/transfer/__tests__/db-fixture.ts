@@ -214,7 +214,10 @@ export function seedSecrets(db: Database): void {
   pref.run('customShellPath', SECRET_VALUES.customShellPath);
   pref.run('preferredEditor', SECRET_VALUES.preferredEditor);
   pref.run('soundWaitingCustomPath', SECRET_VALUES.soundPath);
-  pref.run('theme', 'dark');
+  // A real portable key. This fixture used to seed 'theme', which is not a
+  // preference this app has ever written — so the tests asserting it travelled
+  // were asserting about a key that does not exist (#227).
+  pref.run('fontSize', '14');
   pref.run('closeToTray', 'true');
 
   db.prepare(
