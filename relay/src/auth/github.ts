@@ -58,7 +58,8 @@ export async function exchangeCodeForProfile(
   if (!tokenRes.ok) throw new GithubOAuthError(`token endpoint returned ${tokenRes.status}`);
   const tokenJson = (await tokenRes.json()) as { access_token?: string; error?: string };
   if (!tokenJson.access_token) {
-    throw new GithubOAuthError(`no access_token in response${tokenJson.error ? `: ${tokenJson.error}` : ''}`);
+    const detail = tokenJson.error ? `: ${tokenJson.error}` : '';
+    throw new GithubOAuthError(`no access_token in response${detail}`);
   }
   const token = tokenJson.access_token;
 
