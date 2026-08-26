@@ -6,6 +6,9 @@
  * env map explicitly so tests can exercise it without touching `process.env`.
  */
 
+import os from 'node:os';
+import path from 'node:path';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface RelayConfig {
@@ -20,11 +23,12 @@ export interface RelayConfig {
   linkCodeTtlSeconds: number;
   /** How long a prepared machine handoff stays available to be restored. */
   handoffTtlSeconds: number;
-  /**
-   * Ceiling on one handoff's sealed bytes, and with it the request body Bun
-   * will accept. Larger states move by file instead.
-   */
+  /** Ceiling on one handoff's sealed bytes. */
   handoffMaxBytes: number;
+  /** Where sealed bundles are written. Beside the database, so it is on the volume. */
+  handoffDir: string;
+  /** Ceiling on the whole store, so one machine's cap is not the disk's. */
+  handoffStoreMaxBytes: number;
   /** GitHub OAuth app credentials — consumed in M2, optional for now. */
   githubClientId: string | null;
   githubClientSecret: string | null;
@@ -128,13 +132,26 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   const handoffMaxBytes = env.HANDOFF_MAX_BYTES
     ? parsePositiveInt('HANDOFF_MAX_BYTES', env.HANDOFF_MAX_BYTES)
-    : 16 * 1024 * 1024;
+    : 256 * 1024 * 1024;
+
+  const handoffStoreMaxBytes = env.HANDOFF_STORE_MAX_BYTES
+    ? parsePositiveInt('HANDOFF_STORE_MAX_BYTES', env.HANDOFF_STORE_MAX_BYTES)
+    : 8 * 1024 * 1024 * 1024;
+
+  const dbPath = env.DB_PATH ?? './data/relay.db';
+  // Beside the database, which is what the deployment puts on a volume. An
+  // in-memory database has no directory to sit beside, so tests say where.
+  const handoffDir =
+    env.HANDOFF_DIR ??
+    (dbPath === ':memory:'
+      ? path.join(os.tmpdir(), 'bodhilander-relay-handoffs')
+      : path.join(path.dirname(path.resolve(dbPath)), 'handoffs'));
 
   return {
     config: {
       port,
       publicUrl,
-      dbPath: env.DB_PATH ?? './data/relay.db',
+      dbPath,
       sessionSecret,
       logLevel,
       trustProxy,
@@ -142,6 +159,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       linkCodeTtlSeconds,
       handoffTtlSeconds,
       handoffMaxBytes,
+      handoffDir,
+      handoffStoreMaxBytes,
       githubClientId: env.GITHUB_CLIENT_ID || null,
       githubClientSecret: env.GITHUB_CLIENT_SECRET || null,
       allowedGithubOrg: env.ALLOWED_GITHUB_ORG?.trim() || null,

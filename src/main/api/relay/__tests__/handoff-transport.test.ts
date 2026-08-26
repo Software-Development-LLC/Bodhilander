@@ -3,8 +3,11 @@
  * router. Both trees build these signed lines from their own copy of the
  * format, so a divergence is only visible where both are present.
  */
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { createHandoffTransport } from '../handoff-transport';
 import { openHandoff, sealHandoff } from '../../../transfer/handoff-crypto';
 import { loadConfig } from '../../../../../relay/src/config';
@@ -25,10 +28,17 @@ function identity() {
   };
 }
 
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function relay(env: Record<string, string> = {}) {
   const db = openDb(':memory:');
   const repos = createRepositories(db);
-  const { config } = loadConfig({ NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test', ...env });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'transport-handoff-'));
+  dirs.push(dir);
+  const { config } = loadConfig({ NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test', HANDOFF_DIR: dir, ...env });
   const route = createRouter({ config, logger, repos });
 
   const user = repos.upsertGithubUser({

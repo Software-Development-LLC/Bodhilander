@@ -7,6 +7,7 @@ import { createGateway, newAgentSocketData, newClientSocketData } from './ws';
 import { parseCookies, SESSION_COOKIE } from './auth/cookies';
 import { createRateLimiter } from './rate-limit';
 import { serveOptions } from './server';
+import { ORPHAN_GRACE_MS, purgeExpiredHandoffs, sweepOrphans } from './handoff-store';
 
 /** How often expired sessions / link codes / rate-limit windows are swept. */
 const REAP_INTERVAL_MS = 10 * 60 * 1000;
@@ -33,6 +34,17 @@ export function main() {
 
   const repos = createRepositories(db);
   const rateLimiter = createRateLimiter();
+
+  /** Files a crash stranded between writing one and recording it. */
+  const sweepHandoffOrphans = async (): Promise<void> => {
+    try {
+      const swept = await sweepOrphans(config.handoffDir, new Set(repos.listHandoffIds()), ORPHAN_GRACE_MS);
+      if (swept > 0) logger.warn('swept orphaned handoff files', { count: swept });
+    } catch (err) {
+      logger.error('handoff sweep failed', { err: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  void sweepHandoffOrphans();
   // The gateway is built first so the router can call into it. HTTP and
   // WebSocket are separate surfaces; these two callbacks are the only seam
   // between them, rather than a shared mutable table either side can corrupt.
@@ -85,8 +97,12 @@ export function main() {
       // its own record, so nothing dropped here is the audit trail.
       const shares = repos.purgeDeadShares();
       if (shares > 0) logger.debug('reaped dead shares', { count: shares });
-      const handoffs = repos.purgeExpiredHandoffBundles();
-      if (handoffs > 0) logger.debug('reaped expired handoffs', { count: handoffs });
+      void purgeExpiredHandoffs(repos, config.handoffDir)
+        .then((count) => {
+          if (count > 0) logger.debug('reaped expired handoffs', { count });
+        })
+        .catch((err) => logger.error('handoff purge failed', { err: String(err) }));
+      void sweepHandoffOrphans();
       rateLimiter.sweep();
       if (codes > 0) logger.debug('reaped expired link codes', { count: codes });
       // Only non-zero when someone is holding MAX_WINDOWS buckets at their

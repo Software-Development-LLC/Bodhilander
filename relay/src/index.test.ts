@@ -4,10 +4,13 @@
  * ceiling regressed once in exactly the gap between those two statements.
  */
 import { afterEach, expect, test } from 'bun:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { main } from './index';
 
 let running: { stop: () => Promise<void> } | null = null;
-const KEYS = ['NODE_ENV', 'PORT', 'DB_PATH', 'PUBLIC_URL', 'SESSION_SECRET', 'LOG_LEVEL'] as const;
+const KEYS = ['NODE_ENV', 'PORT', 'DB_PATH', 'PUBLIC_URL', 'SESSION_SECRET', 'LOG_LEVEL', 'HANDOFF_DIR'] as const;
 const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 
 afterEach(async () => {
@@ -33,6 +36,7 @@ test('the entry point serves at the shipped body ceiling', async () => {
     PUBLIC_URL: `http://127.0.0.1:${port}`,
     SESSION_SECRET: 'test-only-secret',
     LOG_LEVEL: 'error',
+    HANDOFF_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'relay-entry-')),
   });
 
   running = main();

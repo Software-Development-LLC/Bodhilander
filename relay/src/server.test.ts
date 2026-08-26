@@ -5,6 +5,9 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash, generateKeyPairSync, randomBytes, sign as edSign } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { loadConfig } from './config';
 import { createLogger } from './logger';
 import { openDb } from './db';
@@ -20,14 +23,18 @@ const REALISTIC_BUNDLE_BYTES = 5 * 1024 * 1024;
 const OLD_WIRE_CEILING = 1024 * 1024;
 
 const servers: { stop: (force?: boolean) => void }[] = [];
+const dirs: string[] = [];
 afterEach(() => {
   while (servers.length) servers.pop()!.stop(true);
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 function start(env: Record<string, string> = {}) {
   const db = openDb(':memory:');
   const repos = createRepositories(db);
-  const { config } = loadConfig({ NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test', ...env });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-serve-'));
+  dirs.push(dir);
+  const { config } = loadConfig({ NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test', HANDOFF_DIR: dir, ...env });
   const route = createRouter({ config, logger, repos });
 
   // The same two values index.ts hands Bun. Only the body ceiling is under
@@ -106,6 +113,31 @@ function postChunked(url: string, totalBytes: number, produced: { bytes: number 
 }
 
 describe('what the socket will accept', () => {
+  test('does not apply the ceiling to a body read as a stream', async () => {
+    // Load-bearing, and the reason `readJson` counts bytes itself rather than
+    // trusting this setting. If it ever starts failing, Bun changed.
+    const ceiling = 64 * 1024;
+    const server = Bun.serve({
+      port: 0,
+      maxRequestBodySize: ceiling,
+      async fetch(req) {
+        const reader = req.body!.getReader();
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+        }
+        return Response.json({ total });
+      },
+    });
+    servers.push(server);
+
+    const produced = { bytes: 0 };
+    const res = await postChunked(server.url.origin, ceiling * 8, produced);
+    expect(await res.json()).toEqual({ total: ceiling * 8 });
+  });
+
   test('admits a bundle from a real machine, which the old ceiling did not', async () => {
     const { config, put } = start();
     expect(REALISTIC_BUNDLE_BYTES).toBeGreaterThan(OLD_WIRE_CEILING);

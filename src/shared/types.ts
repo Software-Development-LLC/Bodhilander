@@ -535,7 +535,7 @@ export interface PortableImportResult {
  * `handoffMaxBytes` default so an oversized state is refused before it is
  * uploaded. A cross-tree test fails when the two drift apart.
  */
-export const HANDOFF_MAX_BYTES = 16 * 1024 * 1024;
+export const HANDOFF_MAX_BYTES = 256 * 1024 * 1024;
 
 /** A prepared handoff waiting on the relay, as the relay describes it. */
 export interface HandoffOffer {

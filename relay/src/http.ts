@@ -2,7 +2,7 @@ import pkg from '../package.json';
 import type { RelayConfig } from './config';
 import type { Logger } from './logger';
 import type { HandoffBundle, Machine, MachineGrant, Repositories, ShareInvite, User } from './repositories';
-import { fromBase64, randomToken, sha256Hex, timingSafeEqualHex, verifyEd25519 } from './crypto';
+import { fromBase64, randomToken, timingSafeEqualHex, verifyEd25519 } from './crypto';
 import {
   buildHandoffDeleteMessage,
   buildHandoffGetMessage,
@@ -35,6 +35,15 @@ import { createDevRoutes } from './dev';
 import { createWebClient } from './web';
 import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
 import { MAX_JSON_BODY_BYTES } from './server';
+import {
+  bundlePath,
+  commitHandoff,
+  discardHandoff,
+  handoffSize,
+  HandoffTooLarge,
+  removeHandoff,
+  writeHandoff,
+} from './handoff-store';
 
 /**
  * HTTP surface of the relay (M2), as a `fetch`-style handler for `Bun.serve`.
@@ -635,22 +644,51 @@ export function createRouter(ctx: RelayContext) {
       return json({ error: 'rate_limited' }, 429, { 'retry-after': String(perMachine.retryAfter) });
     }
 
-    const body = Buffer.from(await req.arrayBuffer());
-    if (body.byteLength === 0) return json({ error: 'invalid_request' }, 400);
-    if (body.byteLength > config.handoffMaxBytes) {
-      return json({ error: 'handoff_too_large', maxBytes: config.handoffMaxBytes }, 413);
-    }
-    // Ties the bytes that arrived to the digest the signature covered.
-    if (!timingSafeEqualHex(sha256Hex(body), digest)) return json({ error: 'digest_mismatch' }, 400);
+    const body = req.body;
+    if (!body) return json({ error: 'invalid_request' }, 400);
 
-    const stored = repos.putHandoffBundle({
+    // One user's cap is not the disk's. Checked against what the caller says
+    // it will send, and again below against what it actually sent.
+    const held = repos.totalHandoffBytes(auth.machine.user_id);
+    const tooFull = (size: number) => held + size > config.handoffStoreMaxBytes;
+    if (declared && tooFull(Number(declared))) return json({ error: 'store_full' }, 507);
+
+    const id = crypto.randomUUID();
+    let written;
+    try {
+      written = await writeHandoff(config.handoffDir, id, body, config.handoffMaxBytes);
+    } catch (err) {
+      if (err instanceof HandoffTooLarge) {
+        return json({ error: 'handoff_too_large', maxBytes: config.handoffMaxBytes }, 413);
+      }
+      throw err;
+    }
+
+    // Nothing written is the live bundle until every one of these passes.
+    if (written.bytes === 0) {
+      await discardHandoff(config.handoffDir, id);
+      return json({ error: 'invalid_request' }, 400);
+    }
+    if (!timingSafeEqualHex(written.sha256, digest)) {
+      await discardHandoff(config.handoffDir, id);
+      return json({ error: 'digest_mismatch' }, 400);
+    }
+    if (tooFull(written.bytes)) {
+      await discardHandoff(config.handoffDir, id);
+      return json({ error: 'store_full' }, 507);
+    }
+
+    await commitHandoff(config.handoffDir, id);
+    const { row, previousId } = repos.putHandoffBundle({
+      id,
       userId: auth.machine.user_id,
       sourceMachineId: machineId,
-      ciphertext: body,
+      byteSize: written.bytes,
       ttlSeconds: config.handoffTtlSeconds,
     });
-    logger.info('handoff prepared', { machineId, bytes: stored.byte_size });
-    return json({ handoff: publicHandoff(stored, auth.machine.name) });
+    if (previousId) await removeHandoff(config.handoffDir, previousId);
+    logger.info('handoff prepared', { machineId, bytes: row.byte_size });
+    return json({ handoff: publicHandoff(row, auth.machine.name) });
   }
 
   async function handleHandoffRead(req: Request, machineId: string, wantsBundle: boolean): Promise<Response> {
@@ -666,8 +704,20 @@ export function createRouter(ctx: RelayContext) {
       const source = repos.getMachine(stored.source_machine_id);
       return json({ handoff: publicHandoff(stored, source?.name ?? null) });
     }
-    return new Response(Buffer.from(stored.ciphertext), {
-      headers: { 'content-type': 'application/octet-stream', [HANDOFF_ID_HEADER]: stored.id },
+
+    // Sent from the file rather than read into a buffer, so serving a bundle
+    // costs the relay no more than preparing one did.
+    const size = await handoffSize(config.handoffDir, stored.id);
+    if (size === null) {
+      logger.error('handoff row has no file', { id: stored.id });
+      return json({ error: 'not_found' }, 404);
+    }
+    return new Response(Bun.file(bundlePath(config.handoffDir, stored.id)), {
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-length': String(size),
+        [HANDOFF_ID_HEADER]: stored.id,
+      },
     });
   }
 
@@ -684,6 +734,7 @@ export function createRouter(ctx: RelayContext) {
     if ('response' in auth) return auth.response;
 
     if (!repos.deleteHandoffBundle(auth.machine.user_id, handoffId)) return json({ error: 'not_found' }, 404);
+    await removeHandoff(config.handoffDir, handoffId);
     logger.info('handoff cleared after restore', { machineId });
     return new Response(null, { status: 204 });
   }

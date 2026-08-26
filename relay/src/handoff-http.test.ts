@@ -3,13 +3,17 @@
  * holds one bundle, that an acknowledgement drops only the bundle it names —
  * and that nothing this database holds opens the bytes in it.
  */
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { createDecipheriv, createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { loadConfig } from './config';
 import { createLogger } from './logger';
 import { openDb, type RelayDb } from './db';
 import { createRepositories, type Repositories, type User } from './repositories';
 import { createRouter } from './http';
+import { purgeExpiredHandoffs } from './handoff-store';
 import { toArrayBuffer } from './crypto';
 // The desktop's sealing, used verbatim: a stand-in would prove the sweep below
 // against bytes the relay never actually stores.
@@ -29,6 +33,8 @@ interface TestMachine {
 
 interface Fixture {
   db: RelayDb;
+  /** Where sealed bundles land, so a test can look at what is really on disk. */
+  dir: string;
   repos: Repositories;
   route: ReturnType<typeof createRouter>;
   user: User;
@@ -50,11 +56,18 @@ async function machine(repos: Repositories, userId: string, name: string): Promi
   };
 }
 
+const dirs: string[] = [];
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 async function fixture(overrides: Record<string, string> = {}): Promise<Fixture> {
   const db = openDb(':memory:');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-handoff-'));
+  dirs.push(dir);
   let offset = 0;
   const repos = createRepositories(db, () => Date.now() + offset);
-  const { config } = loadConfig({ ...env, ...overrides });
+  const { config } = loadConfig({ ...env, HANDOFF_DIR: dir, ...overrides });
   const route = createRouter({ config, logger, repos });
 
   const user = repos.upsertGithubUser({
@@ -74,6 +87,7 @@ async function fixture(overrides: Record<string, string> = {}): Promise<Fixture>
 
   return {
     db,
+    dir,
     repos,
     route,
     user,
@@ -272,7 +286,7 @@ describe('restoring and acknowledging', () => {
     f.advance(61_000);
     expect(await (await meta(f, f.newMachine)).json()).toEqual({ handoff: null });
     expect((await fetchBundle(f, f.newMachine)).status).toBe(404);
-    expect(f.repos.purgeExpiredHandoffBundles()).toBe(1);
+    expect(f.repos.purgeExpiredHandoffBundles()).toHaveLength(1);
     expect(f.db.query('SELECT COUNT(*) AS n FROM handoff_bundles').get()).toEqual({ n: 0 });
   });
 });
@@ -328,15 +342,74 @@ function opens(stored: Buffer, key: Buffer): boolean {
   }
 }
 
+describe('the disk the store sits on', () => {
+  test('a bundle is one file, and replacing one leaves exactly one behind', async () => {
+    const f = await fixture();
+    await put(f, f.oldMachine, sealHandoff(Buffer.from('first')).bytes);
+    expect(fs.readdirSync(f.dir)).toHaveLength(1);
+    const first = fs.readdirSync(f.dir)[0]!;
+
+    await put(f, f.oldMachine, sealHandoff(Buffer.from('second')).bytes);
+    const after = fs.readdirSync(f.dir);
+    expect(after).toHaveLength(1);
+    expect(after[0]).not.toBe(first);
+  });
+
+  test('acknowledging a restore takes the file with the row', async () => {
+    const f = await fixture();
+    await put(f, f.oldMachine, sealHandoff(Buffer.from('a whole machine')).bytes);
+    const id = (await fetchBundle(f, f.newMachine)).headers.get('x-bodhi-handoff-id')!;
+
+    expect((await acknowledge(f, f.newMachine, id)).status).toBe(204);
+    expect(fs.readdirSync(f.dir)).toEqual([]);
+  });
+
+  test('expiry takes the file too, not just the row', async () => {
+    const f = await fixture({ HANDOFF_TTL_SECONDS: '60' });
+    await put(f, f.oldMachine, sealHandoff(Buffer.from('a whole machine')).bytes);
+    expect(fs.readdirSync(f.dir)).toHaveLength(1);
+
+    f.advance(61_000);
+    expect(await purgeExpiredHandoffs(f.repos, f.dir)).toBe(1);
+    expect(fs.readdirSync(f.dir)).toEqual([]);
+  });
+
+  test('refuses an upload the store as a whole has no room for', async () => {
+    const f = await fixture({ HANDOFF_STORE_MAX_BYTES: '200' });
+    expect((await put(f, f.stranger, sealHandoff(Buffer.alloc(120)).bytes, { ip: '198.51.100.9' })).status).toBe(200);
+
+    const refused = await put(f, f.oldMachine, sealHandoff(Buffer.alloc(120)).bytes);
+    expect(refused.status).toBe(507);
+    expect(await refused.json()).toEqual({ error: 'store_full' });
+    // Nothing half-written left over.
+    expect(fs.readdirSync(f.dir)).toHaveLength(1);
+  });
+
+  test('does not count a user against themselves when they replace their own', async () => {
+    const f = await fixture({ HANDOFF_STORE_MAX_BYTES: '200' });
+    expect((await put(f, f.oldMachine, sealHandoff(Buffer.alloc(120)).bytes)).status).toBe(200);
+    expect((await put(f, f.oldMachine, sealHandoff(Buffer.alloc(120)).bytes)).status).toBe(200);
+    expect(fs.readdirSync(f.dir)).toHaveLength(1);
+  });
+
+  test('a body that does not match its digest leaves no file', async () => {
+    const f = await fixture();
+    const res = await put(f, f.oldMachine, sealHandoff(Buffer.from('x')).bytes, {
+      digest: sha256Hex(Buffer.from('something else')),
+    });
+    expect(res.status).toBe(400);
+    expect(fs.readdirSync(f.dir)).toEqual([]);
+  });
+});
+
 describe('what the relay can do with what it stores', () => {
   test('no value it has stored opens the bundle, and the phrase does', async () => {
     const f = await fixture();
     const { bytes, phrase } = sealHandoff(Buffer.from('the whole machine, in the clear'));
     await put(f, f.oldMachine, bytes);
 
-    const stored = Buffer.from(
-      (f.db.query('SELECT ciphertext FROM handoff_bundles').get() as { ciphertext: Uint8Array }).ciphertext,
-    );
+    const { id } = (f.db.query('SELECT id FROM handoff_bundles').get() as { id: string });
+    const stored = fs.readFileSync(path.join(f.dir, `${id}.bundle`));
     expect(stored.equals(bytes)).toBe(true);
 
     // Every value the relay actually holds, raw and hashed to key length:
