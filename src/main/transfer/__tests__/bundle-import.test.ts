@@ -103,7 +103,7 @@ describe('what comes back', () => {
     await restore(exportBytes(), mappedToDest());
 
     const keys = (destination.prepare('SELECT key FROM preferences').all() as { key: string }[]).map((r) => r.key);
-    expect(keys).toContain('theme');
+    expect(keys).toContain('fontSize');
     expect(keys).not.toContain('teamsTokens');
     expect(keys).not.toContain('windowBounds');
   });
@@ -218,7 +218,7 @@ describe('transactional', () => {
       arenaRuns: [],
       // No matching run, so the foreign key fires after the rows above landed.
       arenaResponses: [{ id: 'r1', runId: 'missing-run', provider: 'claude', status: 'done', responseText: '', ttftMs: null, totalMs: null, inputTokens: null, outputTokens: null, costUsd: null, error: null, round: 0, prompt: null, sessionRef: null }],
-      preferences: [{ key: 'theme', value: 'dark' }],
+      preferences: [{ key: 'fontSize', value: '14' }],
       accounts: [],
     };
     const manifest: TransferManifest = {
@@ -295,12 +295,12 @@ describe('idempotence', () => {
     seedSecrets(source);
     const bytes = exportBytes();
     await restore(bytes, mappedToDest());
-    destination.prepare("UPDATE preferences SET value = 'light' WHERE key = 'theme'").run();
+    destination.prepare("UPDATE preferences SET value = '18' WHERE key = 'fontSize'").run();
 
     await restore(bytes, mappedToDest());
 
-    const row = destination.prepare('SELECT value FROM preferences WHERE key = ?').get('theme') as any;
-    expect(row.value).toBe('light');
+    const row = destination.prepare('SELECT value FROM preferences WHERE key = ?').get('fontSize') as any;
+    expect(row.value).toBe('18');
   });
 
   test('re-importing the same bundle duplicates nothing', async () => {

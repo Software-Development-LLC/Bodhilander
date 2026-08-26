@@ -160,7 +160,7 @@ describe('what must never reach the archive', () => {
     const tables = JSON.parse(bundle.read(TABLES_ENTRY)!.toString('utf-8'));
     const keys = tables.preferences.map((p: { key: string }) => p.key);
 
-    expect(keys).toContain('theme');
+    expect(keys).toContain('fontSize');
     expect(keys).toContain('closeToTray');
     expect(keys).toHaveLength(2);
   });

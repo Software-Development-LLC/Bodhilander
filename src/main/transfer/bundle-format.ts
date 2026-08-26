@@ -131,19 +131,68 @@ export type TransferCounts = TransferBundleCounts;
 export type TransferManifest = TransferBundleManifest;
 
 // ---------------------------------------------------------------------------
-// Exclusion policy — enforced here, at export, never at import
+// Portability policy — enforced here, at export, never at import
 // ---------------------------------------------------------------------------
+
+/**
+ * Preferences that travel with a bundle.
+ *
+ * An ALLOWLIST, deliberately (#227). This used to be a denylist, which was
+ * correct for every key that existed but failed in the wrong direction: a
+ * preference added later was exported by default, and only stayed home if
+ * whoever added it remembered this file. A bundle is a portable file meant to
+ * be carried between machines and plausibly handed to someone else, so the
+ * default for an unclassified key has to be "stays home".
+ *
+ * That failure was not hypothetical. `quotaCooldownsCleared` — a one-time
+ * migration marker whose three siblings are all listed as local below — was
+ * added without a matching exclusion and was being exported. Under an
+ * allowlist it simply never shipped.
+ *
+ * Adding a preference means adding it here or to LOCAL_PREFERENCE_KEYS;
+ * `bundle-preference-policy.test.ts` fails until you do.
+ */
+const PORTABLE_PREFERENCE_KEYS = new Set([
+  // Appearance and behaviour the user chose, which they will want again.
+  'fontSize',
+  'webglRenderer',
+  'closeToTray',
+  'autoLaunchClaude',
+  'sidebar.showActiveOnly',
+  'updateChannel',
+  // Notification and sound settings — the ON/OFF choices travel; the custom
+  // FILE PATHS behind them do not, because they name this machine's disk.
+  'enableNotifications',
+  'notificationSound',
+  'soundVolume',
+  'soundDebouncePreset',
+  'soundWaitingEnabled',
+  'soundErrorEnabled',
+  'soundStartEnabled',
+  'soundCompleteEnabled',
+  // Account failover policy (BDHLNDR-31) — a user's choice about their own
+  // accounts, not a fact about this machine.
+  'accountFailoverEnabled',
+  'accountFailbackEnabled',
+]);
 
 /**
  * Preference namespaces sealed to the source machine's OS keychain, plus the
  * relay identity. Nothing under these can be decrypted anywhere else, and the
  * relay's machine model requires the destination to mint its own keypair.
  */
-const EXCLUDED_PREFERENCE_PREFIXES = ['providerApiKey.', 'providerApiKeyUse.', 'relay.'] as const;
+const LOCAL_PREFERENCE_PREFIXES = ['providerApiKey.', 'providerApiKeyUse.', 'relay.'] as const;
 
-/** Secrets and settings that describe this machine rather than this user. */
-const EXCLUDED_PREFERENCE_KEYS = new Set([
+/**
+ * Keys classified as staying home. Redundant for the filter now that the
+ * allowlist decides, and kept anyway: this is the written record of which
+ * keys were considered and rejected, and it is what lets the policy test tell
+ * "deliberately local" apart from "nobody has looked at this yet".
+ */
+const LOCAL_PREFERENCE_KEYS = new Set([
+  // Secrets.
   'teamsTokens',
+  // Facts about this machine's hardware, disk, or installed software.
   'windowBounds',
   'customShellPath',
   'preferredEditor',
@@ -151,14 +200,30 @@ const EXCLUDED_PREFERENCE_KEYS = new Set([
   'soundErrorCustomPath',
   'soundStartCustomPath',
   'soundCompleteCustomPath',
+  // One-time migration markers. Carrying one would tell the destination a
+  // cleanup had already run on a database where it had not.
   'legacyCodeSearchCleanupDone',
   'legacyMemoryCleanupDone',
   'legacyMemoryMcpCleanupDone',
+  'quotaCooldownsCleared',
 ]);
 
 export function isPortablePreferenceKey(key: string): boolean {
-  if (EXCLUDED_PREFERENCE_KEYS.has(key)) return false;
-  return !EXCLUDED_PREFERENCE_PREFIXES.some((prefix) => key.startsWith(prefix));
+  return PORTABLE_PREFERENCE_KEYS.has(key);
+}
+
+/**
+ * Whether anyone has decided what this key should do at export time.
+ *
+ * The allowlist alone makes an unclassified key stay home, which is the safe
+ * default but a silent one — a legitimate new setting would quietly stop
+ * travelling and nobody would hear about it. This is what the policy test uses
+ * to turn that silence into a failing build.
+ */
+export function isClassifiedPreferenceKey(key: string): boolean {
+  return PORTABLE_PREFERENCE_KEYS.has(key)
+    || LOCAL_PREFERENCE_KEYS.has(key)
+    || LOCAL_PREFERENCE_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 // ---------------------------------------------------------------------------
