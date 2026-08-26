@@ -122,31 +122,38 @@ export function createGateway(ctx: WsGatewayContext) {
     notifyGrantRevoked,
 
     close(ws: ServerWebSocket<SocketData>) {
-      if (ws.data.role === 'agent') {
-        const { machineId, authTimer } = ws.data;
-        if (authTimer) {
-          clearTimeout(authTimer);
-          ws.data.authTimer = null;
-        }
-        if (machineId && agents.get(machineId) === ws) {
-          agents.delete(machineId);
-          logger.info('agent offline', { machineId });
-          // Tell any clients bound to this machine that their agent dropped.
-          for (const client of clients.values()) {
-            if ((client.data as ClientSocketData).machineId === machineId) send(client, { type: 'agent:offline' });
-          }
-        }
-      } else {
-        const { clientId, machineId } = ws.data;
-        if (clients.get(clientId) === ws) clients.delete(clientId);
-        // Tell the agent this client went away so it can tear down the session.
-        if (machineId) {
-          const agent = agents.get(machineId);
-          if (agent) send(agent, { type: 'client:closed', clientId });
-        }
-      }
+      // Narrow here and hand the result down: the role check is what tells the
+      // compiler which shape ws.data has, and it does not survive a call.
+      const data = ws.data;
+      if (data.role === 'agent') closeAgent(ws, data);
+      else closeClient(ws, data);
     },
   };
+
+  function closeAgent(ws: ServerWebSocket<SocketData>, data: AgentSocketData): void {
+    const { machineId, authTimer } = data;
+    if (authTimer) {
+      clearTimeout(authTimer);
+      data.authTimer = null;
+    }
+    if (!machineId || agents.get(machineId) !== ws) return;
+
+    agents.delete(machineId);
+    logger.info('agent offline', { machineId });
+    // Tell any clients bound to this machine that their agent dropped.
+    for (const client of clients.values()) {
+      if ((client.data as ClientSocketData).machineId === machineId) send(client, { type: 'agent:offline' });
+    }
+  }
+
+  function closeClient(ws: ServerWebSocket<SocketData>, data: ClientSocketData): void {
+    const { clientId, machineId } = data;
+    if (clients.get(clientId) === ws) clients.delete(clientId);
+    // Tell the agent this client went away so it can tear down the session.
+    if (!machineId) return;
+    const agent = agents.get(machineId);
+    if (agent) send(agent, { type: 'client:closed', clientId });
+  }
 
   async function handleAgent(ws: ServerWebSocket<SocketData>, data: AgentSocketData, msg: Record<string, unknown>) {
     if (!data.authed) {

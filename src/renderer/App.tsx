@@ -973,9 +973,9 @@ const App: React.FC = () => {
     }
   }, [sessions, activeSessionId, setActiveSessionId]);
 
-  const handleCloseSession = useCallback(async () => {
+  const handleCloseSession = useCallback(() => {
     if (activeSessionId) {
-      await handleRemoveSession(activeSessionId);
+      handleRemoveSession(activeSessionId);
     }
   }, [activeSessionId, handleRemoveSession]);
 

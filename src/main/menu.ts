@@ -360,14 +360,14 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         { type: 'separator' },
         {
           label: 'Documentation',
-          click: async () => {
-            await shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander');
+          click: () => {
+            void shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander');
           },
         },
         {
           label: 'Report Issue',
-          click: async () => {
-            await shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander/issues');
+          click: () => {
+            void shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander/issues');
           },
         },
         {

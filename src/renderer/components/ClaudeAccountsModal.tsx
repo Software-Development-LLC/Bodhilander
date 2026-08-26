@@ -429,7 +429,7 @@ const AddAccountButton: React.FC<{ onAdd: (label: string) => Promise<void>; disa
   const [label, setLabel] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     const trimmed = label.trim();
     if (!trimmed || submitting) return;

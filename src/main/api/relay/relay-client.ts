@@ -39,6 +39,7 @@ import {
 import { getInviteScope, recordInviteScope } from './grant-sql';
 import type { GrantRole } from './grants';
 import { getAllSessions } from '../../repositories/sessions';
+import { messageText } from '../ws-message';
 
 /** Session name for the approval prompt, or null if it has since gone. */
 function getSessionName(sessionId: string): string | null {
@@ -337,7 +338,7 @@ export class RelayClient extends EventEmitter {
     });
 
     ws.on('message', (data) => {
-      void this.handleMessage(data.toString());
+      void this.handleMessage(messageText(data));
     });
 
     ws.on('close', (code) => {

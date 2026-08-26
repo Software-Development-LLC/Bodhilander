@@ -132,15 +132,17 @@ export function guestShareRows(shares: WireMyShare[], now: number): ShareRow[] {
             : (g.machineName ?? g.ownerName ?? 'A shared session'),
         roleWord: roleWord(g.role),
         pending: g.status === 'pending',
-        detail:
-          g.status === 'pending'
-            ? "Waiting to be let in — they'll get a prompt on their machine"
-            : untilRevoked(g, now)
-              ? 'Until you leave, or they stop sharing'
-              : `Ends in ${timeLeft(g.expiresAt! - now)}`,
+        detail: guestDetail(g, now),
         action: 'Leave',
       }),
     );
+}
+
+/** What a guest's row says about how long they have. */
+function guestDetail(g: WireShareGrant, now: number): string {
+  if (g.status === 'pending') return "Waiting to be let in — they'll get a prompt on their machine";
+  if (untilRevoked(g, now)) return 'Until you leave, or they stop sharing';
+  return `Ends in ${timeLeft(g.expiresAt! - now)}`;
 }
 
 /** The question a revoke action asks, honest about what saying yes does. */

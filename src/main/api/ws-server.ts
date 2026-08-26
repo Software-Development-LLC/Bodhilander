@@ -34,6 +34,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import log from 'electron-log';
 import { PairingManager, PairedDevice } from './pairing/pairing-manager';
 import { ptyManager } from '../pty-manager';
+import { messageText } from './ws-message';
 
 export interface WsMessage {
   type: string;
@@ -112,7 +113,7 @@ export function createWsServer(httpServer: HttpServer, pairingManager: PairingMa
       // If still pending, treat the message as an auth attempt.
       const pendingState = pending.get(ws);
       if (pendingState) {
-        handleAuthMessage(ws, data.toString(), pendingState, pending, clients, pairingManager);
+        handleAuthMessage(ws, messageText(data), pendingState, pending, clients, pairingManager);
         return;
       }
 
@@ -130,7 +131,7 @@ export function createWsServer(httpServer: HttpServer, pairingManager: PairingMa
       }
 
       try {
-        const message = JSON.parse(data.toString()) as WsMessage;
+        const message = JSON.parse(messageText(data)) as WsMessage;
         // Ignore (but log) any post-auth `auth` frames — clients should not
         // re-authenticate on an already-authenticated socket.
         if (message.type === 'auth') {
