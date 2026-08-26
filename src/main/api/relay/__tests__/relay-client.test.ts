@@ -32,6 +32,14 @@ mock.module('electron', () => ({
 }));
 mock.module('../../../database', () => ({ getDatabase: () => db }));
 
+// `relay-client` reaches `pty-manager`, which loads node-pty's native binding
+// at import. There is no Linux prebuild in this checkout, so without this the
+// import throws on CI — and bun reports that as an unhandled error between
+// tests rather than a failure, which is to say the file silently runs nothing.
+mock.module('node-pty', () => ({
+  spawn: () => { throw new Error('no pty spawns in these tests'); },
+}));
+
 const { RelayClient } = await import('../relay-client');
 
 beforeEach(() => {
