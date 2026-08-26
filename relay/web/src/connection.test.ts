@@ -37,6 +37,18 @@ function ab(u: Uint8Array): ArrayBuffer {
   return b;
 }
 
+/**
+ * Wait until `predicate` holds rather than for a fixed number of milliseconds.
+ * Every assertion below waits on an async settle — a WebCrypto unseal, a state
+ * push. The deadline is a backstop, not a wait: it returns as soon as the
+ * condition holds, and missing it fails on the assertion that follows, which
+ * says far more about what went wrong than a bare timeout would.
+ */
+async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) await Bun.sleep(1);
+}
+
 /** A stand-in for the browser WebSocket the connection opens. */
 class FakeSocket {
   static last: FakeSocket | null = null;
@@ -129,8 +141,8 @@ async function connected(): Promise<Session> {
     agentX25519Pub: agentXPubB64,
     signature: toB64(sig),
   });
-  // Let the async handshake settle.
-  await Bun.sleep(20);
+  // Let the async handshake settle — it is done when the state lands.
+  await until(() => states.some((x) => x.state === 'ready'));
 
   // Mirror the client's key derivation from the agent side.
   const clientPub = await subtle.importKey('raw', ab(fromB64(clientPubB64)), algo({ name: 'X25519' }), false, []);
@@ -184,7 +196,7 @@ describe('a refused command must not end the session', () => {
     const before = s.states.length;
 
     s.socket.deliver(await s.seal(0, { type: 'command:denied', reason: 'not_permitted', command: 'terminal:input' }));
-    await Bun.sleep(20);
+    await until(() => s.refusals.length > 0);
 
     expect(s.refusals).toEqual(['terminal:input']);
     // No new state at all — the session is untouched.
@@ -199,7 +211,7 @@ describe('a refused command must not end the session', () => {
     const before = s.states.length;
 
     s.socket.deliver(await s.seal(0, { type: 'denied', reason: 'not_permitted', command: 'terminal:resize' }));
-    await Bun.sleep(20);
+    await until(() => s.refusals.length > 0);
 
     expect(s.refusals).toEqual(['terminal:resize']);
     expect(s.states.length).toBe(before);
@@ -210,7 +222,7 @@ describe('a refused command must not end the session', () => {
     const s = await connected();
     s.socket.deliver(await s.seal(0, { type: 'command:denied', command: 'terminal:input' }));
     s.socket.deliver(await s.seal(1, { type: 'sessions', sessions: [] }));
-    await Bun.sleep(20);
+    await until(() => s.messages.length > 0);
 
     expect(s.messages.map((m) => m.type)).toEqual(['sessions']);
   });
@@ -220,7 +232,7 @@ describe('losing access still ends the session', () => {
   test.each([...ENDING_REASONS])('reason %s ends it, with that reason preserved', async (reason) => {
     const s = await connected();
     s.socket.deliver(await s.seal(0, { type: 'denied', reason }));
-    await Bun.sleep(20);
+    await until(() => s.states.some((x) => x.state === 'denied'));
 
     const denied = s.states.filter((x) => x.state === 'denied');
     expect(denied).toHaveLength(1);
@@ -234,7 +246,7 @@ describe('losing access still ends the session', () => {
     // already closed — silence is the worse error.
     const s = await connected();
     s.socket.deliver(await s.seal(0, { type: 'denied' }));
-    await Bun.sleep(20);
+    await until(() => s.states.some((x) => x.state === 'denied'));
 
     expect(s.states.some((x) => x.state === 'denied')).toBe(true);
     expect(s.refusals).toEqual([]);
@@ -251,7 +263,7 @@ describe('losing access still ends the session', () => {
     await socket.onopen!();
 
     socket.deliver({ type: 'denied', reason: 'revoked' });
-    await Bun.sleep(20);
+    await until(() => states.some((x) => x.state === 'denied'));
 
     const denied = states.find((x) => x.state === 'denied');
     expect(denied?.detail).toBe('not_authorized');
