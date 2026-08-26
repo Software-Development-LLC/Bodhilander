@@ -59,7 +59,7 @@ function offerFor(sealed: Buffer): HandoffOffer {
 }
 
 /** A relay holding one prepared bundle, and a record of what was asked of it. */
-function standIn(sealed: Buffer | null) {
+function standIn(sealed: Buffer | null, options: { failAcknowledge?: boolean } = {}) {
   const acks: string[] = [];
   const transport: HandoffTransport = {
     async upload(bytes) {
@@ -75,6 +75,7 @@ function standIn(sealed: Buffer | null) {
     },
     async acknowledge(id) {
       acks.push(id);
+      if (options.failAcknowledge) throw new Error('relay unreachable');
       sealed = null;
     },
   };
@@ -206,6 +207,22 @@ describe('restoring one', () => {
       .working_dir;
     expect(dir).toBe(chosen);
     expect(relay.acks).toEqual(['handoff-1']);
+  });
+
+  test('a relay that will not release the bundle is still a successful restore', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes, { failAcknowledge: true });
+    const chosen = path.join(tmp, 'dst-projects');
+    fs.mkdirSync(chosen, { recursive: true });
+    messageBoxResponses = [0];
+    openDialogPaths = [chosen];
+
+    const result = await restoreMachineHandoff(relay.transport, phrase, legacyDir);
+    expect(result.success).toBe(true);
+    expect(result.groupCount).toBe(1);
+    // Answered locally, or the bundle it could not drop would be offered again
+    // on the next launch as though nothing had been restored.
+    expect((await readHandoffOffer(relay.transport)).declined).toBe(true);
   });
 
   test('a wrong phrase is reported as one, and the bundle stays put', async () => {

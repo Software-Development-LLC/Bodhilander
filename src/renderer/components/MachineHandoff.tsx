@@ -17,10 +17,12 @@ export const HandoffPreparePanel: React.FC = () => {
   const [phrase, setPhrase] = useState<string | null>(null);
   const [detail, setDetail] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
 
   const prepare = useCallback(async () => {
     setBusy(true);
     setError(null);
+    setCopied('idle');
     try {
       const result = await window.electronAPI.handoffPrepare();
       if (!result.success) {
@@ -57,9 +59,24 @@ export const HandoffPreparePanel: React.FC = () => {
           </p>
           <p className="handoff-phrase-words">{phrase}</p>
           <p className="handoff-phrase-detail">{detail}</p>
+          {copied === 'failed' && (
+            <p className="handoff-error" role="alert">
+              Could not reach the clipboard. Copy the phrase from the screen before closing this.
+            </p>
+          )}
           <div className="handoff-actions">
-            <button className="settings-button" onClick={() => void navigator.clipboard?.writeText(phrase)}>
-              Copy Phrase
+            <button
+              className="settings-button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(phrase);
+                  setCopied('done');
+                } catch {
+                  setCopied('failed');
+                }
+              }}
+            >
+              {copied === 'done' ? 'Copied' : 'Copy Phrase'}
             </button>
             <button className="settings-button" onClick={() => setPhrase(null)}>
               I have written it down
@@ -84,11 +101,25 @@ export const HandoffRestoreOffer: React.FC<HandoffRestoreOfferProps> = ({ onRest
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.handoffPeek().then((next) => {
-      if (!cancelled) setState(next);
-    });
+    // Undefined is "never asked". Null is a real answer, and the one a machine
+    // gives at launch, before anybody has signed in on it.
+    let askedFor: string | null | undefined;
+
+    const peek = (machineId: string | null) => {
+      if (askedFor === machineId) return;
+      askedFor = machineId;
+      void window.electronAPI.handoffPeek().then((next) => {
+        if (!cancelled) setState(next);
+      });
+    };
+
+    void window.electronAPI.relayGetStatus().then((status) => peek(status.machineId));
+    // Linking is what makes a bundle reachable, and it happens well after
+    // launch. Without this the offer waits for a restart nothing asks for.
+    const off = window.electronAPI.onRelayStatus((status) => peek(status.machineId));
     return () => {
       cancelled = true;
+      off();
     };
   }, []);
 

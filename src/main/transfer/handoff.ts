@@ -9,7 +9,8 @@ import type { HandoffOffer } from '../../shared/types';
 import { buildTransferBundle, type ExportOptions } from './bundle-export';
 import { readBundleManifest, restoreTransferBundle, type ImportOptions, type ImportOutcome } from './bundle-import';
 import type { TransferManifest } from './bundle-format';
-import { openHandoff, sealHandoff } from './handoff-crypto';
+import { formatBytes } from './bundle-format';
+import { HANDOFF_SEAL_OVERHEAD_BYTES, openHandoff, sealHandoff } from './handoff-crypto';
 import { deriveHandoffKey } from './recovery-phrase';
 
 type Db = DatabaseCtor.Database;
@@ -38,10 +39,10 @@ export const DECLINED_HANDOFF_PREF = 'relay.declinedHandoffId';
 
 /**
  * The largest sealed handoff worth attempting. Mirrors the relay's shipped
- * ceiling so an oversized state is refused here, with a size in the message,
- * rather than after uploading its way to a 413.
+ * ceiling so an oversized state is refused here, with both sizes in the
+ * message, rather than after uploading its way to a 413.
  */
-export const HANDOFF_MAX_BYTES = 64 * 1024 * 1024;
+export const HANDOFF_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface PreparedHandoff {
   offer: HandoffOffer;
@@ -66,8 +67,12 @@ export interface PrepareOptions {
 /** Null when the confirmation was declined; nothing reached the relay. */
 export async function prepareHandoff(db: Db, options: PrepareOptions): Promise<PreparedHandoff | null> {
   const { bytes, manifest } = buildTransferBundle(db, options.export);
-  if (bytes.length > options.maxBytes) {
-    throw new Error("This machine's state is larger than the relay will carry. Export it to a file instead.");
+  const sealedLength = bytes.length + HANDOFF_SEAL_OVERHEAD_BYTES;
+  if (sealedLength > options.maxBytes) {
+    throw new Error(
+      `This machine's state is ${formatBytes(sealedLength)}, and the relay carries up to ` +
+        `${formatBytes(options.maxBytes)}. Export it to a file instead.`,
+    );
   }
   if (options.confirm && !(await options.confirm(bytes.length, manifest))) return null;
 
@@ -99,15 +104,25 @@ export interface ApplyOptions {
   import: ImportOptions;
 }
 
+export interface AppliedHandoff {
+  outcome: ImportOutcome;
+  /** False when the restore landed but the relay is still holding the bundle. */
+  acknowledged: boolean;
+}
+
 /**
- * Restore an opened handoff, then tell the relay to forget it. The bundle is
- * released only once the import has returned — a failed restore leaves it
- * there to be tried again.
+ * Restore an opened handoff, then tell the relay to forget it. Once the import
+ * has returned, nothing the relay says can make it not have happened — so the
+ * acknowledgement is reported beside the outcome, never thrown over it.
  */
-export async function applyHandoff(db: Db, opened: OpenedHandoff, options: ApplyOptions): Promise<ImportOutcome> {
+export async function applyHandoff(db: Db, opened: OpenedHandoff, options: ApplyOptions): Promise<AppliedHandoff> {
   const outcome = await restoreTransferBundle(db, opened.bytes, options.import);
-  await options.transport.acknowledge(opened.handoffId);
-  return outcome;
+  try {
+    await options.transport.acknowledge(opened.handoffId);
+    return { outcome, acknowledged: true };
+  } catch {
+    return { outcome, acknowledged: false };
+  }
 }
 
 /** Remember that this exact bundle was turned down, so it stops being offered. */

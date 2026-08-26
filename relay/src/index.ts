@@ -6,6 +6,7 @@ import { createRepositories } from './repositories';
 import { createGateway, newAgentSocketData, newClientSocketData } from './ws';
 import { parseCookies, SESSION_COOKIE } from './auth/cookies';
 import { createRateLimiter } from './rate-limit';
+import { requestBodyCeiling } from './server';
 
 /** How often expired sessions / link codes / rate-limit windows are swept. */
 const REAP_INTERVAL_MS = 10 * 60 * 1000;
@@ -46,7 +47,7 @@ function main(): void {
 
   const server = Bun.serve({
     port: config.port,
-    maxRequestBodySize: 1024 * 1024,
+    maxRequestBodySize: requestBodyCeiling(config),
     fetch(req, srv) {
       const url = new URL(req.url);
       // Agents connect at /ws and authenticate with an Ed25519-signed nonce.

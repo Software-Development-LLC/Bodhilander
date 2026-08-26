@@ -306,6 +306,12 @@ describe('rate limits', () => {
 });
 
 /**
+ * The tables a linked machine with a prepared handoff fills. Named so the
+ * sweep below cannot quietly narrow to a database that holds almost nothing.
+ */
+const POPULATED_BY_A_HANDOFF = ['handoff_bundles', 'link_codes', 'machines', 'oauth_identities', 'users'];
+
+/**
  * Try `key` against a stored handoff the way its own opener would. The header
  * is `BDHLHOFF` plus a version byte; the nonce is the fixed counter zero.
  */
@@ -323,7 +329,7 @@ function opens(stored: Buffer, key: Buffer): boolean {
 }
 
 describe('what the relay can do with what it stores', () => {
-  test('nothing in this database opens the bundle, and the phrase does', async () => {
+  test('no value it has stored opens the bundle, and the phrase does', async () => {
     const f = await fixture();
     const { bytes, phrase } = sealHandoff(Buffer.from('the whole machine, in the clear'));
     await put(f, f.oldMachine, bytes);
@@ -333,15 +339,19 @@ describe('what the relay can do with what it stores', () => {
     );
     expect(stored.equals(bytes)).toBe(true);
 
-    // Every value in every table, raw and hashed to key length. This is the
-    // relay's entire world: public keys, ids, names, timestamps, token hashes.
+    // Every value the relay actually holds, raw and hashed to key length:
+    // public keys, ids, names, timestamps, token hashes. An empty table
+    // contributes nothing, so which ones were populated is asserted below.
     const tables = f.db
       .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
       .all() as { name: string }[];
 
     const material: Buffer[] = [];
+    const populated: string[] = [];
     for (const { name } of tables) {
-      for (const row of f.db.query(`SELECT * FROM ${name}`).all() as Record<string, unknown>[]) {
+      const rows = f.db.query(`SELECT * FROM ${name}`).all() as Record<string, unknown>[];
+      if (rows.length > 0) populated.push(name);
+      for (const row of rows) {
         for (const value of Object.values(row)) {
           if (value === null || value === undefined) continue;
           const raw = Buffer.isBuffer(value)
@@ -354,7 +364,8 @@ describe('what the relay can do with what it stores', () => {
       }
     }
 
-    expect(material.length).toBeGreaterThan(20);
+    expect(populated.sort()).toEqual(POPULATED_BY_A_HANDOFF);
+    expect(material.length).toBeGreaterThan(100);
     expect(material.filter((key) => opens(stored, key))).toEqual([]);
     // The positive control: the sweep above WOULD have found a working key.
     expect(opens(stored, deriveHandoffKey(phrase))).toBe(true);

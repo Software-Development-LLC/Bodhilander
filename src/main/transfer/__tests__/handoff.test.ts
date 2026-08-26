@@ -44,7 +44,7 @@ let prefsPath: string;
  * A relay that holds one sealed blob per account. It is given bytes and an id
  * and knows nothing else — which is the whole point of it being this small.
  */
-function standInRelay() {
+function standInRelay(options: { failAcknowledge?: boolean } = {}) {
   let slot: { id: string; sealed: Buffer } | null = null;
   let nextId = 1;
   const counts = { uploads: 0, downloads: 0, acks: 0 };
@@ -77,6 +77,7 @@ function standInRelay() {
       },
       async acknowledge(handoffId: string) {
         counts.acks++;
+        if (options.failAcknowledge) throw new Error('relay unreachable');
         if (slot?.id === handoffId) slot = null;
       },
     },
@@ -157,8 +158,9 @@ describe('preparing a handoff', () => {
   test('carries no key material — not the relay identity, not an API key', async () => {
     const relay = standInRelay();
     const { phrase } = await prepare(relay);
-    // Read what the bundle actually says, not the gzipped container: a search
-    // of the compressed bytes would find nothing whatever was in there.
+    // The bundle's TABLES entry specifically, decoded: a search of the gzipped
+    // container would find nothing whatever had been put in it. Transcript
+    // entries are a separate concern and are not scanned here.
     const tables = decodeBundle(openHandoff(relay.stored()!.sealed, phrase)).read(TABLES_ENTRY)!.toString('utf-8');
 
     for (const secret of Object.values(SECRET_VALUES)) {
@@ -196,7 +198,7 @@ describe('preparing a handoff', () => {
     const relay = standInRelay();
     await expect(
       prepareHandoff(source as never, { transport: relay.transport, maxBytes: 16, export: exportOptions() }),
-    ).rejects.toThrow(/Export it to a file instead/);
+    ).rejects.toThrow(/state is \d+.*relay carries up to .*Export it to a file instead/);
     expect(relay.counts.uploads).toBe(0);
   });
 });
@@ -207,7 +209,7 @@ describe('restoring on the new machine', () => {
     const { phrase } = await prepare(relay);
 
     const opened = await fetchHandoff(relay.transport, phrase);
-    const outcome = await applyHandoff(destination as never, opened, {
+    const { outcome } = await applyHandoff(destination as never, opened, {
       transport: relay.transport,
       import: importOptions(),
     });
@@ -227,9 +229,31 @@ describe('restoring on the new machine', () => {
     const opened = await fetchHandoff(relay.transport, phrase);
     expect(relay.stored()).not.toBeNull();
 
-    await applyHandoff(destination as never, opened, { transport: relay.transport, import: importOptions() });
+    const { acknowledged } = await applyHandoff(destination as never, opened, {
+      transport: relay.transport,
+      import: importOptions(),
+    });
+    expect(acknowledged).toBe(true);
     expect(relay.counts.acks).toBe(1);
     expect(relay.stored()).toBeNull();
+  });
+
+  test('reports the restore that happened even when the relay will not release the bundle', async () => {
+    const relay = standInRelay({ failAcknowledge: true });
+    const { phrase } = await prepare(relay);
+    const opened = await fetchHandoff(relay.transport, phrase);
+
+    const { outcome, acknowledged } = await applyHandoff(destination as never, opened, {
+      transport: relay.transport,
+      import: importOptions(),
+    });
+
+    // The import happened. A relay that will not take the acknowledgement
+    // cannot turn that into a failed restore.
+    expect(outcome.groups).toBe(1);
+    expect(outcome.sessions).toBe(1);
+    expect(acknowledged).toBe(false);
+    expect(destination.query('SELECT COUNT(*) AS n FROM groups').get()).toEqual({ n: 1 });
   });
 
   test('leaves the bundle alone when the import throws', async () => {
@@ -274,7 +298,7 @@ describe('a phrase that does not open it', () => {
     await expect(fetchHandoff(relay.transport, generateRecoveryPhrase())).rejects.toThrow();
 
     const opened = await fetchHandoff(relay.transport, phrase);
-    const outcome = await applyHandoff(destination as never, opened, {
+    const { outcome } = await applyHandoff(destination as never, opened, {
       transport: relay.transport,
       import: importOptions(),
     });

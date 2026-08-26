@@ -9,10 +9,10 @@ import { ConfigError, loadConfig } from './config';
 const BASE = { NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test' };
 
 describe('handoff storage limits', () => {
-  test('default to a week and 64 MiB', () => {
+  test('default to a week and 16 MiB', () => {
     const { config } = loadConfig(BASE);
     expect(config.handoffTtlSeconds).toBe(7 * 24 * 60 * 60);
-    expect(config.handoffMaxBytes).toBe(64 * 1024 * 1024);
+    expect(config.handoffMaxBytes).toBe(16 * 1024 * 1024);
   });
 
   test('are overridable per deployment', () => {

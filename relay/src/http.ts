@@ -34,6 +34,7 @@ import {
 import { createDevRoutes } from './dev';
 import { createWebClient } from './web';
 import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
+import { MAX_JSON_BODY_BYTES } from './server';
 
 /**
  * HTTP surface of the relay (M2), as a `fetch`-style handler for `Bun.serve`.
@@ -148,6 +149,13 @@ export function createRouter(ctx: RelayContext) {
     const method = req.method;
 
     try {
+      // A handoff sets Bun's body ceiling for the whole server. Every other
+      // route reads small JSON and keeps the bound it always had.
+      const declaredLength = Number(req.headers.get('content-length') ?? 0);
+      if (declaredLength > MAX_JSON_BODY_BYTES && !(method === 'PUT' && matchMachineHandoff(pathname))) {
+        return json({ error: 'payload_too_large' }, 413);
+      }
+
       const webResponse = webRoute(req);
       if (webResponse) return webResponse;
 
@@ -586,6 +594,9 @@ export function createRouter(ctx: RelayContext) {
     const signature = req.headers.get(HANDOFF_SIGNATURE_HEADER);
     const sigBytes = signature ? fromBase64(signature) : null;
     if (!Number.isSafeInteger(issuedAt) || !sigBytes) return { response: json({ error: 'invalid_request' }, 400) };
+    // Skew only, so a captured signature is replayable inside the window. That
+    // is a considered trade: transport is TLS, the reads it could repeat return
+    // ciphertext, and the delete names a bundle id that stops matching.
     if (Math.abs(Date.now() - issuedAt) > LINK_MAX_SKEW_MS) return { response: json({ error: 'stale_request' }, 400) };
 
     const machine = repos.getMachine(machineId);

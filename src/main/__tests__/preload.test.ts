@@ -133,7 +133,7 @@ describe('the import/export bridge', () => {
     expect(lastInvocation().channel).toBe('import:fromClaudeLander');
   });
 
-  test('exposes the four steps of a handoff, on the channels index.ts registers', () => {
+  test('exposes the four steps of a handoff, each forwarding to its own channel', () => {
     for (const name of ['handoffPrepare', 'handoffPeek', 'handoffRestore', 'handoffDecline']) {
       expect(typeof exposed[name]).toBe('function');
     }

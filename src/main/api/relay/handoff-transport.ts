@@ -28,8 +28,24 @@ export interface HandoffEndpoint {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * A refusal the window can show. The body is read for the relay's own reason,
+ * and a status is spelled out when there is none — a request killed at the
+ * socket for its size arrives with nothing in it at all.
+ */
 async function refusal(res: Response, what: string): Promise<Error> {
-  const detail = await res.text().catch(() => '');
+  const body = await res.text().catch(() => '');
+  let detail = body.trim();
+  try {
+    const parsed = JSON.parse(body) as { error?: string; maxBytes?: number };
+    if (parsed?.error) {
+      detail = parsed.error.replace(/_/g, ' ');
+      if (typeof parsed.maxBytes === 'number') detail += ` — this relay carries up to ${parsed.maxBytes} bytes`;
+    }
+  } catch {
+    // Not JSON; the raw text, or nothing, is the best that can be said.
+  }
+  if (!detail && res.status === 413) detail = 'the relay refused it as too large';
   return new Error(`Could not ${what} (${res.status})${detail ? `: ${detail}` : ''}`);
 }
 

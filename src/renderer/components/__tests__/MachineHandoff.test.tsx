@@ -27,16 +27,46 @@ let restoreWith: string[];
 let peekResult: HandoffOfferState;
 let restoreResult: PortableImportResult;
 let prepareResult: HandoffPrepareResult;
+let peeks: number;
+let machineId: string | null;
+let statusListeners: ((status: { machineId: string | null; linked: boolean }) => void)[];
+let clipboardWrite: (text: string) => Promise<void>;
+
+/** The relay client pushing a status change, as linking produces one. */
+async function emitStatus(next: string | null) {
+  machineId = next;
+  await act(async () => {
+    for (const listener of [...statusListeners]) listener({ machineId: next, linked: !!next });
+  });
+}
 
 beforeEach(() => {
   declined = [];
   restoreWith = [];
+  peeks = 0;
+  machineId = 'machine-new';
+  statusListeners = [];
+  clipboardWrite = async () => {};
+  Object.defineProperty(globalThis.navigator, 'clipboard', {
+    value: { writeText: (text: string) => clipboardWrite(text) },
+    configurable: true,
+  });
   peekResult = OFFER;
   restoreResult = { success: true, groupCount: 2, sessionCount: 5 };
   prepareResult = { success: true, phrase: 'agent album alloy amber', sizeLabel: '2.0 MB', groupCount: 2, sessionCount: 5 };
 
   (window as unknown as { electronAPI: unknown }).electronAPI = {
-    handoffPeek: async () => peekResult,
+    handoffPeek: async () => {
+      peeks++;
+      return peekResult;
+    },
+    relayGetStatus: async () => ({ machineId, linked: !!machineId }),
+    onRelayStatus: (listener: (status: { machineId: string | null; linked: boolean }) => void) => {
+      statusListeners.push(listener);
+      return () => {
+        statusListeners = statusListeners.filter((l) => l !== listener);
+      };
+    },
     handoffDecline: async (id: string) => {
       declined.push(id);
     },
@@ -94,6 +124,41 @@ describe('the restore offer', () => {
   });
 });
 
+describe('when linking happens after launch', () => {
+  test('asks again the moment this machine is claimed, without a restart', async () => {
+    machineId = null;
+    peekResult = { offer: null, declined: false };
+    await mountOffer();
+    expect(peeks).toBe(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    peekResult = OFFER;
+    await emitStatus('machine-new');
+
+    expect(peeks).toBe(2);
+    expect(screen.getByRole('dialog').textContent).toContain('Old Laptop');
+  });
+
+  test('does not re-ask on every status push the relay sends', async () => {
+    await mountOffer();
+    expect(peeks).toBe(1);
+
+    await emitStatus('machine-new');
+    await emitStatus('machine-new');
+    expect(peeks).toBe(1);
+  });
+
+  test('asks again if this machine is relinked to a different account', async () => {
+    machineId = null;
+    peekResult = { offer: null, declined: false };
+    await mountOffer();
+
+    await emitStatus('machine-a');
+    await emitStatus('machine-b');
+    expect(peeks).toBe(3);
+  });
+});
+
 describe('answering the offer', () => {
   test('"Not Now" records the bundle it declined and closes', async () => {
     await mountOffer();
@@ -143,6 +208,27 @@ describe('preparing one', () => {
 
     await click('I have written it down');
     expect(screen.queryByText('agent album alloy amber')).toBeNull();
+  });
+
+  test('says so when the clipboard refuses, on the one string shown once', async () => {
+    clipboardWrite = async () => {
+      throw new Error('denied');
+    };
+    render(<HandoffPreparePanel />);
+    await click('Send to Another Machine…');
+    await click('Copy Phrase');
+
+    expect(screen.getByRole('alert').textContent).toContain('Copy the phrase from the screen');
+    expect(screen.getByText('agent album alloy amber')).not.toBeNull();
+  });
+
+  test('confirms a copy that worked', async () => {
+    render(<HandoffPreparePanel />);
+    await click('Send to Another Machine…');
+    await click('Copy Phrase');
+
+    expect(screen.getByText('Copied')).not.toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   test('says nothing when the person cancelled it themselves', async () => {

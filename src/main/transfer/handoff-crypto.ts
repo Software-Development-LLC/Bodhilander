@@ -10,6 +10,9 @@ import { deriveHandoffKey, generateRecoveryPhrase } from './recovery-phrase';
 const MAGIC = Buffer.from('BDHLHOFF', 'ascii');
 export const HANDOFF_FORMAT_VERSION = 1;
 
+/** Magic, version byte and the GCM tag — what sealing adds to a bundle. */
+export const HANDOFF_SEAL_OVERHEAD_BYTES = MAGIC.length + 1 + 16;
+
 /**
  * Fixed at zero: the key comes from a phrase generated for this one bundle and
  * never reused, so the (key, nonce) pair cannot repeat.

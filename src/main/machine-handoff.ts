@@ -109,7 +109,7 @@ export async function restoreMachineHandoff(
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhilander-handoff-'));
   try {
-    const outcome = await applyHandoff(getDatabase(), opened, {
+    const { outcome, acknowledged } = await applyHandoff(getDatabase(), opened, {
       transport,
       import: {
         accountsRoot: path.join(app.getPath('userData'), 'claude-accounts'),
@@ -119,6 +119,12 @@ export async function restoreMachineHandoff(
       },
     });
     registerRestoredAccountHooks();
+    if (!acknowledged) {
+      // Restored, but the relay still holds the bundle and would offer it
+      // again on the next launch. Answering it here is what stops that.
+      declineHandoff(prefs, opened.handoffId);
+      log.warn('[Handoff] Restored, but the relay would not release the bundle; it expires on its own');
+    }
     log.info(
       `[Handoff] Restored ${outcome.groups} group(s), ${outcome.sessions} session(s), ` +
         `${outcome.transcripts} transcript(s); ${outcome.needsRelink.length} need relinking`,
@@ -147,15 +153,16 @@ async function confirmHandoffUpload(byteLength: number, manifest: TransferManife
     buttons: ['Prepare Handoff', 'Cancel'],
     defaultId: 0,
     cancelId: 1,
-    title: 'Move to Another Machine',
+    title: 'Send to Another Machine',
     message: `Send ${formatBytes(byteLength)} of this machine's state to the relay?`,
     detail:
       `${manifest.counts.groups} group(s), ${manifest.counts.sessions} session(s), ` +
       `${manifest.counts.transcripts} conversation transcript(s), ` +
       `${manifest.counts.accounts} account(s), ${manifest.counts.preferences} setting(s).\n\n` +
       'It is encrypted here first. The relay stores the result and cannot read it, and only the ' +
-      'recovery phrase shown next can open it. API keys, Teams tokens and the relay identity stay ' +
-      'here — the new machine signs in for itself.',
+      'recovery phrase shown next can open it. This machine keeps everything it has; nothing is ' +
+      'removed. API keys, Teams tokens and the relay identity stay here — the new machine signs ' +
+      'in for itself.',
   });
   return response === 0;
 }
