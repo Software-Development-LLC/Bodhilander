@@ -64,7 +64,7 @@ export function reportSessionSwitch(
       tone: 'muted',
       prefix: `${name} was already using `,
       account,
-      suffix: ' — it is now pinned to that account, so changing the group’s'
+      suffix: ' — it is pinned to that account, so changing the group’s'
         + ' account will no longer move this session.',
     };
   }
@@ -80,62 +80,75 @@ export function reportSessionSwitch(
 /**
  * What to say after a group's account was switched (#214).
  *
- * Returns null when the restart prompt is about to appear: that prompt already
- * names what happened, and two things saying it at once is worse than one.
+ * Composes rather than picks: a group switch can do several things at once —
+ * move some sessions, move others that have no pty to restart, and fail to
+ * move the ones pinned to their own account — and the user needs all of them,
+ * not the first one that happens to apply.
+ *
+ * The restart prompt covers only the sessions it is about to restart. Every
+ * other fact lands here, which is why this returns null in exactly one case:
+ * the prompt is showing and there is nothing left for it to have missed.
  */
 export function reportGroupSwitch(
   result: AccountSwitchResult,
   ctx: SwitchContext,
 ): AccountSwitchReport | null {
-  if (ctx.liveAffected.length > 0) return null; // The restart prompt is the report.
-
   const { account, unchangedSessionIds, overriddenSessionIds } = result.outcome;
-  const prefix = `${quoted(ctx.targetName)} now uses `;
 
-  // Sessions that moved but have no pty to replace: the assignment is real and
-  // takes effect the moment they start, which is worth saying precisely
-  // because there is nothing on screen to suggest it.
-  if (result.affectedSessionIds.length > 0) {
-    return {
-      tone: 'info',
-      prefix,
-      account,
-      suffix: `. ${count(result.affectedSessionIds.length)} in it `
-        + `${plural(result.affectedSessionIds.length, 'is', 'are')} stopped and will use it `
-        + 'when you start ' + plural(result.affectedSessionIds.length, 'it', 'them') + '.',
-    };
-  }
+  const clauses: string[] = [];
 
-  if (unchangedSessionIds.length === 0) {
-    return { tone: 'info', prefix, account, suffix: '.' };
+  // Sessions that moved but have no pty to replace. The assignment is real and
+  // takes effect the moment they start — worth saying precisely because there
+  // is nothing on screen to suggest it.
+  const stoppedMovers = result.affectedSessionIds.length - ctx.liveAffected.length;
+  if (stoppedMovers > 0) {
+    clauses.push(`${count(stoppedMovers)} in it ${plural(stoppedMovers, 'is', 'are')} stopped and `
+      + `will use it when you start ${plural(stoppedMovers, 'it', 'them')}`);
   }
 
   // A group switch cannot move a session pinned to its own account. That is
   // the design, but it is invisible from the group menu, so a switch that
-  // moves nothing looks broken rather than declined.
-  const pinned = overriddenSessionIds.length;
-  const already = unchangedSessionIds.length - pinned;
+  // leaves sessions behind looks broken rather than declined.
+  const stuck = describeStuck(unchangedSessionIds, overriddenSessionIds);
+  if (stuck) {
+    clauses.push(`${stuck}, so ${plural(unchangedSessionIds.length, 'it', 'they')} did not move`);
+  }
+
+  // The prompt about to appear already names what it is restarting. Only stay
+  // silent if that is genuinely the whole story.
+  if (ctx.liveAffected.length > 0 && clauses.length === 0) return null;
 
   return {
-    tone: 'muted',
-    prefix,
+    // Muted only when the switch moved nothing anywhere — a confirmation
+    // rather than news.
+    tone: result.affectedSessionIds.length === 0 ? 'muted' : 'info',
+    prefix: `${quoted(ctx.targetName)} now uses `,
     account,
-    suffix: `. ${describeStuck(already, pinned)}, so nothing moved.`,
+    suffix: clauses.length === 0 ? '.' : `. ${sentence(clauses)}.`,
   };
 }
 
-/** "2 sessions were already on it and 1 has its own account" */
-function describeStuck(already: number, pinned: number): string {
-  const parts: string[] = [];
-  if (already > 0) {
-    parts.push(`${count(already)} ${plural(already, 'was', 'were')} already on it`);
+/** "2 sessions were already on it and 1 has its own account", or '' if neither. */
+function describeStuck(unchanged: string[], overridden: string[]): string {
+  const pinned = overridden.length;
+  const already = unchanged.length - pinned;
+
+  const own = `${plural(pinned, 'has', 'have')} ${plural(pinned, 'its', 'their')} own account`;
+
+  // Both reasons: the first clause establishes "sessions", so the second says
+  // a bare number rather than repeating the noun.
+  if (already > 0 && pinned > 0) {
+    return `${count(already)} ${plural(already, 'was', 'were')} already on it and ${pinned} ${own}`;
   }
-  if (pinned > 0) {
-    parts.push(
-      `${count(pinned)} ${plural(pinned, 'has', 'have')} ${plural(pinned, 'its', 'their')} own account`,
-    );
-  }
-  return parts.join(' and ');
+  if (already > 0) return `${count(already)} ${plural(already, 'was', 'were')} already on it`;
+  if (pinned > 0) return `${count(pinned)} ${own}`;
+  return '';
+}
+
+/** Joins independent clauses into one sentence, capitalised. */
+function sentence(clauses: string[]): string {
+  const joined = clauses.join('; ');
+  return joined.charAt(0).toUpperCase() + joined.slice(1);
 }
 
 function count(n: number): string {

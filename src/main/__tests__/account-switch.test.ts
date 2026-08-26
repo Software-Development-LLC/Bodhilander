@@ -352,6 +352,17 @@ describe('switch outcome', () => {
     expect(result.affectedSessionIds).toEqual(['s1']);
   });
 
+  test('names no account rather than undefined when no default is configured', () => {
+    // AccountChip renders `account: ClaudeAccount | null`; an undefined
+    // leaking through the default lookup would be a different thing entirely.
+    addGroup('g1');
+    addSession('s1', 'g1');
+
+    const result = accountSwitch.assignGroupAccount('g1', null);
+
+    expect(result.outcome.account).toBeNull();
+  });
+
   test('an assignment to a deleted account falls through to the default', () => {
     addAccount('acct-a', true);
     addGroup('g1');

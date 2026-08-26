@@ -132,8 +132,50 @@ describe('reportGroupSwitch', () => {
     );
 
     expect(report?.suffix).toContain('1 session was already on it');
-    expect(report?.suffix).toContain('2 sessions have their own account');
-    expect(report?.suffix).toContain('nothing moved');
+    expect(report?.suffix).toContain('2 have their own account');
+    expect(report?.suffix).toContain('did not move');
+  });
+
+  /**
+   * The shape the data-layer tests already build: one session inherits and
+   * moves, two stay behind. Reporting only the movers reintroduces exactly the
+   * "why did nothing happen to those?" ambiguity this pair of issues is about,
+   * so both facts have to survive into one sentence.
+   */
+  test('a mixed group reports the sessions that moved AND the ones left behind', () => {
+    const report = reportGroupSwitch(
+      result({
+        affectedSessionIds: ['inherits'],
+        outcome: {
+          unchangedSessionIds: ['already', 'pinned'],
+          overriddenSessionIds: ['already', 'pinned'],
+        },
+      }),
+      { targetName: 'Api Service', pickedAccountId: 'work', liveAffected: [] },
+    );
+
+    expect(report?.suffix).toContain('stopped');
+    expect(report?.suffix).toContain('own account');
+  });
+
+  test('still reports sessions left behind when a restart prompt is covering the movers', () => {
+    // The prompt names only what it is about to restart, so the pinned
+    // sessions have no other way of being mentioned.
+    const report = reportGroupSwitch(
+      result({
+        affectedSessionIds: ['inherits'],
+        outcome: {
+          unchangedSessionIds: ['pinned'],
+          overriddenSessionIds: ['pinned'],
+        },
+      }),
+      { targetName: 'Api Service', pickedAccountId: 'work', liveAffected: ['inherits'] },
+    );
+
+    expect(report).not.toBeNull();
+    expect(report?.suffix).toContain('own account');
+    // The prompt is already saying this; the notice must not repeat it.
+    expect(report?.suffix).not.toContain('stopped');
   });
 
   test('reports only the reason that applies when every session is pinned', () => {
