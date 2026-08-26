@@ -1,7 +1,7 @@
 import React from 'react';
 import { AccountFailoverEvent } from '../../shared/types';
 import { AccountChip } from './AccountChip';
-import './FailoverNotice.css';
+import { Notice } from './Notice';
 
 export interface FailoverNoticeProps {
   event: AccountFailoverEvent;
@@ -30,37 +30,26 @@ export const FailoverNotice: React.FC<FailoverNoticeProps> = ({ event, onDismiss
     : `${event.sessionIds.length} sessions`;
 
   return (
-    <output className={`failover-notice ${blocked ? 'blocked' : ''}`} aria-live="polite">
-      <span className="failover-notice-icon" aria-hidden="true">{blocked ? '!' : '⇄'}</span>
-
-      <div className="failover-notice-body">
-        {event.reason === 'failback' ? (
-          <>
-            <strong>Back on your own account.</strong>{' '}
-            <AccountChip account={event.to} size="sm" />{' '}
-            is out of its usage limit, so {sessions} moved back.
-          </>
-        ) : (
-          <>
-            <AccountChip account={event.from} size="sm" />{' '}
-            {describeLimit(event)}{' '}
-            {renderOutcome(event, sessions)}
-          </>
-        )}
-      </div>
-
-      <button className="failover-notice-link" onClick={onOpenAccounts}>
-        Accounts
-      </button>
-      <button
-        className="failover-notice-dismiss"
-        onClick={onDismiss}
-        aria-label="Dismiss"
-        title="Dismiss"
-      >
-        ×
-      </button>
-    </output>
+    <Notice
+      tone={blocked ? 'warn' : 'info'}
+      icon={blocked ? '!' : '⇄'}
+      onDismiss={onDismiss}
+      action={{ label: 'Accounts', onClick: onOpenAccounts }}
+    >
+      {event.reason === 'failback' ? (
+        <>
+          <strong>Back on your own account.</strong>{' '}
+          <AccountChip account={event.to} size="sm" />{' '}
+          is out of its usage limit, so {sessions} moved back.
+        </>
+      ) : (
+        <>
+          <AccountChip account={event.from} size="sm" />{' '}
+          {describeLimit(event)}{' '}
+          {renderOutcome(event, sessions)}
+        </>
+      )}
+    </Notice>
   );
 };
 

@@ -16,6 +16,8 @@ import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
 import { FailoverNotice } from './components/FailoverNotice';
+import { AccountSwitchNotice } from './components/AccountSwitchNotice';
+import { AccountSwitchReport, reportGroupSwitch, reportSessionSwitch } from './accountSwitchReport';
 import { AccountFailoverEvent, ClaudeAccount, Session } from '../shared/types';
 import type { LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
@@ -77,6 +79,21 @@ export function accountMenuLabel(acc: ClaudeAccount, isCurrent: boolean): string
   return `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"`
     + tail
     + (acc.isDefault ? ' (default)' : '');
+}
+
+/**
+ * How the group menu's "use the default" item is named (#213).
+ *
+ * It used to say only "Use default account", sitting one row above the account
+ * list — so during a usage limit, when the whole reason for opening this menu
+ * is to get off the default, a single-row miss put the group back on the
+ * account it was escaping and said nothing. Naming the destination makes the
+ * consequence readable before the click rather than hours later.
+ */
+export function defaultAccountMenuLabel(accounts: ClaudeAccount[], isCurrent: boolean): string {
+  const fallback = accounts.find(acc => acc.isDefault) ?? null;
+  const tail = fallback ? ` (${fallback.label})` : '';
+  return `${isCurrent ? '✓ ' : '   '}Use default account${tail}`;
 }
 
 /**
@@ -196,6 +213,8 @@ const App: React.FC = () => {
    * a stack of banners would push the terminal off screen.
    */
   const [failoverNotice, setFailoverNotice] = useState<AccountFailoverEvent | null>(null);
+  // What the last manual account switch did, when it restarted nothing (#214).
+  const [switchNotice, setSwitchNotice] = useState<AccountSwitchReport | null>(null);
   // Which account each running pty ACTUALLY spawned under (#165), keyed by
   // session id. Absent id = no pty running for that session.
   const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
@@ -631,7 +650,16 @@ const App: React.FC = () => {
   // that session and picked an account, so the restart is the thing they asked
   // for.
   const handleAssignSessionAccount = async (sessionId: string, accountId: string | null) => {
-    restartSessions(liveSessionsAmong(await setSessionAccount(sessionId, accountId)));
+    const result = await setSessionAccount(sessionId, accountId);
+    if (!result) return; // The store already logged the failure; say nothing untrue.
+
+    const liveAffected = liveSessionsAmong(result.affectedSessionIds);
+    restartSessions(liveAffected);
+    setSwitchNotice(reportSessionSwitch(result, {
+      targetName: sessions.find(s => s.id === sessionId)?.name ?? 'This session',
+      pickedAccountId: accountId,
+      liveAffected,
+    }));
   };
 
   // A group switch can sweep several running sessions at once, which is a much
@@ -639,15 +667,30 @@ const App: React.FC = () => {
   // still persists the assignment; those sessions move over on their next
   // restart.
   const handleAssignGroupAccount = async (groupId: string, accountId: string | null) => {
-    const live = liveSessionsAmong(await setGroupAccount(groupId, accountId));
+    const result = await setGroupAccount(groupId, accountId);
+    if (!result) return; // The store already logged the failure; say nothing untrue.
+
+    const live = liveSessionsAmong(result.affectedSessionIds);
+    setSwitchNotice(reportGroupSwitch(result, {
+      targetName: groups.find(g => g.id === groupId)?.name ?? 'This group',
+      pickedAccountId: accountId,
+      liveAffected: live,
+    }));
     if (live.length === 0) return;
+
     const count = live.length === 1 ? '1 running session' : `${live.length} running sessions`;
     setConfirmAction({
       type: 'restartForAccountSwitch',
       id: groupId,
       sessionIds: live,
-      message: `${count} in this group ${live.length === 1 ? 'is' : 'are'} still on the previous `
-        + `account. Restart ${live.length === 1 ? 'it' : 'them'} now to apply the switch? `
+      // States the change as done, because it is: the row was written before
+      // this dialog existed and "Not now" declines only the restart. Read as a
+      // confirmation prompt — which is what a modal appearing straight after a
+      // click looks like — dismissing it feels like cancelling the switch, and
+      // the group silently stays moved (#213).
+      message: `This group now uses the new account. ${count} in it `
+        + `${live.length === 1 ? 'is' : 'are'} still running on the previous one. `
+        + `Restart ${live.length === 1 ? 'it' : 'them'} now to apply the switch? `
         + `Conversations resume where they left off. Skipping applies the switch on their next restart.`,
     });
   };
@@ -686,6 +729,7 @@ const App: React.FC = () => {
         // failures, so there's nothing for the caller to await.
         onClick: () => { void handleAssignSessionAccount(sessionId, null); },
       });
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
       for (const acc of claudeAccounts) {
         items.push({
           label: accountMenuLabel(acc, currentAccountId === acc.id),
@@ -726,11 +770,16 @@ const App: React.FC = () => {
     if (claudeAccounts.length > 0) {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
-        label: `${currentAccountId === null ? '✓ ' : '   '}Use default account`,
+        label: defaultAccountMenuLabel(claudeAccounts, currentAccountId === null),
         // Fire-and-forget, as above — the restart prompt is raised from inside
         // the handler once main reports which sessions moved.
         onClick: () => { void handleAssignGroupAccount(groupId, null); },
       });
+      // This item clears the assignment rather than setting one, and during a
+      // usage limit the account it resolves to is usually the one being fled.
+      // A separator so the row above the account list is not one slip away
+      // from undoing the switch the user came here to make (#213).
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
       for (const acc of claudeAccounts) {
         items.push({
           label: accountMenuLabel(acc, currentAccountId === acc.id),
@@ -1657,6 +1706,9 @@ const App: React.FC = () => {
               setFailoverNotice(null);
             }}
           />
+        )}
+        {switchNotice && (
+          <AccountSwitchNotice report={switchNotice} onDismiss={() => setSwitchNotice(null)} />
         )}
         {contentView === 'analytics' && (
           <AnalyticsPanel

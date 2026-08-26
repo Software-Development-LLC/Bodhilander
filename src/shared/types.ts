@@ -354,6 +354,41 @@ export interface AccountFailoverEvent {
  */
 export interface AccountSwitchResult {
   affectedSessionIds: string[];
+  /**
+   * What the write did, beyond what needs restarting (#214).
+   *
+   * `affectedSessionIds` answers one question — which ptys to replace — and
+   * answers it with `[]` in two very different situations: nothing needed to
+   * move, and nothing could. Both reach the user as an unchanged screen,
+   * indistinguishable from a menu that never registered the click. This is
+   * what the renderer needs to say which one it was.
+   */
+  outcome: AccountSwitchOutcome;
+}
+
+/**
+ * Why an account switch moved what it moved (#214).
+ *
+ * Deliberately describes sessions rather than prescribing a message: "already
+ * on that account" and "pinned to its own account" are different facts about
+ * the user's setup, and only the renderer knows which of them is worth saying
+ * in the surface the click came from.
+ */
+export interface AccountSwitchOutcome {
+  /** The account the target resolves to after the write (null = legacy dir). */
+  account: ClaudeAccount | null;
+  /**
+   * Sessions whose effective account did not move. For a session switch this
+   * is the session itself, meaning the pick recorded an override to the
+   * account it was already inheriting.
+   */
+  unchangedSessionIds: string[];
+  /**
+   * Group switches only: sessions carrying their own account override, which
+   * a group-level change cannot move by design. Worth separating from the
+   * above because the reason is different and so is the remedy.
+   */
+  overriddenSessionIds: string[];
 }
 
 /**

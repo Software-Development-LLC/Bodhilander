@@ -1,4 +1,10 @@
-.failover-notice {
+/*
+ * The shell shared by every "here is what just happened to your sessions"
+ * line (#214). Extracted from FailoverNotice so an automatic failover and a
+ * manual account switch — the same event with a different instigator — cannot
+ * drift into looking like different kinds of thing.
+ */
+.notice {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -16,23 +22,28 @@
 /* Nothing moved. Warmer border so the two outcomes are distinguishable at a
    glance, without the alarm colouring of an actual error — the app is not
    broken, the quota is. */
-.failover-notice.blocked {
+.notice.notice-warn {
   border-left-color: var(--warning-color, #d79c40);
 }
 
-.failover-notice-icon {
+/* Nothing needed to move. Quieter still: this is a confirmation, not news. */
+.notice.notice-muted {
+  border-left-color: var(--border-color, #3a3a3a);
+}
+
+.notice-icon {
   flex: 0 0 auto;
   font-weight: 700;
   opacity: 0.8;
 }
 
-.failover-notice-body {
+.notice-body {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.failover-notice-link,
-.failover-notice-dismiss {
+.notice-link,
+.notice-dismiss {
   flex: 0 0 auto;
   background: none;
   border: none;
@@ -43,13 +54,13 @@
   font-size: 12px;
 }
 
-.failover-notice-link:hover,
-.failover-notice-dismiss:hover {
+.notice-link:hover,
+.notice-dismiss:hover {
   color: var(--text-primary, #ddd);
   background: var(--bg-hover, #2f2f30);
 }
 
-.failover-notice-dismiss {
+.notice-dismiss {
   font-size: 16px;
   line-height: 1;
 }

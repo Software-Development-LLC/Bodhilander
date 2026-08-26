@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Session, SessionState, DEFAULT_SESSION_PROVIDER } from '../../shared/types';
+import { AccountSwitchResult, Session, SessionState, DEFAULT_SESSION_PROVIDER } from '../../shared/types';
 
 /**
  * Apply a hook's state change to the list. Lifted out of the effect because
@@ -162,16 +162,22 @@ export function useSessions() {
    * ptys need restarting — the column write alone leaves a live session on the
    * old account.
    */
-  const setSessionAccount = useCallback(async (id: string, accountId: string | null): Promise<string[]> => {
+  const setSessionAccount = useCallback(async (
+    id: string,
+    accountId: string | null,
+  ): Promise<AccountSwitchResult | null> => {
     try {
-      const { affectedSessionIds } = await window.electronAPI.assignAccountToSession(id, accountId);
+      const result = await window.electronAPI.assignAccountToSession(id, accountId);
       setSessions(prev => prev.map(s =>
         s.id === id ? { ...s, claudeAccountId: accountId } : s
       ));
-      return affectedSessionIds;
+      return result;
     } catch (error) {
       console.error('Failed to assign account to session:', error);
-      return [];
+      // null, not an empty result: the caller reports what the switch did, and
+      // a failed call did nothing at all — reporting it as "already on that
+      // account" would be the same lie in a new place (#214).
+      return null;
     }
   }, []);
 
