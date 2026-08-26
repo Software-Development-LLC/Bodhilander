@@ -4,6 +4,7 @@ import { AccountSwitchResult, ClaudeAccount } from '../shared/types';
 import { getDatabase } from './database';
 import { resolveAccountForSession } from './account-resolver';
 import { carryTranscript, legacyClaudeConfigDir } from './conversation-transcript';
+import * as accountsRepo from './repositories/accounts';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 
@@ -44,11 +45,21 @@ export function assignSessionAccount(
   const after = resolveAccountForSession(sessionId);
 
   if ((before?.id ?? null) === (after?.id ?? null)) {
-    return { affectedSessionIds: [] };
+    // The write still happened and still means something — the session is now
+    // pinned to this account instead of inheriting it, so a later group switch
+    // will leave it behind. Nothing restarts, so the caller is the only thing
+    // that can say so (#214).
+    return {
+      affectedSessionIds: [],
+      outcome: { account: after, unchangedSessionIds: [sessionId], overriddenSessionIds: [] },
+    };
   }
 
   rehomeConversation(sessionId, before, after);
-  return { affectedSessionIds: [sessionId] };
+  return {
+    affectedSessionIds: [sessionId],
+    outcome: { account: after, unchangedSessionIds: [], overriddenSessionIds: [] },
+  };
 }
 
 /**
@@ -61,22 +72,51 @@ export function assignGroupAccount(
   accountId: string | null,
 ): AccountSwitchResult {
   const db = getDatabase();
-  const ids = (db.prepare('SELECT id FROM sessions WHERE group_id = ?').all(groupId) as
-    { id: string }[]).map(row => row.id);
+  const rows = db.prepare(
+    'SELECT id, claude_account_id FROM sessions WHERE group_id = ?'
+  ).all(groupId) as { id: string; claude_account_id: string | null }[];
+  const ids = rows.map(row => row.id);
 
   const before = new Map(ids.map(id => [id, resolveAccountForSession(id)]));
   groupsRepo.updateGroup(groupId, { claudeAccountId: accountId });
 
   const affectedSessionIds: string[] = [];
+  const unchangedSessionIds: string[] = [];
   for (const id of ids) {
     const prev = before.get(id) ?? null;
     const next = resolveAccountForSession(id);
-    if ((prev?.id ?? null) === (next?.id ?? null)) continue;
+    if ((prev?.id ?? null) === (next?.id ?? null)) {
+      unchangedSessionIds.push(id);
+      continue;
+    }
     rehomeConversation(id, prev, next);
     affectedSessionIds.push(id);
   }
 
-  return { affectedSessionIds };
+  return {
+    affectedSessionIds,
+    outcome: {
+      account: groupAccount(accountId),
+      unchangedSessionIds,
+      // Read from the pre-write rows: a group switch never touches a session's
+      // own column, so these are the sessions it was structurally unable to
+      // move — a different fact from "already there", and the one that
+      // explains a group switch that appears to do nothing (#214).
+      overriddenSessionIds: rows.filter(row => row.claude_account_id !== null).map(row => row.id),
+    },
+  };
+}
+
+/**
+ * The account a group resolves to after being pointed at `accountId`.
+ *
+ * Mirrors resolveAccountForSession's tail: null means "use the default", and a
+ * reference to an account that no longer exists falls through to the default
+ * the same way a missing assignment does.
+ */
+function groupAccount(accountId: string | null): ClaudeAccount | null {
+  const picked = accountId ? accountsRepo.getAccount(accountId) : null;
+  return picked ?? accountsRepo.getDefaultAccount();
 }
 
 /**

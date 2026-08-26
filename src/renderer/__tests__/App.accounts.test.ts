@@ -16,7 +16,12 @@
  * Run with: bun test src/renderer/__tests__/App.accounts.test.ts
  */
 import { describe, expect, test } from 'bun:test';
-import { accountMenuLabel, resolveAccountIndicator, respawnable } from '../App';
+import {
+  accountMenuLabel,
+  defaultAccountMenuLabel,
+  resolveAccountIndicator,
+  respawnable,
+} from '../App';
 import type { ClaudeAccount, LiveAccountBinding, Session } from '../../shared/types';
 
 const work = {
@@ -135,6 +140,30 @@ describe('resolveAccountIndicator', () => {
     const renamed = { ...work, label: 'Acme Corp' } as ClaudeAccount;
     const props = resolve({ accounts: [renamed, personal], binding: bindingFor(work.id) })!;
     expect(props.liveAccount?.label).toBe('Acme Corp');
+  });
+});
+
+/**
+ * The group menu's "use the default" item (#213).
+ *
+ * It clears the assignment rather than setting one, and during a usage limit
+ * the account it resolves to is usually the one the user is trying to get off.
+ * An unnamed destination one row above the account list is what let a group
+ * silently go back onto a spent account.
+ */
+describe('defaultAccountMenuLabel', () => {
+  test('names the account the item actually resolves to', () => {
+    expect(defaultAccountMenuLabel([work, personal], false)).toContain('Personal');
+  });
+
+  test('says only what it knows when no account is marked default', () => {
+    const label = defaultAccountMenuLabel([{ ...work, isDefault: false } as ClaudeAccount], false);
+    expect(label).toContain('Use default account');
+    expect(label).not.toContain('(');
+  });
+
+  test('is ticked when the group is already on the default', () => {
+    expect(defaultAccountMenuLabel([work, personal], true).startsWith('✓ ')).toBe(true);
   });
 });
 
