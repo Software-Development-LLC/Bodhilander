@@ -6,7 +6,7 @@
 
 import type DatabaseCtor from 'better-sqlite3';
 import type { HandoffOffer } from '../../shared/types';
-import { buildTransferBundle, type ExportOptions } from './bundle-export';
+import { buildTransferBundle, measureTranscriptBytes, type ExportOptions } from './bundle-export';
 import { readBundleManifest, restoreTransferBundle, type ImportOptions, type ImportOutcome } from './bundle-import';
 import type { TransferManifest } from './bundle-format';
 import { formatBytes } from './bundle-format';
@@ -37,13 +37,6 @@ export interface PreferenceStore {
  */
 export const DECLINED_HANDOFF_PREF = 'relay.declinedHandoffId';
 
-/**
- * The largest sealed handoff worth attempting. Mirrors the relay's shipped
- * ceiling so an oversized state is refused here, with both sizes in the
- * message, rather than after uploading its way to a 413.
- */
-export const HANDOFF_MAX_BYTES = 16 * 1024 * 1024;
-
 export interface PreparedHandoff {
   offer: HandoffOffer;
   manifest: TransferManifest;
@@ -64,8 +57,23 @@ export interface PrepareOptions {
   confirm?: (byteLength: number, manifest: TransferManifest) => Promise<boolean>;
 }
 
+/**
+ * How much better than raw gzip could plausibly do on transcript JSONL. Only a
+ * hopeless state is refused on this estimate — the exact check still follows
+ * the build — but it spares the operator minutes of work to earn a no.
+ */
+const PLAUSIBLE_COMPRESSION_CEILING = 20;
+
 /** Null when the confirmation was declined; nothing reached the relay. */
 export async function prepareHandoff(db: Db, options: PrepareOptions): Promise<PreparedHandoff | null> {
+  const raw = measureTranscriptBytes(db, options.export.legacyConfigDir);
+  if (raw > options.maxBytes * PLAUSIBLE_COMPRESSION_CEILING) {
+    throw new Error(
+      `This machine's conversation transcripts alone are ${formatBytes(raw)}, far past the ` +
+        `${formatBytes(options.maxBytes)} the relay carries. Export it to a file instead.`,
+    );
+  }
+
   const { bytes, manifest } = buildTransferBundle(db, options.export);
   const sealedLength = bytes.length + HANDOFF_SEAL_OVERHEAD_BYTES;
   if (sealedLength > options.maxBytes) {

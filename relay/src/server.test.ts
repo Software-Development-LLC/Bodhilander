@@ -74,6 +74,37 @@ function start(env: Record<string, string> = {}) {
   return { config, origin, put };
 }
 
+/**
+ * A body with no content-length, so it is framed chunked. `produced` counts
+ * what the generator actually handed over, which is how far the server got
+ * before it stopped pulling.
+ */
+function chunkedBody(totalBytes: number, produced: { bytes: number }): ReadableStream<Uint8Array> {
+  const CHUNK = 16 * 1024;
+  let sent = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= totalBytes) {
+        controller.close();
+        return;
+      }
+      const size = Math.min(CHUNK, totalBytes - sent);
+      sent += size;
+      produced.bytes = sent;
+      controller.enqueue(new Uint8Array(size).fill(0x20));
+    },
+  });
+}
+
+function postChunked(url: string, totalBytes: number, produced: { bytes: number }) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: chunkedBody(totalBytes, produced),
+    duplex: 'half',
+  } as RequestInit);
+}
+
 describe('what the socket will accept', () => {
   test('admits a bundle from a real machine, which the old ceiling did not', async () => {
     const { config, put } = start();
@@ -94,6 +125,41 @@ describe('what the socket will accept', () => {
 
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ error: 'handoff_too_large', maxBytes: 65536 });
+  });
+
+  test('bounds a chunked body, which declares no length to check', async () => {
+    const { origin } = start();
+    const produced = { bytes: 0 };
+    const total = 8 * 1024 * 1024;
+
+    const res = await postChunked(`${origin}/link`, total, produced);
+
+    // 400 here would mean the body was buffered AND parsed by /link's handler.
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'payload_too_large' });
+    expect(produced.bytes).toBeLessThan(total / 2);
+  });
+
+  test('bounds a chunked body on the other unauthenticated route too', async () => {
+    const { origin } = start();
+    const produced = { bytes: 0 };
+
+    const res = await postChunked(`${origin}/api/machines/abc/shares`, 4 * 1024 * 1024, produced);
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'payload_too_large' });
+  });
+
+  test('exempts only the handoff upload, not every route under it', async () => {
+    const { origin } = start();
+    // `/handoff/bundle` is a download; nothing there reads a body.
+    const res = await fetch(`${origin}/api/machines/abc/handoff/bundle`, {
+      method: 'PUT',
+      body: randomBytes(MAX_JSON_BODY_BYTES + 1024),
+    });
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: 'payload_too_large' });
   });
 
   test('still bounds every route that is not a handoff upload', async () => {

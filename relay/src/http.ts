@@ -149,10 +149,13 @@ export function createRouter(ctx: RelayContext) {
     const method = req.method;
 
     try {
-      // A handoff sets Bun's body ceiling for the whole server. Every other
-      // route reads small JSON and keeps the bound it always had.
+      // A handoff sets Bun's body ceiling for the whole server, so only the
+      // route that wants it may exceed the JSON bound. This refuses a declared
+      // oversize before a byte is pulled; `readJson` bounds the rest.
+      const handoff = matchMachineHandoff(pathname);
+      const isHandoffUpload = method === 'PUT' && !!handoff && !handoff.bundle;
       const declaredLength = Number(req.headers.get('content-length') ?? 0);
-      if (declaredLength > MAX_JSON_BODY_BYTES && !(method === 'PUT' && matchMachineHandoff(pathname))) {
+      if (!isHandoffUpload && declaredLength > MAX_JSON_BODY_BYTES) {
         return json({ error: 'payload_too_large' }, 413);
       }
 
@@ -240,7 +243,6 @@ export function createRouter(ctx: RelayContext) {
 
       // --- machine handoff ---
 
-      const handoff = matchMachineHandoff(pathname);
       if (handoff) {
         if (method === 'PUT' && !handoff.bundle) {
           return (
@@ -264,6 +266,7 @@ export function createRouter(ctx: RelayContext) {
 
       return json({ error: 'not_found' }, 404);
     } catch (err) {
+      if (err instanceof PayloadTooLarge) return json({ error: 'payload_too_large' }, 413);
       logger.error('unhandled http error', {
         method,
         path: pathname,
@@ -779,9 +782,42 @@ function publicMachine(m: Machine) {
   };
 }
 
-async function readJson(req: Request): Promise<unknown> {
+/** Thrown out of `readJson` and answered with a 413 by the router's catch. */
+class PayloadTooLarge extends Error {
+  override name = 'PayloadTooLarge';
+}
+
+/**
+ * Read and parse a JSON body, refusing anything past `limit` AS IT ARRIVES.
+ * A declared length is not enough on its own: a chunked request declares none,
+ * and the server-wide ceiling is set high enough to admit a handoff.
+ */
+async function readJson(req: Request, limit = MAX_JSON_BODY_BYTES): Promise<unknown> {
+  const declared = req.headers.get('content-length');
+  if (declared && Number(declared) > limit) throw new PayloadTooLarge();
+
+  const stream = req.body;
+  if (!stream) return null;
+
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    return await req.json();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > limit) throw new PayloadTooLarge();
+      chunks.push(value);
+    }
+  } finally {
+    // Stops the sender rather than draining what is left of an oversized body.
+    void reader.cancel().catch(() => {});
+  }
+
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     return null;
   }

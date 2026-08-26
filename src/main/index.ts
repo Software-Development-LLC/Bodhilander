@@ -1040,7 +1040,9 @@ safeHandle('handoff:peek', () => readHandoffOffer(getRelayClient().handoffTransp
 safeHandle('handoff:restore', (phrase: string) =>
   restoreMachineHandoff(getRelayClient().handoffTransport(), phrase)
 );
-safeHandle('handoff:decline', (handoffId: string) => declineMachineHandoff(handoffId));
+safeHandle('handoff:decline', (handoffId: string) =>
+  declineMachineHandoff(getRelayClient().handoffTransport(), handoffId)
+);
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {

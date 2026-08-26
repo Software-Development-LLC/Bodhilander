@@ -165,8 +165,16 @@ describe('reading the offer', () => {
 
   test('remembers a bundle this machine turned down', async () => {
     const relay = standIn(Buffer.alloc(64, 1));
-    declineMachineHandoff('handoff-1');
+    declineMachineHandoff(relay.transport, 'handoff-1');
     expect((await readHandoffOffer(relay.transport)).declined).toBe(true);
+  });
+
+  test('will not bury a bundle on behalf of a machine that has been unlinked', async () => {
+    const relay = standIn(Buffer.alloc(64, 1));
+    // The dialog was drawn, then the machine was unlinked underneath it. That
+    // offer is stale, and recording it would lose a bundle that is still real.
+    declineMachineHandoff(null, 'handoff-1');
+    expect((await readHandoffOffer(relay.transport)).declined).toBe(false);
   });
 
   test('says nothing is waiting rather than interrupting a launch with a relay error', async () => {

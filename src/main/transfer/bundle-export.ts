@@ -187,6 +187,30 @@ function listTranscripts(configDir: string, accountKey: string): TranscriptFile[
   return found;
 }
 
+/** Every account's transcript tree, plus the pre-accounts one if it is separate. */
+function transcriptRoots(db: Db, legacyConfigDir: string): { key: string; dir: string }[] {
+  const roots = (db.prepare('SELECT id, config_dir FROM claude_accounts').all() as any[]).map((a) => ({
+    key: a.id as string,
+    dir: a.config_dir as string,
+  }));
+  const seen = new Set(roots.map((a) => path.resolve(a.dir)));
+  if (!seen.has(path.resolve(legacyConfigDir))) {
+    roots.push({ key: LEGACY_ACCOUNT_KEY, dir: legacyConfigDir });
+  }
+  return roots;
+}
+
+/**
+ * What the transcripts weigh uncompressed, by stat alone. Nothing is read, so
+ * a caller can ask whether a bundle could possibly fit somewhere before paying
+ * to build one.
+ */
+export function measureTranscriptBytes(db: Db, legacyConfigDir: string): number {
+  return transcriptRoots(db, legacyConfigDir)
+    .flatMap((a) => listTranscripts(a.dir, a.key))
+    .reduce((sum, file) => sum + file.size, 0);
+}
+
 /** Sizes come from stat, so the ceiling is checked before a byte is read. */
 export class TranscriptVolumeError extends Error {}
 
@@ -217,17 +241,8 @@ function readWithinBudget(files: TranscriptFile[], budget: number): BundleEntry[
 export function buildTransferBundle(db: Db, options: ExportOptions): BuiltBundle {
   const tables = readPortableTables(db);
 
-  const accountDirs = (db.prepare('SELECT id, config_dir FROM claude_accounts').all() as any[]).map((a) => ({
-    key: a.id as string,
-    dir: a.config_dir as string,
-  }));
-  const seen = new Set(accountDirs.map((a) => path.resolve(a.dir)));
-  if (!seen.has(path.resolve(options.legacyConfigDir))) {
-    accountDirs.push({ key: LEGACY_ACCOUNT_KEY, dir: options.legacyConfigDir });
-  }
-
   const transcripts = readWithinBudget(
-    accountDirs.flatMap((a) => listTranscripts(a.dir, a.key)),
+    transcriptRoots(db, options.legacyConfigDir).flatMap((a) => listTranscripts(a.dir, a.key)),
     options.maxTranscriptBytes ?? MAX_TRANSCRIPT_BYTES,
   );
   const workingDirRoots = collectWorkingDirRoots([

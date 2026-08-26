@@ -20,10 +20,14 @@ import {
   fetchHandoff,
   isHandoffDeclined,
   prepareHandoff,
-  HANDOFF_MAX_BYTES,
   type HandoffTransport,
 } from './transfer/handoff';
-import type { HandoffOfferState, HandoffPrepareResult, PortableImportResult } from '../shared/types';
+import {
+  HANDOFF_MAX_BYTES,
+  type HandoffOfferState,
+  type HandoffPrepareResult,
+  type PortableImportResult,
+} from '../shared/types';
 
 const prefs = { get: getPreference, set: setPreference };
 
@@ -83,7 +87,13 @@ export async function readHandoffOffer(transport: HandoffTransport | null): Prom
   }
 }
 
-export function declineMachineHandoff(handoffId: string): void {
+export function declineMachineHandoff(transport: HandoffTransport | null, handoffId: string): void {
+  if (!transport) {
+    // Unlinked since the offer was drawn, so what is on screen is stale.
+    // Writing the decline here would permanently bury a bundle that is real.
+    log.info('[Handoff] Declined a stale offer; not recording it');
+    return;
+  }
   declineHandoff(prefs, handoffId);
   log.info('[Handoff] Offer declined; it will not be raised again');
 }

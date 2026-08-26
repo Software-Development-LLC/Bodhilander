@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
+import { ApiServerStatus, HANDOFF_MAX_BYTES, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
 import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
@@ -588,7 +588,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     <span className="settings-hint">
                       Sends that same bundle to your relay account instead of a file. It is encrypted
                       here first, so the relay carries bytes it cannot read; sign in on the new
-                      machine and it is offered there. Needs this machine linked under Remote Hosting.
+                      machine and it is offered there. Needs this machine linked under Remote Hosting,
+                      and holds up to {Math.round(HANDOFF_MAX_BYTES / (1024 * 1024))} MB — larger
+                      machines move by file.
                     </span>
                   </div>
                   <div className="settings-row">

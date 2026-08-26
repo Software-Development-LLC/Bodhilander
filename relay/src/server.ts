@@ -1,3 +1,4 @@
+import type { Server, WebSocketHandler } from 'bun';
 import type { RelayConfig } from './config';
 
 /**
@@ -20,3 +21,23 @@ export function requestBodyCeiling(config: RelayConfig): number {
  * above is far too generous for them now that a handoff sets it.
  */
 export const MAX_JSON_BODY_BYTES = 64 * 1024;
+
+export interface ServeInput<T> {
+  config: RelayConfig;
+  fetch: (req: Request, server: Server<T>) => Response | undefined | Promise<Response | undefined>;
+  websocket: WebSocketHandler<T>;
+}
+
+/**
+ * Everything `Bun.serve` is given. Shared with the entry point rather than
+ * replicated in a test, so what a test starts is what production starts —
+ * a copy pins its own copy and lets the deployed ceiling regress unseen.
+ */
+export function serveOptions<T>(input: ServeInput<T>) {
+  return {
+    port: input.config.port,
+    maxRequestBodySize: requestBodyCeiling(input.config),
+    fetch: input.fetch,
+    websocket: input.websocket,
+  };
+}

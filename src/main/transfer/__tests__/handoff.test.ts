@@ -3,13 +3,14 @@
  * handed, that a restore drives the ordinary importer and its remapping, that
  * a failure leaves the bundle retryable, and that "not now" outlives a launch.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { freshDb, seedSecrets, seedSourceDb, SECRET_VALUES, writeTranscript } from './db-fixture';
 import { decodeBundle, looksLikeBundle, TABLES_ENTRY } from '../bundle-format';
+import { HANDOFF_SEAL_OVERHEAD_BYTES } from '../handoff-crypto';
 import { openHandoff } from '../handoff-crypto';
 import { generateRecoveryPhrase } from '../recovery-phrase';
 import type { HandoffOffer } from '../../../shared/types';
@@ -192,6 +193,43 @@ describe('preparing a handoff', () => {
     expect(result).toBeNull();
     expect(relay.counts.uploads).toBe(0);
     expect(relay.stored()).toBeNull();
+  });
+
+  test('counts what sealing adds, so a bundle that only just fits is refused', async () => {
+    // The boundary here is 25 bytes wide, and an export stamps the time it ran
+    // — so the clock is frozen to make successive builds byte-identical.
+    setSystemTime(new Date('2026-08-26T00:00:00.000Z'));
+    try {
+      const relay = standInRelay();
+      const { sealedBytes } = await prepare(relay);
+
+      await expect(
+        prepareHandoff(source as never, {
+          transport: relay.transport,
+          maxBytes: sealedBytes - 1,
+          export: exportOptions(),
+        }),
+      ).rejects.toThrow(/relay carries up to/);
+
+      const fits = await prepareHandoff(source as never, {
+        transport: relay.transport,
+        maxBytes: sealedBytes,
+        export: exportOptions(),
+      });
+      expect(fits).not.toBeNull();
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('refuses a hopeless transcript volume from stat alone, before building', async () => {
+    writeTranscript(sourceConfigDir, 'big-project', 'conv-big', 'x'.repeat(40_000));
+    const relay = standInRelay();
+
+    await expect(
+      prepareHandoff(source as never, { transport: relay.transport, maxBytes: 512, export: exportOptions() }),
+    ).rejects.toThrow(/transcripts alone are/);
+    expect(relay.counts.uploads).toBe(0);
   });
 
   test('refuses a state larger than the relay will carry, before uploading', async () => {

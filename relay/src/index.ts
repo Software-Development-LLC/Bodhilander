@@ -6,7 +6,7 @@ import { createRepositories } from './repositories';
 import { createGateway, newAgentSocketData, newClientSocketData } from './ws';
 import { parseCookies, SESSION_COOKIE } from './auth/cookies';
 import { createRateLimiter } from './rate-limit';
-import { requestBodyCeiling } from './server';
+import { serveOptions } from './server';
 
 /** How often expired sessions / link codes / rate-limit windows are swept. */
 const REAP_INTERVAL_MS = 10 * 60 * 1000;
@@ -20,7 +20,8 @@ const REAP_INTERVAL_MS = 10 * 60 * 1000;
  */
 const MAX_WS_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
-function main(): void {
+/** The running server plus the handle a test needs to shut it down again. */
+export function main() {
   const { config, warnings } = loadConfig();
   const logger = createLogger(config.logLevel);
   for (const warning of warnings) {
@@ -45,9 +46,8 @@ function main(): void {
     onGrantRevoked: (grant) => gateway.notifyGrantRevoked(grant),
   });
 
-  const server = Bun.serve({
-    port: config.port,
-    maxRequestBodySize: requestBodyCeiling(config),
+  const server = Bun.serve(serveOptions({
+    config,
     fetch(req, srv) {
       const url = new URL(req.url);
       // Agents connect at /ws and authenticate with an Ed25519-signed nonce.
@@ -67,7 +67,7 @@ function main(): void {
       return route(req, srv.requestIP(req)?.address ?? null);
     },
     websocket: { ...gateway, maxPayloadLength: MAX_WS_PAYLOAD_BYTES },
-  });
+  }));
 
   // Nothing purged expired sessions or link codes before — `purgeExpiredSessions`
   // was on the repository interface but had no caller, so both tables grew
@@ -123,16 +123,33 @@ function main(): void {
       process.exit(1);
     }, 5000).unref();
   };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  const onSigint = () => shutdown('SIGINT');
+  const onSigterm = () => shutdown('SIGTERM');
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+
+  return {
+    server,
+    stop: async () => {
+      clearInterval(reaper);
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+      await server.stop(true);
+      db.close();
+    },
+  };
 }
 
-try {
-  main();
-} catch (err) {
-  const message = err instanceof Error ? err.message : String(err);
-  process.stderr.write(
-    JSON.stringify({ ts: new Date().toISOString(), level: 'error', msg: 'startup failed', err: message }) + '\n',
-  );
-  process.exit(1);
+// Only when run as the program. Importing this module — which a test does, to
+// check the server it builds — must not start one.
+if (import.meta.main) {
+  try {
+    main();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      JSON.stringify({ ts: new Date().toISOString(), level: 'error', msg: 'startup failed', err: message }) + '\n',
+    );
+    process.exit(1);
+  }
 }

@@ -12,6 +12,7 @@ import { createLogger } from '../../../../../relay/src/logger';
 import { openDb } from '../../../../../relay/src/db';
 import { createRepositories } from '../../../../../relay/src/repositories';
 import { createRouter } from '../../../../../relay/src/http';
+import { HANDOFF_MAX_BYTES } from '../../../../shared/types';
 
 const logger = createLogger('error');
 
@@ -53,6 +54,13 @@ function relay(env: Record<string, string> = {}) {
 
   return { db, link };
 }
+
+describe('the two sides of the size ceiling', () => {
+  test('agree, so a pre-flight refusal means what the relay would have said', () => {
+    const { config } = loadConfig({ NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test' });
+    expect(HANDOFF_MAX_BYTES).toBe(config.handoffMaxBytes);
+  });
+});
 
 describe('the transport against the real router', () => {
   test('carries a bundle from one machine to another and clears it', async () => {
