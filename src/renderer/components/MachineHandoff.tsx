@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { HandoffOfferState, PortableImportResult } from '../../shared/types';
 import './MachineHandoff.css';
 
@@ -52,7 +52,7 @@ export const HandoffPreparePanel: React.FC = () => {
       )}
 
       {phrase && (
-        <div className="handoff-phrase" role="group" aria-label="Recovery phrase">
+        <section className="handoff-phrase" aria-label="Recovery phrase">
           <p className="handoff-phrase-lead">
             Write this down before you close it. It is the only thing that opens the bundle, and it is
             not stored anywhere — not here, and not on the relay.
@@ -82,7 +82,7 @@ export const HandoffPreparePanel: React.FC = () => {
               I have written it down
             </button>
           </div>
-        </div>
+        </section>
       )}
     </div>
   );
@@ -98,6 +98,7 @@ export const HandoffRestoreOffer: React.FC<HandoffRestoreOfferProps> = ({ onRest
   const [phrase, setPhrase] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,6 +125,21 @@ export const HandoffRestoreOffer: React.FC<HandoffRestoreOfferProps> = ({ onRest
   }, []);
 
   const offer = state?.offer;
+
+  // Opened here rather than left to `open`, because only `showModal()` makes
+  // the rest of the page inert and traps focus — and this asks for a phrase
+  // that must be typed into it and nowhere else.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, [offer?.id]);
+
+  // Escape would close the dialog and leave the offer neither restored nor
+  // declined — visibly gone, with nothing recorded. "Not Now" is durable and
+  // must not be something a stray keypress can spend, so neither answer is
+  // reachable except by its button. This is what the overlay did before.
+  const keepOpen = (e: React.SyntheticEvent<HTMLDialogElement>) => e.preventDefault();
+
   if (!offer || state?.declined) return null;
 
   const decline = async () => {
@@ -150,54 +166,49 @@ export const HandoffRestoreOffer: React.FC<HandoffRestoreOfferProps> = ({ onRest
   const from = offer.sourceMachineName ?? 'your other machine';
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content handoff-offer" role="dialog" aria-modal="true" aria-labelledby="handoff-offer-title">
-        <div className="modal-header">
-          <h2 id="handoff-offer-title">Restore from {from}?</h2>
-        </div>
-        <div className="modal-body">
-          <p>
-            {from} left {state?.sizeLabel ?? 'its state'} here for you — groups, sessions, history,
-            settings and conversation transcripts. Enter the recovery phrase it showed you.
-          </p>
+    <dialog ref={dialogRef} className="handoff-offer" aria-labelledby="handoff-offer-title" onCancel={keepOpen}>
+      <h3 id="handoff-offer-title">Restore from {from}?</h3>
 
-          <label className="handoff-field" htmlFor="handoff-phrase-input">
-            Recovery phrase
-          </label>
-          <textarea
-            id="handoff-phrase-input"
-            className="handoff-input"
-            rows={3}
-            spellCheck={false}
-            autoFocus
-            value={phrase}
-            onChange={(e) => setPhrase(e.target.value)}
-            aria-describedby="handoff-phrase-count"
-          />
-          <p id="handoff-phrase-count" className="handoff-phrase-detail">
-            {words(phrase)} of 18 words
-          </p>
+      <p className="handoff-offer-lead">
+        {from} left {state?.sizeLabel ?? 'its state'} here for you — groups, sessions, history,
+        settings and conversation transcripts. Enter the recovery phrase it showed you.
+      </p>
 
-          {error && (
-            <p className="handoff-error" role="alert">
-              {error}
-            </p>
-          )}
+      <label className="handoff-field" htmlFor="handoff-phrase-input">
+        Recovery phrase
+      </label>
+      <textarea
+        id="handoff-phrase-input"
+        className="handoff-input"
+        rows={3}
+        spellCheck={false}
+        autoFocus
+        value={phrase}
+        onChange={(e) => setPhrase(e.target.value)}
+        aria-describedby="handoff-phrase-count"
+      />
+      <p id="handoff-phrase-count" className="handoff-phrase-detail">
+        {words(phrase)} of 18 words
+      </p>
 
-          <div className="handoff-actions">
-            <button className="btn primary" onClick={restore} disabled={busy || words(phrase) === 0}>
-              {busy ? 'Restoring…' : 'Restore'}
-            </button>
-            <button className="btn" onClick={decline} disabled={busy}>
-              Not Now
-            </button>
-          </div>
-          <p className="handoff-phrase-detail">
-            Declining keeps the bundle on the relay until it expires; you will not be asked about this
-            one again.
-          </p>
-        </div>
+      {error && (
+        <p className="handoff-error" role="alert">
+          {error}
+        </p>
+      )}
+
+      <div className="handoff-actions">
+        <button className="btn primary" onClick={restore} disabled={busy || words(phrase) === 0}>
+          {busy ? 'Restoring…' : 'Restore'}
+        </button>
+        <button className="btn" onClick={decline} disabled={busy}>
+          Not Now
+        </button>
       </div>
-    </div>
+      <p className="handoff-phrase-detail">
+        Declining keeps the bundle on the relay until it expires; you will not be asked about this
+        one again.
+      </p>
+    </dialog>
   );
 };

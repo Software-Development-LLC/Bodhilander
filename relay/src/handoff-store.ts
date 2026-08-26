@@ -17,6 +17,14 @@ export const ORPHAN_GRACE_MS = 60 * 60 * 1000;
 const BUNDLE_SUFFIX = '.bundle';
 const PARTIAL_SUFFIX = '.part';
 
+/** The id a store filename carries, or null when the file is not one of ours. */
+function idFromFilename(name: string): string | null {
+  for (const suffix of [BUNDLE_SUFFIX, PARTIAL_SUFFIX]) {
+    if (name.endsWith(suffix)) return name.slice(0, -suffix.length);
+  }
+  return null;
+}
+
 /** Raised mid-stream, so an oversized upload stops rather than completing. */
 export class HandoffTooLarge extends Error {
   override name = 'HandoffTooLarge';
@@ -130,11 +138,7 @@ export async function sweepOrphans(
 
   let removed = 0;
   for (const name of names) {
-    const id = name.endsWith(BUNDLE_SUFFIX)
-      ? name.slice(0, -BUNDLE_SUFFIX.length)
-      : name.endsWith(PARTIAL_SUFFIX)
-        ? name.slice(0, -PARTIAL_SUFFIX.length)
-        : null;
+    const id = idFromFilename(name);
     if (id === null || liveIds.has(id)) continue;
 
     const full = path.join(dir, name);

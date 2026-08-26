@@ -46,7 +46,8 @@ async function refusal(res: Response, what: string): Promise<Error> {
     // Not JSON; the raw text, or nothing, is the best that can be said.
   }
   if (!detail && res.status === 413) detail = 'the relay refused it as too large';
-  return new Error(`Could not ${what} (${res.status})${detail ? `: ${detail}` : ''}`);
+  const because = detail ? `: ${detail}` : '';
+  return new Error(`Could not ${what} (${res.status})${because}`);
 }
 
 export function createHandoffTransport(endpoint: HandoffEndpoint): HandoffTransport {

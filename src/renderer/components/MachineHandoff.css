@@ -47,8 +47,34 @@
   margin-top: 12px;
 }
 
+/* Native <dialog> + showModal(): the browser owns modality, focus trapping and
+   the backdrop, so there is no overlay div here and none is wanted. */
 .handoff-offer {
   width: 520px;
+  max-width: 90vw;
+  padding: 20px 24px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d4d4d4;
+}
+
+.handoff-offer::backdrop {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.handoff-offer h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.handoff-offer-lead {
+  margin: 0;
+  font-size: 13px;
+  color: #b8b8b8;
 }
 
 .handoff-field {

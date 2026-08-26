@@ -32,6 +32,15 @@ let machineId: string | null;
 let statusListeners: ((status: { machineId: string | null; linked: boolean }) => void)[];
 let clipboardWrite: (text: string) => Promise<void>;
 
+/**
+ * Which opener the offer used. happy-dom implements both, and only
+ * `showModal()` makes the rest of the page inert — so record the choice rather
+ * than trust that `open` became true.
+ */
+let modalCalls: string[];
+const nativeShowModal = HTMLDialogElement.prototype.showModal;
+const nativeShow = HTMLDialogElement.prototype.show;
+
 /** The relay client pushing a status change, as linking produces one. */
 async function emitStatus(next: string | null) {
   machineId = next;
@@ -41,6 +50,15 @@ async function emitStatus(next: string | null) {
 }
 
 beforeEach(() => {
+  modalCalls = [];
+  HTMLDialogElement.prototype.showModal = function patchedShowModal(this: HTMLDialogElement) {
+    modalCalls.push('showModal');
+    return nativeShowModal.call(this);
+  };
+  HTMLDialogElement.prototype.show = function patchedShow(this: HTMLDialogElement) {
+    modalCalls.push('show');
+    return nativeShow.call(this);
+  };
   declined = [];
   restoreWith = [];
   peeks = 0;
@@ -78,7 +96,11 @@ beforeEach(() => {
   };
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  HTMLDialogElement.prototype.showModal = nativeShowModal;
+  HTMLDialogElement.prototype.show = nativeShow;
+  cleanup();
+});
 
 /** Mount and let the offer lookup settle, so "no dialog" means an answer arrived. */
 async function mountOffer(onRestored: () => void = () => {}) {
@@ -198,13 +220,42 @@ describe('answering the offer', () => {
   });
 });
 
+describe('the offer is a modal, and answering it is the only way out', () => {
+  test('opens with showModal, so the page behind it is inert', async () => {
+    await mountOffer();
+
+    expect(modalCalls).toEqual(['showModal']);
+    expect((screen.getByRole('dialog') as HTMLDialogElement).open).toBe(true);
+  });
+
+  test('refuses the Escape close, rather than relying on the DOM not to honour it', async () => {
+    await mountOffer();
+    const cancel = new Event('cancel', { cancelable: true, bubbles: false });
+
+    await act(async () => {
+      fireEvent(screen.getByRole('dialog'), cancel);
+    });
+
+    // `defaultPrevented`, not `open`: happy-dom does not close a dialog on
+    // `cancel` of its own accord, so asserting it stayed open would pass with
+    // no handler at all. What is pinned is the component's own refusal —
+    // turning the offer down is durable, and a stray keypress must not spend
+    // it, nor make the dialog vanish leaving nothing recorded.
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(declined).toEqual([]);
+    expect(restoreWith).toEqual([]);
+  });
+});
+
 describe('preparing one', () => {
   test('shows the phrase, and keeps showing it until it is dismissed', async () => {
     render(<HandoffPreparePanel />);
     await click('Send to Another Machine…');
 
     expect(screen.getByText('agent album alloy amber')).not.toBeNull();
-    expect(screen.getByRole('group', { name: 'Recovery phrase' }).textContent).toContain('2.0 MB');
+    // A named <section>, which is to say a region: the phrase and what it
+    // opens are one labelled block, reachable as a unit by a screen reader.
+    expect(screen.getByRole('region', { name: 'Recovery phrase' }).textContent).toContain('2.0 MB');
 
     await click('I have written it down');
     expect(screen.queryByText('agent album alloy amber')).toBeNull();

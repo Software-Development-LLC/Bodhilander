@@ -73,7 +73,7 @@ function checksum(entropy: Buffer): Buffer {
 
 function toPhrase(entropy: Buffer): string {
   const bytes = Buffer.concat([entropy, checksum(entropy)]);
-  return [...bytes].map((b) => PHRASE_WORDS[b]!).join(' ');
+  return [...bytes].map((b) => PHRASE_WORDS[b]).join(' ');
 }
 
 /** A fresh phrase, and with it a fresh key. Never reuse one across bundles. */
