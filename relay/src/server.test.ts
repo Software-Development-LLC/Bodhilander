@@ -113,31 +113,6 @@ function postChunked(url: string, totalBytes: number, produced: { bytes: number 
 }
 
 describe('what the socket will accept', () => {
-  test('does not apply the ceiling to a body read as a stream', async () => {
-    // Load-bearing, and the reason `readJson` counts bytes itself rather than
-    // trusting this setting. If it ever starts failing, Bun changed.
-    const ceiling = 64 * 1024;
-    const server = Bun.serve({
-      port: 0,
-      maxRequestBodySize: ceiling,
-      async fetch(req) {
-        const reader = req.body!.getReader();
-        let total = 0;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          total += value.byteLength;
-        }
-        return Response.json({ total });
-      },
-    });
-    servers.push(server);
-
-    const produced = { bytes: 0 };
-    const res = await postChunked(server.url.origin, ceiling * 8, produced);
-    expect(await res.json()).toEqual({ total: ceiling * 8 });
-  });
-
   test('admits a bundle from a real machine, which the old ceiling did not', async () => {
     const { config, put } = start();
     expect(REALISTIC_BUNDLE_BYTES).toBeGreaterThan(OLD_WIRE_CEILING);
@@ -160,13 +135,23 @@ describe('what the socket will accept', () => {
   });
 
   test('bounds a chunked body, which declares no length to check', async () => {
-    const { origin } = start();
+    const { config, origin } = start();
     const produced = { bytes: 0 };
     const total = 8 * 1024 * 1024;
 
+    // Why `readJson` counts bytes itself instead of leaning on the setting
+    // above: the ceiling this server runs with is the handoff cap, three
+    // orders of magnitude past anything a JSON route may accept. Bun's own
+    // treatment of it is beside the point and not stable anyway — 1.3
+    // ignored it for a body read as a stream, 1.4 enforces it — so this
+    // suite pins the relay's bound and not Bun's.
+    expect(requestBodyCeiling(config)).toBeGreaterThan(MAX_JSON_BODY_BYTES * 100);
+
     const res = await postChunked(`${origin}/link`, total, produced);
 
-    // 400 here would mean the body was buffered AND parsed by /link's handler.
+    // A reasoned 413 is the handler's. Bun's, when it refuses at the socket,
+    // carries an empty body — so this also pins which of the two answered.
+    // 400 would mean the body was buffered AND parsed by `/link`'s handler.
     expect(res.status).toBe(413);
     expect(await res.json()).toEqual({ error: 'payload_too_large' });
     expect(produced.bytes).toBeLessThan(total / 2);
