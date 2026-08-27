@@ -530,6 +530,45 @@ export interface PortableImportResult {
   needsRelinkCount?: number;
 }
 
+/**
+ * Largest sealed handoff this build will attempt, mirroring the relay's own
+ * `handoffMaxBytes` default so an oversized state is refused before it is
+ * uploaded. A cross-tree test fails when the two drift apart.
+ */
+export const HANDOFF_MAX_BYTES = 256 * 1024 * 1024;
+
+/** A prepared handoff waiting on the relay, as the relay describes it. */
+export interface HandoffOffer {
+  id: string;
+  sourceMachineId: string;
+  sourceMachineName: string | null;
+  byteSize: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** What a machine should do about the handoff its account is holding. */
+export interface HandoffOfferState {
+  /** Null when nothing waits, or when this machine is the one that prepared it. */
+  offer: HandoffOffer | null;
+  /** This machine has already turned that exact bundle down. */
+  declined: boolean;
+  /** Size as it is shown in the offer. */
+  sizeLabel?: string;
+}
+
+export interface HandoffPrepareResult {
+  success: boolean;
+  error?: string;
+  /** Shown once, on the machine being left behind. */
+  phrase?: string;
+  sizeLabel?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  /** When the relay stops holding it. */
+  expiresAt?: number;
+}
+
 export interface TransferBundleCounts {
   groups: number;
   sessions: number;

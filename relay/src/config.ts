@@ -6,6 +6,8 @@
  * env map explicitly so tests can exercise it without touching `process.env`.
  */
 
+import path from 'node:path';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface RelayConfig {
@@ -18,6 +20,14 @@ export interface RelayConfig {
   /** Extra allowed web origins; empty = same-origin only. */
   allowedOrigins: string[];
   linkCodeTtlSeconds: number;
+  /** How long a prepared machine handoff stays available to be restored. */
+  handoffTtlSeconds: number;
+  /** Ceiling on one handoff's sealed bytes. */
+  handoffMaxBytes: number;
+  /** Where sealed bundles are written. Beside the database, so it is on the volume. */
+  handoffDir: string;
+  /** Ceiling on the whole store, so one machine's cap is not the disk's. */
+  handoffStoreMaxBytes: number;
   /** GitHub OAuth app credentials — consumed in M2, optional for now. */
   githubClientId: string | null;
   githubClientSecret: string | null;
@@ -115,16 +125,44 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ? parsePositiveInt('LINK_CODE_TTL_SECONDS', env.LINK_CODE_TTL_SECONDS)
     : 600;
 
+  const handoffTtlSeconds = env.HANDOFF_TTL_SECONDS
+    ? parsePositiveInt('HANDOFF_TTL_SECONDS', env.HANDOFF_TTL_SECONDS)
+    : 7 * 24 * 60 * 60;
+
+  const handoffMaxBytes = env.HANDOFF_MAX_BYTES
+    ? parsePositiveInt('HANDOFF_MAX_BYTES', env.HANDOFF_MAX_BYTES)
+    : 256 * 1024 * 1024;
+
+  const handoffStoreMaxBytes = env.HANDOFF_STORE_MAX_BYTES
+    ? parsePositiveInt('HANDOFF_STORE_MAX_BYTES', env.HANDOFF_STORE_MAX_BYTES)
+    : 8 * 1024 * 1024 * 1024;
+
+  const dbPath = env.DB_PATH ?? './data/relay.db';
+  // Beside the database, which is what the deployment puts on a volume. An
+  // in-memory database has no directory to sit beside, so the caller must say
+  // where — a fixed name under the system temp directory would be a
+  // world-writable path holding other people's sealed bundles, and one nobody
+  // chose. Every caller here already passes HANDOFF_DIR alongside `:memory:`.
+  const handoffDir =
+    env.HANDOFF_DIR ??
+    (dbPath === ':memory:'
+      ? fail('HANDOFF_DIR must be set when DB_PATH is :memory:, since there is no database directory to sit beside')
+      : path.join(path.dirname(path.resolve(dbPath)), 'handoffs'));
+
   return {
     config: {
       port,
       publicUrl,
-      dbPath: env.DB_PATH ?? './data/relay.db',
+      dbPath,
       sessionSecret,
       logLevel,
       trustProxy,
       allowedOrigins,
       linkCodeTtlSeconds,
+      handoffTtlSeconds,
+      handoffMaxBytes,
+      handoffDir,
+      handoffStoreMaxBytes,
       githubClientId: env.GITHUB_CLIENT_ID || null,
       githubClientSecret: env.GITHUB_CLIENT_SECRET || null,
       allowedGithubOrg: env.ALLOWED_GITHUB_ORG?.trim() || null,

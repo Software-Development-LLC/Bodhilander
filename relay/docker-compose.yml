@@ -23,6 +23,8 @@ services:
       - path: .env
         required: false
     volumes:
+      # Holds relay.db and handoffs/, where sealed transfer bundles are written.
+      # Sized for HANDOFF_STORE_MAX_BYTES (8 GiB by default); see .env.example.
       - relay-data:/data
     restart: unless-stopped
 

@@ -22,6 +22,8 @@ import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-i
 import { SessionTunnel, type Principal } from './session-tunnel';
 import { defaultDeps } from './session-tunnel-deps';
 import { CAP_GRANTS_V1, buildShareCreateMessage } from './grants';
+import { createHandoffTransport } from './handoff-transport';
+import type { HandoffTransport } from '../../transfer/handoff';
 import { ptyManager } from '../../pty-manager';
 import { getDatabase } from '../../database';
 import {
@@ -582,6 +584,17 @@ export class RelayClient extends EventEmitter {
     const url = `${origin}/i/${body.code}${fragment}`;
     log.info('[Relay] share invite created', { addressed: !!input.expectedGithubLogin });
     return { code: body.code, url, expiresAt: body.expiresAt };
+  }
+
+  /** Reaches this account's handoff slot, or null until the machine is linked. */
+  handoffTransport(): HandoffTransport | null {
+    const machineId = getPreference(PREF.machineId);
+    if (!machineId) return null;
+    return createHandoffTransport({
+      origin: stripTrailingSlashes(this.relayUrl),
+      machineId,
+      sign: signWithIdentity,
+    });
   }
 
   /** Every grant this machine has issued, for the owner's settings list. */

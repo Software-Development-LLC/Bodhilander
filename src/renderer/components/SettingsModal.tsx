@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
+import { ApiServerStatus, HANDOFF_MAX_BYTES, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
 import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
+import { HandoffPreparePanel } from './MachineHandoff';
 
 // Exported so callers that deep-link into a tab (menu, tray) can type their
 // state instead of passing a bare string.
@@ -579,6 +580,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                       Export asks what to carry: this whole machine as a transfer bundle — groups, sessions,
                       history, settings, accounts and conversation transcripts — or just groups and sessions
                       as portable JSON that ClaudeLander reads. Import accepts either.
+                    </span>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-row-label" aria-hidden="true">Over the Relay:</span>
+                    <HandoffPreparePanel />
+                    <span className="settings-hint">
+                      Sends that same bundle to your relay account instead of a file. It is encrypted
+                      here first, so the relay carries bytes it cannot read; sign in on the new
+                      machine and it is offered there. Needs this machine linked under Remote Hosting,
+                      and holds up to {Math.round(HANDOFF_MAX_BYTES / (1024 * 1024))} MB — larger
+                      machines move by file.
                     </span>
                   </div>
                   <div className="settings-row">

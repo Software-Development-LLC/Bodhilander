@@ -43,7 +43,7 @@ describe('openDb / migrations', () => {
     const db = openDb(':memory:');
     try {
       const { user_version } = db.query('PRAGMA user_version;').get() as { user_version: number };
-      expect(user_version).toBe(3);
+      expect(user_version).toBe(5);
 
       const tables = db
         .query("SELECT name FROM sqlite_master WHERE type='table';")
@@ -57,6 +57,7 @@ describe('openDb / migrations', () => {
         'push_subscriptions',
         'share_invites',
         'machine_grants',
+        'handoff_bundles',
       ]) {
         expect(tables).toContain(t);
       }

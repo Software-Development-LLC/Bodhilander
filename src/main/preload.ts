@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -209,6 +209,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('import:groups'),
   importFromClaudeLander: (): Promise<PortableImportResult> =>
     ipcRenderer.invoke('import:fromClaudeLander'),
+
+  // Machine handoff, over the relay
+  handoffPrepare: (): Promise<HandoffPrepareResult> =>
+    ipcRenderer.invoke('handoff:prepare'),
+  handoffPeek: (): Promise<HandoffOfferState> =>
+    ipcRenderer.invoke('handoff:peek'),
+  handoffRestore: (phrase: string): Promise<PortableImportResult> =>
+    ipcRenderer.invoke('handoff:restore', phrase),
+  handoffDecline: (handoffId: string): Promise<void> =>
+    ipcRenderer.invoke('handoff:decline', handoffId),
 
   // Preferences
   getPreference: (key: string): Promise<string | null> =>
