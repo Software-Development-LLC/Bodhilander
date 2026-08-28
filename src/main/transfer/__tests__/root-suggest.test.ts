@@ -173,6 +173,31 @@ describe('proposing a root mapping', () => {
     expect(reads).toBeLessThan(60);
   });
 
+  test('spends no listing at all once the budget is gone', () => {
+    // Needs SEVERAL bases: the waste is within one depth level, where the
+    // budget runs out on the first parent and the rest of the frontier would
+    // still each pay for a readdir whose results are discarded.
+    const backing = fs([
+      '/home/a/one', '/home/a/two', '/home/a/three',
+      '/home/b/four', '/home/c/five',
+    ]);
+    const listed: string[] = [];
+
+    suggestRootMappings(['/Users/will/Work/Repos'], {
+      bases: ['/home/a', '/home/b', '/home/c'],
+      directoryExists: backing.directoryExists,
+      readSubdirs: (dir) => {
+        listed.push(dir);
+        return backing.readSubdirs(dir);
+      },
+      maxVisits: 2,
+    });
+
+    // `/home/a` alone exhausts the budget. `/home/b` and `/home/c` are still
+    // in the frontier behind it and must not be read.
+    expect(listed).toEqual(['/home/a']);
+  });
+
   test('an unreadable directory is empty, not fatal', () => {
     const backing = fs(['/home/will/Work/Repos']);
     const suggestions = suggestRootMappings(['/Users/will/Work/Repos'], {

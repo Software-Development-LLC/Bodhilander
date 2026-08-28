@@ -118,6 +118,11 @@ function childrenOf(
   seen: Set<string>,
   budget: Budget,
 ): Candidate[] {
+  // Checked before the listing, not inside it: an exhausted budget must stop
+  // the readdir too, or every remaining parent at this depth pays for a call
+  // whose results are discarded.
+  if (budget.left <= 0) return [];
+
   const children: Candidate[] = [];
   for (const name of subdirsOf(options, parent.path)) {
     if (budget.left <= 0) break;
