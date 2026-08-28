@@ -84,6 +84,7 @@ interface ElectronAPI {
   handoffRestore: (phrase: string) => Promise<PortableImportResult>;
   arrivalRead: () => Promise<ArrivalReport | null>;
   arrivalDismiss: () => Promise<void>;
+  arrivalResolveRelink: (sessionId: string, workingDir: string) => Promise<ArrivalReport | null>;
   resumeAccountLogin: (accountId: string) => Promise<{ account: ClaudeAccount; ptyId: string }>;
   handoffDecline: (handoffId: string) => Promise<void>;
 

@@ -64,11 +64,16 @@ const REPORT: ArrivalReport = {
 let dismissed: number;
 let resumed: string[];
 let cancelled: { ptyId: string; deleteAccount: boolean }[];
+let relinked: { sessionId: string; workingDir: string }[];
+/** What the folder picker answers next; null is the user cancelling it. */
+let pickedDir: string | null;
 
 beforeEach(() => {
   dismissed = 0;
   resumed = [];
   cancelled = [];
+  relinked = [];
+  pickedDir = '/home/will/Work/api';
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     arrivalDismiss: async () => {
       dismissed++;
@@ -80,6 +85,15 @@ beforeEach(() => {
     cancelAccountLogin: async (ptyId: string, deleteAccount: boolean) => {
       cancelled.push({ ptyId, deleteAccount });
     },
+    selectDirectory: async () => pickedDir,
+    arrivalResolveRelink: async (sessionId: string, workingDir: string) => {
+      relinked.push({ sessionId, workingDir });
+      // What main returns: the kept report, rewritten.
+      const needsRelink = REPORT.needsRelink.filter(
+        (r) => !relinked.some((done) => done.sessionId === r.sessionId),
+      );
+      return { ...REPORT, needsRelink, resumable: REPORT.sessions - needsRelink.length };
+    },
   };
 });
 
@@ -87,13 +101,26 @@ afterEach(cleanup);
 
 function view(report: ArrivalReport = REPORT, onClose = () => {}, onDismiss = () => {}) {
   render(
-    <ArrivalReportView report={report} onClose={onClose} onDismiss={onDismiss} onSignIn={() => {}} />,
+    <ArrivalReportView
+      report={report}
+      onClose={onClose}
+      onDismiss={onDismiss}
+      onSignIn={() => {}}
+      onRelink={() => {}}
+    />,
   );
 }
 
 async function click(label: string | RegExp) {
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: label }));
+  });
+}
+
+/** There is one per unlinked session, so they are addressed by position. */
+async function clickRelink(index = 0) {
+  await act(async () => {
+    fireEvent.click(screen.getAllByRole('button', { name: 'Set Folder…' })[index]);
   });
 }
 
@@ -202,6 +229,55 @@ describe('closing it', () => {
 
     expect(dismissed).toBe(1);
     expect(closed).toBe(1);
+  });
+});
+
+describe('relinking a session from the report', () => {
+  test('sends the chosen folder for the session on that row', async () => {
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+
+    await clickRelink();
+
+    expect(relinked).toEqual([{ sessionId: 's1', workingDir: '/home/will/Work/api' }]);
+  });
+
+  test('drops the row, and follows the count in the heading', async () => {
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+    expect(screen.getByRole('region', { name: 'Sessions needing a folder' }).textContent)
+      .toContain('2 sessions need their folder');
+
+    await clickRelink();
+
+    const section = screen.getByRole('region', { name: 'Sessions needing a folder' });
+    // Redrawn from what main stored, not from a local guess at it.
+    expect(section.textContent).toContain('1 session needs its folder');
+    expect(section.textContent).not.toContain('api');
+    expect(section.textContent).toContain('web');
+  });
+
+  test('the section goes when the last one is resolved, and the report stays up', async () => {
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+
+    await clickRelink();
+    pickedDir = '/home/will/Work/web';
+    await clickRelink();
+
+    expect(screen.queryByRole('region', { name: 'Sessions needing a folder' })).toBeNull();
+    // Deliberately still open: the counts are worth reading, and a dialog that
+    // vanishes as you finish with it reads as a crash. It stops being *raised*
+    // on the next launch instead, which is the launch check's job.
+    expect((screen.getByRole('dialog') as HTMLDialogElement).open).toBe(true);
+  });
+
+  test('cancelling the picker changes nothing at all', async () => {
+    pickedDir = null;
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+
+    await clickRelink();
+
+    expect(relinked).toEqual([]);
+    expect(screen.getByRole('region', { name: 'Sessions needing a folder' }).textContent)
+      .toContain('2 sessions need their folder');
   });
 });
 

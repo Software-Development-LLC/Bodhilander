@@ -225,6 +225,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('arrival:read'),
   arrivalDismiss: (): Promise<void> =>
     ipcRenderer.invoke('arrival:dismiss'),
+  arrivalResolveRelink: (sessionId: string, workingDir: string): Promise<ArrivalReport | null> =>
+    ipcRenderer.invoke('arrival:resolveRelink', sessionId, workingDir),
 
   // Preferences
   getPreference: (key: string): Promise<string | null> =>

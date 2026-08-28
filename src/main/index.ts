@@ -30,7 +30,7 @@ import {
   readHandoffOffer,
   restoreMachineHandoff,
 } from './machine-handoff';
-import { dismissArrival, readArrival } from './arrival';
+import { dismissArrival, readArrival, resolveRelink } from './arrival';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
@@ -1056,6 +1056,17 @@ safeHandle('handoff:decline', (handoffId: string) =>
 // What the last restore left outstanding, kept so it can be opened again
 safeHandle('arrival:read', () => readArrival());
 safeHandle('arrival:dismiss', () => dismissArrival());
+safeHandle('arrival:resolveRelink', (sessionId: string, workingDir: string) => {
+  const id = (sessionId ?? '').toString().trim();
+  const dir = (workingDir ?? '').toString().trim();
+  if (!id || !dir) throw new Error('A session id and a folder are both required');
+  const report = resolveRelink(id, dir);
+  // Every renderer's session list derives `workingDirMissing` in main, so a
+  // relink is only visible once they reload. This is the broadcast they
+  // already listen to.
+  mainWindow?.webContents.send('sessions:refresh');
+  return report;
+});
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {
