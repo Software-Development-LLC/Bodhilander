@@ -46,6 +46,43 @@ function readableText(bytes: Buffer): string {
   return [bytes.toString('utf-8'), JSON.stringify(bundle.manifest), ...parts].join('\n');
 }
 
+describe('provider keys the destination will have to re-enter', () => {
+  test('records which providers had one, by name, and no key with it', () => {
+    seedSecrets(db);
+    const built = buildTransferBundle(db as never, {
+      sourceAppVersion: '3.5.1-beta.6',
+      sourcePlatform: 'darwin',
+      sourceUserData: path.join(tmp, 'userData'),
+      legacyConfigDir,
+      providersWithApiKeys: ['anthropic'],
+    });
+
+    expect(built.manifest.providersWithApiKeys).toEqual(['anthropic']);
+    // The whole point of carrying the name is that the value stays behind.
+    // Read from the produced bytes, not from the filter: a correct-but-unwired
+    // exclusion looks identical from the inside.
+    expect(readableText(built.bytes)).not.toContain(SECRET_VALUES.providerApiKey);
+  });
+
+  test('says nothing rather than "none" when the caller did not look', () => {
+    // Absent and empty are different answers. A build that cannot tell must
+    // not be read on the far side as proof that no provider had a key.
+    expect(build().manifest.providersWithApiKeys).toBeUndefined();
+  });
+
+  test('orders the names, so two exports of one machine agree', () => {
+    const built = buildTransferBundle(db as never, {
+      sourceAppVersion: '3.5.1-beta.6',
+      sourcePlatform: 'darwin',
+      sourceUserData: path.join(tmp, 'userData'),
+      legacyConfigDir,
+      providersWithApiKeys: ['openai', 'anthropic'],
+    });
+
+    expect(built.manifest.providersWithApiKeys).toEqual(['anthropic', 'openai']);
+  });
+});
+
 describe('the manifest', () => {
   test('records where and when the export came from', () => {
     const { manifest, bytes } = build();

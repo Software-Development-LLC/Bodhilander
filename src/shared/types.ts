@@ -591,5 +591,16 @@ export interface TransferBundleManifest {
   exportedAt: string;
   /** Distinct roots across every group and session working directory. */
   workingDirRoots: string[];
+  /**
+   * Providers that had an API key stored on the source machine — **ids only**.
+   * The keys are sealed to that machine's OS keychain and are excluded from
+   * the bundle by `LOCAL_PREFERENCE_PREFIXES`; nothing here changes that.
+   *
+   * Carried so the destination can say which keys to re-enter instead of
+   * leaving the user to find out when a launch fails. Optional: bundles
+   * written before this existed simply do not say, and are read as "unknown"
+   * rather than as "none".
+   */
+  providersWithApiKeys?: string[];
   counts: TransferBundleCounts;
 }

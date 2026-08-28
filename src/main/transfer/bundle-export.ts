@@ -39,6 +39,12 @@ export interface ExportOptions {
   legacyConfigDir: string;
   /** Overridable so the ceiling can be exercised without a huge fixture. */
   maxTranscriptBytes?: number;
+  /**
+   * Ids of providers holding an API key here. Names, never values — the keys
+   * themselves cannot leave this machine's keychain, and the destination needs
+   * to know which ones to ask for. Absent when the caller cannot tell.
+   */
+  providersWithApiKeys?: string[];
 }
 
 export interface BuiltBundle {
@@ -258,6 +264,10 @@ export function buildTransferBundle(db: Db, options: ExportOptions): BuiltBundle
     sourceUserData: options.sourceUserData,
     exportedAt: tables.exportedAt,
     workingDirRoots,
+    // Omitted rather than empty when the caller did not say: "no provider had
+    // a key" and "nobody looked" are different answers, and the report reads
+    // them differently.
+    ...(options.providersWithApiKeys ? { providersWithApiKeys: [...options.providersWithApiKeys].sort() } : {}),
     counts: {
       groups: tables.groups.length,
       sessions: tables.sessions.length,
