@@ -187,7 +187,14 @@ const PORTABLE_PREFERENCE_KEYS = new Set([
  * that never happened there, naming folders to relink that machine has never
  * had and accounts it was never asked to sign in to.
  */
-const LOCAL_PREFERENCE_PREFIXES = ['providerApiKey.', 'providerApiKeyUse.', 'relay.', 'arrival.'] as const;
+/**
+ * Where a stored provider key lives. Named here because it is both an excluded
+ * prefix below and, separately, the only record of WHICH providers had a key —
+ * which the manifest carries so the destination can ask for them again.
+ */
+export const PROVIDER_KEY_PREFIX = 'providerApiKey.';
+
+const LOCAL_PREFERENCE_PREFIXES = [PROVIDER_KEY_PREFIX, 'providerApiKeyUse.', 'relay.', 'arrival.'] as const;
 
 /**
  * Keys classified as staying home. Redundant for the filter now that the

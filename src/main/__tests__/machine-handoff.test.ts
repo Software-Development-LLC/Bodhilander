@@ -38,13 +38,6 @@ mock.module('electron', () => ({
     },
     showSaveDialog: async () => ({ canceled: true, filePath: undefined }),
   },
-  // The export path reads which providers hold an API key, so the key vault is
-  // in this module's graph even though nothing here exports a bundle.
-  safeStorage: {
-    isEncryptionAvailable: () => false,
-    encryptString: () => Buffer.alloc(0),
-    decryptString: () => '',
-  },
 }));
 mock.module('../database', () => ({ getDatabase: () => db }));
 

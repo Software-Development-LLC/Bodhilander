@@ -18,7 +18,6 @@ import { isKnownProvider, DEFAULT_PROVIDER_ID } from './providers';
 import { getDatabase } from './database';
 import { legacyClaudeConfigDir } from './conversation-transcript';
 import { registerHooks } from './mcp-config';
-import { listVaultStatuses } from './key-vault';
 import { buildTransferBundle } from './transfer/bundle-export';
 import { readBundleManifest, restoreTransferBundle } from './transfer/bundle-import';
 import { BUNDLE_EXTENSION, formatBytes, looksLikeBundle } from './transfer/bundle-format';
@@ -84,9 +83,6 @@ async function exportTransferBundle(legacyDir: string = legacyClaudeConfigDir())
       sourcePlatform: process.platform,
       sourceUserData: app.getPath('userData'),
       legacyConfigDir: legacyDir,
-      // Names only. The keys are sealed to this machine's keychain and stay
-      // here; the destination gets the list so it can say which to re-enter.
-      providersWithApiKeys: listVaultStatuses().filter((v) => v.hasKey).map((v) => v.providerId),
     });
     const sizeLabel = formatBytes(bytes.length);
 
@@ -307,10 +303,14 @@ export function registerRestoredAccountHooks(): void {
   }
 }
 
-async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<ImportResult> {
+async function importTransferBundle(
+  bytes: Buffer,
+  legacyDir: string,
+  suggest: RootSuggester,
+): Promise<ImportResult> {
   const manifest = readBundleManifest(bytes);
   const roots = manifest?.workingDirRoots ?? [];
-  const mappings = await askRootMappings(roots, suggestRootMappingsHere(roots));
+  const mappings = await askRootMappings(roots, suggest(roots));
   if (mappings === null) return { success: false, error: 'Import cancelled' };
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhilander-transfer-'));
@@ -343,7 +343,18 @@ async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<I
   }
 }
 
-export async function importGroupsAndSessions(legacyDir: string = legacyClaudeConfigDir()): Promise<ImportResult> {
+/**
+ * What this machine proposes for the source's roots. Injectable because the
+ * real one walks the user's home directory: a test that did not control it
+ * would depend on whatever happens to be on the machine running it — and would
+ * ask a different question depending on the answer.
+ */
+export type RootSuggester = (roots: string[]) => RootSuggestion[];
+
+export async function importGroupsAndSessions(
+  legacyDir: string = legacyClaudeConfigDir(),
+  suggest: RootSuggester = suggestRootMappingsHere,
+): Promise<ImportResult> {
   try {
     const result = await dialog.showOpenDialog({
       title: 'Import Groups & Sessions',
@@ -359,7 +370,7 @@ export async function importGroupsAndSessions(legacyDir: string = legacyClaudeCo
     }
 
     const bytes = fs.readFileSync(result.filePaths[0]);
-    if (looksLikeBundle(bytes)) return await importTransferBundle(bytes, legacyDir);
+    if (looksLikeBundle(bytes)) return await importTransferBundle(bytes, legacyDir, suggest);
 
     const raw = bytes.toString('utf-8');
     const data: PortableData = JSON.parse(raw);

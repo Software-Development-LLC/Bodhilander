@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -220,6 +220,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   handoffDecline: (handoffId: string): Promise<void> =>
     ipcRenderer.invoke('handoff:decline', handoffId),
 
+  // What the last restore left for a person to finish
+  arrivalRead: (): Promise<ArrivalReport | null> =>
+    ipcRenderer.invoke('arrival:read'),
+  arrivalDismiss: (): Promise<void> =>
+    ipcRenderer.invoke('arrival:dismiss'),
+
   // Preferences
   getPreference: (key: string): Promise<string | null> =>
     ipcRenderer.invoke('prefs:get', key),
@@ -359,6 +365,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Claude accounts (BDHLNDR-31)
   listAccounts: (): Promise<ClaudeAccount[]> =>
     ipcRenderer.invoke('accounts:list'),
+  resumeAccountLogin: (accountId: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
+    ipcRenderer.invoke('accounts:resumeLogin', accountId),
   startAccountLogin: (label: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
     ipcRenderer.invoke('accounts:startLogin', label),
   cancelAccountLogin: (ptyId: string, deleteAccount: boolean): Promise<void> =>

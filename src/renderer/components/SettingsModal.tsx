@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, HANDOFF_MAX_BYTES, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
+import { ApiServerStatus, ArrivalReport, HANDOFF_MAX_BYTES, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
 import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
 import { HandoffPreparePanel } from './MachineHandoff';
+import { ArrivalReportModal } from './ArrivalReport';
 
 // Exported so callers that deep-link into a tab (menu, tray) can type their
 // state instead of passing a bare string.
@@ -53,6 +54,10 @@ export function importSummary(result: PortableImportResult): string {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general' }) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  // The kept arrival report, reopened on demand. `missing` is a separate flag
+  // so "nothing has been restored here" is an answer rather than a dead button.
+  const [arrivalReport, setArrivalReport] = useState<ArrivalReport | null>(null);
+  const [arrivalMissing, setArrivalMissing] = useState(false);
   const navClass = (tab: SettingsTab) =>
     `settings-nav-item ${activeTab === tab ? 'active' : ''}`;
 
@@ -594,6 +599,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     </span>
                   </div>
                   <div className="settings-row">
+                    <span className="settings-row-label" aria-hidden="true">Last Restore:</span>
+                    <button
+                      className="settings-button"
+                      onClick={async () => {
+                        const report = await window.electronAPI.arrivalRead();
+                        if (report) setArrivalReport(report);
+                        else setArrivalMissing(true);
+                      }}
+                    >
+                      Show Restore Report
+                    </button>
+                    {arrivalMissing && (
+                      <span className="settings-hint" role="status">
+                        Nothing has been restored onto this machine yet.
+                      </span>
+                    )}
+                    <span className="settings-hint">
+                      What the last restore carried, and what it left for you: sessions whose folder is
+                      not on this machine, accounts still to sign in to, and provider keys to re-enter.
+                    </span>
+                  </div>
+                  <div className="settings-row">
                     <label>ClaudeLander:</label>
                     <button
                       className="settings-button"
@@ -1034,6 +1061,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
           </div>
         </div>
       </div>
+
+      {/* Reopened on demand, over the settings window that asked for it. */}
+      <ArrivalReportModal report={arrivalReport} onClosed={() => setArrivalReport(null)} />
     </div>
   );
 };

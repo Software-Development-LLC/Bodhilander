@@ -13,51 +13,12 @@
  * dismissed is a list nobody can get back.
  */
 
+import type { ArrivalAccountItem, ArrivalRelinkItem, ArrivalReport } from '../../shared/types';
 import type { TransferManifest } from './bundle-format';
 
-/** A session that arrived but cannot start until somebody says where it lives. */
-export interface ArrivalRelinkItem {
-  sessionId: string;
-  name: string;
-  /** The directory as it was remapped, i.e. where we looked and did not find it. */
-  workingDir: string;
-}
-
-export interface ArrivalAccountItem {
-  accountId: string;
-  label: string;
-  /**
-   * Undefined where the evidence could not be read, which is not the same as
-   * "never logged in" and is not reported as needing a sign-in.
-   */
-  loggedIn: boolean | undefined;
-}
-
-export interface ArrivalReport {
-  /** ISO 8601, stamped by the caller so this module stays a pure assembly. */
-  restoredAt: string;
-  /** How the state got here, for a report the user opens a week later. */
-  via: 'file' | 'handoff';
-  /** The machine that prepared it, when the transport knows. */
-  sourceLabel: string | null;
-  sourcePlatform: string | null;
-  groups: number;
-  sessions: number;
-  /** Sessions whose working directory is on this machine, so they can start. */
-  resumable: number;
-  transcripts: number;
-  skippedGroups: number;
-  skippedSessions: number;
-  needsRelink: ArrivalRelinkItem[];
-  accounts: ArrivalAccountItem[];
-  /**
-   * Providers that had a key on the source machine. The keys themselves are
-   * sealed to that machine's keychain and never travel; these are names, so
-   * the report can say which ones to re-enter rather than leaving the user to
-   * discover it when a launch fails.
-   */
-  providersNeedingKeys: string[];
-}
+// The report's shapes live in `shared/types` because the renderer draws them
+// and preload has to name them on the way through.
+export type { ArrivalAccountItem, ArrivalRelinkItem, ArrivalReport } from '../../shared/types';
 
 export interface BuildArrivalReportInput {
   restoredAt: string;
@@ -95,26 +56,9 @@ export function buildArrivalReport(input: BuildArrivalReportInput): ArrivalRepor
   };
 }
 
-/** Accounts the user still has to sign in to, in the order they arrived. */
-export function accountsNeedingSignIn(report: ArrivalReport): ArrivalAccountItem[] {
-  // `undefined` means the evidence was unreadable. Listing it as "sign in"
-  // would send someone to re-authenticate an account that may be fine.
-  return report.accounts.filter((a) => a.loggedIn === false);
-}
-
-/**
- * Whether anything in the report is still waiting on a person. This is what
- * decides whether the report is worth surfacing at all — a restore onto the
- * same machine, with every folder present and every account already signed in,
- * has nothing to say and should say nothing.
- */
-export function hasOutstandingWork(report: ArrivalReport): boolean {
-  return (
-    report.needsRelink.length > 0 ||
-    accountsNeedingSignIn(report).length > 0 ||
-    report.providersNeedingKeys.length > 0
-  );
-}
+// One implementation, in `shared/arrival`, because the renderer asks the same
+// two questions of a report and a second copy would eventually disagree.
+export { accountsNeedingSignIn, hasOutstandingWork } from '../../shared/arrival';
 
 /**
  * Where the kept report lives. Under `arrival.` so the export policy treats it
