@@ -13,6 +13,7 @@ import {
   formatBytes,
   isPortablePreferenceKey,
   LEGACY_ACCOUNT_KEY,
+  PROVIDER_KEY_PREFIX,
   TABLES_ENTRY,
   TRANSCRIPT_PREFIX,
   type BundleEntry,
@@ -55,6 +56,27 @@ interface AccountRow {
   is_default: number;
   created_at: string;
   last_used_at: string | null;
+}
+
+/**
+ * Which providers hold an API key on this machine — **names only**.
+ *
+ * Read from the preference rows that hold the keys, which is the same source
+ * of truth `hasKey` uses, and deliberately not through `key-vault`: answering
+ * "which" needs no decryption, and importing that module here would put
+ * electron's keychain surface in the graph of everything that imports the
+ * exporter. The values themselves are excluded from the bundle by this very
+ * prefix, and could not be decrypted anywhere else if they were not.
+ */
+function providersWithStoredKeys(db: Db): string[] {
+  const rows = db
+    .prepare('SELECT key FROM preferences WHERE key LIKE ?')
+    .all(`${PROVIDER_KEY_PREFIX}%`) as { key: string }[];
+  const ids = rows.map((row) => row.key.slice(PROVIDER_KEY_PREFIX.length)).filter((id) => id.length > 0);
+  // Sorted so two exports of one machine produce byte-identical manifests, in
+  // a fixed locale rather than the host's — a bundle written on one machine is
+  // read on another, and the order must not depend on which.
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b, 'en'));
 }
 
 /**
@@ -240,6 +262,7 @@ function readWithinBudget(files: TranscriptFile[], budget: number): BundleEntry[
  */
 export function buildTransferBundle(db: Db, options: ExportOptions): BuiltBundle {
   const tables = readPortableTables(db);
+  const providersWithApiKeys = providersWithStoredKeys(db);
 
   const transcripts = readWithinBudget(
     transcriptRoots(db, options.legacyConfigDir).flatMap((a) => listTranscripts(a.dir, a.key)),
@@ -258,6 +281,7 @@ export function buildTransferBundle(db: Db, options: ExportOptions): BuiltBundle
     sourceUserData: options.sourceUserData,
     exportedAt: tables.exportedAt,
     workingDirRoots,
+    providersWithApiKeys,
     counts: {
       groups: tables.groups.length,
       sessions: tables.sessions.length,

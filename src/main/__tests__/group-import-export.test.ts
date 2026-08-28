@@ -49,6 +49,13 @@ mock.module('../database', () => ({ getDatabase: () => db }));
 const { exportGroupsAndSessions, importGroupsAndSessions } = await import('../group-import-export');
 const { decodeBundle, looksLikeBundle } = await import('../transfer/bundle-format');
 
+/**
+ * No proposal for any root. The real suggester walks the home directory of
+ * whoever runs the suite — left alone it found this repo's own checkout and
+ * proposed it, which is the feature working and a test that cannot be trusted.
+ */
+const noSuggestions = () => [];
+
 const SOURCE_ROOT = '/src-machine/Work/Repos';
 const SOURCE_DIR = `${SOURCE_ROOT}/Bodhilander`;
 
@@ -156,7 +163,7 @@ describe('import', () => {
     openDialogPaths = [bundle, here];
     messageBoxResponses = [0]; // "Choose Folder…" for the single root
 
-    const result = await importGroupsAndSessions(legacyDir);
+    const result = await importGroupsAndSessions(legacyDir, noSuggestions);
 
     expect(result.success).toBe(true);
     expect(messageBoxes[0].message).toBe(SOURCE_DIR);
@@ -178,7 +185,7 @@ describe('import', () => {
     openDialogPaths = [bundle, here];
     messageBoxResponses = [0];
 
-    await importGroupsAndSessions(legacyDir);
+    await importGroupsAndSessions(legacyDir, noSuggestions);
 
     // Without this the restored account reports no state until a restart.
     const settings = path.join(userDataDir, 'claude-accounts', 'acct-1', '.claude', 'settings.json');
@@ -191,7 +198,7 @@ describe('import', () => {
     openDialogPaths = [bundle];
     messageBoxResponses = [1]; // "Leave As Is"
 
-    const result = await importGroupsAndSessions(legacyDir);
+    const result = await importGroupsAndSessions(legacyDir, noSuggestions);
 
     expect(result.success).toBe(true);
     expect(result.needsRelinkCount).toBe(1);
@@ -204,7 +211,7 @@ describe('import', () => {
     openDialogPaths = [bundle];
     messageBoxResponses = [2]; // "Cancel Import"
 
-    expect(await importGroupsAndSessions(legacyDir)).toEqual({ success: false, error: 'Import cancelled' });
+    expect(await importGroupsAndSessions(legacyDir, noSuggestions)).toEqual({ success: false, error: 'Import cancelled' });
     expect((db.prepare('SELECT COUNT(*) AS n FROM sessions').get() as any).n).toBe(0);
   });
 
@@ -219,7 +226,7 @@ describe('import', () => {
     }), 'utf-8');
     openDialogPaths = [file];
 
-    const result = await importGroupsAndSessions(legacyDir);
+    const result = await importGroupsAndSessions(legacyDir, noSuggestions);
 
     expect(result.success).toBe(true);
     expect(result.groupCount).toBe(1);
@@ -236,7 +243,7 @@ describe('import', () => {
     db = freshDb();
     openDialogPaths = [saveDialogPath];
 
-    const result = await importGroupsAndSessions(legacyDir);
+    const result = await importGroupsAndSessions(legacyDir, noSuggestions);
 
     expect(result.success).toBe(true);
     expect(result.groupCount).toBe(1);
@@ -247,6 +254,6 @@ describe('import', () => {
 
   test('cancelling the file picker changes nothing', async () => {
     openDialogPaths = [];
-    expect(await importGroupsAndSessions(legacyDir)).toEqual({ success: false, error: 'Import cancelled' });
+    expect(await importGroupsAndSessions(legacyDir, noSuggestions)).toEqual({ success: false, error: 'Import cancelled' });
   });
 });

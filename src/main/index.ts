@@ -30,6 +30,7 @@ import {
   readHandoffOffer,
   restoreMachineHandoff,
 } from './machine-handoff';
+import { dismissArrival, readArrival } from './arrival';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
 import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
@@ -938,6 +939,14 @@ safeHandle('accounts:startLogin', (label: string) => {
   return accountAuth.startLoginFlow(ptyManager, mainWindow, trimmed);
 });
 
+// Signing in to an account a restore brought back. Separate from startLogin
+// because that one MINTS an account and rolls it back on a spawn failure.
+safeHandle('accounts:resumeLogin', (accountId: string) => {
+  const id = (accountId ?? '').toString().trim();
+  if (!id) throw new Error('Account id is required');
+  return accountAuth.resumeLoginFlow(ptyManager, mainWindow, id);
+});
+
 safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {
   accountAuth.cancelLoginFlow(ptyManager, ptyId, deleteAccount);
 });
@@ -1043,6 +1052,10 @@ safeHandle('handoff:restore', (phrase: string) =>
 safeHandle('handoff:decline', (handoffId: string) =>
   declineMachineHandoff(getRelayClient().handoffTransport(), handoffId)
 );
+
+// What the last restore left outstanding, kept so it can be opened again
+safeHandle('arrival:read', () => readArrival());
+safeHandle('arrival:dismiss', () => dismissArrival());
 
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {

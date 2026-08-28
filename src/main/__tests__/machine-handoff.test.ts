@@ -45,6 +45,16 @@ const { declineMachineHandoff, prepareMachineHandoff, readHandoffOffer, restoreM
   '../machine-handoff'
 );
 
+/**
+ * No proposal for any root, which is what the machine says when it cannot
+ * find one. The real suggester walks the home directory of whoever is running
+ * the suite, so a test that let it run would ask a different question
+ * depending on the machine.
+ */
+const noSuggestions = () => [];
+
+const { readArrival } = await import('../arrival');
+
 const SOURCE_ROOT = '/src-machine/Work/Repos';
 
 function offerFor(sealed: Buffer): HandoffOffer {
@@ -207,7 +217,7 @@ describe('restoring one', () => {
     messageBoxResponses = [0];
     openDialogPaths = [chosen];
 
-    const result = await restoreMachineHandoff(relay.transport, phrase, legacyDir);
+    const result = await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
     expect(result.success).toBe(true);
     expect(result.groupCount).toBe(1);
     expect(result.needsRelinkCount).toBe(0);
@@ -225,7 +235,7 @@ describe('restoring one', () => {
     messageBoxResponses = [0];
     openDialogPaths = [chosen];
 
-    const result = await restoreMachineHandoff(relay.transport, phrase, legacyDir);
+    const result = await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
     expect(result.success).toBe(true);
     expect(result.groupCount).toBe(1);
     // Answered locally, or the bundle it could not drop would be offered again
@@ -244,9 +254,95 @@ describe('restoring one', () => {
     expect(relay.stored()).not.toBeNull();
   });
 
+  test('offers what this machine found, and takes it on one confirmation', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    // One session means `collectWorkingDirRoots` descends to it, so the root
+    // in the manifest is the session's own directory — and the folder proposed
+    // for it IS the new working directory.
+    const here = path.join(tmp, 'dst', 'Work', 'Repos', 'Bodhilander');
+    fs.mkdirSync(here, { recursive: true });
+
+    // The four-button prompt a proposal raises; 0 is "Use This Folder". No
+    // showOpenDialog answer is queued, so a restore that reached the folder
+    // picker would come back with the root unmapped and fail the assertion.
+    messageBoxResponses = [0];
+    const result = await restoreMachineHandoff(relay.transport, phrase, legacyDir, (roots) =>
+      roots.map((from) => ({ from, to: here, matchedSegments: 2, unchanged: false })),
+    );
+
+    expect(result.success).toBe(true);
+    const dir = (db.query('SELECT working_dir FROM sessions WHERE id = ?').get('s1') as { working_dir: string })
+      .working_dir;
+    expect(dir).toBe(here);
+  });
+
+  test('does not ask about a root that is already here', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+
+    // Nothing queued: a prompt raised here would take the `?? 0` default and
+    // then reach a folder picker with no answer, so this fails loudly if the
+    // unchanged root is asked about rather than skipped.
+    messageBoxResponses = [];
+    const asked: string[] = [];
+    const result = await restoreMachineHandoff(relay.transport, phrase, legacyDir, (roots) => {
+      asked.push(...roots);
+      return roots.map((from) => ({ from, to: from, matchedSegments: 3, unchanged: true }));
+    });
+
+    expect(result.success).toBe(true);
+    expect(asked).toEqual([`${SOURCE_ROOT}/Bodhilander`]);
+    // Left exactly as the source wrote it, which is the right answer when the
+    // tree is at the same path on both machines.
+    const dir = (db.query('SELECT working_dir FROM sessions WHERE id = ?').get('s1') as { working_dir: string })
+      .working_dir;
+    expect(dir).toBe(`${SOURCE_ROOT}/Bodhilander`);
+  });
+
+  test('keeps a report of what arrived, naming the machine that sent it', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    // Reading the offer is what puts it on screen, and is where the source
+    // machine's name is learned.
+    await readHandoffOffer(relay.transport);
+    messageBoxResponses = [1];
+
+    await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
+    const report = readArrival();
+
+    expect(report).not.toBeNull();
+    expect(report!.via).toBe('handoff');
+    expect(report!.sourceLabel).toBe('Old Laptop');
+    expect(report!.sessions).toBe(1);
+    // The folder is not on this machine, so the one session that arrived is
+    // not one that can start — and the report says so rather than reporting
+    // a restore of one session and leaving the rest to be discovered.
+    expect(report!.resumable).toBe(0);
+    expect(report!.needsRelink.map((r) => r.sessionId)).toEqual(['s1']);
+  });
+
+  test('reports only the accounts the bundle carried, not every account here', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    // An account this machine already had, signed out, and never in the
+    // transfer. Without scoping it would appear in the "needs sign-in" list of
+    // this restore — and of every future one.
+    db.prepare(
+      `INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at)
+       VALUES ('local-only', 'Not From The Bundle', ?, NULL, '#888888', 0, '2026-08-01T00:00:00.000Z')`,
+    ).run(path.join(tmp, 'unrelated', '.claude'));
+    messageBoxResponses = [1];
+
+    await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
+    const report = readArrival();
+
+    expect(report!.accounts.map((a) => a.accountId)).toEqual(['acct-1']);
+  });
+
   test('a mistyped phrase names the mistake instead of a decryption failure', async () => {
     const relay = standIn(preparedElsewhere().bytes);
-    const result = await restoreMachineHandoff(relay.transport, 'agent album alloy', legacyDir);
+    const result = await restoreMachineHandoff(relay.transport, 'agent album alloy', legacyDir, noSuggestions);
     expect(result.error).toMatch(/18 words/);
     expect(relay.stored()).not.toBeNull();
   });
@@ -256,7 +352,7 @@ describe('restoring one', () => {
     const relay = standIn(bytes);
     messageBoxResponses = [2];
 
-    expect(await restoreMachineHandoff(relay.transport, phrase, legacyDir)).toEqual({
+    expect(await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions)).toEqual({
       success: false,
       error: 'Import cancelled',
     });

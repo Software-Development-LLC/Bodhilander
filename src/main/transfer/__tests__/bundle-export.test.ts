@@ -46,6 +46,43 @@ function readableText(bytes: Buffer): string {
   return [bytes.toString('utf-8'), JSON.stringify(bundle.manifest), ...parts].join('\n');
 }
 
+describe('provider keys the destination will have to re-enter', () => {
+  test('records which providers had one, by name, and no key with it', () => {
+    seedSecrets(db);
+
+    const built = build();
+
+    expect(built.manifest.providersWithApiKeys).toEqual(['anthropic']);
+    // The whole point of carrying the name is that the value stays behind.
+    // Read from the produced bytes, not from the filter: a correct-but-unwired
+    // exclusion looks identical from the inside.
+    expect(readableText(built.bytes)).not.toContain(SECRET_VALUES.providerApiKey);
+  });
+
+  test('a machine with no stored key says so, rather than leaving it unknown', () => {
+    // Derived from the preference rows rather than handed in, so the exporter
+    // always knows the answer — there is no "nobody looked" case any more.
+    expect(build().manifest.providersWithApiKeys).toEqual([]);
+  });
+
+  test('orders the names, so two exports of one machine agree', () => {
+    const pref = db.prepare('INSERT INTO preferences (key, value) VALUES (?, ?)');
+    pref.run('providerApiKey.openai', 'SEALED-OPENAI');
+    pref.run('providerApiKey.anthropic', 'SEALED-ANTHROPIC');
+
+    expect(build().manifest.providersWithApiKeys).toEqual(['anthropic', 'openai']);
+  });
+
+  test('names the provider even when the toggle behind it is off', () => {
+    // `providerApiKeyUse.` is a separate row and does not travel either. What
+    // the destination needs is "there was a key here", not whether it was in
+    // use — otherwise a stored-but-unused key silently fails to be re-entered.
+    db.prepare('INSERT INTO preferences (key, value) VALUES (?, ?)').run('providerApiKey.anthropic', 'SEALED');
+
+    expect(build().manifest.providersWithApiKeys).toEqual(['anthropic']);
+  });
+});
+
 describe('the manifest', () => {
   test('records where and when the export came from', () => {
     const { manifest, bytes } = build();

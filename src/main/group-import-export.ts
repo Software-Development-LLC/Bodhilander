@@ -24,6 +24,8 @@ import { BUNDLE_EXTENSION, formatBytes, looksLikeBundle } from './transfer/bundl
 import type { PortableExportResult, PortableImportResult } from '../shared/types';
 import type { PortableDataV1 as PortableData } from './transfer/bundle-format';
 import type { WorkingDirMapping } from './transfer/working-dirs';
+import type { RootSuggestion } from './transfer/root-suggest';
+import { recordArrival, suggestRootMappingsHere } from './arrival';
 import log from 'electron-log';
 
 /**
@@ -194,36 +196,96 @@ async function exportPortableJson(): Promise<ExportResult> {
 // Import
 // ---------------------------------------------------------------------------
 
+/** Let the user pick a folder for `root`, or decline. */
+async function chooseFolderFor(root: string): Promise<string | null> {
+  const chosen = await dialog.showOpenDialog({
+    title: `New location for ${root}`,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  return chosen.canceled || chosen.filePaths.length === 0 ? null : chosen.filePaths[0];
+}
+
+const LEAVE_AS_IS_DETAIL =
+  'Left as is, any session under it whose folder is missing arrives marked for relinking ' +
+  'rather than failing to start.';
+
+/**
+ * Ask about a root this machine has a proposal for. The proposal is the
+ * default button but never the silent answer — #202 asks for a confirmation,
+ * not an application, because a wrong match relocates every session under the
+ * root and does it quietly.
+ */
+async function confirmSuggestedRoot(
+  root: string,
+  suggestion: RootSuggestion,
+): Promise<WorkingDirMapping | null | 'cancel'> {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Use This Folder', 'Choose Different Folder…', 'Leave As Is', 'Cancel Import'],
+    defaultId: 0,
+    cancelId: 3,
+    title: 'Is this the same folder?',
+    message: root,
+    detail:
+      `This machine has:\n\n${suggestion.to}\n\n` +
+      `Matched on the last ${suggestion.matchedSegments} part(s) of the path. ` +
+      `Use it if it is the same tree. ${LEAVE_AS_IS_DETAIL}`,
+  });
+
+  if (response === 3) return 'cancel';
+  if (response === 0) return { from: root, to: suggestion.to };
+  if (response === 2) return null;
+
+  const chosen = await chooseFolderFor(root);
+  return chosen ? { from: root, to: chosen } : null;
+}
+
+/** Ask about a root with nothing to propose — the original prompt. */
+async function askUnknownRoot(root: string): Promise<WorkingDirMapping | null | 'cancel'> {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Choose Folder…', 'Leave As Is', 'Cancel Import'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Where does this folder live now?',
+    message: root,
+    detail: `Point this at the same tree on this machine. ${LEAVE_AS_IS_DETAIL}`,
+  });
+
+  if (response === 2) return 'cancel';
+  if (response !== 0) return null;
+
+  const chosen = await chooseFolderFor(root);
+  return chosen ? { from: root, to: chosen } : null;
+}
+
 /**
  * Ask where each of the source machine's working-directory roots lives here.
  * Null means the user abandoned the import; an empty answer for one root is
  * allowed and leaves those paths as they were.
+ *
+ * A root this machine already has at the same path is not asked about at all:
+ * there is nothing to remap, nothing under it will be marked for relinking,
+ * and a prompt whose only sensible answer is "leave it" is a prompt that
+ * teaches people to click through the ones that matter.
  */
-export async function askRootMappings(roots: string[]): Promise<WorkingDirMapping[] | null> {
+export async function askRootMappings(
+  roots: string[],
+  suggestions: RootSuggestion[] = [],
+): Promise<WorkingDirMapping[] | null> {
+  const byRoot = new Map(suggestions.map((s) => [s.from, s]));
   const mappings: WorkingDirMapping[] = [];
 
   for (const root of roots) {
-    const { response } = await dialog.showMessageBox({
-      type: 'question',
-      buttons: ['Choose Folder…', 'Leave As Is', 'Cancel Import'],
-      defaultId: 0,
-      cancelId: 2,
-      title: 'Where does this folder live now?',
-      message: root,
-      detail:
-        'Point this at the same tree on this machine. Left as is, any session under it ' +
-        'whose folder is missing arrives marked for relinking rather than failing to start.',
-    });
-    if (response === 2) return null;
-    if (response !== 0) continue;
+    const suggestion = byRoot.get(root);
+    if (suggestion?.unchanged) continue;
 
-    const chosen = await dialog.showOpenDialog({
-      title: `New location for ${root}`,
-      properties: ['openDirectory', 'createDirectory'],
-    });
-    if (!chosen.canceled && chosen.filePaths.length > 0) {
-      mappings.push({ from: root, to: chosen.filePaths[0] });
-    }
+    const answer = suggestion
+      ? await confirmSuggestedRoot(root, suggestion)
+      : await askUnknownRoot(root);
+
+    if (answer === 'cancel') return null;
+    if (answer) mappings.push(answer);
   }
   return mappings;
 }
@@ -241,9 +303,14 @@ export function registerRestoredAccountHooks(): void {
   }
 }
 
-async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<ImportResult> {
+async function importTransferBundle(
+  bytes: Buffer,
+  legacyDir: string,
+  suggest: RootSuggester,
+): Promise<ImportResult> {
   const manifest = readBundleManifest(bytes);
-  const mappings = await askRootMappings(manifest?.workingDirRoots ?? []);
+  const roots = manifest?.workingDirRoots ?? [];
+  const mappings = await askRootMappings(roots, suggest(roots));
   if (mappings === null) return { success: false, error: 'Import cancelled' };
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhilander-transfer-'));
@@ -255,6 +322,9 @@ async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<I
       mappings,
     });
     registerRestoredAccountHooks();
+    // Kept, not just logged: what a restore leaves outstanding is not work
+    // anybody finishes in the thirty seconds after an import.
+    recordArrival({ via: 'file', manifest: outcome.manifest, outcome });
     log.info(
       `[Import/Export] Restored ${outcome.groups} group(s), ${outcome.sessions} session(s), ` +
       `${outcome.transcripts} transcript(s); ${outcome.needsRelink.length} need relinking`,
@@ -273,7 +343,18 @@ async function importTransferBundle(bytes: Buffer, legacyDir: string): Promise<I
   }
 }
 
-export async function importGroupsAndSessions(legacyDir: string = legacyClaudeConfigDir()): Promise<ImportResult> {
+/**
+ * What this machine proposes for the source's roots. Injectable because the
+ * real one walks the user's home directory: a test that did not control it
+ * would depend on whatever happens to be on the machine running it — and would
+ * ask a different question depending on the answer.
+ */
+export type RootSuggester = (roots: string[]) => RootSuggestion[];
+
+export async function importGroupsAndSessions(
+  legacyDir: string = legacyClaudeConfigDir(),
+  suggest: RootSuggester = suggestRootMappingsHere,
+): Promise<ImportResult> {
   try {
     const result = await dialog.showOpenDialog({
       title: 'Import Groups & Sessions',
@@ -289,7 +370,7 @@ export async function importGroupsAndSessions(legacyDir: string = legacyClaudeCo
     }
 
     const bytes = fs.readFileSync(result.filePaths[0]);
-    if (looksLikeBundle(bytes)) return await importTransferBundle(bytes, legacyDir);
+    if (looksLikeBundle(bytes)) return await importTransferBundle(bytes, legacyDir, suggest);
 
     const raw = bytes.toString('utf-8');
     const data: PortableData = JSON.parse(raw);

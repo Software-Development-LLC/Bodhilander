@@ -153,6 +153,24 @@ describe('the import/export bridge', () => {
     expect(lastInvocation().args).toEqual(['handoff-1']);
   });
 
+  test('exposes the arrival report, and signing in to an account that already exists', () => {
+    for (const name of ['arrivalRead', 'arrivalDismiss', 'resumeAccountLogin']) {
+      expect(typeof exposed[name]).toBe('function');
+    }
+
+    call('arrivalRead');
+    expect(lastInvocation().channel).toBe('arrival:read');
+
+    call('arrivalDismiss');
+    expect(lastInvocation().channel).toBe('arrival:dismiss');
+
+    // Not `accounts:startLogin`: that one mints an account and rolls it back
+    // on a spawn failure, which for a restored account would delete it.
+    call('resumeAccountLogin', 'acct-1');
+    expect(lastInvocation().channel).toBe('accounts:resumeLogin');
+    expect(lastInvocation().args).toEqual(['acct-1']);
+  });
+
   test('the folder picker forwards the directory it should open at', () => {
     call('selectDirectory', '/some/where');
 

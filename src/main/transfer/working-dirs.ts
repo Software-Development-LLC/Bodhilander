@@ -151,6 +151,43 @@ export function collectWorkingDirRoots(dirs: string[]): string[] {
   return [...new Set(roots)].sort((a, b) => a.localeCompare(b, 'en'));
 }
 
+/**
+ * A directory broken into the pieces a comparison needs, for callers outside
+ * this module. Exported rather than re-derived because the parsing rules —
+ * UNC prefixes, drive letters, which separator a path is written with — are
+ * subtle enough that a second implementation would drift from this one.
+ *
+ * Null for a directory that is not one, i.e. blank or whitespace.
+ */
+export interface WorkingDirParts {
+  /** Path components, root prefix excluded. Empty for a volume root. */
+  segments: string[];
+  /** True when the path is Windows-shaped, and so compares case-insensitively. */
+  windows: boolean;
+}
+
+export function workingDirParts(dir: string): WorkingDirParts | null {
+  const parsed = parseDir(dir);
+  return parsed && { segments: parsed.segments, windows: parsed.windows };
+}
+
+/**
+ * How many trailing components `a` and `b` share. Either side being a Windows
+ * path makes the comparison case-insensitive, for the same reason
+ * `folderFor` gives.
+ */
+export function sharedTrailingSegments(a: WorkingDirParts, b: WorkingDirParts): number {
+  const fold: Fold = a.windows || b.windows ? foldCaseless : foldExact;
+  let shared = 0;
+  while (shared < a.segments.length && shared < b.segments.length) {
+    const left = a.segments[a.segments.length - 1 - shared];
+    const right = b.segments[b.segments.length - 1 - shared];
+    if (fold(left) !== fold(right)) break;
+    shared++;
+  }
+  return shared;
+}
+
 /** Whether `subject` sits at or under `from`, compared component by component. */
 function startsWithDir(subject: ParsedDir, from: ParsedDir, folder: Fold): boolean {
   if (folder(subject.prefix) !== folder(from.prefix)) return false;

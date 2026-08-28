@@ -1,0 +1,104 @@
+/* Native <dialog> + showModal(): the browser owns modality, focus trapping and
+   the backdrop, so there is no overlay div here and none is wanted. */
+
+.arrival-report {
+  width: 560px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 20px 24px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d4d4d4;
+}
+
+.arrival-report::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.arrival-report h3 {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.arrival-report h4 {
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.arrival-when {
+  margin: 0 0 16px 0;
+  font-size: 11px;
+  color: #888;
+}
+
+.arrival-counts p {
+  margin: 0 0 6px 0;
+  font-size: 13px;
+  color: #b8b8b8;
+}
+
+.arrival-counts strong {
+  color: #e0e0e0;
+}
+
+.arrival-muted {
+  margin: 0 0 8px 0;
+  font-size: 11px;
+  color: #888;
+}
+
+/* Each outstanding thing is its own block, so the list of what is left reads
+   as a list of jobs rather than as one long paragraph of bad news. */
+.arrival-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #3c3c3c;
+}
+
+.arrival-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.arrival-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #2f2f2f;
+}
+
+.arrival-list li:last-child {
+  border-bottom: none;
+}
+
+.arrival-name {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: #e0e0e0;
+}
+
+/* A path from another machine is arbitrary text and can be very long; never
+   let it push the dialog wide. */
+.arrival-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: #9a9a9a;
+  overflow-wrap: anywhere;
+}
+
+.arrival-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}

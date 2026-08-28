@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -82,6 +82,9 @@ interface ElectronAPI {
   handoffPrepare: () => Promise<HandoffPrepareResult>;
   handoffPeek: () => Promise<HandoffOfferState>;
   handoffRestore: (phrase: string) => Promise<PortableImportResult>;
+  arrivalRead: () => Promise<ArrivalReport | null>;
+  arrivalDismiss: () => Promise<void>;
+  resumeAccountLogin: (accountId: string) => Promise<{ account: ClaudeAccount; ptyId: string }>;
   handoffDecline: (handoffId: string) => Promise<void>;
 
   // Preferences

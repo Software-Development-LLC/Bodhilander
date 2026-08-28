@@ -50,6 +50,13 @@ export interface ImportOutcome {
   arenaResponses: number;
   preferences: number;
   accounts: number;
+  /**
+   * Every account id the bundle carried and that is present here afterwards —
+   * newly inserted or already known. What the arrival report is about: an
+   * account this machine happens to hold and the bundle never mentioned is not
+   * something this restore left outstanding.
+   */
+  accountIds: string[];
   transcripts: number;
   skippedGroups: number;
   skippedSessions: number;
@@ -129,6 +136,7 @@ interface RowCounts {
   arenaResponses: number;
   preferences: number;
   accounts: number;
+  accountIds: string[];
   skippedGroups: number;
   skippedSessions: number;
   needsRelink: string[];
@@ -318,7 +326,13 @@ function restorePreferences(db: Db, tables: PortableTables): number {
   return inserted;
 }
 
-function restoreAccounts(db: Db, tables: PortableTables, options: ImportOptions): number {
+interface RestoredAccounts {
+  inserted: number;
+  /** Ids the bundle named, whether newly inserted here or already present. */
+  ids: string[];
+}
+
+function restoreAccounts(db: Db, tables: PortableTables, options: ImportOptions): RestoredAccounts {
   const existing = idsIn(db, 'claude_accounts');
   const insert = db.prepare(`
     INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at, last_used_at)
@@ -326,8 +340,10 @@ function restoreAccounts(db: Db, tables: PortableTables, options: ImportOptions)
   `);
 
   let inserted = 0;
+  const ids: string[] = [];
   for (const account of tables.accounts) {
     assertRestorableAccountId(account.id);
+    ids.push(account.id);
     if (existing.has(account.id)) continue;
     insert.run(
       account.id,
@@ -342,7 +358,7 @@ function restoreAccounts(db: Db, tables: PortableTables, options: ImportOptions)
   }
 
   promoteDefaultAccount(db, tables);
-  return inserted;
+  return { inserted, ids };
 }
 
 function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): RowCounts {
@@ -358,6 +374,7 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
   const sessions = restoreSessions(db, tables, options, groupIds, sessionIds);
   const events = restoreEvents(db, tables, sessionIds);
   const arena = restoreArena(db, tables, options);
+  const restored = restoreAccounts(db, tables, options);
 
   return {
     groups: groups.inserted,
@@ -367,7 +384,8 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
     arenaRuns: arena.arenaRuns,
     arenaResponses: arena.arenaResponses,
     preferences: restorePreferences(db, tables),
-    accounts: restoreAccounts(db, tables, options),
+    accounts: restored.inserted,
+    accountIds: restored.ids,
     skippedGroups: groups.skipped,
     skippedSessions: sessions.skipped,
     needsRelink: sessions.needsRelink,

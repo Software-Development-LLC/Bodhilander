@@ -177,11 +177,24 @@ const PORTABLE_PREFERENCE_KEYS = new Set([
 ]);
 
 /**
- * Preference namespaces sealed to the source machine's OS keychain, plus the
- * relay identity. Nothing under these can be decrypted anywhere else, and the
- * relay's machine model requires the destination to mint its own keypair.
+ * Where a stored provider key lives. Named because it is both an excluded
+ * prefix below and, separately, the only record of WHICH providers had a key —
+ * which the manifest carries so the destination can ask for them again.
  */
-const LOCAL_PREFERENCE_PREFIXES = ['providerApiKey.', 'providerApiKeyUse.', 'relay.'] as const;
+export const PROVIDER_KEY_PREFIX = 'providerApiKey.';
+
+/**
+ * Preference namespaces sealed to the source machine's OS keychain, plus the
+ * relay identity and this machine's own arrival history. Nothing under the
+ * first two can be decrypted anywhere else, and the relay's machine model
+ * requires the destination to mint its own keypair.
+ *
+ * `arrival.` is local for a different reason: it records what a restore left
+ * outstanding *here*. Carried to a third machine it would describe a restore
+ * that never happened there, naming folders to relink that machine has never
+ * had and accounts it was never asked to sign in to.
+ */
+const LOCAL_PREFERENCE_PREFIXES = [PROVIDER_KEY_PREFIX, 'providerApiKeyUse.', 'relay.', 'arrival.'] as const;
 
 /**
  * Keys classified as staying home. Redundant for the filter now that the

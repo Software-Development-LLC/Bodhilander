@@ -13,6 +13,8 @@ import { getDatabase } from './database';
 import { legacyClaudeConfigDir } from './conversation-transcript';
 import { getPreference, setPreference } from './repositories/preferences';
 import { askRootMappings, registerRestoredAccountHooks } from './group-import-export';
+import { recordArrival, suggestRootMappingsHere } from './arrival';
+import type { RootSuggestion } from './transfer/root-suggest';
 import { formatBytes, type TransferManifest } from './transfer/bundle-format';
 import {
   applyHandoff,
@@ -87,6 +89,15 @@ export async function readHandoffOffer(transport: HandoffTransport | null): Prom
   }
 }
 
+/** The name of the machine holding this account's slot, or null if unknowable. */
+async function sourceMachineName(transport: HandoffTransport): Promise<string | null> {
+  try {
+    return (await transport.peek())?.sourceMachineName ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function declineMachineHandoff(transport: HandoffTransport | null, handoffId: string): void {
   if (!transport) {
     // Unlinked since the offer was drawn, so what is on screen is stale.
@@ -98,10 +109,19 @@ export function declineMachineHandoff(transport: HandoffTransport | null, handof
   log.info('[Handoff] Offer declined; it will not be raised again');
 }
 
+/**
+ * What this machine proposes for the source's roots. Injectable because the
+ * real one walks the user's home directory: a test that did not control it
+ * would depend on whatever happens to be on the machine running it, and would
+ * ask a different question depending on the answer.
+ */
+export type RootSuggester = (roots: string[]) => RootSuggestion[];
+
 export async function restoreMachineHandoff(
   transport: HandoffTransport | null,
   phrase: string,
   legacyDir: string = legacyClaudeConfigDir(),
+  suggest: RootSuggester = suggestRootMappingsHere,
 ): Promise<PortableImportResult> {
   if (!transport) return { success: false, error: NOT_LINKED };
   let opened;
@@ -114,7 +134,15 @@ export async function restoreMachineHandoff(
     return { success: false, error: message(error) };
   }
 
-  const mappings = await askRootMappings(opened.manifest?.workingDirRoots ?? []);
+  // Asked here rather than remembered from the last `readHandoffOffer`: module
+  // state would be written by any poll that happened while this restore sat on
+  // a confirmation dialog, and would then label the finished restore with a
+  // different machine's name. One small signed GET, and a failure just means
+  // the report does not name the source.
+  const sourceLabel = await sourceMachineName(transport);
+
+  const roots = opened.manifest?.workingDirRoots ?? [];
+  const mappings = await askRootMappings(roots, suggest(roots));
   if (mappings === null) return { success: false, error: 'Import cancelled' };
 
   const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhilander-handoff-'));
@@ -129,6 +157,7 @@ export async function restoreMachineHandoff(
       },
     });
     registerRestoredAccountHooks();
+    recordArrival({ via: 'handoff', sourceLabel, manifest: outcome.manifest, outcome });
     if (!acknowledged) {
       // Restored, but the relay still holds the bundle and would offer it
       // again on the next launch. Answering it here is what stops that.

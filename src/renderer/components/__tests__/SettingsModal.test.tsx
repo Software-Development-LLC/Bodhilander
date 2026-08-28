@@ -5,10 +5,30 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import type { ArrivalReport } from '../../../shared/types';
 import { SettingsModal, exportSummary, importSummary } from '../SettingsModal';
 
 const noopSub = () => () => {};
+
+/** What `arrival:read` answers next. Null is "nothing restored here yet". */
+let storedReport: ArrivalReport | null = null;
+
+const A_REPORT: ArrivalReport = {
+  restoredAt: '2026-08-28T10:00:00.000Z',
+  via: 'file',
+  sourceLabel: null,
+  sourcePlatform: null,
+  groups: 1,
+  sessions: 1,
+  resumable: 1,
+  transcripts: 0,
+  skippedGroups: 0,
+  skippedSessions: 0,
+  needsRelink: [],
+  accounts: [],
+  providersNeedingKeys: [],
+};
 
 beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -24,12 +44,56 @@ beforeEach(() => {
     openExternal: () => {},
     testSound: () => {},
     onPtyData: noopSub,
+    arrivalRead: async () => storedReport,
+    arrivalDismiss: async () => {},
   };
+  storedReport = null;
 });
 
 afterEach(() => {
   cleanup();
   delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+});
+
+describe('reopening the restore report', () => {
+  async function open() {
+    await act(async () => { render(<SettingsModal isOpen onClose={() => {}} initialTab="general" />); });
+  }
+  async function showReport() {
+    await act(async () => { fireEvent.click(screen.getByText('Show Restore Report')); });
+  }
+
+  /**
+   * Deliberately not `*ByRole`, and deliberately reduced to booleans.
+   *
+   * The settings window is a large DOM: computing the accessibility tree over
+   * it is slow, and a failing `queryByText(...)).toBeNull()` pretty-prints the
+   * whole thing into the failure message — slow enough that a red run reads as
+   * a hung one. Asserting on a boolean keeps the failure fast and legible.
+   */
+  const reportShown = () => document.querySelector('dialog.arrival-report') !== null;
+  const hintShown = () =>
+    screen.queryByText(/Nothing has been restored onto this machine yet/) !== null;
+
+  test('says so plainly when nothing has been restored here', async () => {
+    await open();
+    await showReport();
+
+    expect(hintShown()).toBe(true);
+    expect(reportShown()).toBe(false);
+  });
+
+  test('clears that answer once there IS a report, rather than showing both', async () => {
+    await open();
+    await showReport();
+    // Something gets restored, and the user comes back to the same button.
+    storedReport = A_REPORT;
+
+    await showReport();
+
+    expect(hintShown()).toBe(false);
+    expect(reportShown()).toBe(true);
+  });
 });
 
 describe('the Data section', () => {

@@ -581,6 +581,50 @@ export interface TransferBundleCounts {
   transcripts: number;
 }
 
+/** A session that arrived but cannot start until somebody says where it lives. */
+export interface ArrivalRelinkItem {
+  sessionId: string;
+  name: string;
+  /** The directory as it was remapped, i.e. where we looked and did not find it. */
+  workingDir: string;
+}
+
+export interface ArrivalAccountItem {
+  accountId: string;
+  label: string;
+  /**
+   * Undefined where the evidence could not be read, which is not the same as
+   * "never logged in" and is not reported as needing a sign-in.
+   */
+  loggedIn: boolean | undefined;
+}
+
+export interface ArrivalReport {
+  /** ISO 8601, stamped by the caller so this module stays a pure assembly. */
+  restoredAt: string;
+  /** How the state got here, for a report the user opens a week later. */
+  via: 'file' | 'handoff';
+  /** The machine that prepared it, when the transport knows. */
+  sourceLabel: string | null;
+  sourcePlatform: string | null;
+  groups: number;
+  sessions: number;
+  /** Sessions whose working directory is on this machine, so they can start. */
+  resumable: number;
+  transcripts: number;
+  skippedGroups: number;
+  skippedSessions: number;
+  needsRelink: ArrivalRelinkItem[];
+  accounts: ArrivalAccountItem[];
+  /**
+   * Providers that had a key on the source machine. The keys themselves are
+   * sealed to that machine's keychain and never travel; these are names, so
+   * the report can say which ones to re-enter rather than leaving the user to
+   * discover it when a launch fails.
+   */
+  providersNeedingKeys: string[];
+}
+
 export interface TransferBundleManifest {
   formatVersion: number;
   sourceApp: string;
@@ -591,5 +635,16 @@ export interface TransferBundleManifest {
   exportedAt: string;
   /** Distinct roots across every group and session working directory. */
   workingDirRoots: string[];
+  /**
+   * Providers that had an API key stored on the source machine — **ids only**.
+   * The keys are sealed to that machine's OS keychain and are excluded from
+   * the bundle by `LOCAL_PREFERENCE_PREFIXES`; nothing here changes that.
+   *
+   * Carried so the destination can say which keys to re-enter instead of
+   * leaving the user to find out when a launch fails. Optional: bundles
+   * written before this existed simply do not say, and are read as "unknown"
+   * rather than as "none".
+   */
+  providersWithApiKeys?: string[];
   counts: TransferBundleCounts;
 }

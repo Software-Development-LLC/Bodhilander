@@ -8,6 +8,8 @@ import { ShareSessionModal } from './components/ShareSessionModal';
 import { GuestJoinRequestModal } from './components/GuestJoinRequestModal';
 import { SettingsModal, SettingsTab } from './components/SettingsModal';
 import { HandoffRestoreOffer } from './components/MachineHandoff';
+import { ArrivalReportModal } from './components/ArrivalReport';
+import { hasOutstandingWork } from '../shared/arrival';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
 import { SessionRow } from './components/SessionRow';
@@ -20,7 +22,7 @@ import { FailoverNotice } from './components/FailoverNotice';
 import { AccountSwitchNotice } from './components/AccountSwitchNotice';
 import { AccountSwitchReport, reportGroupSwitch, reportSessionSwitch } from './accountSwitchReport';
 import { AccountFailoverEvent, ClaudeAccount, Session } from '../shared/types';
-import type { LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
+import type { ArrivalReport, LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
@@ -203,6 +205,22 @@ const App: React.FC = () => {
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [arrivalReport, setArrivalReport] = useState<ArrivalReport | null>(null);
+
+  // Raised at launch only while something in it is still waiting on a person.
+  // A restore onto the same machine, with every folder present and every
+  // account signed in, has nothing to say — and saying it anyway is how a
+  // report becomes something people dismiss without reading. It stays
+  // reachable from Settings regardless.
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.arrivalRead().then((report) => {
+      if (!cancelled && report && hasOutstandingWork(report)) setArrivalReport(report);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Which Settings tab to land on. Claude accounts left the sidebar and became
   // a Settings tab, so App needs to be able to open Settings straight to it.
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('general');
@@ -1913,6 +1931,10 @@ const App: React.FC = () => {
 
       {/* Raised once when this account has state waiting from another machine. */}
       <HandoffRestoreOffer onRestored={() => window.location.reload()} />
+
+      {/* What the last restore left undone. Raised only while something is
+          still outstanding; it stays reachable from Settings either way. */}
+      <ArrivalReportModal report={arrivalReport} onClosed={() => setArrivalReport(null)} />
 
       {/* Destructive action confirmation dialog */}
       {confirmAction && (
