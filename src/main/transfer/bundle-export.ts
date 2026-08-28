@@ -73,8 +73,10 @@ function providersWithStoredKeys(db: Db): string[] {
     .prepare('SELECT key FROM preferences WHERE key LIKE ?')
     .all(`${PROVIDER_KEY_PREFIX}%`) as { key: string }[];
   const ids = rows.map((row) => row.key.slice(PROVIDER_KEY_PREFIX.length)).filter((id) => id.length > 0);
-  // Sorted so two exports of one machine produce byte-identical manifests.
-  return [...new Set(ids)].sort();
+  // Sorted so two exports of one machine produce byte-identical manifests, in
+  // a fixed locale rather than the host's — a bundle written on one machine is
+  // read on another, and the order must not depend on which.
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b, 'en'));
 }
 
 /**

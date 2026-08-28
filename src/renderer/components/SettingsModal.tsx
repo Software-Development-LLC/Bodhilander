@@ -611,9 +611,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                       Show Restore Report
                     </button>
                     {arrivalMissing && (
-                      <span className="settings-hint" role="status">
+                      <output className="settings-hint">
                         Nothing has been restored onto this machine yet.
-                      </span>
+                      </output>
                     )}
                     <span className="settings-hint">
                       What the last restore carried, and what it left for you: sessions whose folder is

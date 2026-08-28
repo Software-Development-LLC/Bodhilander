@@ -12,7 +12,12 @@
  * confident match simply falls through to being asked, exactly as before.
  */
 
-import { sharedTrailingSegments, workingDirParts, type WorkingDirMapping } from './working-dirs';
+import {
+  sharedTrailingSegments,
+  workingDirParts,
+  type WorkingDirMapping,
+  type WorkingDirParts,
+} from './working-dirs';
 
 export interface RootSuggestion {
   /** The root as the manifest recorded it, on the source machine. */
@@ -83,6 +88,49 @@ interface Candidate {
   segments: string[];
 }
 
+/** Join with the parent's own separator, so a Windows base stays one. */
+function joinPath(parent: string, name: string): string {
+  const separator = parent.includes('\\') && !parent.includes('/') ? '\\' : '/';
+  return parent.endsWith(separator) ? `${parent}${name}` : `${parent}${separator}${name}`;
+}
+
+/** The bases themselves, which are candidates before anything is descended. */
+function seedFrontier(bases: string[], seen: Set<string>): Candidate[] {
+  const seeds: Candidate[] = [];
+  for (const base of bases) {
+    const parts = workingDirParts(base);
+    if (!parts || seen.has(base)) continue;
+    seen.add(base);
+    seeds.push({ path: base, segments: parts.segments });
+  }
+  return seeds;
+}
+
+/** How many more directories this walk may look at. */
+interface Budget {
+  left: number;
+}
+
+/** One directory's unseen subdirectories, as far as the budget allows. */
+function childrenOf(
+  parent: Candidate,
+  options: SuggestOptions,
+  seen: Set<string>,
+  budget: Budget,
+): Candidate[] {
+  const children: Candidate[] = [];
+  for (const name of subdirsOf(options, parent.path)) {
+    if (budget.left <= 0) break;
+    if (skipped(name)) continue;
+    budget.left--;
+    const path = joinPath(parent.path, name);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    children.push({ path, segments: [...parent.segments, name] });
+  }
+  return children;
+}
+
 /**
  * Every directory under `bases`, down to `maxDepth`, as path plus the
  * components that got there. Breadth-first so the shallowest matches — which
@@ -90,40 +138,15 @@ interface Candidate {
  */
 function walk(options: SuggestOptions): Candidate[] {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
-  const maxVisits = options.maxVisits ?? DEFAULT_MAX_VISITS;
-
-  const found: Candidate[] = [];
+  const budget: Budget = { left: options.maxVisits ?? DEFAULT_MAX_VISITS };
   const seen = new Set<string>();
-  let frontier: Candidate[] = [];
 
-  for (const base of options.bases) {
-    const parts = workingDirParts(base);
-    if (!parts || seen.has(base)) continue;
-    seen.add(base);
-    const candidate = { path: base, segments: parts.segments };
-    found.push(candidate);
-    frontier.push(candidate);
-  }
+  let frontier = seedFrontier(options.bases, seen);
+  const found = [...frontier];
 
-  let visits = 0;
-  for (let depth = 0; depth < maxDepth && frontier.length > 0 && visits < maxVisits; depth++) {
-    const next: Candidate[] = [];
-    for (const parent of frontier) {
-      if (visits >= maxVisits) break;
-      for (const name of subdirsOf(options, parent.path)) {
-        if (skipped(name)) continue;
-        if (++visits > maxVisits) break;
-        // Joined with the parent's own separator rather than the host's: a
-        // base handed in as a Windows path stays one.
-        const separator = parent.path.includes('\\') && !parent.path.includes('/') ? '\\' : '/';
-        const path = parent.path.endsWith(separator) ? `${parent.path}${name}` : `${parent.path}${separator}${name}`;
-        if (seen.has(path)) continue;
-        seen.add(path);
-        const child = { path, segments: [...parent.segments, name] };
-        found.push(child);
-        next.push(child);
-      }
-    }
+  for (let depth = 0; depth < maxDepth && frontier.length > 0 && budget.left > 0; depth++) {
+    const next = frontier.flatMap((parent) => childrenOf(parent, options, seen, budget));
+    found.push(...next);
     frontier = next;
   }
   return found;
@@ -135,59 +158,72 @@ function walk(options: SuggestOptions): Candidate[] {
  * mean the machine does not know, and saying so is better than picking one and
  * quietly moving somebody's sessions to the wrong tree.
  */
-export function suggestRootMappings(roots: string[], options: SuggestOptions): RootSuggestion[] {
-  const wanted = roots
-    .map((root) => ({ root, parts: workingDirParts(root) }))
-    .filter((r): r is { root: string; parts: NonNullable<ReturnType<typeof workingDirParts>> } => r.parts !== null);
-  if (wanted.length === 0) return [];
+interface WantedRoot {
+  root: string;
+  parts: WorkingDirParts;
+}
 
-  const suggestions: RootSuggestion[] = [];
-  const stillWanted: typeof wanted = [];
+/**
+ * The single best-matching directory, or null when there is no match or more
+ * than one equally good one. A tie is not a near-miss to break in favour of
+ * the first: it is the machine saying it does not know.
+ */
+function bestMatchFor(wanted: WantedRoot, candidates: Candidate[]): RootSuggestion | null {
+  if (wanted.parts.segments.length === 0) return null;
 
-  // A root that is already here needs no search and no mapping. Checked first
-  // so the common same-platform restore costs one stat per root and no walk.
-  for (const entry of wanted) {
-    if (options.directoryExists(entry.root)) {
-      suggestions.push({
-        from: entry.root,
-        to: entry.root,
-        matchedSegments: entry.parts.segments.length,
-        unchanged: true,
-      });
+  let best = 0;
+  let bestPaths: string[] = [];
+  for (const candidate of candidates) {
+    const shared = sharedTrailingSegments(wanted.parts, {
+      segments: candidate.segments,
+      windows: wanted.parts.windows,
+    });
+    if (shared === 0 || shared < best) continue;
+    if (shared > best) {
+      best = shared;
+      bestPaths = [candidate.path];
     } else {
-      stillWanted.push(entry);
+      bestPaths.push(candidate.path);
     }
   }
-  if (stillWanted.length === 0) return suggestions;
+
+  if (best === 0 || bestPaths.length !== 1) return null;
+  return { from: wanted.root, to: bestPaths[0], matchedSegments: best, unchanged: false };
+}
+
+/**
+ * A root already at this path needs no search and no mapping. Split out first
+ * so the common same-platform restore costs one stat per root and no walk.
+ */
+function splitByPresence(
+  roots: string[],
+  directoryExists: (dir: string) => boolean,
+): { here: RootSuggestion[]; elsewhere: WantedRoot[] } {
+  const here: RootSuggestion[] = [];
+  const elsewhere: WantedRoot[] = [];
+
+  for (const root of roots) {
+    const parts = workingDirParts(root);
+    if (!parts) continue;
+    if (directoryExists(root)) {
+      here.push({ from: root, to: root, matchedSegments: parts.segments.length, unchanged: true });
+    } else {
+      elsewhere.push({ root, parts });
+    }
+  }
+  return { here, elsewhere };
+}
+
+export function suggestRootMappings(roots: string[], options: SuggestOptions): RootSuggestion[] {
+  const { here, elsewhere } = splitByPresence(roots, options.directoryExists);
+  if (elsewhere.length === 0) return here;
 
   const candidates = walk(options);
+  const matched = elsewhere
+    .map((wanted) => bestMatchFor(wanted, candidates))
+    .filter((s): s is RootSuggestion => s !== null);
 
-  for (const { root, parts } of stillWanted) {
-    if (parts.segments.length === 0) continue;
-
-    let best = 0;
-    let bestPaths: string[] = [];
-    for (const candidate of candidates) {
-      // Never propose moving a root to itself by another name, and never
-      // propose a base that shares nothing with it.
-      const shared = sharedTrailingSegments(parts, { segments: candidate.segments, windows: parts.windows });
-      if (shared === 0) continue;
-      if (shared > best) {
-        best = shared;
-        bestPaths = [candidate.path];
-      } else if (shared === best) {
-        bestPaths.push(candidate.path);
-      }
-    }
-
-    // Exactly one directory matched better than every other. Anything else —
-    // no match at all, or a tie — is a question for the user.
-    if (best > 0 && bestPaths.length === 1) {
-      suggestions.push({ from: root, to: bestPaths[0], matchedSegments: best, unchanged: false });
-    }
-  }
-
-  return suggestions;
+  return [...here, ...matched];
 }
 
 /** The subset of suggestions that actually move something. */
