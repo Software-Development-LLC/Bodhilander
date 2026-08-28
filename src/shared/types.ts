@@ -31,6 +31,24 @@ export interface Session {
    * 'claude'; plain shell sessions keep the default.
    */
   provider: string;
+  /**
+   * Derived at read time, never stored: `workingDir` is not on this machine,
+   * so launching would throw. A stored flag could not survive the bulk state
+   * reset every app start performs.
+   */
+  workingDirMissing?: boolean;
+  /**
+   * The account this session was moved OFF when failover fired (#207), or null
+   * when it is running where it was put. Kept so the session can go back once
+   * that account's limit lifts, and so the UI can say why it moved.
+   */
+  failoverFromAccountId: string | null;
+  /**
+   * The value `claudeAccountId` held before failover overwrote it. NULL means
+   * "inherited from the group", which is why it cannot double as the "no
+   * failover in progress" signal — `failoverFromAccountId` is that signal.
+   */
+  failoverPrevAccountId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +308,43 @@ export interface ClaudeAccount {
   isDefault: boolean;
   createdAt: Date;
   lastUsedAt: Date | null;
+  /**
+   * Position in the failover order (#207): when an account hits its usage
+   * limit, its live sessions move to the lowest-ranked healthy account. Null
+   * for accounts that have never been ranked, which sort after every ranked
+   * one in the list order the accounts panel already uses.
+   */
+  fallbackRank: number | null;
+  /**
+   * When this account's usage limit is expected to lift, or null when it is
+   * not currently limited (#207). An account is skipped as a failover target
+   * until this passes. Parsed out of the CLI's own "resets at" line where it
+   * says one, otherwise a conservative default window.
+   */
+  limitedUntil: Date | null;
+  /** When the limit was observed. Null whenever limitedUntil is null. */
+  limitedAt: Date | null;
+}
+
+/**
+ * One automatic account switch (#207), reported to the renderer so it can
+ * respawn the ptys and say what happened.
+ *
+ * `to` is null when there was nowhere to go: every other account is limited
+ * too, or none is registered. That is not a failure to report as an error —
+ * the session stays where it is and the user is told the wall is real.
+ */
+export interface AccountFailoverEvent {
+  /** 'limit' = moved off an exhausted account; 'failback' = returned to it. */
+  reason: 'limit' | 'failback';
+  from: ClaudeAccount | null;
+  to: ClaudeAccount | null;
+  /** Sessions whose pty must be respawned for the switch to take effect. */
+  sessionIds: string[];
+  /** When `from`'s limit lifts, for the notification copy. Null if unknown. */
+  resetAt: Date | null;
+  /** Why nothing moved, when `to` is null. */
+  blocked?: 'no-healthy-account';
 }
 
 /**
@@ -299,6 +354,41 @@ export interface ClaudeAccount {
  */
 export interface AccountSwitchResult {
   affectedSessionIds: string[];
+  /**
+   * What the write did, beyond what needs restarting (#214).
+   *
+   * `affectedSessionIds` answers one question — which ptys to replace — and
+   * answers it with `[]` in two very different situations: nothing needed to
+   * move, and nothing could. Both reach the user as an unchanged screen,
+   * indistinguishable from a menu that never registered the click. This is
+   * what the renderer needs to say which one it was.
+   */
+  outcome: AccountSwitchOutcome;
+}
+
+/**
+ * Why an account switch moved what it moved (#214).
+ *
+ * Deliberately describes sessions rather than prescribing a message: "already
+ * on that account" and "pinned to its own account" are different facts about
+ * the user's setup, and only the renderer knows which of them is worth saying
+ * in the surface the click came from.
+ */
+export interface AccountSwitchOutcome {
+  /** The account the target resolves to after the write (null = legacy dir). */
+  account: ClaudeAccount | null;
+  /**
+   * Sessions whose effective account did not move. For a session switch this
+   * is the session itself, meaning the pick recorded an override to the
+   * account it was already inheriting.
+   */
+  unchangedSessionIds: string[];
+  /**
+   * Group switches only: sessions carrying their own account override, which
+   * a group-level change cannot move by design. Worth separating from the
+   * above because the reason is different and so is the remedy.
+   */
+  overriddenSessionIds: string[];
 }
 
 /**
@@ -416,4 +506,145 @@ export interface GlobalStats {
   totalDurationSeconds: number;
   eventsPerDay: { date: string; count: number }[];
   toolUseCounts: Record<string, number>;
+}
+
+export interface PortableExportResult {
+  success: boolean;
+  filePath?: string;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  /** Archive size as it was shown before the file was written; bundles only. */
+  sizeLabel?: string;
+}
+
+export interface PortableImportResult {
+  success: boolean;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  skippedGroups?: number;
+  skippedSessions?: number;
+  /** Bundles only: transcripts landed, and sessions whose folder is missing. */
+  transcriptCount?: number;
+  needsRelinkCount?: number;
+}
+
+/**
+ * Largest sealed handoff this build will attempt, mirroring the relay's own
+ * `handoffMaxBytes` default so an oversized state is refused before it is
+ * uploaded. A cross-tree test fails when the two drift apart.
+ */
+export const HANDOFF_MAX_BYTES = 256 * 1024 * 1024;
+
+/** A prepared handoff waiting on the relay, as the relay describes it. */
+export interface HandoffOffer {
+  id: string;
+  sourceMachineId: string;
+  sourceMachineName: string | null;
+  byteSize: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** What a machine should do about the handoff its account is holding. */
+export interface HandoffOfferState {
+  /** Null when nothing waits, or when this machine is the one that prepared it. */
+  offer: HandoffOffer | null;
+  /** This machine has already turned that exact bundle down. */
+  declined: boolean;
+  /** Size as it is shown in the offer. */
+  sizeLabel?: string;
+}
+
+export interface HandoffPrepareResult {
+  success: boolean;
+  error?: string;
+  /** Shown once, on the machine being left behind. */
+  phrase?: string;
+  sizeLabel?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  /** When the relay stops holding it. */
+  expiresAt?: number;
+}
+
+export interface TransferBundleCounts {
+  groups: number;
+  sessions: number;
+  sessionEvents: number;
+  chatEvents: number;
+  arenaRuns: number;
+  arenaResponses: number;
+  preferences: number;
+  accounts: number;
+  transcripts: number;
+}
+
+/** A session that arrived but cannot start until somebody says where it lives. */
+export interface ArrivalRelinkItem {
+  sessionId: string;
+  name: string;
+  /** The directory as it was remapped, i.e. where we looked and did not find it. */
+  workingDir: string;
+}
+
+export interface ArrivalAccountItem {
+  accountId: string;
+  label: string;
+  /**
+   * Undefined where the evidence could not be read, which is not the same as
+   * "never logged in" and is not reported as needing a sign-in.
+   */
+  loggedIn: boolean | undefined;
+}
+
+export interface ArrivalReport {
+  /** ISO 8601, stamped by the caller so this module stays a pure assembly. */
+  restoredAt: string;
+  /** How the state got here, for a report the user opens a week later. */
+  via: 'file' | 'handoff';
+  /** The machine that prepared it, when the transport knows. */
+  sourceLabel: string | null;
+  sourcePlatform: string | null;
+  groups: number;
+  sessions: number;
+  /** Sessions whose working directory is on this machine, so they can start. */
+  resumable: number;
+  transcripts: number;
+  skippedGroups: number;
+  skippedSessions: number;
+  needsRelink: ArrivalRelinkItem[];
+  accounts: ArrivalAccountItem[];
+  /**
+   * Providers that had a key on the source machine. The keys themselves are
+   * sealed to that machine's keychain and never travel; these are names, so
+   * the report can say which ones to re-enter rather than leaving the user to
+   * discover it when a launch fails.
+   */
+  providersNeedingKeys: string[];
+}
+
+export interface TransferBundleManifest {
+  formatVersion: number;
+  sourceApp: string;
+  sourceAppVersion: string;
+  sourcePlatform: string;
+  /** The userData root the bundle came from, recorded for diagnostics. */
+  sourceUserData: string;
+  exportedAt: string;
+  /** Distinct roots across every group and session working directory. */
+  workingDirRoots: string[];
+  /**
+   * Providers that had an API key stored on the source machine — **ids only**.
+   * The keys are sealed to that machine's OS keychain and are excluded from
+   * the bundle by `LOCAL_PREFERENCE_PREFIXES`; nothing here changes that.
+   *
+   * Carried so the destination can say which keys to re-enter instead of
+   * leaving the user to find out when a launch fails. Optional: bundles
+   * written before this existed simply do not say, and are read as "unknown"
+   * rather than as "none".
+   */
+  providersWithApiKeys?: string[];
+  counts: TransferBundleCounts;
 }

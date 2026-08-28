@@ -97,7 +97,7 @@ function statOf(file: string): { mtimeMs: number; size: number } | null {
 }
 
 /** Locate <configDir>/projects/<any-slug>/<uuid>.jsonl without recomputing the slug. */
-function findTranscript(configDir: string, uuid: string): string | null {
+export function findTranscript(configDir: string, uuid: string): string | null {
   const projects = path.join(configDir, 'projects');
   let entries: fs.Dirent[];
   try {

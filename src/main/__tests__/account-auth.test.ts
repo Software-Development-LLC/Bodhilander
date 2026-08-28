@@ -49,7 +49,10 @@ function freshDb(): Database {
       color TEXT DEFAULT '#888888',
       is_default INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      last_used_at TEXT
+      last_used_at TEXT,
+      fallback_rank INTEGER DEFAULT NULL,
+      limited_until TEXT DEFAULT NULL,
+      limited_at TEXT DEFAULT NULL
     );
     CREATE UNIQUE INDEX idx_claude_accounts_single_default
       ON claude_accounts(is_default) WHERE is_default = 1;
@@ -58,12 +61,16 @@ function freshDb(): Database {
       group_id TEXT,
       name TEXT NOT NULL,
       working_dir TEXT NOT NULL,
-      claude_account_id TEXT DEFAULT NULL
+      claude_account_id TEXT DEFAULT NULL,
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
     CREATE TABLE groups (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      claude_account_id TEXT DEFAULT NULL
+      claude_account_id TEXT DEFAULT NULL,
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
   `);
   return d;
@@ -202,6 +209,73 @@ describe('startLoginFlow legacy seeding', () => {
   });
 });
 
+describe('resumeLoginFlow — signing in to an account that already exists', () => {
+  /** A restored row: label, colour and place in the order, and no credentials. */
+  function restoredAccount(id = 'restored-1') {
+    const configDir = path.join(userDataDir, 'claude-accounts', id, '.claude');
+    db.prepare(
+      `INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at)
+       VALUES (?, 'Work', ?, NULL, '#61afef', 1, '2026-08-01T00:00:00.000Z')`,
+    ).run(id, configDir);
+    return { id, configDir };
+  }
+
+  test('signs in against the existing row and its own config dir', () => {
+    const pty = fakePtyManager();
+    const { id, configDir } = restoredAccount();
+
+    const { account, ptyId } = accountAuth.resumeLoginFlow(pty, null, id);
+
+    expect(account.id).toBe(id);
+    expect(ptyId).toBe(`__login-${id}`);
+    expect(pty.loginSessions).toEqual([ptyId]);
+    // The restore rewrote config_dir for this machine; the directory itself
+    // only exists once something creates it.
+    expect(fs.existsSync(configDir)).toBe(true);
+    expect(hookRegistrations).toContain(configDir);
+
+    accountAuth.cancelLoginFlow(pty, ptyId, false);
+  });
+
+  test('a pty that will not spawn does NOT delete the account', () => {
+    // The difference that makes this a separate entry point. `startLoginFlow`
+    // rolls back on a spawn failure, which is right for a row it minted a
+    // moment ago and would be catastrophic for one the user has had for
+    // months — and which a restore has just brought back.
+    const pty = fakePtyManager();
+    (pty as unknown as { createLoginSession: () => void }).createLoginSession = () => {
+      throw new Error('no pty today');
+    };
+    const { id } = restoredAccount();
+
+    expect(() => accountAuth.resumeLoginFlow(pty, null, id)).toThrow('no pty today');
+    expect(storedAccounts().map((a) => a.id)).toEqual([id]);
+  });
+
+  test('refuses an id that is not an account, rather than minting one', () => {
+    const pty = fakePtyManager();
+
+    expect(() => accountAuth.resumeLoginFlow(pty, null, 'no-such-account')).toThrow(/No such account/);
+    expect(storedAccounts()).toEqual([]);
+    expect(pty.loginSessions).toEqual([]);
+  });
+
+  test('completes on the same evidence a new account does', () => {
+    const pty = fakePtyManager();
+    const { id, configDir } = restoredAccount();
+    const { ptyId } = accountAuth.resumeLoginFlow(pty, null, id);
+
+    // What the watcher looks for: the profile block, not the file's arrival.
+    fs.writeFileSync(
+      path.join(configDir, '.claude.json'),
+      JSON.stringify({ oauthAccount: { emailAddress: 'will@example.com' } }),
+    );
+    accountAuth.confirmLoginMacOS(null, ptyId);
+
+    expect(storedEmail(id)).toBe('will@example.com');
+  });
+});
+
 function storedEmail(id: string): string | null {
   const row = db.prepare('SELECT email FROM claude_accounts WHERE id = ?').get(id) as
     { email: string | null } | undefined;
@@ -212,8 +286,17 @@ function writeConfigFile(configDir: string, name: string, contents: unknown): vo
   fs.writeFileSync(path.join(configDir, name), JSON.stringify(contents));
 }
 
-/** fs.watch delivers asynchronously, so the assertion has to outlast it. */
-async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+/**
+ * fs.watch delivers asynchronously, so the assertion has to outlast it. This
+ * ceiling must stay below the per-test timeout the watch-driven tests declare,
+ * or the two race and a real failure reports a bare timeout instead of the
+ * message below, which says what was actually being waited on.
+ */
+const WATCH_TIMEOUT_MS = 15_000;
+/** Per-test ceiling for the watch-driven tests; must exceed WATCH_TIMEOUT_MS. */
+const WATCH_TEST_TIMEOUT_MS = 20_000;
+
+async function waitFor(predicate: () => boolean, timeoutMs = WATCH_TIMEOUT_MS): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return;
@@ -266,7 +349,7 @@ describe('login detection', () => {
     expect(fs.existsSync(path.join(account.configDir, '.credentials.json'))).toBe(false);
 
     accountAuth.cancelLoginFlow(pty, ptyId, false);
-  });
+  }, WATCH_TEST_TIMEOUT_MS);
 
   test('a token file appearing still completes the flow', async () => {
     const pty = fakePtyManager();
@@ -278,7 +361,7 @@ describe('login detection', () => {
     await waitFor(() => storedEmail(account.id) === 'will@linux.test');
 
     accountAuth.cancelLoginFlow(pty, ptyId, false);
-  });
+  }, WATCH_TEST_TIMEOUT_MS);
 
   test('the manual confirmation records the email the watch would have', async () => {
     const pty = fakePtyManager();

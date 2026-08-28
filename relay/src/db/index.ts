@@ -16,8 +16,8 @@ export function openDb(dbPath: string): RelayDb {
     fs.mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
   }
   const db = new Database(dbPath, { create: true });
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec('PRAGMA foreign_keys = ON;');
+  db.run('PRAGMA journal_mode = WAL;');
+  db.run('PRAGMA foreign_keys = ON;');
   runMigrations(db);
   return db;
 }
@@ -45,10 +45,10 @@ export function runMigrations(db: RelayDb): void {
 
     const sql = fs.readFileSync(path.join(dir, file), 'utf8');
     db.transaction(() => {
-      db.exec(sql);
+      db.run(sql);
       // user_version does not accept bound parameters; `version` is a validated
       // integer parsed from the filename above, so interpolation is safe here.
-      db.exec(`PRAGMA user_version = ${version};`);
+      db.run(`PRAGMA user_version = ${version};`);
     })();
   }
 }

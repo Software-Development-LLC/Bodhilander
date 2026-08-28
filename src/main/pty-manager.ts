@@ -33,6 +33,7 @@ import {
 } from './repositories/sessions';
 import { getAllAccounts, touchAccount } from './repositories/accounts';
 import { resolveAccountForSession } from './account-resolver';
+import { readQuotaLimit } from './quota-limit';
 import { vaultEnvFor } from './key-vault';
 import { redactEnv } from './redact-env';
 import log from 'electron-log';
@@ -103,6 +104,17 @@ interface PtySession {
    * single 'data' event first, guaranteeing ordered delivery.
    */
   deferEmission: boolean;
+  /**
+   * Set once this pty has reported a usage limit, so the TUI repainting the
+   * same message forty times a second produces one failover and not forty.
+   *
+   * Per-pty, not per-session: the flag lives and dies with the process, so the
+   * replacement pty spawned by a failover can report its own limit if the
+   * account it landed on turns out to be exhausted too.
+   */
+  usageLimitReported: boolean;
+  /** Last time the transcript was consulted, to bound the read rate. */
+  quotaCheckedAt: number;
 }
 
 /**
@@ -165,6 +177,12 @@ const SPAWN_FAILURE_WINDOW_MS = 15_000;
  * floods the first seconds.
  */
 const LAUNCH_OUTPUT_CAP = 256 * 1024;
+
+/**
+ * Floor on how often a session's transcript is consulted for a quota
+ * rejection. Output arrives many times a second; a refusal does not.
+ */
+const QUOTA_CHECK_INTERVAL_MS = 3000;
 
 /**
  * Provider-agnostic "waiting for user input" patterns — generic prompt shapes
@@ -481,6 +499,8 @@ export class PtyManager extends EventEmitter {
       launchOutput: '',
       // Regular sessions spawn only after the renderer explicitly called
       // pty:create, so listeners are already attached — no deferral needed.
+      usageLimitReported: false,
+      quotaCheckedAt: 0,
       deferEmission: false,
     });
 
@@ -822,6 +842,8 @@ export class PtyManager extends EventEmitter {
       launchOutput: '',
       // Spawned before the renderer's Terminal mounts — same race as the
       // login pty (BDHLNDR-33).
+      usageLimitReported: false,
+      quotaCheckedAt: 0,
       deferEmission: true,
     });
   }
@@ -937,6 +959,8 @@ export class PtyManager extends EventEmitter {
       // Login ptys defer event emission until the renderer attaches its
       // listener and calls primePty — avoids losing claude's startup banner
       // in the IPC-round-trip + React-render gap (BDHLNDR-33).
+      usageLimitReported: false,
+      quotaCheckedAt: 0,
       deferEmission: true,
     });
   }
@@ -1280,6 +1304,50 @@ export class PtyManager extends EventEmitter {
     }, 300); // Wait 300ms of sustained output
   }
 
+  /**
+   * Report a quota rejection once per pty.
+   *
+   * Output is the trigger, never the evidence. Terminal output cannot separate
+   * a CLI announcing a limit from a CLI rendering a conversation about one, so
+   * new output only prompts a look at the transcript, where the agent records
+   * the rejection as a structured entry with an exact reset time.
+   *
+   * What is emitted is deliberately thin — the account this pty is BILLING
+   * (its live binding, not the database assignment, which may already point
+   * elsewhere) plus the reset. Deciding where the work goes belongs to
+   * account-failover, which can see every account; this sees one terminal.
+   */
+  private checkUsageLimit(id: string, session: PtySession): void {
+    if (session.usageLimitReported) return;
+    if (!session.provider?.capabilities.accounts) return;
+
+    const now = Date.now();
+    if (now - session.quotaCheckedAt < QUOTA_CHECK_INTERVAL_MS) return;
+    session.quotaCheckedAt = now;
+
+    const conversationId = getStoredClaudeSessionId(id);
+    const configDir = session.liveAccount?.configDir;
+    if (!conversationId || !configDir) return;
+
+    // Only a rejection this pty could have caused. A transcript is append-only
+    // and replayed on resume, so an older entry is history, not news.
+    const hit = readQuotaLimit(configDir, conversationId, new Date(session.spawnedAt));
+    if (!hit) return;
+
+    session.usageLimitReported = true;
+    log.warn(
+      `[Accounts] Session ${id} was refused by quota on account ` +
+      `${session.liveAccount?.accountId ?? 'legacy ~/.claude'} ` +
+      `(${hit.rateLimitType ?? 'unknown window'}, resets ${hit.resetAt.toISOString()})`
+    );
+    this.emit('usageLimit', {
+      id,
+      accountId: session.liveAccount?.accountId ?? null,
+      resetAt: hit.resetAt,
+      rateLimitType: hit.rateLimitType,
+    });
+  }
+
   private detectAgentState(id: string, data: string): void {
     const session = this.sessions.get(id);
     if (!session) return;
@@ -1340,6 +1408,17 @@ export class PtyManager extends EventEmitter {
     }
     session.recentOutputBytes += printableContent.length;
     session.lastOutputTime = now;
+
+    // Did the CLI just say the account is out of quota? Checked before the
+    // waiting-state work below because the two are not alternatives: a limited
+    // Claude usually parks at its prompt, so this would otherwise be read as an
+    // ordinary "waiting for input" and nothing would ever move.
+    //
+    // A wider slice than the waiting check gets: the announcement and its
+    // "resets at" clause can be a couple of wrapped lines apart, and the reset
+    // time is the whole difference between a five-hour default cooldown and
+    // the real one.
+    this.checkUsageLimit(id, session);
 
     // Detect waiting for user input patterns (check recent buffer).
     // Generic prompt shapes plus whatever the session's provider knows about

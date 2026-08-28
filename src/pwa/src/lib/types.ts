@@ -41,6 +41,11 @@ export interface Session {
   claudeAccountId: string | null;
   /** Agent provider registry id (#96); absent from older API versions. */
   provider?: string;
+  /**
+   * The desktop could not find this session's folder, so starting it will be
+   * refused. Derived per request; absent from older API versions.
+   */
+  workingDirMissing?: boolean;
 }
 
 export interface Group {

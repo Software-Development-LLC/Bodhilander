@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -74,9 +74,18 @@ interface ElectronAPI {
   exportSessions: (format: 'csv' | 'json', since?: string) => Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }>;
 
   // Group & Session Import/Export
-  exportGroups: () => Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }>;
-  importGroups: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
-  importFromClaudeLander: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
+  exportGroups: () => Promise<PortableExportResult>;
+  importGroups: () => Promise<PortableImportResult>;
+  importFromClaudeLander: () => Promise<PortableImportResult>;
+
+  // Machine handoff, over the relay
+  handoffPrepare: () => Promise<HandoffPrepareResult>;
+  handoffPeek: () => Promise<HandoffOfferState>;
+  handoffRestore: (phrase: string) => Promise<PortableImportResult>;
+  arrivalRead: () => Promise<ArrivalReport | null>;
+  arrivalDismiss: () => Promise<void>;
+  resumeAccountLogin: (accountId: string) => Promise<{ account: ClaudeAccount; ptyId: string }>;
+  handoffDecline: (handoffId: string) => Promise<void>;
 
   // Preferences
   getPreference: (key: string) => Promise<string | null>;
@@ -177,10 +186,14 @@ interface ElectronAPI {
   deleteAccount: (id: string) => Promise<void>;
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }) => Promise<void>;
   setDefaultAccount: (id: string) => Promise<boolean>;
+  setAccountFallbackOrder: (orderedIds: string[]) => Promise<void>;
+  clearAccountLimit: (id: string) => Promise<void>;
+  nextAccountInLine: (excludeId: string | null) => Promise<ClaudeAccount | null>;
   assignAccountToSession: (sessionId: string, accountId: string | null) => Promise<AccountSwitchResult>;
   assignAccountToGroup: (groupId: string, accountId: string | null) => Promise<AccountSwitchResult>;
   onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null; verified: boolean }) => void) => () => void;
   onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => () => void;
+  onAccountFailover: (callback: (event: AccountFailoverEvent) => void) => () => void;
 
   // Update channel (BDHLNDR-32)
   getUpdateChannel: () => Promise<'stable' | 'beta'>;

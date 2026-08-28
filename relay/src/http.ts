@@ -1,9 +1,22 @@
 import pkg from '../package.json';
 import type { RelayConfig } from './config';
 import type { Logger } from './logger';
-import type { Machine, MachineGrant, Repositories, ShareInvite, User } from './repositories';
-import { fromBase64, randomToken, verifyEd25519 } from './crypto';
-import { buildLinkMessage, buildShareCreateMessage, LINK_MAX_SKEW_MS, MINTABLE_ROLES } from './protocol';
+import type { HandoffBundle, Machine, MachineGrant, Repositories, ShareInvite, User } from './repositories';
+import { fromBase64, randomToken, timingSafeEqualHex, verifyEd25519 } from './crypto';
+import {
+  buildHandoffDeleteMessage,
+  buildHandoffGetMessage,
+  buildHandoffMetaMessage,
+  buildHandoffPutMessage,
+  buildLinkMessage,
+  buildShareCreateMessage,
+  HANDOFF_DIGEST_HEADER,
+  HANDOFF_ID_HEADER,
+  HANDOFF_ISSUED_AT_HEADER,
+  HANDOFF_SIGNATURE_HEADER,
+  LINK_MAX_SKEW_MS,
+  MINTABLE_ROLES,
+} from './protocol';
 import {
   buildAuthorizeUrl,
   exchangeCodeForProfile,
@@ -23,6 +36,16 @@ import { createWebClient } from './web';
 import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
 import { isAllowedPushEndpoint } from './push/send';
 import type { Vapid } from './push/vapid';
+import { MAX_JSON_BODY_BYTES } from './server';
+import {
+  bundlePath,
+  commitHandoff,
+  discardHandoff,
+  handoffSize,
+  HandoffTooLarge,
+  removeHandoff,
+  writeHandoff,
+} from './handoff-store';
 
 /**
  * HTTP surface of the relay (M2), as a `fetch`-style handler for `Bun.serve`.
@@ -46,6 +69,10 @@ import type { Vapid } from './push/vapid';
  *   GET  /api/push/vapid-key          — application-server key to subscribe with
  *   POST /api/push/subscribe          — register this browser (session)
  *   POST /api/push/unsubscribe        — drop this browser (session)
+ *   PUT  /api/machines/:id/handoff    — machine uploads a sealed handoff
+ *   GET  /api/machines/:id/handoff    — what handoff is waiting, if any
+ *   GET  /api/machines/:id/handoff/bundle — the sealed bytes
+ *   DEL  /api/machines/:id/handoff    — destination acknowledges a restore
  */
 export interface RelayContext {
   config: RelayConfig;
@@ -100,6 +127,11 @@ const SHARE_PER_IP = 20;
 export const PUSH_PER_IP = 30;
 /** Reading the public key is free and idempotent — this is anti-hammering only. */
 export const PUSH_KEY_PER_IP = 120;
+/** A handoff is a rare, deliberate act, and each one costs the disk a bundle. */
+const HANDOFF_UPLOAD_PER_IP = 5;
+const HANDOFF_UPLOAD_PER_MACHINE = 5;
+/** Reading is cheap, but a restore may be retried after a mistyped phrase. */
+const HANDOFF_READ_PER_IP = 30;
 
 /**
  * Ceilings on what an invite may ask for. The desktop offers far shorter
@@ -156,6 +188,16 @@ export function createRouter(ctx: RelayContext) {
     const method = req.method;
 
     try {
+      // A handoff sets Bun's body ceiling for the whole server, so only the
+      // route that wants it may exceed the JSON bound. This refuses a declared
+      // oversize before a byte is pulled; `readJson` bounds the rest.
+      const handoff = matchMachineHandoff(pathname);
+      const isHandoffUpload = method === 'PUT' && !!handoff && !handoff.bundle;
+      const declaredLength = Number(req.headers.get('content-length') ?? 0);
+      if (!isHandoffUpload && declaredLength > MAX_JSON_BODY_BYTES) {
+        return json({ error: 'payload_too_large' }, 413);
+      }
+
       const webResponse = webRoute(req);
       if (webResponse) return webResponse;
 
@@ -183,8 +225,32 @@ export function createRouter(ctx: RelayContext) {
       const pushed = await pushRoutes(req, peerIp, pathname, method);
       if (pushed) return pushed;
 
+      // --- machine handoff ---
+
+      if (handoff) {
+        if (method === 'PUT' && !handoff.bundle) {
+          return (
+            limited(req, peerIp, 'handoff-put', HANDOFF_UPLOAD_PER_IP) ??
+            (await handleHandoffPut(req, handoff.machineId))
+          );
+        }
+        if (method === 'GET') {
+          return (
+            limited(req, peerIp, 'handoff-read', HANDOFF_READ_PER_IP) ??
+            (await handleHandoffRead(req, handoff.machineId, handoff.bundle))
+          );
+        }
+        if (method === 'DELETE' && !handoff.bundle) {
+          return (
+            limited(req, peerIp, 'handoff-read', HANDOFF_READ_PER_IP) ??
+            (await handleHandoffDelete(req, handoff.machineId))
+          );
+        }
+      }
+
       return json({ error: 'not_found' }, 404);
     } catch (err) {
+      if (err instanceof PayloadTooLarge) return json({ error: 'payload_too_large' }, 413);
       logger.error('unhandled http error', {
         method,
         path: pathname,
@@ -496,7 +562,7 @@ export function createRouter(ctx: RelayContext) {
 
     const { invite, code } = repos.createShareInvite({
       machineId,
-      expectedGithubLogin: (expectedGithubLogin as string | null) ?? null,
+      expectedGithubLogin: expectedGithubLogin ?? null,
       role: role as 'viewer' | 'operator',
       label: (label as string | undefined) ?? null,
       grantTtlSeconds,
@@ -667,6 +733,155 @@ export function createRouter(ctx: RelayContext) {
     }
     return new Response(null, { status: 204 });
   }
+
+  // --- machine handoff ---
+
+  /**
+   * Prove the caller is a linked machine. Ed25519 because the desktop holds no
+   * cookie, and the slot belongs to the machine's user — which is how a second
+   * machine under one identity reaches what the first one left.
+   */
+  async function machineFromSignature(
+    req: Request,
+    machineId: string,
+    message: (issuedAt: number) => Uint8Array,
+  ): Promise<{ machine: Machine } | { response: Response }> {
+    const issuedAt = Number(req.headers.get(HANDOFF_ISSUED_AT_HEADER));
+    const signature = req.headers.get(HANDOFF_SIGNATURE_HEADER);
+    const sigBytes = signature ? fromBase64(signature) : null;
+    if (!Number.isSafeInteger(issuedAt) || !sigBytes) return { response: json({ error: 'invalid_request' }, 400) };
+    // Skew only, so a captured signature is replayable inside the window. That
+    // is a considered trade: transport is TLS, the reads it could repeat return
+    // ciphertext, and the delete names a bundle id that stops matching.
+    if (Math.abs(Date.now() - issuedAt) > LINK_MAX_SKEW_MS) return { response: json({ error: 'stale_request' }, 400) };
+
+    const machine = repos.getMachine(machineId);
+    if (!machine) return { response: json({ error: 'not_found' }, 404) };
+    if (!(await verifyEd25519(new Uint8Array(machine.ed25519_pubkey), sigBytes, message(issuedAt)))) {
+      return { response: json({ error: 'bad_signature' }, 401) };
+    }
+    return { machine };
+  }
+
+  async function handleHandoffPut(req: Request, machineId: string): Promise<Response> {
+    const digest = req.headers.get(HANDOFF_DIGEST_HEADER);
+    if (!digest || !/^[0-9a-f]{64}$/.test(digest)) return json({ error: 'invalid_request' }, 400);
+
+    const declared = req.headers.get('content-length');
+    if (declared && Number(declared) > config.handoffMaxBytes) {
+      return json({ error: 'handoff_too_large', maxBytes: config.handoffMaxBytes }, 413);
+    }
+
+    // Authenticated before the body is touched: the signature covers the
+    // declared digest, so an unsigned caller cannot make the relay buffer
+    // megabytes on its way to being refused.
+    const auth = await machineFromSignature(req, machineId, (issuedAt) =>
+      buildHandoffPutMessage({ machineId, ciphertextSha256Hex: digest, issuedAt }),
+    );
+    if ('response' in auth) return auth.response;
+
+    // Charged after the signature verifies, so no one can exhaust another
+    // machine's budget by naming its id.
+    const perMachine = limiter.check(`handoff:machine:${machineId}`, HANDOFF_UPLOAD_PER_MACHINE, RATE_WINDOW_MS);
+    if (!perMachine.allowed) {
+      logger.warn('rate limited', { bucket: 'handoff:machine' });
+      return json({ error: 'rate_limited' }, 429, { 'retry-after': String(perMachine.retryAfter) });
+    }
+
+    const body = req.body;
+    if (!body) return json({ error: 'invalid_request' }, 400);
+
+    // One user's cap is not the disk's. Checked against what the caller says
+    // it will send, and again below against what it actually sent.
+    const held = repos.totalHandoffBytes(auth.machine.user_id);
+    const tooFull = (size: number) => held + size > config.handoffStoreMaxBytes;
+    if (declared && tooFull(Number(declared))) return json({ error: 'store_full' }, 507);
+
+    const id = crypto.randomUUID();
+    let written;
+    try {
+      written = await writeHandoff(config.handoffDir, id, body, config.handoffMaxBytes);
+    } catch (err) {
+      if (err instanceof HandoffTooLarge) {
+        return json({ error: 'handoff_too_large', maxBytes: config.handoffMaxBytes }, 413);
+      }
+      throw err;
+    }
+
+    // Nothing written is the live bundle until every one of these passes.
+    if (written.bytes === 0) {
+      await discardHandoff(config.handoffDir, id);
+      return json({ error: 'invalid_request' }, 400);
+    }
+    if (!timingSafeEqualHex(written.sha256, digest)) {
+      await discardHandoff(config.handoffDir, id);
+      return json({ error: 'digest_mismatch' }, 400);
+    }
+    if (tooFull(written.bytes)) {
+      await discardHandoff(config.handoffDir, id);
+      return json({ error: 'store_full' }, 507);
+    }
+
+    await commitHandoff(config.handoffDir, id);
+    const { row, previousId } = repos.putHandoffBundle({
+      id,
+      userId: auth.machine.user_id,
+      sourceMachineId: machineId,
+      byteSize: written.bytes,
+      ttlSeconds: config.handoffTtlSeconds,
+    });
+    if (previousId) await removeHandoff(config.handoffDir, previousId);
+    logger.info('handoff prepared', { machineId, bytes: row.byte_size });
+    return json({ handoff: publicHandoff(row, auth.machine.name) });
+  }
+
+  async function handleHandoffRead(req: Request, machineId: string, wantsBundle: boolean): Promise<Response> {
+    const auth = await machineFromSignature(req, machineId, (issuedAt) =>
+      wantsBundle ? buildHandoffGetMessage({ machineId, issuedAt }) : buildHandoffMetaMessage({ machineId, issuedAt }),
+    );
+    if ('response' in auth) return auth.response;
+
+    const stored = repos.getHandoffBundle(auth.machine.user_id);
+    if (!stored) return wantsBundle ? json({ error: 'not_found' }, 404) : json({ handoff: null });
+
+    if (!wantsBundle) {
+      const source = repos.getMachine(stored.source_machine_id);
+      return json({ handoff: publicHandoff(stored, source?.name ?? null) });
+    }
+
+    // Sent from the file rather than read into a buffer, so serving a bundle
+    // costs the relay no more than preparing one did.
+    const size = await handoffSize(config.handoffDir, stored.id);
+    if (size === null) {
+      logger.error('handoff row has no file', { id: stored.id });
+      return json({ error: 'not_found' }, 404);
+    }
+    return new Response(Bun.file(bundlePath(config.handoffDir, stored.id)), {
+      headers: {
+        'content-type': 'application/octet-stream',
+        'content-length': String(size),
+        [HANDOFF_ID_HEADER]: stored.id,
+      },
+    });
+  }
+
+  async function handleHandoffDelete(req: Request, machineId: string): Promise<Response> {
+    // Constrained to a UUID before it reaches the signed bytes: a value
+    // carrying a newline would shift the later fields and let one signature
+    // stand for a different request.
+    const handoffId = new URL(req.url).searchParams.get('id') ?? '';
+    if (!/^[0-9a-f-]{36}$/.test(handoffId)) return json({ error: 'invalid_request' }, 400);
+
+    const auth = await machineFromSignature(req, machineId, (issuedAt) =>
+      buildHandoffDeleteMessage({ machineId, handoffId, issuedAt }),
+    );
+    if ('response' in auth) return auth.response;
+
+    if (!repos.deleteHandoffBundle(auth.machine.user_id, handoffId)) return json({ error: 'not_found' }, 404);
+    await removeHandoff(config.handoffDir, handoffId);
+    logger.info('handoff cleared after restore', { machineId });
+    return new Response(null, { status: 204 });
+  }
 }
 
 /** The subscription's public key: an uncompressed P-256 point, base64url. */
@@ -687,6 +902,15 @@ function matchMachineShares(pathname: string): { machineId: string; inviteId: st
   if (parts.length < 4 || parts[0] !== 'api' || parts[1] !== 'machines' || parts[3] !== 'shares') return null;
   if (parts.length > 5) return null;
   return { machineId: parts[2]!, inviteId: parts[4] ?? null };
+}
+
+/** `/api/machines/:machineId/handoff[/bundle]` */
+function matchMachineHandoff(pathname: string): { machineId: string; bundle: boolean } | null {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts.length < 4 || parts[0] !== 'api' || parts[1] !== 'machines' || parts[3] !== 'handoff') return null;
+  if (parts.length > 5) return null;
+  if (parts.length === 5 && parts[4] !== 'bundle') return null;
+  return { machineId: parts[2]!, bundle: parts.length === 5 };
 }
 
 /** `/api/shares/:grantId`, excluding the fixed sub-routes. */
@@ -728,6 +952,18 @@ function publicGrant(g: MachineGrant, grantee: User | null) {
   };
 }
 
+/** Everything about a waiting handoff except the one thing the relay cannot read. */
+function publicHandoff(h: HandoffBundle, sourceMachineName: string | null) {
+  return {
+    id: h.id,
+    sourceMachineId: h.source_machine_id,
+    sourceMachineName,
+    byteSize: h.byte_size,
+    createdAt: h.created_at,
+    expiresAt: h.expires_at,
+  };
+}
+
 function publicUser(user: User) {
   return {
     id: user.id,
@@ -753,9 +989,42 @@ function publicMachine(m: Machine) {
   };
 }
 
-async function readJson(req: Request): Promise<unknown | null> {
+/** Thrown out of `readJson` and answered with a 413 by the router's catch. */
+class PayloadTooLarge extends Error {
+  override name = 'PayloadTooLarge';
+}
+
+/**
+ * Read and parse a JSON body, refusing anything past `limit` AS IT ARRIVES.
+ * A declared length is not enough on its own: a chunked request declares none,
+ * and the server-wide ceiling is set high enough to admit a handoff.
+ */
+async function readJson(req: Request, limit = MAX_JSON_BODY_BYTES): Promise<unknown> {
+  const declared = req.headers.get('content-length');
+  if (declared && Number(declared) > limit) throw new PayloadTooLarge();
+
+  const stream = req.body;
+  if (!stream) return null;
+
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    return await req.json();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > limit) throw new PayloadTooLarge();
+      chunks.push(value);
+    }
+  } finally {
+    // Stops the sender rather than draining what is left of an oversized body.
+    void reader.cancel().catch(() => {});
+  }
+
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     return null;
   }

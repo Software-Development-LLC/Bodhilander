@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Group } from '../../shared/types';
+import { AccountSwitchResult, Group } from '../../shared/types';
 
 const DEFAULT_COLORS = ['#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2'];
 
@@ -91,16 +91,19 @@ export function useGroups() {
    * useSessions().setSessionAccount for why the plain updateGroup path isn't
    * enough.
    */
-  const setGroupAccount = useCallback(async (id: string, accountId: string | null): Promise<string[]> => {
+  const setGroupAccount = useCallback(async (
+    id: string,
+    accountId: string | null,
+  ): Promise<AccountSwitchResult | null> => {
     try {
-      const { affectedSessionIds } = await window.electronAPI.assignAccountToGroup(id, accountId);
+      const result = await window.electronAPI.assignAccountToGroup(id, accountId);
       setGroups(prev => prev.map(g =>
         g.id === id ? { ...g, claudeAccountId: accountId } : g
       ));
-      return affectedSessionIds;
+      return result;
     } catch (error) {
       console.error('Failed to assign account to group:', error);
-      return [];
+      return null; // See useSessions().setSessionAccount for why not an empty result.
     }
   }, []);
 

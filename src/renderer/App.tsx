@@ -7,6 +7,9 @@ import { OwnerConfirmModal, type PendingOwner } from './components/OwnerConfirmM
 import { ShareSessionModal } from './components/ShareSessionModal';
 import { GuestJoinRequestModal } from './components/GuestJoinRequestModal';
 import { SettingsModal, SettingsTab } from './components/SettingsModal';
+import { HandoffRestoreOffer } from './components/MachineHandoff';
+import { ArrivalReportModal } from './components/ArrivalReport';
+import { hasOutstandingWork } from '../shared/arrival';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
 import { SessionRow } from './components/SessionRow';
@@ -15,8 +18,11 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
-import { ClaudeAccount, Session } from '../shared/types';
-import type { LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
+import { FailoverNotice } from './components/FailoverNotice';
+import { AccountSwitchNotice } from './components/AccountSwitchNotice';
+import { AccountSwitchReport, reportGroupSwitch, reportSessionSwitch } from './accountSwitchReport';
+import { AccountFailoverEvent, ClaudeAccount, Session } from '../shared/types';
+import type { ArrivalReport, LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
@@ -25,6 +31,21 @@ import { useActiveOnlyPreference } from './hooks/useActiveOnlyPreference';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
+
+/**
+ * Of the sessions an automatic account switch moved (#207), the ones with a pty
+ * to replace.
+ *
+ * A stopped session has nothing running under the old account and picks the new
+ * one up whenever it is next started; restarting it here would start a session
+ * the user had deliberately ended.
+ */
+export function respawnable(sessionIds: string[], sessions: Session[]): string[] {
+  const stopped = new Set(
+    sessions.filter(session => session.state === 'stopped').map(session => session.id)
+  );
+  return sessionIds.filter(id => !stopped.has(id));
+}
 
 /**
  * Collapse-chevron labels. While a filter is active every row is force-expanded,
@@ -61,6 +82,21 @@ export function accountMenuLabel(acc: ClaudeAccount, isCurrent: boolean): string
   return `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"`
     + tail
     + (acc.isDefault ? ' (default)' : '');
+}
+
+/**
+ * How the group menu's "use the default" item is named (#213).
+ *
+ * It used to say only "Use default account", sitting one row above the account
+ * list — so during a usage limit, when the whole reason for opening this menu
+ * is to get off the default, a single-row miss put the group back on the
+ * account it was escaping and said nothing. Naming the destination makes the
+ * consequence readable before the click rather than hours later.
+ */
+export function defaultAccountMenuLabel(accounts: ClaudeAccount[], isCurrent: boolean): string {
+  const fallback = accounts.find(acc => acc.isDefault) ?? null;
+  const tail = fallback ? ` (${fallback.label})` : '';
+  return `${isCurrent ? '✓ ' : '   '}Use default account${tail}`;
 }
 
 /**
@@ -169,10 +205,35 @@ const App: React.FC = () => {
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [arrivalReport, setArrivalReport] = useState<ArrivalReport | null>(null);
+
+  // Raised at launch only while something in it is still waiting on a person.
+  // A restore onto the same machine, with every folder present and every
+  // account signed in, has nothing to say — and saying it anyway is how a
+  // report becomes something people dismiss without reading. It stays
+  // reachable from Settings regardless.
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.arrivalRead().then((report) => {
+      if (!cancelled && report && hasOutstandingWork(report)) setArrivalReport(report);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Which Settings tab to land on. Claude accounts left the sidebar and became
   // a Settings tab, so App needs to be able to open Settings straight to it.
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('general');
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  /**
+   * The most recent automatic account switch, until the user dismisses it
+   * (#207). One at a time: these arrive seconds apart at most —
+   * one account running dry moves every session on it in a single event — and
+   * a stack of banners would push the terminal off screen.
+   */
+  const [failoverNotice, setFailoverNotice] = useState<AccountFailoverEvent | null>(null);
+  // What the last manual account switch did, when it restarted nothing (#214).
+  const [switchNotice, setSwitchNotice] = useState<AccountSwitchReport | null>(null);
   // Which account each running pty ACTUALLY spawned under (#165), keyed by
   // session id. Absent id = no pty running for that session.
   const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
@@ -526,6 +587,40 @@ const App: React.FC = () => {
   }, []);
 
   /**
+   * Latest sessions, readable from a subscription that must not re-subscribe
+   * every time one of them changes state.
+   *
+   * The failover listener below needs to know which of the moved sessions are
+   * actually running, and session state changes on almost every keystroke of
+   * agent output. Putting `sessions` in that effect's dependencies would tear
+   * down and re-register the IPC listener continuously, and a failover event
+   * arriving in the gap would be dropped — the one event this feature exists
+   * to act on.
+   */
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+
+  /**
+   * Apply an account switch the app made on its own (#207).
+   *
+   * Main has already written the assignments and carried the conversations;
+   * what it cannot do is respawn the ptys, because a pty's CLAUDE_CONFIG_DIR is
+   * fixed at spawn and only this side owns the terminals. Until the respawn the
+   * sessions are still billing the account that just ran dry, so this is not
+   * cosmetic follow-up — it is the half of the switch that makes it real.
+   */
+  useEffect(() => {
+    return window.electronAPI.onAccountFailover((event) => {
+      setFailoverNotice(event);
+
+      // Cooldowns and default/rank state both just changed.
+      window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
+
+      restartSessions(respawnable(event.sessionIds, sessionsRef.current));
+    });
+  }, [restartSessions]);
+
+  /**
    * The header account indicator for one session (#165).
    *
    * Sits here rather than beside effectiveAccountForSession because it needs
@@ -574,7 +669,16 @@ const App: React.FC = () => {
   // that session and picked an account, so the restart is the thing they asked
   // for.
   const handleAssignSessionAccount = async (sessionId: string, accountId: string | null) => {
-    restartSessions(liveSessionsAmong(await setSessionAccount(sessionId, accountId)));
+    const result = await setSessionAccount(sessionId, accountId);
+    if (!result) return; // The store already logged the failure; say nothing untrue.
+
+    const liveAffected = liveSessionsAmong(result.affectedSessionIds);
+    restartSessions(liveAffected);
+    setSwitchNotice(reportSessionSwitch(result, {
+      targetName: sessions.find(s => s.id === sessionId)?.name ?? 'This session',
+      pickedAccountId: accountId,
+      liveAffected,
+    }));
   };
 
   // A group switch can sweep several running sessions at once, which is a much
@@ -582,15 +686,30 @@ const App: React.FC = () => {
   // still persists the assignment; those sessions move over on their next
   // restart.
   const handleAssignGroupAccount = async (groupId: string, accountId: string | null) => {
-    const live = liveSessionsAmong(await setGroupAccount(groupId, accountId));
+    const result = await setGroupAccount(groupId, accountId);
+    if (!result) return; // The store already logged the failure; say nothing untrue.
+
+    const live = liveSessionsAmong(result.affectedSessionIds);
+    setSwitchNotice(reportGroupSwitch(result, {
+      targetName: groups.find(g => g.id === groupId)?.name ?? 'This group',
+      pickedAccountId: accountId,
+      liveAffected: live,
+    }));
     if (live.length === 0) return;
+
     const count = live.length === 1 ? '1 running session' : `${live.length} running sessions`;
     setConfirmAction({
       type: 'restartForAccountSwitch',
       id: groupId,
       sessionIds: live,
-      message: `${count} in this group ${live.length === 1 ? 'is' : 'are'} still on the previous `
-        + `account. Restart ${live.length === 1 ? 'it' : 'them'} now to apply the switch? `
+      // States the change as done, because it is: the row was written before
+      // this dialog existed and "Not now" declines only the restart. Read as a
+      // confirmation prompt — which is what a modal appearing straight after a
+      // click looks like — dismissing it feels like cancelling the switch, and
+      // the group silently stays moved (#213).
+      message: `This group now uses the new account. ${count} in it `
+        + `${live.length === 1 ? 'is' : 'are'} still running on the previous one. `
+        + `Restart ${live.length === 1 ? 'it' : 'them'} now to apply the switch? `
         + `Conversations resume where they left off. Skipping applies the switch on their next restart.`,
     });
   };
@@ -602,6 +721,10 @@ const App: React.FC = () => {
 
     const items: MenuItem[] = [
       { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
+      {
+        label: 'Set Working Directory…',
+        onClick: () => { void handleRelinkSession(sessionId, session?.workingDir ?? ''); },
+      },
     ];
 
     // Sharing is entered PER SESSION, which is the whole shape of the feature —
@@ -625,6 +748,7 @@ const App: React.FC = () => {
         // failures, so there's nothing for the caller to await.
         onClick: () => { void handleAssignSessionAccount(sessionId, null); },
       });
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
       for (const acc of claudeAccounts) {
         items.push({
           label: accountMenuLabel(acc, currentAccountId === acc.id),
@@ -665,11 +789,16 @@ const App: React.FC = () => {
     if (claudeAccounts.length > 0) {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
-        label: `${currentAccountId === null ? '✓ ' : '   '}Use default account`,
+        label: defaultAccountMenuLabel(claudeAccounts, currentAccountId === null),
         // Fire-and-forget, as above — the restart prompt is raised from inside
         // the handler once main reports which sessions moved.
         onClick: () => { void handleAssignGroupAccount(groupId, null); },
       });
+      // This item clears the assignment rather than setting one, and during a
+      // usage limit the account it resolves to is usually the one being fled.
+      // A separator so the row above the account list is not one slip away
+      // from undoing the switch the user came here to make (#213).
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
       for (const acc of claudeAccounts) {
         items.push({
           label: accountMenuLabel(acc, currentAccountId === acc.id),
@@ -912,9 +1041,9 @@ const App: React.FC = () => {
     }
   }, [sessions, activeSessionId, setActiveSessionId]);
 
-  const handleCloseSession = useCallback(async () => {
+  const handleCloseSession = useCallback(() => {
     if (activeSessionId) {
-      await handleRemoveSession(activeSessionId);
+      handleRemoveSession(activeSessionId);
     }
   }, [activeSessionId, handleRemoveSession]);
 
@@ -1052,6 +1181,13 @@ const App: React.FC = () => {
     return map;
   }, [attachedGuests]);
 
+  // A session restored from another machine points at a folder that is not
+  // here. Picking the folder is all it takes to make it launchable again.
+  const handleRelinkSession = useCallback(async (id: string, currentDir: string) => {
+    const chosen = await window.electronAPI.selectDirectory(currentDir || undefined);
+    if (chosen) await updateSession(id, { workingDir: chosen, state: 'stopped' });
+  }, [updateSession]);
+
   const sessionRowProps = useCallback((session: Session, groupId: string) => ({
     session,
     isActive: session.id === activeSessionId,
@@ -1077,12 +1213,13 @@ const App: React.FC = () => {
     onDragOver: (e: React.DragEvent) => handleSessionDragOver(e, session.id, groupId),
     onDrop: (e: React.DragEvent) => handleSessionDrop(e, session.id, groupId),
     onClose: () => handleRemoveSession(session.id),
+    onRelink: () => handleRelinkSession(session.id, session.workingDir),
   }), [
     activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
     isSearching, sidebarAccountFor, editingSessionId, editingSessionName,
     handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
-    handleRemoveSession, guestsBySession]);
+    handleRemoveSession, guestsBySession, handleRelinkSession]);
 
   const getContextShortcuts = useCallback(() => {
     if (sidebarFocused) {
@@ -1578,6 +1715,20 @@ const App: React.FC = () => {
 
       <main className="main">
         <ViewSwitcher value={contentView} onChange={setContentView} shortcutPrefix={appMod} />
+        {failoverNotice && (
+          <FailoverNotice
+            event={failoverNotice}
+            onDismiss={() => setFailoverNotice(null)}
+            onOpenAccounts={() => {
+              setSettingsInitialTab('accounts');
+              setSettingsOpen(true);
+              setFailoverNotice(null);
+            }}
+          />
+        )}
+        {switchNotice && (
+          <AccountSwitchNotice report={switchNotice} onDismiss={() => setSwitchNotice(null)} />
+        )}
         {contentView === 'analytics' && (
           <AnalyticsPanel
             onClose={() => setContentView('terminal')}
@@ -1625,7 +1776,11 @@ const App: React.FC = () => {
                   cwd={session.workingDir}
                   launchClaude={session.shellType === 'claude'}
                   provider={session.provider}
-                  isStopped={session.state === 'stopped'}
+                  isStopped={session.state === 'stopped' || !!session.workingDirMissing}
+                  blockedReason={session.workingDirMissing
+                    ? `Working directory not found on this machine: ${session.workingDir || '(none set)'}`
+                    : undefined}
+                  onBlockedAction={() => { void handleRelinkSession(session.id, session.workingDir); }}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
                   sessionState={session.state}
@@ -1773,6 +1928,13 @@ const App: React.FC = () => {
         initialTab={settingsInitialTab}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {/* Raised once when this account has state waiting from another machine. */}
+      <HandoffRestoreOffer onRestored={() => window.location.reload()} />
+
+      {/* What the last restore left undone. Raised only while something is
+          still outstanding; it stays reachable from Settings either way. */}
+      <ArrivalReportModal report={arrivalReport} onClosed={() => setArrivalReport(null)} />
 
       {/* Destructive action confirmation dialog */}
       {confirmAction && (

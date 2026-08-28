@@ -17,6 +17,7 @@ export function getDatabase(): Database.Database {
 
   initializeTables(db);
   initializeArenaTables(db);
+  clearCooldownsFromOutputScanning(db);
 
   // Reclaim for the removed code-indexing and memory features. Each drop
   // records its own completion marker, so this branch — including the
@@ -50,6 +51,7 @@ const LEGACY_CODE_SEARCH_TABLES = ['code_chunks', 'symbols', 'indexed_files', 'c
  * work forever and re-run a full VACUUM on every single launch.
  */
 const CODE_SEARCH_CLEANUP_PREF = 'legacyCodeSearchCleanupDone';
+const QUOTA_COOLDOWN_CLEANUP_PREF = 'quotaCooldownsCleared';
 
 function cleanupAlreadyRan(database: Database.Database, pref: string): boolean {
   try {
@@ -363,7 +365,10 @@ function initializeTables(database: Database.Database): void {
       color TEXT DEFAULT '#888888',
       is_default INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      last_used_at TEXT
+      last_used_at TEXT,
+      fallback_rank INTEGER DEFAULT NULL,
+      limited_until TEXT DEFAULT NULL,
+      limited_at TEXT DEFAULT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_accounts_single_default
       ON claude_accounts(is_default) WHERE is_default = 1;
@@ -416,6 +421,29 @@ function initializeTables(database: Database.Database): void {
   }
   if (!sessionColsBdhlndr17.includes('claude_account_id')) {
     database.exec("ALTER TABLE sessions ADD COLUMN claude_account_id TEXT DEFAULT NULL");
+  }
+
+  // Migration: automatic failover between Claude accounts.
+  //
+  // Three facts the pre-failover schema had nowhere to put:
+  //   fallback_rank  — the order accounts are tried in. NULL sorts last, so an
+  //                    unranked estate keeps the panel's existing order.
+  //   limited_until  — when a recorded usage limit lifts. NULL = healthy. No
+  //                    sweeper clears it; expiry is decided at read time.
+  //   limited_at     — when the limit was seen, for the UI's "since" copy.
+  // On sessions, the two columns that make the move reversible: which account
+  // we moved OFF, and what the session's own override held before we wrote to
+  // it (NULL there means "inherit from the group", which is why it can't also
+  // mean "not failed over" — failover_from_account_id carries that).
+  const accountColumns = database.prepare('PRAGMA table_info(claude_accounts)').all() as { name: string }[];
+  if (!accountColumns.some(col => col.name === 'fallback_rank')) {
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN fallback_rank INTEGER DEFAULT NULL');
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN limited_until TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN limited_at TEXT DEFAULT NULL');
+  }
+  if (!sessionColsBdhlndr17.includes('failover_from_account_id')) {
+    database.exec('ALTER TABLE sessions ADD COLUMN failover_from_account_id TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE sessions ADD COLUMN failover_prev_account_id TEXT DEFAULT NULL');
   }
 
   // Migration: Add provider column to sessions (#96, epic #94).
@@ -546,6 +574,32 @@ function initializeArenaTables(database: Database.Database): void {
     database.exec('ALTER TABLE arena_responses ADD COLUMN round INTEGER NOT NULL DEFAULT 0');
     database.exec('ALTER TABLE arena_responses ADD COLUMN prompt TEXT DEFAULT NULL');
     database.exec('ALTER TABLE arena_responses ADD COLUMN session_ref TEXT DEFAULT NULL');
+  }
+}
+
+/**
+ * Clear every account cooldown once.
+ *
+ * Cooldowns only ever existed under the detector that read them off rendered
+ * terminal output, and that detector marked healthy accounts limited — 86
+ * times on one machine, on text that merely discussed a usage limit. Every row
+ * it left is therefore suspect, and none is worth keeping: an account that is
+ * genuinely out of quota gets marked again within seconds of its next refusal,
+ * now from the CLI's own record rather than from pixels.
+ *
+ * Guarded by a preference rather than a schema check, because nothing about
+ * the columns changed — only the trustworthiness of what was written into them.
+ */
+export function clearCooldownsFromOutputScanning(database: Database.Database): void {
+  if (cleanupAlreadyRan(database, QUOTA_COOLDOWN_CLEANUP_PREF)) return;
+
+  const { changes } = database.prepare(
+    'UPDATE claude_accounts SET limited_until = NULL, limited_at = NULL WHERE limited_until IS NOT NULL'
+  ).run();
+  markCleanupRan(database, QUOTA_COOLDOWN_CLEANUP_PREF, 'quota cooldown');
+
+  if (changes > 0) {
+    log.info(`[Accounts] Cleared ${changes} account cooldown(s) left by the previous detector.`);
   }
 }
 

@@ -161,6 +161,39 @@ export interface Repositories {
   deletePushSubscription(id: string): boolean;
   /** Scoped by user so an endpoint alone cannot unsubscribe someone else. */
   deletePushSubscriptionByEndpoint(userId: string, endpoint: string): boolean;
+  /**
+   * Record this user's handoff, replacing whatever they had prepared before.
+   * Returns the bundle it displaced, whose file the caller must remove.
+   */
+  putHandoffBundle(input: PutHandoffInput): { row: HandoffBundle; previousId: string | null };
+  /** The user's live handoff, or null when there is none or it has lapsed. */
+  getHandoffBundle(userId: string): HandoffBundle | null;
+  /** Drop the named handoff once its destination has restored from it. */
+  deleteHandoffBundle(userId: string, handoffId: string): boolean;
+  /** Ids of the bundles dropped, so their files go with them. */
+  purgeExpiredHandoffBundles(): string[];
+  /** Bytes the store already holds, ignoring the row an upload will replace. */
+  totalHandoffBytes(exceptUserId?: string): number;
+  /** Every id a row claims, for the orphan sweep. */
+  listHandoffIds(): string[];
+}
+
+export interface HandoffBundle {
+  id: string;
+  user_id: string;
+  source_machine_id: string;
+  byte_size: number;
+  created_at: number;
+  expires_at: number;
+}
+
+export interface PutHandoffInput {
+  /** Chosen by the caller, because the file is written under it first. */
+  id: string;
+  userId: string;
+  sourceMachineId: string;
+  byteSize: number;
+  ttlSeconds: number;
 }
 
 export interface PushSubscription {
@@ -719,6 +752,72 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
     deletePushSubscriptionByEndpoint(userId, endpoint) {
       const result = db.query('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').run(userId, endpoint);
       return Number(result.changes ?? 0) > 0;
+    },
+    putHandoffBundle(input) {
+      const ts = now();
+      const row: HandoffBundle = {
+        id: input.id,
+        user_id: input.userId,
+        source_machine_id: input.sourceMachineId,
+        byte_size: input.byteSize,
+        created_at: ts,
+        expires_at: ts + input.ttlSeconds * 1000,
+      };
+      // Upsert on the user, so preparing a second handoff replaces the first
+      // rather than leaving two claims on one slot. The id changes with it:
+      // a destination that declined the old bundle must be offered this one.
+      return db.transaction(() => {
+        const previous = db
+          .query('SELECT id FROM handoff_bundles WHERE user_id = ?')
+          .get(input.userId) as { id: string } | null;
+        db.query(
+          `INSERT INTO handoff_bundles (id, user_id, source_machine_id, byte_size, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             id = excluded.id,
+             source_machine_id = excluded.source_machine_id,
+             byte_size = excluded.byte_size,
+             created_at = excluded.created_at,
+             expires_at = excluded.expires_at`,
+        ).run(row.id, row.user_id, row.source_machine_id, row.byte_size, row.created_at, row.expires_at);
+        return { row, previousId: previous?.id ?? null };
+      })();
+    },
+
+    getHandoffBundle(userId) {
+      // Filtered on expiry rather than trusted to the reaper, which runs every
+      // ten minutes — otherwise a lapsed bundle keeps being offered until it
+      // happens to be swept.
+      return (
+        (db
+          .query('SELECT * FROM handoff_bundles WHERE user_id = ? AND expires_at > ?')
+          .get(userId, now()) as HandoffBundle | null) ?? null
+      );
+    },
+
+    deleteHandoffBundle(userId, handoffId) {
+      const result = db.query('DELETE FROM handoff_bundles WHERE user_id = ? AND id = ?').run(userId, handoffId);
+      return Number(result.changes ?? 0) > 0;
+    },
+
+    purgeExpiredHandoffBundles() {
+      const ts = now();
+      return db.transaction(() => {
+        const dead = db.query('SELECT id FROM handoff_bundles WHERE expires_at <= ?').all(ts) as { id: string }[];
+        db.query('DELETE FROM handoff_bundles WHERE expires_at <= ?').run(ts);
+        return dead.map((row) => row.id);
+      })();
+    },
+
+    totalHandoffBytes(exceptUserId) {
+      const row = db
+        .query('SELECT COALESCE(SUM(byte_size), 0) AS total FROM handoff_bundles WHERE user_id IS NOT ?')
+        .get(exceptUserId ?? null) as { total: number };
+      return Number(row.total);
+    },
+
+    listHandoffIds() {
+      return (db.query('SELECT id FROM handoff_bundles').all() as { id: string }[]).map((row) => row.id);
     },
   };
 }

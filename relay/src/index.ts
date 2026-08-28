@@ -8,6 +8,8 @@ import { parseCookies, SESSION_COOKIE } from './auth/cookies';
 import { createRateLimiter } from './rate-limit';
 import { createVapid } from './push/vapid';
 import { createPushDispatcher } from './push/send';
+import { serveOptions } from './server';
+import { ORPHAN_GRACE_MS, purgeExpiredHandoffs, sweepOrphans } from './handoff-store';
 
 /** How often expired sessions / link codes / rate-limit windows are swept. */
 const REAP_INTERVAL_MS = 10 * 60 * 1000;
@@ -21,7 +23,8 @@ const REAP_INTERVAL_MS = 10 * 60 * 1000;
  */
 const MAX_WS_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
-function main(): void {
+/** The running server plus the handle a test needs to shut it down again. */
+export function main() {
   const { config, warnings } = loadConfig();
   const logger = createLogger(config.logLevel);
   for (const warning of warnings) {
@@ -36,6 +39,17 @@ function main(): void {
   // Web push identity. The keypair is resolved lazily, on the first request
   // that needs it, so a start-up with no push traffic touches no crypto.
   const vapid = createVapid({ config, repos, logger });
+
+  /** Files a crash stranded between writing one and recording it. */
+  const sweepHandoffOrphans = async (): Promise<void> => {
+    try {
+      const swept = await sweepOrphans(config.handoffDir, new Set(repos.listHandoffIds()), ORPHAN_GRACE_MS);
+      if (swept > 0) logger.warn('swept orphaned handoff files', { count: swept });
+    } catch (err) {
+      logger.error('handoff sweep failed', { err: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  void sweepHandoffOrphans();
   // The gateway is built first so the router can call into it. HTTP and
   // WebSocket are separate surfaces; these callbacks are the only seam
   // between them, rather than a shared mutable table either side can corrupt.
@@ -57,9 +71,8 @@ function main(): void {
     isPushCapable: (machineId) => gateway.isPushCapable(machineId),
   });
 
-  const server = Bun.serve({
-    port: config.port,
-    maxRequestBodySize: 1024 * 1024,
+  const server = Bun.serve(serveOptions({
+    config,
     fetch(req, srv) {
       const url = new URL(req.url);
       // Agents connect at /ws and authenticate with an Ed25519-signed nonce.
@@ -79,7 +92,7 @@ function main(): void {
       return route(req, srv.requestIP(req)?.address ?? null);
     },
     websocket: { ...gateway, maxPayloadLength: MAX_WS_PAYLOAD_BYTES },
-  });
+  }));
 
   // Nothing purged expired sessions or link codes before — `purgeExpiredSessions`
   // was on the repository interface but had no caller, so both tables grew
@@ -97,6 +110,12 @@ function main(): void {
       // its own record, so nothing dropped here is the audit trail.
       const shares = repos.purgeDeadShares();
       if (shares > 0) logger.debug('reaped dead shares', { count: shares });
+      void purgeExpiredHandoffs(repos, config.handoffDir)
+        .then((count) => {
+          if (count > 0) logger.debug('reaped expired handoffs', { count });
+        })
+        .catch((err) => logger.error('handoff purge failed', { err: String(err) }));
+      void sweepHandoffOrphans();
       rateLimiter.sweep();
       if (codes > 0) logger.debug('reaped expired link codes', { count: codes });
       // Only non-zero when someone is holding MAX_WINDOWS buckets at their
@@ -133,16 +152,33 @@ function main(): void {
       process.exit(1);
     }, 5000).unref();
   };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  const onSigint = () => shutdown('SIGINT');
+  const onSigterm = () => shutdown('SIGTERM');
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+
+  return {
+    server,
+    stop: async () => {
+      clearInterval(reaper);
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+      await server.stop(true);
+      db.close();
+    },
+  };
 }
 
-try {
-  main();
-} catch (err) {
-  const message = err instanceof Error ? err.message : String(err);
-  process.stderr.write(
-    JSON.stringify({ ts: new Date().toISOString(), level: 'error', msg: 'startup failed', err: message }) + '\n',
-  );
-  process.exit(1);
+// Only when run as the program. Importing this module — which a test does, to
+// check the server it builds — must not start one.
+if (import.meta.main) {
+  try {
+    main();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      JSON.stringify({ ts: new Date().toISOString(), level: 'error', msg: 'startup failed', err: message }) + '\n',
+    );
+    process.exit(1);
+  }
 }

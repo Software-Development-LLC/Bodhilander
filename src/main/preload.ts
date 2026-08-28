@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -203,12 +203,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('export:sessions', format, since),
 
   // Group & Session Import/Export
-  exportGroups: (): Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }> =>
+  exportGroups: (): Promise<PortableExportResult> =>
     ipcRenderer.invoke('export:groups'),
-  importGroups: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+  importGroups: (): Promise<PortableImportResult> =>
     ipcRenderer.invoke('import:groups'),
-  importFromClaudeLander: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+  importFromClaudeLander: (): Promise<PortableImportResult> =>
     ipcRenderer.invoke('import:fromClaudeLander'),
+
+  // Machine handoff, over the relay
+  handoffPrepare: (): Promise<HandoffPrepareResult> =>
+    ipcRenderer.invoke('handoff:prepare'),
+  handoffPeek: (): Promise<HandoffOfferState> =>
+    ipcRenderer.invoke('handoff:peek'),
+  handoffRestore: (phrase: string): Promise<PortableImportResult> =>
+    ipcRenderer.invoke('handoff:restore', phrase),
+  handoffDecline: (handoffId: string): Promise<void> =>
+    ipcRenderer.invoke('handoff:decline', handoffId),
+
+  // What the last restore left for a person to finish
+  arrivalRead: (): Promise<ArrivalReport | null> =>
+    ipcRenderer.invoke('arrival:read'),
+  arrivalDismiss: (): Promise<void> =>
+    ipcRenderer.invoke('arrival:dismiss'),
 
   // Preferences
   getPreference: (key: string): Promise<string | null> =>
@@ -349,6 +365,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Claude accounts (BDHLNDR-31)
   listAccounts: (): Promise<ClaudeAccount[]> =>
     ipcRenderer.invoke('accounts:list'),
+  resumeAccountLogin: (accountId: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
+    ipcRenderer.invoke('accounts:resumeLogin', accountId),
   startAccountLogin: (label: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
     ipcRenderer.invoke('accounts:startLogin', label),
   cancelAccountLogin: (ptyId: string, deleteAccount: boolean): Promise<void> =>
@@ -361,6 +379,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('accounts:update', id, updates),
   setDefaultAccount: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('accounts:setDefault', id),
+  setAccountFallbackOrder: (orderedIds: string[]): Promise<void> =>
+    ipcRenderer.invoke('accounts:setFallbackOrder', orderedIds),
+  clearAccountLimit: (id: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:clearLimit', id),
+  nextAccountInLine: (excludeId: string | null): Promise<ClaudeAccount | null> =>
+    ipcRenderer.invoke('accounts:nextInLine', excludeId),
   assignAccountToSession: (sessionId: string, accountId: string | null): Promise<AccountSwitchResult> =>
     ipcRenderer.invoke('accounts:assignToSession', sessionId, accountId),
   assignAccountToGroup: (groupId: string, accountId: string | null): Promise<AccountSwitchResult> =>
@@ -374,6 +398,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; exitCode: number }) => callback(data);
     ipcRenderer.on('accounts:login-exited', listener);
     return () => ipcRenderer.removeListener('accounts:login-exited', listener);
+  },
+  // An account hit its usage limit and its sessions were moved (or couldn't be).
+  onAccountFailover: (callback: (event: AccountFailoverEvent) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, event: AccountFailoverEvent) => callback(event);
+    ipcRenderer.on('accounts:failover', listener);
+    return () => ipcRenderer.removeListener('accounts:failover', listener);
   },
 
   // Update channel (BDHLNDR-32) — opt-in beta builds

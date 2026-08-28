@@ -1,19 +1,31 @@
 /**
- * Group & Session Import/Export
+ * Group & session import/export, and the whole-machine transfer bundle.
  *
- * Portable JSON format for transferring groups and sessions between
- * Bodhilander and ClaudeLander (or any compatible app). Sessions carry their
- * claudeSessionId so Claude Code conversations can be resumed after import.
+ * The portable JSON is what ClaudeLander and older versions read; the bundle
+ * adds history, settings, accounts and the transcripts `--resume` reads.
  */
 
 import { dialog, app } from 'electron';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
+import * as accountsRepo from './repositories/accounts';
 import { isKnownProvider, DEFAULT_PROVIDER_ID } from './providers';
+import { getDatabase } from './database';
+import { legacyClaudeConfigDir } from './conversation-transcript';
+import { registerHooks } from './mcp-config';
+import { buildTransferBundle } from './transfer/bundle-export';
+import { readBundleManifest, restoreTransferBundle } from './transfer/bundle-import';
+import { BUNDLE_EXTENSION, formatBytes, looksLikeBundle } from './transfer/bundle-format';
+import type { PortableExportResult, PortableImportResult } from '../shared/types';
+import type { PortableDataV1 as PortableData } from './transfer/bundle-format';
+import type { WorkingDirMapping } from './transfer/working-dirs';
+import type { RootSuggestion } from './transfer/root-suggest';
+import { recordArrival, suggestRootMappingsHere } from './arrival';
 import log from 'electron-log';
 
 /**
@@ -32,64 +44,95 @@ export function sanitizeImportedProvider(provider: string | null | undefined): s
 }
 
 // ---------------------------------------------------------------------------
-// Portable format types
+// Result shapes
 // ---------------------------------------------------------------------------
 
-interface PortableGroup {
-  id: string;
-  name: string;
-  color: string;
-  workingDir: string;
-  parentId: string | null;
-  collapsed: boolean;
-  order: number;
-  createdAt: string; // ISO 8601
-}
+type ExportResult = PortableExportResult;
 
-interface PortableSession {
-  id: string;
-  groupId: string;
-  name: string;
-  workingDir: string;
-  shellType: string;
-  claudeSessionId: string | null;
-  order: number;
-  createdAt: string;
-  lastActivityAt: string;
-  /** Agent provider registry id (#96); absent in exports from older versions. */
-  provider?: string;
-}
-
-interface PortableData {
-  version: 1;
-  sourceApp: string;
-  exportedAt: string;
-  groups: PortableGroup[];
-  sessions: PortableSession[];
-}
-
-interface ExportResult {
-  success: boolean;
-  filePath?: string;
-  error?: string;
-  groupCount?: number;
-  sessionCount?: number;
-}
-
-interface ImportResult {
-  success: boolean;
-  error?: string;
-  groupCount?: number;
-  sessionCount?: number;
-  skippedGroups?: number;
-  skippedSessions?: number;
-}
+type ImportResult = PortableImportResult;
 
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
-export async function exportGroupsAndSessions(): Promise<ExportResult> {
+/**
+ * Which of the two formats the user wants. The portable JSON is still what
+ * another app reads; the bundle is the whole machine.
+ */
+async function askExportFormat(): Promise<'bundle' | 'portable' | 'cancel'> {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Everything on this machine…', 'Groups & sessions only…', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Export',
+    message: 'What should the export carry?',
+    detail:
+      'Everything: groups, sessions, history, settings, accounts and conversation transcripts, ' +
+      'as one transfer bundle for a new machine.\n\n' +
+      'Groups & sessions only: the portable JSON older versions and ClaudeLander read.',
+  });
+  const choices = ['bundle', 'portable', 'cancel'] as const;
+  return choices[response] ?? 'cancel';
+}
+
+async function exportTransferBundle(legacyDir: string = legacyClaudeConfigDir()): Promise<ExportResult> {
+  try {
+    const { bytes, manifest } = buildTransferBundle(getDatabase(), {
+      sourceAppVersion: app.getVersion(),
+      sourcePlatform: process.platform,
+      sourceUserData: app.getPath('userData'),
+      legacyConfigDir: legacyDir,
+    });
+    const sizeLabel = formatBytes(bytes.length);
+
+    const confirm = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['Save Bundle…', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Transfer Bundle',
+      message: `This bundle will be ${sizeLabel}.`,
+      detail:
+        `${manifest.counts.groups} group(s), ${manifest.counts.sessions} session(s), ` +
+        `${manifest.counts.transcripts} conversation transcript(s), ` +
+        `${manifest.counts.accounts} account(s), ${manifest.counts.preferences} setting(s).\n\n` +
+        'API keys, Teams tokens and the relay identity stay here — they cannot be decrypted elsewhere.',
+    });
+    if (confirm.response !== 0) return { success: false, error: 'Export cancelled' };
+
+    const defaultName = `bodhilander-transfer-${new Date().toISOString().slice(0, 10)}.${BUNDLE_EXTENSION}`;
+    const chosen = await dialog.showSaveDialog({
+      title: 'Save Transfer Bundle',
+      defaultPath: path.join(app.getPath('documents'), defaultName),
+      filters: [{ name: 'Bodhilander Bundle', extensions: [BUNDLE_EXTENSION] }],
+    });
+    if (chosen.canceled || !chosen.filePath) return { success: false, error: 'Export cancelled' };
+
+    fs.writeFileSync(chosen.filePath, bytes);
+    log.info(`[Import/Export] Wrote ${sizeLabel} transfer bundle to ${chosen.filePath}`);
+    return {
+      success: true,
+      filePath: chosen.filePath,
+      groupCount: manifest.counts.groups,
+      sessionCount: manifest.counts.sessions,
+      sizeLabel,
+    };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log.error('[Import/Export] Transfer bundle export failed:', msg);
+    return { success: false, error: msg };
+  }
+}
+
+export async function exportGroupsAndSessions(legacyDir?: string): Promise<ExportResult> {
+  const choice = await askExportFormat();
+  if (choice === 'cancel') return { success: false, error: 'Export cancelled' };
+  if (choice === 'bundle') return exportTransferBundle(legacyDir);
+  return exportPortableJson();
+}
+
+async function exportPortableJson(): Promise<ExportResult> {
   try {
     const groups = groupsRepo.getAllGroups();
     const sessions = sessionsRepo.getAllSessions();
@@ -153,11 +196,172 @@ export async function exportGroupsAndSessions(): Promise<ExportResult> {
 // Import
 // ---------------------------------------------------------------------------
 
-export async function importGroupsAndSessions(): Promise<ImportResult> {
+/** Let the user pick a folder for `root`, or decline. */
+async function chooseFolderFor(root: string): Promise<string | null> {
+  const chosen = await dialog.showOpenDialog({
+    title: `New location for ${root}`,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  return chosen.canceled || chosen.filePaths.length === 0 ? null : chosen.filePaths[0];
+}
+
+const LEAVE_AS_IS_DETAIL =
+  'Left as is, any session under it whose folder is missing arrives marked for relinking ' +
+  'rather than failing to start.';
+
+/**
+ * Ask about a root this machine has a proposal for. The proposal is the
+ * default button but never the silent answer — #202 asks for a confirmation,
+ * not an application, because a wrong match relocates every session under the
+ * root and does it quietly.
+ */
+async function confirmSuggestedRoot(
+  root: string,
+  suggestion: RootSuggestion,
+): Promise<WorkingDirMapping | null | 'cancel'> {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Use This Folder', 'Choose Different Folder…', 'Leave As Is', 'Cancel Import'],
+    defaultId: 0,
+    cancelId: 3,
+    title: 'Is this the same folder?',
+    message: root,
+    detail:
+      `This machine has:\n\n${suggestion.to}\n\n` +
+      `Matched on the last ${suggestion.matchedSegments} part(s) of the path. ` +
+      `Use it if it is the same tree. ${LEAVE_AS_IS_DETAIL}`,
+  });
+
+  if (response === 3) return 'cancel';
+  if (response === 0) return { from: root, to: suggestion.to };
+  if (response === 2) return null;
+
+  const chosen = await chooseFolderFor(root);
+  return chosen ? { from: root, to: chosen } : null;
+}
+
+/** Ask about a root with nothing to propose — the original prompt. */
+async function askUnknownRoot(root: string): Promise<WorkingDirMapping | null | 'cancel'> {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Choose Folder…', 'Leave As Is', 'Cancel Import'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Where does this folder live now?',
+    message: root,
+    detail: `Point this at the same tree on this machine. ${LEAVE_AS_IS_DETAIL}`,
+  });
+
+  if (response === 2) return 'cancel';
+  if (response !== 0) return null;
+
+  const chosen = await chooseFolderFor(root);
+  return chosen ? { from: root, to: chosen } : null;
+}
+
+/**
+ * Ask where each of the source machine's working-directory roots lives here.
+ * Null means the user abandoned the import; an empty answer for one root is
+ * allowed and leaves those paths as they were.
+ *
+ * A root this machine already has at the same path is not asked about at all:
+ * there is nothing to remap, nothing under it will be marked for relinking,
+ * and a prompt whose only sensible answer is "leave it" is a prompt that
+ * teaches people to click through the ones that matter.
+ */
+export async function askRootMappings(
+  roots: string[],
+  suggestions: RootSuggestion[] = [],
+): Promise<WorkingDirMapping[] | null> {
+  const byRoot = new Map(suggestions.map((s) => [s.from, s]));
+  const mappings: WorkingDirMapping[] = [];
+
+  for (const root of roots) {
+    const suggestion = byRoot.get(root);
+    if (suggestion?.unchanged) continue;
+
+    const answer = suggestion
+      ? await confirmSuggestedRoot(root, suggestion)
+      : await askUnknownRoot(root);
+
+    if (answer === 'cancel') return null;
+    if (answer) mappings.push(answer);
+  }
+  return mappings;
+}
+
+/**
+ * Hooks are what make a session report its state. Registering them only at
+ * window creation left every restored account silent until the next launch.
+ */
+export function registerRestoredAccountHooks(): void {
+  for (const account of accountsRepo.getAllAccounts()) {
+    const result = registerHooks(account.configDir);
+    if (!result.success) {
+      log.warn(`[Import/Export] Hook registration failed for ${account.configDir}:`, result.error);
+    }
+  }
+}
+
+async function importTransferBundle(
+  bytes: Buffer,
+  legacyDir: string,
+  suggest: RootSuggester,
+): Promise<ImportResult> {
+  const manifest = readBundleManifest(bytes);
+  const roots = manifest?.workingDirRoots ?? [];
+  const mappings = await askRootMappings(roots, suggest(roots));
+  if (mappings === null) return { success: false, error: 'Import cancelled' };
+
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhilander-transfer-'));
+  try {
+    const outcome = await restoreTransferBundle(getDatabase(), bytes, {
+      accountsRoot: path.join(app.getPath('userData'), 'claude-accounts'),
+      legacyConfigDir: legacyDir,
+      stagingDir,
+      mappings,
+    });
+    registerRestoredAccountHooks();
+    // Kept, not just logged: what a restore leaves outstanding is not work
+    // anybody finishes in the thirty seconds after an import.
+    recordArrival({ via: 'file', manifest: outcome.manifest, outcome });
+    log.info(
+      `[Import/Export] Restored ${outcome.groups} group(s), ${outcome.sessions} session(s), ` +
+      `${outcome.transcripts} transcript(s); ${outcome.needsRelink.length} need relinking`,
+    );
+    return {
+      success: true,
+      groupCount: outcome.groups,
+      sessionCount: outcome.sessions,
+      skippedGroups: outcome.skippedGroups,
+      skippedSessions: outcome.skippedSessions,
+      transcriptCount: outcome.transcripts,
+      needsRelinkCount: outcome.needsRelink.length,
+    };
+  } finally {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * What this machine proposes for the source's roots. Injectable because the
+ * real one walks the user's home directory: a test that did not control it
+ * would depend on whatever happens to be on the machine running it — and would
+ * ask a different question depending on the answer.
+ */
+export type RootSuggester = (roots: string[]) => RootSuggestion[];
+
+export async function importGroupsAndSessions(
+  legacyDir: string = legacyClaudeConfigDir(),
+  suggest: RootSuggester = suggestRootMappingsHere,
+): Promise<ImportResult> {
   try {
     const result = await dialog.showOpenDialog({
       title: 'Import Groups & Sessions',
-      filters: [{ name: 'JSON Files', extensions: ['json'] }],
+      filters: [
+        { name: 'Bodhilander Bundle', extensions: [BUNDLE_EXTENSION] },
+        { name: 'JSON Files', extensions: ['json'] },
+      ],
       properties: ['openFile'],
     });
 
@@ -165,7 +369,10 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
       return { success: false, error: 'Import cancelled' };
     }
 
-    const raw = fs.readFileSync(result.filePaths[0], 'utf-8');
+    const bytes = fs.readFileSync(result.filePaths[0]);
+    if (looksLikeBundle(bytes)) return await importTransferBundle(bytes, legacyDir, suggest);
+
+    const raw = bytes.toString('utf-8');
     const data: PortableData = JSON.parse(raw);
 
     if (data.version !== 1 || !Array.isArray(data.groups) || !Array.isArray(data.sessions)) {
@@ -245,6 +452,9 @@ export async function importGroupsAndSessions(): Promise<ImportResult> {
         durationSeconds: 0,
         claudeAccountId: null,
         provider: sanitizeImportedProvider(s.provider),
+        // A brand-new session has never been failed over (#207).
+        failoverFromAccountId: null,
+        failoverPrevAccountId: null,
       });
       sessionCount++;
     }
@@ -384,6 +594,9 @@ export async function importFromClaudeLander(): Promise<ImportResult> {
         durationSeconds: 0,
         claudeAccountId: null,
         provider: sanitizeImportedProvider(row.provider),
+        // A brand-new session has never been failed over (#207).
+        failoverFromAccountId: null,
+        failoverPrevAccountId: null,
       });
       sessionCount++;
     }

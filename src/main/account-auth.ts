@@ -112,18 +112,79 @@ export async function startLoginFlow(
     log.warn(`[Accounts] Hook registration failed for new account ${accountId}:`, err);
   }
 
-  const ptyId = `__login-${accountId}`;
-
-  try {
-    ptyManager.createLoginSession(ptyId, configDir);
-  } catch (err) {
+  const ptyId = beginLoginPty(ptyManager, mainWindow, accountId, configDir, () => {
     // Roll back the account row + directory if we couldn't spawn the pty.
+    // Only a login that MINTED the account may do this — see `resumeLoginFlow`.
     try {
       accountsRepo.deleteAccount(accountId);
       fs.rmSync(accountRoot(accountId), { recursive: true, force: true });
     } catch (cleanupErr) {
       log.error(`[Accounts] Cleanup after failed login spawn failed for ${accountId}:`, cleanupErr);
     }
+  });
+
+  log.info(`[Accounts] Started login flow for account ${accountId} (label="${label}", ptyId=${ptyId})`);
+
+  return { account, ptyId };
+}
+
+/**
+ * Sign in to an account that already exists — the case a restore creates.
+ *
+ * A restored `claude_accounts` row arrives with its label, its colour and its
+ * place in the failover order, and with no credentials: those live in the
+ * source machine's keychain and were never in the bundle. Everything about the
+ * login is the same as a new account's; what must NOT be the same is the
+ * rollback. `startLoginFlow` deletes the row and its directory when the pty
+ * will not spawn, which is right for an account it minted a moment ago and
+ * catastrophic for one the user has had for months.
+ */
+export function resumeLoginFlow(
+  ptyManager: PtyManager,
+  mainWindow: BrowserWindow | null,
+  accountId: string,
+): StartLoginResult {
+  const account = accountsRepo.getAccount(accountId);
+  if (!account) throw new Error(`No such account: ${accountId}`);
+
+  // The restore rewrites `config_dir` to this machine's accounts root, but the
+  // directory itself only exists once something writes to it.
+  fs.mkdirSync(account.configDir, { recursive: true });
+  try {
+    registerHooks(account.configDir);
+  } catch (err) {
+    log.warn(`[Accounts] Hook registration failed for ${accountId}:`, err);
+  }
+
+  // No rollback: the account is the user's, and a pty that would not spawn is
+  // a reason to report a failure, never to delete it.
+  const ptyId = beginLoginPty(ptyManager, mainWindow, accountId, account.configDir);
+
+  log.info(`[Accounts] Resumed login flow for existing account ${accountId} (ptyId=${ptyId})`);
+  return { account, ptyId };
+}
+
+/**
+ * Spawn the login pty for `accountId` against `configDir` and watch it for the
+ * artifacts that mean a login landed. Shared by the two entry points so a new
+ * account and a restored one complete by exactly the same evidence.
+ *
+ * `onSpawnFailure` runs before the error is rethrown, and exists only so the
+ * caller that created the account can undo that.
+ */
+function beginLoginPty(
+  ptyManager: PtyManager,
+  mainWindow: BrowserWindow | null,
+  accountId: string,
+  configDir: string,
+  onSpawnFailure?: () => void,
+): string {
+  const ptyId = `__login-${accountId}`;
+
+  try {
+    ptyManager.createLoginSession(ptyId, configDir);
+  } catch (err) {
+    onSpawnFailure?.();
     throw err;
   }
 
@@ -164,9 +225,7 @@ export async function startLoginFlow(
     exitListener,
   });
 
-  log.info(`[Accounts] Started login flow for account ${accountId} (label="${label}", ptyId=${ptyId})`);
-
-  return { account, ptyId };
+  return ptyId;
 }
 
 function handleLoginCompleted(

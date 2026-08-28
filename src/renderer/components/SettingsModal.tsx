@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ApiServerStatus, PairedDevice, PairingCode } from '../../shared/types';
+import { ApiServerStatus, ArrivalReport, HANDOFF_MAX_BYTES, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
 import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
+import { HandoffPreparePanel } from './MachineHandoff';
+import { ArrivalReportModal } from './ArrivalReport';
 
 // Exported so callers that deep-link into a tab (menu, tray) can type their
 // state instead of passing a bare string.
@@ -24,8 +26,38 @@ interface SettingsModalProps {
   initialTab?: SettingsTab;
 }
 
+/** A bundle export reports its size; the portable JSON has none to report. */
+export function exportSummary(result: PortableExportResult): string {
+  const carried = `${result.groupCount} groups and ${result.sessionCount} sessions`;
+  return result.sizeLabel
+    ? `Wrote a ${result.sizeLabel} transfer bundle carrying ${carried}.`
+    : `Exported ${carried}.`;
+}
+
+/**
+ * Everything the restore actually did. Transcripts and relinks are the two
+ * facts a machine transfer turns on, and both were being computed and dropped.
+ */
+export function importSummary(result: PortableImportResult): string {
+  const lines = [`Imported ${result.groupCount} groups and ${result.sessionCount} sessions.`];
+  if (result.transcriptCount !== undefined) {
+    lines.push(`Restored ${result.transcriptCount} conversation transcripts.`);
+  }
+  if (result.needsRelinkCount) {
+    lines.push(`${result.needsRelinkCount} sessions need their folder set before they can start.`);
+  }
+  if (result.skippedGroups || result.skippedSessions) {
+    lines.push(`Skipped ${result.skippedGroups} existing groups and ${result.skippedSessions} existing sessions.`);
+  }
+  return lines.join('\n');
+}
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general' }) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  // The kept arrival report, reopened on demand. `missing` is a separate flag
+  // so "nothing has been restored here" is an answer rather than a dead button.
+  const [arrivalReport, setArrivalReport] = useState<ArrivalReport | null>(null);
+  const [arrivalMissing, setArrivalMissing] = useState(false);
   const navClass = (tab: SettingsTab) =>
     `settings-nav-item ${activeTab === tab ? 'active' : ''}`;
 
@@ -514,41 +546,82 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
                 <div className="settings-group">
                   <h4>Data</h4>
+                  {/* Two buttons, not one control — so the purpose rides on each
+                      button's own name instead of a label with nothing to point at. */}
                   <div className="settings-row">
-                    <label>Import / Export:</label>
+                    <span className="settings-row-label" aria-hidden="true">Move to Another Machine:</span>
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <button
                         className="settings-button"
+                        aria-label="Export this machine, to move to another one"
                         onClick={async () => {
                           const result = await window.electronAPI.exportGroups();
                           if (result.success) {
-                            alert(`Exported ${result.groupCount} groups and ${result.sessionCount} sessions.`);
+                            alert(exportSummary(result));
                           } else if (result.error && result.error !== 'Export cancelled') {
                             alert(`Export failed: ${result.error}`);
                           }
                         }}
                       >
-                        Export Groups & Sessions
+                        Export…
                       </button>
                       <button
                         className="settings-button"
+                        aria-label="Import a machine exported from another one"
                         onClick={async () => {
                           const result = await window.electronAPI.importGroups();
                           if (result.success) {
-                            alert(`Imported ${result.groupCount} groups and ${result.sessionCount} sessions.` +
-                              (result.skippedGroups || result.skippedSessions
-                                ? ` (Skipped ${result.skippedGroups} existing groups, ${result.skippedSessions} existing sessions)`
-                                : ''));
+                            alert(importSummary(result));
                             window.location.reload();
                           } else if (result.error && result.error !== 'Import cancelled') {
                             alert(`Import failed: ${result.error}`);
                           }
                         }}
                       >
-                        Import Groups & Sessions
+                        Import…
                       </button>
                     </div>
-                    <span className="settings-hint">Transfer groups and sessions between Bodhilander and ClaudeLander</span>
+                    <span className="settings-hint">
+                      Export asks what to carry: this whole machine as a transfer bundle — groups, sessions,
+                      history, settings, accounts and conversation transcripts — or just groups and sessions
+                      as portable JSON that ClaudeLander reads. Import accepts either.
+                    </span>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-row-label" aria-hidden="true">Over the Relay:</span>
+                    <HandoffPreparePanel />
+                    <span className="settings-hint">
+                      Sends that same bundle to your relay account instead of a file. It is encrypted
+                      here first, so the relay carries bytes it cannot read; sign in on the new
+                      machine and it is offered there. Needs this machine linked under Remote Hosting,
+                      and holds up to {Math.round(HANDOFF_MAX_BYTES / (1024 * 1024))} MB — larger
+                      machines move by file.
+                    </span>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-row-label" aria-hidden="true">Last Restore:</span>
+                    <button
+                      className="settings-button"
+                      onClick={async () => {
+                        const report = await window.electronAPI.arrivalRead();
+                        // Both branches, every time: a machine with nothing
+                        // restored yet can have something restored later, and
+                        // the hint must not outlive the fact it stated.
+                        setArrivalReport(report);
+                        setArrivalMissing(report === null);
+                      }}
+                    >
+                      Show Restore Report
+                    </button>
+                    {arrivalMissing && (
+                      <output className="settings-hint">
+                        Nothing has been restored onto this machine yet.
+                      </output>
+                    )}
+                    <span className="settings-hint">
+                      What the last restore carried, and what it left for you: sessions whose folder is
+                      not on this machine, accounts still to sign in to, and provider keys to re-enter.
+                    </span>
                   </div>
                   <div className="settings-row">
                     <label>ClaudeLander:</label>
@@ -991,6 +1064,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
           </div>
         </div>
       </div>
+
+      {/* Reopened on demand, over the settings window that asked for it. */}
+      <ArrivalReportModal report={arrivalReport} onClosed={() => setArrivalReport(null)} />
     </div>
   );
 };

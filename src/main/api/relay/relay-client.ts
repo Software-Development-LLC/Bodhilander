@@ -25,6 +25,8 @@ import { defaultDeps } from './session-tunnel-deps';
 import { CAP_GRANTS_V1, CAP_PUSH_V1, buildShareCreateMessage } from './grants';
 import type { RelayPushSubscription } from './push-seal';
 import { createAttentionGate, MAX_SPENT_WINDOWS, planAttentionPush, type AttentionEvent } from './push-attention';
+import { createHandoffTransport } from './handoff-transport';
+import type { HandoffTransport } from '../../transfer/handoff';
 import { ptyManager } from '../../pty-manager';
 import { getDatabase } from '../../database';
 import {
@@ -42,6 +44,7 @@ import {
 import { getInviteScope, recordInviteScope } from './grant-sql';
 import type { GrantRole } from './grants';
 import { getAllSessions } from '../../repositories/sessions';
+import { messageText } from '../ws-message';
 
 /** Session name for the approval prompt, or null if it has since gone. */
 function getSessionName(sessionId: string): string | null {
@@ -357,7 +360,7 @@ export class RelayClient extends EventEmitter {
     });
 
     ws.on('message', (data) => {
-      void this.handleMessage(data.toString());
+      void this.handleMessage(messageText(data));
     });
 
     ws.on('close', (code) => {
@@ -736,6 +739,17 @@ export class RelayClient extends EventEmitter {
     const url = `${origin}/i/${body.code}${fragment}`;
     log.info('[Relay] share invite created', { addressed: !!input.expectedGithubLogin });
     return { code: body.code, url, expiresAt: body.expiresAt };
+  }
+
+  /** Reaches this account's handoff slot, or null until the machine is linked. */
+  handoffTransport(): HandoffTransport | null {
+    const machineId = getPreference(PREF.machineId);
+    if (!machineId) return null;
+    return createHandoffTransport({
+      origin: stripTrailingSlashes(this.relayUrl),
+      machineId,
+      sign: signWithIdentity,
+    });
   }
 
   /** Every grant this machine has issued, for the owner's settings list. */

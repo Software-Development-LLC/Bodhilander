@@ -1,6 +1,7 @@
 import { Menu, shell, app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import log from 'electron-log';
+import { exportGroupsAndSessions, importGroupsAndSessions } from './group-import-export';
 
 const aboutPreloadPath = path.join(__dirname, 'preload-about.js');
 
@@ -142,6 +143,17 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
           label: 'Close Session',
           accelerator: `${mod}+W`,
           click: () => mainWindow.webContents.send('menu:close-session'),
+        },
+        { type: 'separator' },
+        {
+          // Both prompt for what they carry, so neither needs a second entry
+          // point per format. Fire-and-forget: each reports through its dialogs.
+          label: 'Export…',
+          click: () => { void exportGroupsAndSessions(); },
+        },
+        {
+          label: 'Import…',
+          click: () => { void importGroupsAndSessions(); },
         },
         { type: 'separator' },
         // Tab is not a readline key, so bare Ctrl+Tab is safe to take on every platform -
@@ -348,14 +360,14 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         { type: 'separator' },
         {
           label: 'Documentation',
-          click: async () => {
-            await shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander');
+          click: () => {
+            void shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander');
           },
         },
         {
           label: 'Report Issue',
-          click: async () => {
-            await shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander/issues');
+          click: () => {
+            void shell.openExternal('https://github.com/Software-Development-LLC/Bodhilander/issues');
           },
         },
         {

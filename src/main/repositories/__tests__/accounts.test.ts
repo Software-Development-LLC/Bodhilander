@@ -49,7 +49,10 @@ function freshDb(): Database {
       color TEXT DEFAULT '#888888',
       is_default INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      last_used_at TEXT
+      last_used_at TEXT,
+      fallback_rank INTEGER DEFAULT NULL,
+      limited_until TEXT DEFAULT NULL,
+      limited_at TEXT DEFAULT NULL
     );
     CREATE UNIQUE INDEX idx_claude_accounts_single_default
       ON claude_accounts(is_default) WHERE is_default = 1;
@@ -59,13 +62,17 @@ function freshDb(): Database {
       group_id TEXT,
       name TEXT NOT NULL,
       working_dir TEXT NOT NULL,
-      claude_account_id TEXT DEFAULT NULL
+      claude_account_id TEXT DEFAULT NULL,
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
 
     CREATE TABLE groups (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      claude_account_id TEXT DEFAULT NULL
+      claude_account_id TEXT DEFAULT NULL,
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
   `);
   return d;

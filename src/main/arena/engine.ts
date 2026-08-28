@@ -336,7 +336,7 @@ export class ArenaEngine extends EventEmitter {
       stderrTail = (stderrTail + data.toString()).slice(-2000);
     });
 
-    const rl = readline.createInterface({ input: child.stdout! });
+    const rl = readline.createInterface({ input: child.stdout });
     rl.on('line', (line) => {
       this.appendChunk(responseId, parser.onLine(line));
     });

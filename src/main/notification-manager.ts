@@ -69,6 +69,33 @@ class NotificationManager {
     notification.show();
   }
 
+  /**
+   * Tell the user the app switched accounts under them (#207).
+   *
+   * Unlike showWaitingNotification this does NOT suppress on a focused window.
+   * "Waiting for input" is redundant when you are looking at the terminal that
+   * says so; "your account ran out and three sessions just restarted somewhere
+   * else" is not — it happened without being asked for, and a user watching one
+   * session's terminal has no other way to learn it happened to the other two.
+   */
+  showAccountNotification(options: { title: string; body: string; sessionId?: string }): void {
+    if (!this.isEnabled() || !Notification.isSupported()) return;
+
+    const notification = new Notification({
+      title: options.title,
+      body: options.body,
+      icon: this.getIconPath(),
+      silent: !this.isSoundEnabled(),
+    });
+
+    const { sessionId } = options;
+    if (sessionId) {
+      notification.on('click', () => this.handleNotificationClick(sessionId));
+    }
+
+    notification.show();
+  }
+
   private handleNotificationClick(sessionId: string): void {
     // Show and focus the main window
     if (this.mainWindow) {

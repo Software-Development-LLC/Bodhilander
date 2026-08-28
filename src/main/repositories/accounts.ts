@@ -37,30 +37,37 @@ export function createAccount(input: CreateAccountInput): ClaudeAccount {
     if (isDefault) {
       db.prepare('UPDATE claude_accounts SET is_default = 0 WHERE is_default = 1').run();
     }
+    // A new account joins the END of an order that already exists, rather than
+    // sharing NULL with the unranked ones — an estate someone has ordered
+    // should not have the next account inserted into the middle of it.
+    //
+    // Where NO order exists yet the new account stays unranked too. Giving it
+    // rank 0 would put a just-created account, which may not even be logged in
+    // yet, at the front of the failover queue for an estate whose owner has
+    // never expressed an opinion about ordering.
+    const maxRank = (db.prepare(
+      'SELECT MAX(fallback_rank) AS max FROM claude_accounts'
+    ).get() as { max: number | null }).max;
+    const nextRank = maxRank === null ? null : maxRank + 1;
+
     db.prepare(`
-      INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at, last_used_at)
-      VALUES (?, ?, ?, NULL, ?, ?, ?, NULL)
+      INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at, last_used_at, fallback_rank)
+      VALUES (?, ?, ?, NULL, ?, ?, ?, NULL, ?)
     `).run(
       input.id,
       input.label,
       input.configDir,
       input.color ?? '#888888',
       isDefault ? 1 : 0,
-      createdAt.toISOString()
+      createdAt.toISOString(),
+      nextRank
     );
   });
   insert();
 
-  return {
-    id: input.id,
-    label: input.label,
-    configDir: input.configDir,
-    email: null,
-    color: input.color ?? '#888888',
-    isDefault,
-    createdAt,
-    lastUsedAt: null,
-  };
+  // Re-read rather than reconstruct: the rank was computed inside the
+  // transaction and the caller's copy must agree with the row.
+  return getAccount(input.id)!;
 }
 
 export interface UpdateAccountInput {
@@ -150,3 +157,72 @@ export function deleteAccount(id: string): void {
 
 // resolveAccountForSession() lives in ../account-resolver — it reads sessions
 // and groups as well as accounts, so it isn't this repository's to own.
+
+// ---------------------------------------------------------------------------
+// Failover order and usage-limit cooldowns
+// ---------------------------------------------------------------------------
+
+/**
+ * Accounts in the order failover tries them: explicit rank first, then the
+ * panel's existing order (default, then oldest) for anything unranked.
+ *
+ * ORDER BY puts NULL ranks last explicitly — SQLite sorts NULL FIRST by
+ * default, which would hand an unranked account priority over the order the
+ * user actually set.
+ */
+export function getAccountsInFallbackOrder(): ClaudeAccount[] {
+  const db = getDatabase();
+  const rows = db.prepare(`
+    SELECT * FROM claude_accounts
+    ORDER BY fallback_rank IS NULL, fallback_rank, is_default DESC, created_at ASC
+  `).all() as any[];
+  return rows.map(mapRow);
+}
+
+/** Write an explicit failover order. Ids not listed keep whatever rank they had. */
+export function setFallbackOrder(orderedIds: string[]): void {
+  const db = getDatabase();
+  const stmt = db.prepare('UPDATE claude_accounts SET fallback_rank = ? WHERE id = ?');
+  const tx = db.transaction(() => {
+    orderedIds.forEach((id, index) => stmt.run(index, id));
+  });
+  tx();
+}
+
+/**
+ * Record that `id` has run out of quota until `until`.
+ *
+ * Extends rather than replaces: two sessions on the same account hit the wall
+ * seconds apart, and the second one's message is usually the vaguer of the two
+ * (no "resets at" line, so the default window). Taking the later of the two
+ * stops a precise reset time from being overwritten by a generic one.
+ */
+export function markAccountLimited(id: string, until: Date): void {
+  const db = getDatabase();
+  db.prepare(`
+    UPDATE claude_accounts
+    SET limited_at = COALESCE(limited_at, ?),
+        limited_until = CASE
+          WHEN limited_until IS NULL OR limited_until < ? THEN ?
+          ELSE limited_until
+        END
+    WHERE id = ?
+  `).run(new Date().toISOString(), until.toISOString(), until.toISOString(), id);
+}
+
+/** Clear a cooldown — the limit lifted, or the user cleared it by hand. */
+export function clearAccountLimit(id: string): void {
+  const db = getDatabase();
+  db.prepare(
+    'UPDATE claude_accounts SET limited_until = NULL, limited_at = NULL WHERE id = ?'
+  ).run(id);
+}
+
+/**
+ * True when the account can take work right now. A cooldown that has already
+ * expired is not a limit: nothing sweeps the column, so every reader has to
+ * decide expiry against the clock, and this is the one place that does it.
+ */
+export function isAccountHealthy(account: ClaudeAccount, now: Date = new Date()): boolean {
+  return account.limitedUntil === null || account.limitedUntil.getTime() <= now.getTime();
+}

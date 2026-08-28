@@ -46,7 +46,9 @@ function freshDb(): Database {
       ended_at TEXT DEFAULT NULL,
       duration_seconds REAL DEFAULT 0,
       claude_account_id TEXT DEFAULT NULL,
-      provider TEXT NOT NULL DEFAULT 'claude'
+      provider TEXT NOT NULL DEFAULT 'claude',
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
     CREATE TABLE groups (
       id TEXT PRIMARY KEY,
@@ -57,7 +59,9 @@ function freshDb(): Database {
       created_at TEXT,
       parent_id TEXT DEFAULT NULL,
       collapsed INTEGER DEFAULT 0,
-      claude_account_id TEXT DEFAULT NULL
+      claude_account_id TEXT DEFAULT NULL,
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     );
     CREATE TABLE claude_accounts (
       id TEXT PRIMARY KEY,
@@ -67,7 +71,10 @@ function freshDb(): Database {
       color TEXT,
       is_default INTEGER DEFAULT 0,
       created_at TEXT,
-      last_used_at TEXT
+      last_used_at TEXT,
+      fallback_rank INTEGER DEFAULT NULL,
+      limited_until TEXT DEFAULT NULL,
+      limited_at TEXT DEFAULT NULL
     );
   `);
   return d;
@@ -278,5 +285,91 @@ describe('assignGroupAccount', () => {
     const result = accountSwitch.assignGroupAccount('g1', null);
 
     expect(result.affectedSessionIds).toEqual([]);
+  });
+});
+
+/**
+ * The outcome (#214) exists so a switch that restarts nothing can still be
+ * explained. `affectedSessionIds: []` is returned both when nothing needed to
+ * move and when nothing could, and the renderer cannot tell those apart — nor
+ * could the user, which is the bug.
+ */
+describe('switch outcome', () => {
+  test('a session pick that changes nothing still names the account and the session', () => {
+    addAccount('acct-a', true);
+    addGroup('g1', 'acct-a');
+    addSession('s1', 'g1');
+
+    // Picking the account the session already inherits: no restart, but the
+    // row is now an override and the session has left group control.
+    const result = accountSwitch.assignSessionAccount('s1', 'acct-a');
+
+    expect(result.affectedSessionIds).toEqual([]);
+    expect(result.outcome.account?.id).toBe('acct-a');
+    expect(result.outcome.unchangedSessionIds).toEqual(['s1']);
+  });
+
+  test('a session that does move reports no unchanged sessions', () => {
+    addAccount('acct-a', true);
+    addAccount('acct-b');
+    addGroup('g1');
+    addSession('s1', 'g1');
+
+    const result = accountSwitch.assignSessionAccount('s1', 'acct-b');
+
+    expect(result.outcome.account?.id).toBe('acct-b');
+    expect(result.outcome.unchangedSessionIds).toEqual([]);
+  });
+
+  test('a group switch separates sessions it could not move from ones already there', () => {
+    addAccount('acct-a', true);
+    addAccount('acct-b');
+    addGroup('g1');
+    addSession('inherits', 'g1');
+    addSession('pinned', 'g1', { accountId: 'acct-a' });
+    addSession('already', 'g1', { accountId: 'acct-b' });
+
+    const result = accountSwitch.assignGroupAccount('g1', 'acct-b');
+
+    expect(result.affectedSessionIds).toEqual(['inherits']);
+    // Both stayed put, but for different reasons — and only one of them is
+    // something the user can act on from the group menu.
+    expect(result.outcome.unchangedSessionIds.sort()).toEqual(['already', 'pinned']);
+    expect(result.outcome.overriddenSessionIds.sort()).toEqual(['already', 'pinned']);
+  });
+
+  test('clearing a group assignment names the default account it falls back to', () => {
+    addAccount('acct-a', true);
+    addAccount('acct-b');
+    addGroup('g1', 'acct-b');
+    addSession('s1', 'g1');
+
+    const result = accountSwitch.assignGroupAccount('g1', null);
+
+    // #213: this is the item sitting one row above the account list, so what
+    // it resolves to has to be knowable rather than inferred.
+    expect(result.outcome.account?.id).toBe('acct-a');
+    expect(result.affectedSessionIds).toEqual(['s1']);
+  });
+
+  test('names no account rather than undefined when no default is configured', () => {
+    // AccountChip renders `account: ClaudeAccount | null`; an undefined
+    // leaking through the default lookup would be a different thing entirely.
+    addGroup('g1');
+    addSession('s1', 'g1');
+
+    const result = accountSwitch.assignGroupAccount('g1', null);
+
+    expect(result.outcome.account).toBeNull();
+  });
+
+  test('an assignment to a deleted account falls through to the default', () => {
+    addAccount('acct-a', true);
+    addGroup('g1');
+    addSession('s1', 'g1');
+
+    const result = accountSwitch.assignGroupAccount('g1', 'gone');
+
+    expect(result.outcome.account?.id).toBe('acct-a');
   });
 });

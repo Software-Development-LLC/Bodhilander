@@ -45,6 +45,7 @@ const { ptyManager } = await import('../../../pty-manager');
 const patchable = ptyManager as unknown as {
   getSession?: (id: string) => unknown;
   kill?: (id: string) => Promise<void>;
+  createSession?: (id: string, cwd: string) => void;
 };
 
 function freshDb(): Database {
@@ -70,11 +71,24 @@ function freshDb(): Database {
   return d;
 }
 
-function insertSession(id: string): void {
+function insertSession(id: string, workingDir = '/tmp'): void {
   db.prepare(`
     INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at)
-    VALUES (?, 'g1', 'test', '/tmp', 'idle', 'claude', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
-  `).run(id);
+    VALUES (?, 'g1', 'test', ?, 'idle', 'claude', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+  `).run(id, workingDir);
+}
+
+/**
+ * Wait until `predicate` holds rather than for a fixed number of milliseconds.
+ * This one waits for an in-flight fetch to reach the route. The deadline is a
+ * backstop; it returns as soon as the condition holds, and missing it fails on
+ * the assertion that follows rather than on a bare timeout.
+ */
+async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1));
+  }
 }
 
 function sessionRowCount(id: string): number {
@@ -119,6 +133,7 @@ beforeEach(() => {
 afterEach(() => {
   delete patchable.getSession;
   delete patchable.kill;
+  delete patchable.createSession;
 });
 
 describe('POST /sessions/:id/stop', () => {
@@ -135,7 +150,8 @@ describe('POST /sessions/:id/stop', () => {
     const pending = fetch(`${baseUrl}/sessions/${id}/stop`, { method: 'POST' });
     let settled = false;
     const tracked = pending.then((r) => { settled = true; return r; });
-    await new Promise((r) => setTimeout(r, 25));
+    // Wait for the route to actually ask for the kill, not for 25ms and hope.
+    await until(() => killCalls.length > 0);
     // The kill has been asked for but has not settled: no response yet, so
     // success can only ever mean the process is really gone.
     expect(killCalls).toEqual([id]);
@@ -222,5 +238,62 @@ describe('DELETE /sessions/:id', () => {
     const retry = await fetch(`${baseUrl}/sessions/${id}`, { method: 'DELETE' });
     expect(retry.status).toBe(200);
     expect(sessionRowCount(id)).toBe(0);
+  });
+});
+
+describe('POST /sessions/:id/start', () => {
+  test('a session whose folder is not on this machine is refused, by name', async () => {
+    const id = randomUUID();
+    insertSession(id, '/gone/from/this/machine');
+    const spawned: string[] = [];
+    patchable.getSession = () => undefined;
+    patchable.createSession = (startedId: string) => { spawned.push(startedId); };
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain('/gone/from/this/machine');
+    // The point of the guard: createSession is where the unactionable throw is.
+    expect(spawned).toEqual([]);
+  });
+
+  test('a session whose folder is present still starts', async () => {
+    const id = randomUUID();
+    insertSession(id, '/tmp');
+    const spawned: string[] = [];
+    patchable.getSession = () => undefined;
+    patchable.createSession = (startedId: string) => { spawned.push(startedId); };
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ launchClaude: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(spawned).toEqual([id]);
+  });
+
+  test('a spawn failure reports what actually went wrong', async () => {
+    const id = randomUUID();
+    insertSession(id, '/tmp');
+    patchable.getSession = () => undefined;
+    patchable.createSession = () => { throw new Error('Shell not found: /bin/nope'); };
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, { method: 'POST' });
+
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe('Shell not found: /bin/nope');
+  });
+
+  test('an already-running session is still refused before the folder check', async () => {
+    const id = randomUUID();
+    insertSession(id, '/gone/from/this/machine');
+    patchable.getSession = () => ({});
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, { method: 'POST' });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('Session is already running');
   });
 });
