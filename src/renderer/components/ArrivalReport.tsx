@@ -26,6 +26,10 @@ export interface ArrivalReportViewProps {
   onDismiss: () => void;
   /** Run the sign-in flow for one restored account. */
   onSignIn: (accountId: string) => Promise<void> | void;
+  /** Point one session at a folder on this machine. */
+  onRelink: (sessionId: string, currentDir: string) => Promise<void> | void;
+  /** Surfaced above the actions when something the report tried did not work. */
+  error?: string | null;
 }
 
 function relinkLabel(count: number): string {
@@ -37,9 +41,12 @@ export const ArrivalReportView: React.FC<ArrivalReportViewProps> = ({
   onClose,
   onDismiss,
   onSignIn,
+  onRelink,
+  error,
 }) => {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [signingIn, setSigningIn] = useState<string | null>(null);
+  const [relinking, setRelinking] = useState<string | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -87,14 +94,28 @@ export const ArrivalReportView: React.FC<ArrivalReportViewProps> = ({
         <section className="arrival-section" aria-label="Sessions needing a folder">
           <h4>{relinkLabel(report.needsRelink.length)}</h4>
           <p className="arrival-muted">
-            These arrived pointing at a folder that is not on this machine. Set each one&apos;s working
-            directory and it will start.
+            These arrived pointing at a folder that is not on this machine. Point each one at its
+            folder here and it becomes launchable again.
           </p>
           <ul className="arrival-list">
             {report.needsRelink.map((item) => (
               <li key={item.sessionId}>
                 <span className="arrival-name">{item.name}</span>
                 <span className="arrival-path">{item.workingDir}</span>
+                <button
+                  className="btn"
+                  disabled={relinking !== null}
+                  onClick={async () => {
+                    setRelinking(item.sessionId);
+                    try {
+                      await onRelink(item.sessionId, item.workingDir);
+                    } finally {
+                      setRelinking(null);
+                    }
+                  }}
+                >
+                  {relinking === item.sessionId ? 'Setting…' : 'Set Folder…'}
+                </button>
               </li>
             ))}
           </ul>
@@ -149,6 +170,12 @@ export const ArrivalReportView: React.FC<ArrivalReportViewProps> = ({
         </section>
       )}
 
+      {error && (
+        <p className="arrival-error" role="alert">
+          {error}
+        </p>
+      )}
+
       <div className="arrival-actions">
         <button className="btn primary" onClick={onClose}>
           Close
@@ -179,6 +206,14 @@ export interface ArrivalReportProps {
  */
 export const ArrivalReportModal: React.FC<ArrivalReportProps> = ({ report, onClosed }) => {
   const [loginFlow, setLoginFlow] = useState<{ account: ClaudeAccount; ptyId: string } | null>(null);
+  /**
+   * The report as it stands after any relinking done here. Main rewrites the
+   * kept copy and hands back what it stored, so this redraws from the record
+   * rather than from a guess at what the record now says.
+   */
+  const [live, setLive] = useState(report);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setLive(report), [report]);
 
   const endLogin = useCallback(
     async (cancel: boolean) => {
@@ -190,11 +225,11 @@ export const ArrivalReportModal: React.FC<ArrivalReportProps> = ({ report, onClo
     [loginFlow],
   );
 
-  if (!report) return null;
+  if (!live) return null;
   return (
     <>
       <ArrivalReportView
-        report={report}
+        report={live}
         onClose={onClosed}
         onDismiss={async () => {
           await window.electronAPI.arrivalDismiss();
@@ -202,6 +237,28 @@ export const ArrivalReportModal: React.FC<ArrivalReportProps> = ({ report, onClo
         }}
         onSignIn={async (accountId) => {
           setLoginFlow(await window.electronAPI.resumeAccountLogin(accountId));
+        }}
+        error={error}
+        onRelink={async (sessionId, currentDir) => {
+          setError(null);
+          try {
+            // Opened at the folder the session is looking for. On a restore
+            // across machines that path does not exist, and the picker falls
+            // back on its own rather than refusing to open.
+            const chosen = await window.electronAPI.selectDirectory(currentDir || undefined);
+            if (!chosen) return;
+            // The row goes when main says it has gone. Deliberately not closed
+            // when the last one is resolved: the counts are still worth
+            // reading, and a dialog that vanishes as you finish with it reads
+            // as a crash. It stops being *raised* on the next launch instead.
+            const next = await window.electronAPI.arrivalResolveRelink(sessionId, chosen);
+            if (next) setLive(next);
+          } catch (err) {
+            // Without this the rejection is unhandled, the button quietly
+            // re-enables, and the row stays put with nothing said — which
+            // reads as the button not working.
+            setError(err instanceof Error ? err.message : 'That folder could not be set.');
+          }
         }}
       />
 

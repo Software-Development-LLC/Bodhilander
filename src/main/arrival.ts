@@ -183,6 +183,46 @@ export function recordArrival(input: RecordArrivalInput): ArrivalReport | null {
   }
 }
 
+/**
+ * Point a restored session at a folder on this machine, and strike it off the
+ * kept report.
+ *
+ * Both halves, in one place, because they are one act: fixing the session
+ * without updating the report leaves the report listing work already done, and
+ * updating the report without fixing the session is a lie. The caller gets the
+ * rewritten report back so the window can redraw from what was actually
+ * stored rather than from its own guess at it.
+ *
+ * Null when there is no kept report — the session is still relinked, since
+ * that is worth doing whether or not anything is keeping score.
+ */
+export function resolveRelink(
+  sessionId: string,
+  workingDir: string,
+  store: ReportStore = preferenceStore,
+): ArrivalReport | null {
+  // The directory and nothing else. `workingDirMissing` — the parked marker —
+  // is derived from the filesystem on every read, so a real directory is the
+  // whole fix; a restored session is already `stopped`, which made writing the
+  // state a no-op on the only path that reaches here and left this able to
+  // stop a *running* session if it were ever called with another id.
+  sessionsRepo.updateSession(sessionId, { workingDir });
+
+  const report = loadArrivalReport(store);
+  if (!report) return null;
+
+  const needsRelink = report.needsRelink.filter((item) => item.sessionId !== sessionId);
+  const next: ArrivalReport = {
+    ...report,
+    needsRelink,
+    // Recomputed rather than incremented, so a double-resolve of the same
+    // session cannot walk the count past the number of sessions there are.
+    resumable: Math.max(0, report.sessions - needsRelink.length),
+  };
+  saveArrivalReport(store, next);
+  return next;
+}
+
 /** The kept report, or null when there has been no restore on this machine. */
 export function readArrival(store: ReportStore = preferenceStore): ArrivalReport | null {
   return loadArrivalReport(store);

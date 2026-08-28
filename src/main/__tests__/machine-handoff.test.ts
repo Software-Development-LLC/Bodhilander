@@ -53,7 +53,8 @@ const { declineMachineHandoff, prepareMachineHandoff, readHandoffOffer, restoreM
  */
 const noSuggestions = () => [];
 
-const { readArrival } = await import('../arrival');
+const { dismissArrival, readArrival, resolveRelink } = await import('../arrival');
+const sessionsRepo = await import('../repositories/sessions');
 
 const SOURCE_ROOT = '/src-machine/Work/Repos';
 
@@ -338,6 +339,66 @@ describe('restoring one', () => {
     const report = readArrival();
 
     expect(report!.accounts.map((a) => a.accountId)).toEqual(['acct-1']);
+  });
+
+  test('relinking a session strikes it off the kept report and makes it launchable', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    messageBoxResponses = [1];
+    await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
+
+    expect(readArrival()!.needsRelink.map((r) => r.sessionId)).toEqual(['s1']);
+    const here = path.join(tmp, 'dst', 'api');
+    fs.mkdirSync(here, { recursive: true });
+
+    const report = resolveRelink('s1', here);
+
+    // Both halves, or the report is describing work that is already done.
+    expect(report!.needsRelink).toEqual([]);
+    expect(report!.resumable).toBe(1);
+    expect(readArrival()!.needsRelink).toEqual([]);
+    // The directory is the whole fix: `workingDirMissing` is derived from the
+    // filesystem on every read, so a session pointed at a real folder stops
+    // being parked without anything touching its state.
+    const row = db.query('SELECT working_dir FROM sessions WHERE id = ?').get('s1') as {
+      working_dir: string;
+    };
+    expect(row.working_dir).toBe(here);
+    expect(sessionsRepo.getSession('s1')!.workingDirMissing).toBe(false);
+  });
+
+  test('resolving the same session twice cannot walk the resumable count past the truth', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    messageBoxResponses = [1];
+    await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
+
+    const here = path.join(tmp, 'dst', 'api');
+    resolveRelink('s1', here);
+    const report = resolveRelink('s1', here);
+
+    // Recomputed from the list rather than incremented, so a double-resolve —
+    // two windows with the report open, say — is idempotent.
+    expect(report!.resumable).toBe(1);
+    expect(report!.sessions).toBe(1);
+  });
+
+  test('relinks the session even when nothing is keeping score', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    messageBoxResponses = [1];
+    await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
+    // The user read the report and dismissed it. The session is still parked,
+    // and pointing it at a real folder is still worth doing.
+    dismissArrival();
+
+    const here = path.join(tmp, 'dst', 'api');
+    expect(resolveRelink('s1', here)).toBeNull();
+
+    const row = db.query('SELECT working_dir FROM sessions WHERE id = ?').get('s1') as {
+      working_dir: string;
+    };
+    expect(row.working_dir).toBe(here);
   });
 
   test('a mistyped phrase names the mistake instead of a decryption failure', async () => {

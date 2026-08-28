@@ -154,7 +154,7 @@ describe('the import/export bridge', () => {
   });
 
   test('exposes the arrival report, and signing in to an account that already exists', () => {
-    for (const name of ['arrivalRead', 'arrivalDismiss', 'resumeAccountLogin']) {
+    for (const name of ['arrivalRead', 'arrivalDismiss', 'arrivalResolveRelink', 'resumeAccountLogin']) {
       expect(typeof exposed[name]).toBe('function');
     }
 
@@ -163,6 +163,10 @@ describe('the import/export bridge', () => {
 
     call('arrivalDismiss');
     expect(lastInvocation().channel).toBe('arrival:dismiss');
+
+    call('arrivalResolveRelink', 's1', '/home/will/Work/api');
+    expect(lastInvocation().channel).toBe('arrival:resolveRelink');
+    expect(lastInvocation().args).toEqual(['s1', '/home/will/Work/api']);
 
     // Not `accounts:startLogin`: that one mints an account and rolls it back
     // on a spawn failure, which for a restored account would delete it.
