@@ -488,7 +488,7 @@ const AddAccountButton: React.FC<{ onAdd: (label: string) => Promise<void>; disa
 // one main cannot read directly.
 // -----------------------------------------------------------------------------
 
-interface ClaudeAccountLoginModalProps {
+export interface ClaudeAccountLoginModalProps {
   account: ClaudeAccount;
   ptyId: string;
   onDone: () => void;
@@ -544,7 +544,7 @@ export const LoginBanner: React.FC<LoginBannerProps> = ({ completed, verified })
   return <div className="completion-banner">Login saved. It's safe to close this window.</div>;
 };
 
-const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
+export const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
   account,
   ptyId,
   onDone,

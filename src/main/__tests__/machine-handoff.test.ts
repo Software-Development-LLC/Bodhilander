@@ -322,6 +322,24 @@ describe('restoring one', () => {
     expect(report!.needsRelink.map((r) => r.sessionId)).toEqual(['s1']);
   });
 
+  test('reports only the accounts the bundle carried, not every account here', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    // An account this machine already had, signed out, and never in the
+    // transfer. Without scoping it would appear in the "needs sign-in" list of
+    // this restore — and of every future one.
+    db.prepare(
+      `INSERT INTO claude_accounts (id, label, config_dir, email, color, is_default, created_at)
+       VALUES ('local-only', 'Not From The Bundle', ?, NULL, '#888888', 0, '2026-08-01T00:00:00.000Z')`,
+    ).run(path.join(tmp, 'unrelated', '.claude'));
+    messageBoxResponses = [1];
+
+    await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
+    const report = readArrival();
+
+    expect(report!.accounts.map((a) => a.accountId)).toEqual(['acct-1']);
+  });
+
   test('a mistyped phrase names the mistake instead of a decryption failure', async () => {
     const relay = standIn(preparedElsewhere().bytes);
     const result = await restoreMachineHandoff(relay.transport, 'agent album alloy', legacyDir, noSuggestions);

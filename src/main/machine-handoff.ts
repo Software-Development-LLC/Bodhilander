@@ -77,24 +77,24 @@ export async function prepareMachineHandoff(
  * into "nothing waiting": this runs on launch, and a relay that is unreachable
  * is not something to interrupt someone with.
  */
-/**
- * The name of the machine whose offer was last read. Kept so the arrival
- * report can say where the state came from without a second signed round trip
- * for a label — an offer is always read before it can be restored, since
- * reading it is what puts the prompt on screen.
- */
-let lastOfferedBy: string | null = null;
-
 export async function readHandoffOffer(transport: HandoffTransport | null): Promise<HandoffOfferState> {
   if (!transport) return { offer: null, declined: false };
   try {
     const offer = await transport.peek();
     if (!offer) return { offer: null, declined: false };
-    lastOfferedBy = offer.sourceMachineName ?? null;
     return { offer, declined: isHandoffDeclined(prefs, offer.id), sizeLabel: formatBytes(offer.byteSize) };
   } catch (error) {
     log.info('[Handoff] No offer available:', message(error));
     return { offer: null, declined: false };
+  }
+}
+
+/** The name of the machine holding this account's slot, or null if unknowable. */
+async function sourceMachineName(transport: HandoffTransport): Promise<string | null> {
+  try {
+    return (await transport.peek())?.sourceMachineName ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -134,6 +134,13 @@ export async function restoreMachineHandoff(
     return { success: false, error: message(error) };
   }
 
+  // Asked here rather than remembered from the last `readHandoffOffer`: module
+  // state would be written by any poll that happened while this restore sat on
+  // a confirmation dialog, and would then label the finished restore with a
+  // different machine's name. One small signed GET, and a failure just means
+  // the report does not name the source.
+  const sourceLabel = await sourceMachineName(transport);
+
   const roots = opened.manifest?.workingDirRoots ?? [];
   const mappings = await askRootMappings(roots, suggest(roots));
   if (mappings === null) return { success: false, error: 'Import cancelled' };
@@ -150,7 +157,7 @@ export async function restoreMachineHandoff(
       },
     });
     registerRestoredAccountHooks();
-    recordArrival({ via: 'handoff', sourceLabel: lastOfferedBy, manifest: outcome.manifest, outcome });
+    recordArrival({ via: 'handoff', sourceLabel, manifest: outcome.manifest, outcome });
     if (!acknowledged) {
       // Restored, but the relay still holds the bundle and would offer it
       // again on the next launch. Answering it here is what stops that.

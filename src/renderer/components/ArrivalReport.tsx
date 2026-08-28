@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { ArrivalReport } from '../../shared/types';
+import type { ArrivalReport, ClaudeAccount } from '../../shared/types';
+import { ClaudeAccountLoginModal } from './ClaudeAccountsModal';
 import { accountsNeedingSignIn } from '../../shared/arrival';
 import './ArrivalReport.css';
 
@@ -167,20 +168,51 @@ export interface ArrivalReportProps {
   onClosed: () => void;
 }
 
-/** The report wired to the main process — loading is the owner's job. */
+/**
+ * The report wired to the main process — loading is the owner's job.
+ *
+ * Signing in raises the same `ClaudeAccountLoginModal` the accounts panel
+ * does, over the top of the report. `resumeAccountLogin` spawns a live pty and
+ * hands back its id; without a terminal attached to that id there is nowhere
+ * for the user to complete the OAuth flow, and the button would look like it
+ * did nothing while leaving a pty running.
+ */
 export const ArrivalReportModal: React.FC<ArrivalReportProps> = ({ report, onClosed }) => {
+  const [loginFlow, setLoginFlow] = useState<{ account: ClaudeAccount; ptyId: string } | null>(null);
+
+  const endLogin = useCallback(
+    async (cancel: boolean) => {
+      // Cancelling never deletes: this account is the user's, brought back by a
+      // restore, and an interrupted sign-in is not a reason to lose it.
+      if (cancel && loginFlow) await window.electronAPI.cancelAccountLogin(loginFlow.ptyId, false);
+      setLoginFlow(null);
+    },
+    [loginFlow],
+  );
+
   if (!report) return null;
   return (
-    <ArrivalReportView
-      report={report}
-      onClose={onClosed}
-      onDismiss={async () => {
-        await window.electronAPI.arrivalDismiss();
-        onClosed();
-      }}
-      onSignIn={async (accountId) => {
-        await window.electronAPI.resumeAccountLogin(accountId);
-      }}
-    />
+    <>
+      <ArrivalReportView
+        report={report}
+        onClose={onClosed}
+        onDismiss={async () => {
+          await window.electronAPI.arrivalDismiss();
+          onClosed();
+        }}
+        onSignIn={async (accountId) => {
+          setLoginFlow(await window.electronAPI.resumeAccountLogin(accountId));
+        }}
+      />
+
+      {loginFlow && (
+        <ClaudeAccountLoginModal
+          account={loginFlow.account}
+          ptyId={loginFlow.ptyId}
+          onDone={() => void endLogin(false)}
+          onCancel={() => void endLogin(true)}
+        />
+      )}
+    </>
   );
 };

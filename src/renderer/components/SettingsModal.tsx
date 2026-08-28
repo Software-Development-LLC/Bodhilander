@@ -604,8 +604,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                       className="settings-button"
                       onClick={async () => {
                         const report = await window.electronAPI.arrivalRead();
-                        if (report) setArrivalReport(report);
-                        else setArrivalMissing(true);
+                        // Both branches, every time: a machine with nothing
+                        // restored yet can have something restored later, and
+                        // the hint must not outlive the fact it stated.
+                        setArrivalReport(report);
+                        setArrivalMissing(report === null);
                       }}
                     >
                       Show Restore Report

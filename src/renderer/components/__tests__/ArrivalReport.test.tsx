@@ -6,11 +6,37 @@
  * was unreadable is not listed as needing a sign-in, and closing it is not the
  * same as saying the work is done.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import type { ArrivalReport } from '../../../shared/types';
-import { ArrivalReportModal, ArrivalReportView } from '../ArrivalReport';
+
+/**
+ * The login modal embeds a live xterm `<Terminal>`, which has no business
+ * being stood up here. Stubbed down to the two things this file is about: that
+ * it is rendered at all, and that it is given the pty id the sign-in returned.
+ */
+const realAccountsModal = await import('../ClaudeAccountsModal');
+mock.module('../ClaudeAccountsModal', () => ({
+  ...realAccountsModal,
+  ClaudeAccountLoginModal: ({ account, ptyId, onCancel }: {
+    account: { id: string };
+    ptyId: string;
+    onCancel: (deleteAccount: boolean) => void;
+  }) => (
+    <div data-testid="login-modal" data-account={account.id} data-pty={ptyId}>
+      <button onClick={() => onCancel(false)}>Stop Login</button>
+    </div>
+  ),
+}));
+
+// Hand the real module back: in a shared-registry run a stub left registered
+// here would silently become another spec's subject.
+afterAll(() => {
+  mock.module('../ClaudeAccountsModal', () => realAccountsModal);
+});
+
+const { ArrivalReportModal, ArrivalReportView } = await import('../ArrivalReport');
 
 const REPORT: ArrivalReport = {
   restoredAt: '2026-08-28T10:00:00.000Z',
@@ -37,17 +63,22 @@ const REPORT: ArrivalReport = {
 
 let dismissed: number;
 let resumed: string[];
+let cancelled: { ptyId: string; deleteAccount: boolean }[];
 
 beforeEach(() => {
   dismissed = 0;
   resumed = [];
+  cancelled = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     arrivalDismiss: async () => {
       dismissed++;
     },
     resumeAccountLogin: async (accountId: string) => {
       resumed.push(accountId);
-      return { account: {}, ptyId: `__login-${accountId}` };
+      return { account: { id: accountId }, ptyId: `__login-${accountId}` };
+    },
+    cancelAccountLogin: async (ptyId: string, deleteAccount: boolean) => {
+      cancelled.push({ ptyId, deleteAccount });
     },
   };
 });
@@ -184,6 +215,32 @@ describe('signing in from the report', () => {
     // its label, colour and place in the failover order, and only its
     // credentials were missing.
     expect(resumed).toEqual(['a1']);
+  });
+
+  test('raises the login terminal, so the flow has somewhere to happen', async () => {
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+
+    await click('Sign In');
+
+    // `resumeAccountLogin` spawns a live pty and returns its id. Discarding
+    // that id leaves the pty running with no terminal attached and no way for
+    // the user to finish the OAuth flow — the button would look inert.
+    const modal = screen.getByTestId('login-modal');
+    expect(modal.getAttribute('data-account')).toBe('a1');
+    expect(modal.getAttribute('data-pty')).toBe('__login-a1');
+  });
+
+  test('abandoning the sign-in stops the pty and never deletes the account', async () => {
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+    await click('Sign In');
+
+    await click('Stop Login');
+
+    // An interrupted sign-in is not an aborted one. This account is the
+    // user's, brought back by a restore, and losing it here would be far worse
+    // than leaving it signed out.
+    expect(cancelled).toEqual([{ ptyId: '__login-a1', deleteAccount: false }]);
+    expect(screen.queryByTestId('login-modal')).toBeNull();
   });
 
   test('renders nothing at all when there is no report', () => {

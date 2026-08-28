@@ -127,16 +127,26 @@ function relinkItems(sessionIds: string[]): ArrivalRelinkItem[] {
 }
 
 /**
- * Every account and whether this machine has credentials for it. Read from the
- * config dir rather than from the restored row: the row travelled, the
- * credentials did not, and only the dir on this disk can say.
+ * The accounts THIS BUNDLE carried, and whether this machine has credentials
+ * for each. Scoped to the bundle rather than to the machine: an account that
+ * happens to live here and was never in the transfer is not something this
+ * restore left outstanding, and listing it would put a standing "you have a
+ * logged-out account" notice inside every future arrival report.
+ *
+ * Whether it is signed in is read from the config dir, not from the row: the
+ * row travelled, the credentials did not, and only the directory on this disk
+ * can say.
  */
-function accountItems(): ArrivalAccountItem[] {
-  return accountsRepo.getAllAccounts().map((account) => ({
-    accountId: account.id,
-    label: account.label,
-    loggedIn: resolveAccountIdentity(account.configDir).loggedIn,
-  }));
+function accountItems(accountIds: string[]): ArrivalAccountItem[] {
+  const wanted = new Set(accountIds);
+  return accountsRepo
+    .getAllAccounts()
+    .filter((account) => wanted.has(account.id))
+    .map((account) => ({
+      accountId: account.id,
+      label: account.label,
+      loggedIn: resolveAccountIdentity(account.configDir).loggedIn,
+    }));
 }
 
 /**
@@ -159,7 +169,7 @@ export function recordArrival(input: RecordArrivalInput): ArrivalReport | null {
       skippedGroups: input.outcome.skippedGroups,
       skippedSessions: input.outcome.skippedSessions,
       needsRelink: relinkItems(input.outcome.needsRelink),
-      accounts: accountItems(),
+      accounts: accountItems(input.outcome.accountIds),
       // The manifest names providers that had a key on the source. A bundle
       // written before that existed says nothing, and nothing is what gets
       // reported — not "none", which would be a claim the bundle never made.

@@ -177,6 +177,13 @@ const PORTABLE_PREFERENCE_KEYS = new Set([
 ]);
 
 /**
+ * Where a stored provider key lives. Named because it is both an excluded
+ * prefix below and, separately, the only record of WHICH providers had a key —
+ * which the manifest carries so the destination can ask for them again.
+ */
+export const PROVIDER_KEY_PREFIX = 'providerApiKey.';
+
+/**
  * Preference namespaces sealed to the source machine's OS keychain, plus the
  * relay identity and this machine's own arrival history. Nothing under the
  * first two can be decrypted anywhere else, and the relay's machine model
@@ -187,13 +194,6 @@ const PORTABLE_PREFERENCE_KEYS = new Set([
  * that never happened there, naming folders to relink that machine has never
  * had and accounts it was never asked to sign in to.
  */
-/**
- * Where a stored provider key lives. Named here because it is both an excluded
- * prefix below and, separately, the only record of WHICH providers had a key —
- * which the manifest carries so the destination can ask for them again.
- */
-export const PROVIDER_KEY_PREFIX = 'providerApiKey.';
-
 const LOCAL_PREFERENCE_PREFIXES = [PROVIDER_KEY_PREFIX, 'providerApiKeyUse.', 'relay.', 'arrival.'] as const;
 
 /**
