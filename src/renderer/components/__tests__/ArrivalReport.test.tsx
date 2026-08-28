@@ -269,6 +269,41 @@ describe('relinking a session from the report', () => {
     expect((screen.getByRole('dialog') as HTMLDialogElement).open).toBe(true);
   });
 
+  test('says so when the relink fails, instead of a button that did nothing', async () => {
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.arrivalResolveRelink =
+      async () => {
+        throw new Error('EACCES: that folder is not readable');
+      };
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+
+    await clickRelink();
+
+    // Uncaught, this was an unhandled rejection with the button quietly
+    // re-enabling and the row still sitting there — which reads as the button
+    // not working rather than as the folder being unusable.
+    expect(screen.getByRole('alert').textContent).toContain('EACCES');
+    expect(screen.getByRole('region', { name: 'Sessions needing a folder' }).textContent)
+      .toContain('2 sessions need their folder');
+  });
+
+  test('clears a previous failure when the next attempt is made', async () => {
+    let fail = true;
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.arrivalResolveRelink =
+      async (sessionId: string, workingDir: string) => {
+        if (fail) throw new Error('EACCES');
+        relinked.push({ sessionId, workingDir });
+        return { ...REPORT, needsRelink: REPORT.needsRelink.slice(1), resumable: 9 };
+      };
+    render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
+    await clickRelink();
+    expect(screen.queryByRole('alert')).not.toBeNull();
+
+    fail = false;
+    await clickRelink();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   test('cancelling the picker changes nothing at all', async () => {
     pickedDir = null;
     render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);

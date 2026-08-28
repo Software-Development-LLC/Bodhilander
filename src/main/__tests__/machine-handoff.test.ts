@@ -54,6 +54,7 @@ const { declineMachineHandoff, prepareMachineHandoff, readHandoffOffer, restoreM
 const noSuggestions = () => [];
 
 const { dismissArrival, readArrival, resolveRelink } = await import('../arrival');
+const sessionsRepo = await import('../repositories/sessions');
 
 const SOURCE_ROOT = '/src-machine/Work/Repos';
 
@@ -356,13 +357,14 @@ describe('restoring one', () => {
     expect(report!.needsRelink).toEqual([]);
     expect(report!.resumable).toBe(1);
     expect(readArrival()!.needsRelink).toEqual([]);
-    const row = db.query('SELECT working_dir, state FROM sessions WHERE id = ?').get('s1') as {
+    // The directory is the whole fix: `workingDirMissing` is derived from the
+    // filesystem on every read, so a session pointed at a real folder stops
+    // being parked without anything touching its state.
+    const row = db.query('SELECT working_dir FROM sessions WHERE id = ?').get('s1') as {
       working_dir: string;
-      state: string;
     };
     expect(row.working_dir).toBe(here);
-    // `stopped`, which is what the sidebar's parked marker is derived from.
-    expect(row.state).toBe('stopped');
+    expect(sessionsRepo.getSession('s1')!.workingDirMissing).toBe(false);
   });
 
   test('resolving the same session twice cannot walk the resumable count past the truth', async () => {

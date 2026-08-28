@@ -201,10 +201,12 @@ export function resolveRelink(
   workingDir: string,
   store: ReportStore = preferenceStore,
 ): ArrivalReport | null {
-  // `stopped`, not the state it arrived in: the session has a real directory
-  // now and is launchable, which is exactly what the sidebar's parked marker
-  // is derived from.
-  sessionsRepo.updateSession(sessionId, { workingDir, state: 'stopped' });
+  // The directory and nothing else. `workingDirMissing` — the parked marker —
+  // is derived from the filesystem on every read, so a real directory is the
+  // whole fix; a restored session is already `stopped`, which made writing the
+  // state a no-op on the only path that reaches here and left this able to
+  // stop a *running* session if it were ever called with another id.
+  sessionsRepo.updateSession(sessionId, { workingDir });
 
   const report = loadArrivalReport(store);
   if (!report) return null;

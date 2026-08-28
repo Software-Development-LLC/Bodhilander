@@ -97,6 +97,12 @@
   overflow-wrap: anywhere;
 }
 
+.arrival-error {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: #e06c75;
+}
+
 .arrival-actions {
   display: flex;
   gap: 8px;
