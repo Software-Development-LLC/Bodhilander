@@ -34,6 +34,13 @@ export interface RelayConfig {
   /** If set, only active members of this GitHub org may sign in (empty = open). */
   allowedGithubOrg: string | null;
   vapidSubject: string;
+  /**
+   * The Web Push application-server keypair, base64url. Both null means "mint
+   * one and keep it in `kv`". Supply them when the volume is disposable: the
+   * public key is baked into every browser subscription. See `push/vapid.ts`.
+   */
+  vapidPublicKey: string | null;
+  vapidPrivateKey: string | null;
   nodeEnv: string;
   isProduction: boolean;
 }
@@ -125,6 +132,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ? parsePositiveInt('LINK_CODE_TTL_SECONDS', env.LINK_CODE_TTL_SECONDS)
     : 600;
 
+  const { publicKey: vapidPublicKey, privateKey: vapidPrivateKey } = parseVapidKeys(env);
   const handoffTtlSeconds = env.HANDOFF_TTL_SECONDS
     ? parsePositiveInt('HANDOFF_TTL_SECONDS', env.HANDOFF_TTL_SECONDS)
     : 7 * 24 * 60 * 60;
@@ -167,9 +175,59 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       githubClientSecret: env.GITHUB_CLIENT_SECRET || null,
       allowedGithubOrg: env.ALLOWED_GITHUB_ORG?.trim() || null,
       vapidSubject: env.VAPID_SUBJECT ?? 'mailto:admin@localhost',
+      vapidPublicKey,
+      vapidPrivateKey,
       nodeEnv,
       isProduction,
     },
     warnings,
   };
+}
+
+/** Raw uncompressed P-256 point, and the scalar that goes with it. */
+const VAPID_PUBLIC_KEY_BYTES = 65;
+const VAPID_PRIVATE_KEY_BYTES = 32;
+
+function decodeBase64Url(raw: string): Uint8Array | null {
+  try {
+    return new Uint8Array(Buffer.from(raw.trim(), 'base64url'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the VAPID keypair from the environment. Half a pair is a mistake, not a
+ * shorthand, so it fails rather than ignoring the half that was set. Absent is
+ * the supported default; `push/vapid.ts` warns at the one actionable moment.
+ */
+function parseVapidKeys(env: Record<string, string | undefined>): {
+  publicKey: string | null;
+  privateKey: string | null;
+} {
+  // Empty and unset are the same thing here. Written out rather than as
+  // `?.trim() || null`, which reads as a `??` waiting to happen — and `??`
+  // would keep the empty string, tripping the paired check below on a relay
+  // that has `VAPID_PUBLIC_KEY=` in its .env and started fine yesterday.
+  let publicKey: string | null = null;
+  let privateKey: string | null = null;
+  const rawPublic = env.VAPID_PUBLIC_KEY?.trim();
+  const rawPrivate = env.VAPID_PRIVATE_KEY?.trim();
+  if (rawPublic) publicKey = rawPublic;
+  if (rawPrivate) privateKey = rawPrivate;
+
+  if (!publicKey && !privateKey) return { publicKey: null, privateKey: null };
+  if (!publicKey || !privateKey) {
+    fail('VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be set together');
+  }
+
+  const pub = decodeBase64Url(publicKey);
+  const priv = decodeBase64Url(privateKey);
+  if (!pub || pub.length !== VAPID_PUBLIC_KEY_BYTES || pub[0] !== 0x04) {
+    fail(`VAPID_PUBLIC_KEY must be a base64url uncompressed P-256 point (${VAPID_PUBLIC_KEY_BYTES} bytes, 0x04 prefix)`);
+  }
+  if (!priv || priv.length !== VAPID_PRIVATE_KEY_BYTES) {
+    fail(`VAPID_PRIVATE_KEY must be a base64url P-256 scalar (${VAPID_PRIVATE_KEY_BYTES} bytes)`);
+  }
+  return { publicKey, privateKey };
 }

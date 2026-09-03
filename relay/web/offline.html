@@ -26,7 +26,15 @@
     <div class="logo" aria-hidden="true">📡</div>
     <h1>Can't reach the relay</h1>
     <p>You're offline, or the relay is. Your sessions are safe on your machine — they'll be right here once you're connected again.</p>
-    <button onclick="location.reload()">Try again</button>
+    <button id="again" type="button">Try again</button>
   </main>
+  <!-- A block, not an `onclick`: a nonce or hash can permit this under a CSP,
+       an attribute handler would need 'unsafe-hashes'. Inline for the reason
+       the CSS is — this page renders when nothing else can be fetched. -->
+  <script>
+    document.getElementById('again').addEventListener('click', function () {
+      location.reload();
+    });
+  </script>
 </body>
 </html>

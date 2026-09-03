@@ -8,6 +8,20 @@ import { createReconnectScheduler, readyCommands } from './reconnect';
 import { clearAccountState, INVITE_STASH } from './account';
 import { endedCopy } from './ended';
 import {
+  consumePushTarget,
+  currentPushState,
+  disablePush,
+  enablePush,
+  isPushSupported,
+  applySwitchView,
+  notificationsSectionHtml,
+  pushFailureCopy,
+  switchView,
+  type PushDeps,
+  type PushManagerLike,
+  type PushState,
+} from './push';
+import {
   autoOpenSessionId,
   machineLabel,
   machineMenuTitle,
@@ -55,6 +69,8 @@ interface Machine {
   grantId?: string | null;
   role?: string | null;
   certificate?: string | null;
+  /** Can this machine's live agent seal push payloads? Null when offline. */
+  pushCapable?: boolean | null;
 }
 
 interface Me {
@@ -210,8 +226,9 @@ async function renderRedeem(code: string): Promise<void> {
     rootEl.innerHTML = `<div class="screen-center"><div class="card-center">
       <div class="logo">📡</div><h1>Couldn't reach the server</h1>
       <p>Check your connection and try again.</p>
-      <button class="btn" onclick="location.reload()">Try again</button>
+      <button class="btn" id="redeemRetry">Try again</button>
     </div></div>`;
+    $('#redeemRetry')!.onclick = () => location.reload();
     return;
   }
 
@@ -348,10 +365,11 @@ function renderApp(machines: Machine[]) {
          <b>Settings → Remote Hosting → Generate link code</b> in the desktop app.</p>
       <button class="btn" id="inviteBtn">Enter an invite code</button>
       <button class="btn ghost" style="margin-top:10px" id="linkBtn">Link my own machine</button>
-      <button class="btn ghost" style="margin-top:10px" onclick="location.reload()">Refresh</button>
+      <button class="btn ghost" style="margin-top:10px" id="emptyRefresh">Refresh</button>
       ${accountFooter()}
     </div></div>`;
     $('#linkBtn')!.onclick = openLinkMachine;
+    $('#emptyRefresh')!.onclick = () => location.reload();
     // "Nothing here yet" is exactly what the wrong account looks like, so this
     // screen of all of them must offer a way out of the identity you're in.
     const out = $<HTMLButtonElement>('#emptyOut');
@@ -654,6 +672,9 @@ function onAgentMessage(m: Inner) {
     lastSessionsJson = j;
     app.sessions = list;
     renderSessions();
+    // A tapped notification named a session, so it wins over arrival's own
+    // choice — and leaves nothing for it to do, because it sees `activeId`.
+    openPushTargetSession();
     maybeLandInTerminal();
     updateTermHeader(); // keep the open terminal's state chip / attention banner live
     return;
@@ -1162,6 +1183,7 @@ function openAccount() {
       </div>
     </div>
     ${handle}
+    ${notificationsSection()}
     <button class="btn ghost" id="accLink" style="margin-top:18px">Link a machine</button>
     <button class="btn ghost" id="accOut" style="margin-top:10px">Sign out</button>
   </div>`;
@@ -1174,6 +1196,97 @@ function openAccount() {
   // the ability to link their own — this sheet is reachable from every screen.
   $('#accLink')!.onclick = () => openLinkMachine();
   $('#accOut')!.onclick = (e) => void signOut({ btn: e.currentTarget as HTMLButtonElement });
+  wireNotifications();
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+/** The session a tapped notification named, until the list arrives to open it. */
+let pushTargetSessionId: string | null = null;
+
+/**
+ * Open the session a notification was about, once the agent has sent the list.
+ * Tried on every refresh and cleared on the first hit — the tap happens long
+ * before the channel is up, and the session may not exist any more.
+ */
+function openPushTargetSession(): void {
+  if (!pushTargetSessionId || app.activeId) return;
+  const session = app.sessions.find((s) => s.id === pushTargetSessionId);
+  if (!session) return;
+  pushTargetSessionId = null;
+  app.landed = true;
+  openTerminal(session);
+}
+
+/**
+ * Browser surfaces the push flow needs, gathered in one place so `push.ts`
+ * itself touches no globals and stays testable.
+ */
+const pushDeps: PushDeps = {
+  supported: isPushSupported(window as unknown as { navigator?: { serviceWorker?: unknown } }),
+  permission: () => Notification.permission,
+  requestPermission: () => Notification.requestPermission(),
+  registration: () => navigator.serviceWorker.ready as unknown as Promise<{ pushManager: PushManagerLike }>,
+  api,
+};
+
+/**
+ * The notifications row. A switch, not a button: two states, and a screen
+ * reader should hear which one. It renders pending and settles once the worker
+ * is ready — blocking the sheet on that would feel broken on a slow link.
+ */
+function notificationsSection(): string {
+  // A guest with no machines of their own would never get one of these, and
+  // saying so is better than a switch that silently does nothing.
+  const guestOnly = app.machines.length > 0 && app.machines.every((m) => m.relation === 'grantee');
+  return notificationsSectionHtml({ guestOnly });
+}
+
+function paintNotifications(state: PushState, note?: string): void {
+  const toggle = $<HTMLButtonElement>('#pushToggle');
+  const noteEl = $('#pushNote');
+  if (!toggle || !noteEl) return; // the sheet was closed mid-flight
+
+  applySwitchView(
+    { toggle, note: noteEl, stale: $('#pushStale') },
+    switchView(state, { pushCapable: app.machine?.pushCapable, note }),
+  );
+}
+
+function wireNotifications(): void {
+  const toggle = $<HTMLButtonElement>('#pushToggle');
+  if (!toggle) return;
+
+  void currentPushState(pushDeps).then((state) => paintNotifications(state));
+
+  toggle.onclick = async () => {
+    // Focusable but inert: `denied` and `unsupported` are states this control
+    // cannot change, and clicking must not pretend otherwise.
+    if (toggle.getAttribute('aria-disabled') === 'true' || toggle.disabled) return;
+    const turningOn = toggle.getAttribute('aria-checked') !== 'true';
+    // Only for the moment the request is in flight; every paint clears it.
+    toggle.disabled = true;
+    const noteEl = $('#pushNote');
+    if (noteEl) noteEl.textContent = turningOn ? 'Asking your browser…' : 'Turning off…';
+
+    if (!turningOn) {
+      await disablePush(pushDeps);
+      paintNotifications(await currentPushState(pushDeps));
+      return;
+    }
+
+    const result = await enablePush(pushDeps);
+    if (result.ok) {
+      paintNotifications('on');
+      return;
+    }
+    // Re-read rather than assuming: a refused prompt leaves the browser in a
+    // state this control has to reflect, and it is not always the one we
+    // started from.
+    paintNotifications(await currentPushState(pushDeps), pushFailureCopy(result.reason));
+  };
 }
 
 /**
@@ -1188,6 +1301,11 @@ async function signOut(opts: { to?: string; stashInvite?: string; btn?: HTMLButt
   const { to = '/', stashInvite, btn } = opts;
   if (btn) { btn.disabled = true; btn.textContent = 'Signing out…'; }
   app.conn?.close();
+  // Before anything else. A subscription is per-ACCOUNT even though the browser
+  // holds it: left behind, the previous account's agents keep sealing session
+  // names to this lock screen, and the next person to sign in is told
+  // notifications are "on" about a subscription that is not theirs.
+  await disablePush(pushDeps);
   try {
     // Bounded, because the alternative to a slow relay answering is not
     // "wait longer" — it is a disabled button that never comes back. The
@@ -1470,10 +1588,28 @@ function linkErrorText(error?: string): string {
   }
 }
 
-// Root scope, so the worker covers `/i/*` invite links and can carry web
-// push. An updated worker must never take over a page mid-terminal-session;
-// sw.js therefore never calls skipWaiting/clients.claim, and nothing here
-// needs to wait on, prompt about, or reload for an update.
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// Root scope, so the worker covers `/i/*` invite links and carries web push.
+// An updated worker must never take over a page mid-terminal-session; sw.js
+// never calls skipWaiting/clients.claim, so nothing here waits on an update.
+
+// The failure is logged rather than swallowed. Registration failing is silent
+// from a person's point of view — the app keeps working, offline support and
+// notifications just never arrive — so otherwise there is no signal at all.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch((err) => {
+    // eslint-disable-next-line no-console
+    console.warn('[sw] registration failed — offline support and notifications are off:', err);
+  });
+}
+
+// Arriving from a tapped notification: adopt the machine it named before boot()
+// reads the stored preference, and strip it back out of the URL.
+const pushTarget = consumePushTarget({
+  search: location.search,
+  pathname: location.pathname,
+  storage: localStorage,
+  replace: (url) => history.replaceState(null, '', url),
+});
+pushTargetSessionId = pushTarget?.sessionId ?? null;
 
 boot();

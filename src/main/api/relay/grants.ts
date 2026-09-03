@@ -23,6 +23,13 @@ export const GRANT_VERSION = 'grant:v1';
 /** Capability an agent advertises so the relay knows it enforces certificates. */
 export const CAP_GRANTS_V1 = 'grants:v1';
 
+/**
+ * Capability an agent advertises to say it can seal web-push payloads itself.
+ * The relay withholds subscription keys from any agent that has not said so.
+ * Mirrors `CAP_PUSH_V1` in `relay/src/protocol.ts`.
+ */
+export const CAP_PUSH_V1 = 'push:v1';
+
 /** Roles a certificate may carry. `owner` is deliberately not among them. */
 export const MINTABLE_ROLES = ['viewer', 'operator'] as const;
 export type GrantRole = (typeof MINTABLE_ROLES)[number];

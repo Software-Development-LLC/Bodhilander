@@ -38,6 +38,49 @@ describe('loadConfig', () => {
   });
 });
 
+describe('loadConfig — the VAPID keypair', () => {
+  /** A well-formed pair: an uncompressed P-256 point, and a 32-byte scalar. */
+  const publicKey = Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 1)]).toString('base64url');
+  const privateKey = Buffer.alloc(32, 2).toString('base64url');
+
+  test('is optional, and its absence is not a warning even in production', () => {
+    // Minting a pair and storing it is the supported default; warning about it
+    // on every boot of the documented setup is noise nobody still reads.
+    const { config, warnings } = loadConfig({ NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(64) });
+    expect(config.vapidPublicKey).toBeNull();
+    expect(config.vapidPrivateKey).toBeNull();
+    expect(warnings).toHaveLength(0);
+  });
+
+  test('passes a well-formed pair through untouched', () => {
+    const { config } = loadConfig({ VAPID_PUBLIC_KEY: publicKey, VAPID_PRIVATE_KEY: privateKey });
+    expect(config.vapidPublicKey).toBe(publicKey);
+    expect(config.vapidPrivateKey).toBe(privateKey);
+  });
+
+  test.each([
+    ['only the public half', { VAPID_PUBLIC_KEY: publicKey }],
+    ['only the private half', { VAPID_PRIVATE_KEY: privateKey }],
+  ])('refuses %s rather than silently ignoring it', (_label, env) => {
+    expect(() => loadConfig(env)).toThrow(ConfigError);
+  });
+
+  test.each([
+    ['a compressed point', Buffer.concat([Buffer.from([0x02]), Buffer.alloc(32, 1)]).toString('base64url'), privateKey],
+    ['a short point', Buffer.alloc(32, 1).toString('base64url'), privateKey],
+    ['a short scalar', publicKey, Buffer.alloc(16, 2).toString('base64url')],
+  ])('refuses %s at startup, not at first send', (_label, pub, priv) => {
+    // A key that only fails when a push is attempted fails invisibly, hours
+    // later, on a path nobody is watching.
+    expect(() => loadConfig({ VAPID_PUBLIC_KEY: pub, VAPID_PRIVATE_KEY: priv })).toThrow(ConfigError);
+  });
+
+  test('defaults the subject, and takes one when given', () => {
+    expect(loadConfig({}).config.vapidSubject).toBe('mailto:admin@localhost');
+    expect(loadConfig({ VAPID_SUBJECT: 'mailto:ops@x.test' }).config.vapidSubject).toBe('mailto:ops@x.test');
+  });
+});
+
 describe('openDb / migrations', () => {
   test('runs migrations to the latest version and creates the schema', () => {
     const db = openDb(':memory:');
