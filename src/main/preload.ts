@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -375,6 +375,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('accounts:cancelLogin', ptyId, deleteAccount),
   confirmAccountLoginMacOS: (ptyId: string): Promise<void> =>
     ipcRenderer.invoke('accounts:confirmLoginMacOS', ptyId),
+  accountRemovalCost: (id: string): Promise<AccountRemovalCost> =>
+    ipcRenderer.invoke('accounts:removalCost', id),
   deleteAccount: (id: string): Promise<void> =>
     ipcRenderer.invoke('accounts:delete', id),
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }): Promise<void> =>

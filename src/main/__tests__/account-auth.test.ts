@@ -451,3 +451,76 @@ describe('cancelLoginFlow', () => {
     expect(kills).toBe(1);
   });
 });
+
+/**
+ * accountRemovalCost is what the delete confirmation quotes, and both halves
+ * are measured rather than declared: the sessions come from the same predicate
+ * deleteAccount() unsets, and the conversations are counted off disk. A count
+ * that silently reads zero would turn the warning into a reassurance.
+ */
+describe('accountRemovalCost', () => {
+  function writeTranscripts(accountId: string, slug: string, names: string[]): void {
+    const dir = path.join(userDataDir, 'claude-accounts', accountId, '.claude', 'projects', slug);
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of names) fs.writeFileSync(path.join(dir, name), '{}');
+  }
+
+  function insertAccount(id: string): void {
+    db.prepare('INSERT INTO claude_accounts (id, label, config_dir) VALUES (?, ?, ?)')
+      .run(id, id, path.join(userDataDir, 'claude-accounts', id, '.claude'));
+  }
+
+  function bindSession(id: string, accountId: string | null): void {
+    db.prepare('INSERT INTO sessions (id, name, working_dir, claude_account_id) VALUES (?, ?, ?, ?)')
+      .run(id, id, userDataDir, accountId);
+  }
+
+  test('counts transcripts across slugs and only the sessions on this account', () => {
+    insertAccount('a1');
+    writeTranscripts('a1', 'proj-one', ['x.jsonl', 'y.jsonl']);
+    writeTranscripts('a1', 'proj-two', ['z.jsonl']);
+    bindSession('s1', 'a1');
+    bindSession('s2', 'a1');
+    bindSession('s3', 'other');
+    bindSession('s4', null);
+
+    expect(accountAuth.accountRemovalCost('a1')).toEqual({ sessions: 2, conversations: 3 });
+  });
+
+  test('ignores files that are not transcripts', () => {
+    insertAccount('a1');
+    writeTranscripts('a1', 'proj', ['keep.jsonl', 'notes.md', 'settings.json']);
+
+    expect(accountAuth.accountRemovalCost('a1').conversations).toBe(1);
+  });
+
+  // An account that never ran has no projects/ at all. That is the ordinary
+  // case, not a failure, and it has to report zero rather than throw — the
+  // confirmation is built from this before the user sees it.
+  test('an account that never ran costs nothing and does not throw', () => {
+    insertAccount('a1');
+    fs.mkdirSync(path.join(userDataDir, 'claude-accounts', 'a1', '.claude'), { recursive: true });
+
+    expect(accountAuth.accountRemovalCost('a1')).toEqual({ sessions: 0, conversations: 0 });
+  });
+
+  test('a config dir that was never created at all still answers', () => {
+    insertAccount('a1');
+
+    expect(accountAuth.accountRemovalCost('a1')).toEqual({ sessions: 0, conversations: 0 });
+  });
+
+  // projects/ holds a directory per working dir, but nothing stops a stray file
+  // landing beside them. It contributes nothing and must not take the
+  // surrounding count down with it. The inner catch guards the narrower case of
+  // a directory that stops being readable after it was listed, which needs a
+  // race to reach and is not covered here.
+  test('a plain file among the slugs is skipped, and the slugs beside it still count', () => {
+    insertAccount('a1');
+    writeTranscripts('a1', 'good', ['x.jsonl']);
+    const projects = path.join(userDataDir, 'claude-accounts', 'a1', '.claude', 'projects');
+    fs.writeFileSync(path.join(projects, 'not-a-dir'), 'plain file');
+
+    expect(accountAuth.accountRemovalCost('a1').conversations).toBe(1);
+  });
+});

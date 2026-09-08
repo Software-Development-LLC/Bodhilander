@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -184,6 +184,7 @@ interface ElectronAPI {
   startAccountLogin: (label: string) => Promise<{ account: ClaudeAccount; ptyId: string }>;
   cancelAccountLogin: (ptyId: string, deleteAccount: boolean) => Promise<void>;
   confirmAccountLoginMacOS: (ptyId: string) => Promise<void>;
+  accountRemovalCost: (id: string) => Promise<AccountRemovalCost>;
   deleteAccount: (id: string) => Promise<void>;
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }) => Promise<void>;
   setDefaultAccount: (id: string) => Promise<boolean>;

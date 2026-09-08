@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ClaudeAccount, LiveAccountBindings } from '../../shared/types';
+import { AccountRemovalCost, ClaudeAccount, LiveAccountBindings } from '../../shared/types';
 import Terminal from './Terminal';
 import { AccountChip } from './AccountChip';
 import './ClaudeAccountsModal.css';
@@ -12,6 +12,41 @@ import './ClaudeAccountsModal.css';
 // isOpen plumbing needed. Reached from the app menu's "Claude Accounts…" item
 // (menu:open-accounts), which deep-links Settings to this tab.
 // -----------------------------------------------------------------------------
+
+/**
+ * What the delete costs. The transcripts live in the config directory this
+ * removes and nothing else on disk records them, so the confirmation names
+ * them rather than only listing what it unsets. A null cost means we could not
+ * measure it, and silence beats a number we do not have.
+ */
+export function removalWarning(cost: AccountRemovalCost | null): string {
+  if (!cost) return '';
+  if (cost.conversations === 0) return '\n\nIt has no saved conversations, so nothing is lost.';
+
+  const conversations = cost.conversations === 1
+    ? '1 saved conversation'
+    : `${cost.conversations} saved conversations`;
+  const deletes = `\n\nThis permanently deletes ${conversations}.`;
+
+  if (cost.sessions === 0) return deletes;
+  if (cost.sessions === 1) {
+    return `${deletes} The session bound to this account stays in the sidebar, but its `
+      + 'history is gone and it cannot be resumed.';
+  }
+  return `${deletes} The ${cost.sessions} sessions bound to this account stay in the sidebar, `
+    + 'but their history is gone and they cannot be resumed.';
+}
+
+/** Live ptys lose the directory underneath them, which is a different loss. */
+export function runningWarning(runningSessions: number): string {
+  if (runningSessions === 0) return '';
+  if (runningSessions === 1) {
+    return '\n\n1 session is using it right now. It keeps running, but its account directory '
+      + 'goes away underneath it.';
+  }
+  return `\n\n${runningSessions} sessions are using it right now. They keep running, but their `
+    + 'account directory goes away underneath them.';
+}
 
 export const ClaudeAccountsPanel: React.FC = () => {
   const [accounts, setAccounts] = useState<ClaudeAccount[]>([]);
@@ -96,21 +131,20 @@ export const ClaudeAccountsPanel: React.FC = () => {
     await refresh();
   }, [refresh]);
 
-  // The panel computes "N sessions are running on this account" two inches
-  // above this button, and deleting removes the on-disk config dir out from
-  // under those live ptys (#165). Withholding the number here while the dialog
-  // reassures the user that "sessions themselves are kept" is the one place
-  // that count actually had a job to do.
   const handleDelete = useCallback(async (id: string, label: string, runningSessions: number) => {
-    const subject = runningSessions === 1 ? 'session is' : 'sessions are';
-    const warning = runningSessions > 0
-      ? `\n\n${runningSessions} running ${subject} `
-        + `using this account right now. They keep running, but their account directory goes away `
-        + `with it — restart them onto another account first if you need their conversations.`
-      : '';
+    // A cost we could not compute must not block the delete, so a failure here
+    // falls through to a confirmation that claims no number rather than one
+    // that claims a wrong one.
+    let cost: AccountRemovalCost | null = null;
+    try {
+      cost = await window.electronAPI.accountRemovalCost(id);
+    } catch (err) {
+      console.error('Could not measure what deleting this account costs', err);
+    }
+
     const confirmed = window.confirm(
       `Delete account "${label}"?\n\nThis removes its saved credentials and unsets any sessions or `
-      + `groups that were bound to it. Sessions themselves are kept.${warning}`
+      + `groups that were bound to it.${removalWarning(cost)}${runningWarning(runningSessions)}`
     );
     if (!confirmed) return;
     await window.electronAPI.deleteAccount(id);

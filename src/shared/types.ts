@@ -648,3 +648,11 @@ export interface TransferBundleManifest {
   providersWithApiKeys?: string[];
   counts: TransferBundleCounts;
 }
+
+/** What removing a Claude account destroys, so the confirmation can say it. */
+export interface AccountRemovalCost {
+  /** Sessions bound to the account, running or not. */
+  sessions: number;
+  /** Conversation transcripts stored under the account's config dir. */
+  conversations: number;
+}

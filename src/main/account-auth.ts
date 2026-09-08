@@ -21,7 +21,7 @@ import * as accountsRepo from './repositories/accounts';
 import { AccountIdentity, LOGIN_ARTIFACTS, resolveAccountIdentity } from './account-identity';
 import { registerHooks } from './mcp-config';
 import { seedLegacyConversations } from './legacy-claude-seed';
-import { ClaudeAccount } from '../shared/types';
+import { AccountRemovalCost, ClaudeAccount } from '../shared/types';
 
 interface LoginFlow {
   accountId: string;
@@ -297,6 +297,41 @@ export function cancelLoginFlow(
   }
 
   activeFlows.delete(ptyId);
+}
+
+/**
+ * What removing an account costs, for a confirmation that can name it. The
+ * conversations are the part worth counting: they live under the config dir
+ * and go with it, and nothing else on disk records them.
+ */
+export function accountRemovalCost(accountId: string): AccountRemovalCost {
+  return {
+    sessions: accountsRepo.countSessionsUsingAccount(accountId),
+    conversations: countTranscripts(configDirFor(accountId)),
+  };
+}
+
+/** Transcripts live at <configDir>/projects/<cwd-slug>/<uuid>.jsonl. */
+function countTranscripts(configDir: string): number {
+  const projects = path.join(configDir, 'projects');
+  let slugs: fs.Dirent[];
+  try {
+    slugs = fs.readdirSync(projects, { withFileTypes: true });
+  } catch {
+    // No projects/ is the ordinary "never used" case, not a failure.
+    return 0;
+  }
+
+  let total = 0;
+  for (const slug of slugs) {
+    if (!slug.isDirectory()) continue;
+    try {
+      total += fs.readdirSync(path.join(projects, slug.name)).filter((f) => f.endsWith('.jsonl')).length;
+    } catch {
+      // A slug we cannot read contributes nothing and stops nothing.
+    }
+  }
+  return total;
 }
 
 /**

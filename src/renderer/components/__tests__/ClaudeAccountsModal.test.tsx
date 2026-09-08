@@ -16,7 +16,7 @@
 import React from 'react';
 import { describe, expect, test, afterEach } from 'bun:test';
 import { act, render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { AccountRow, ClaudeAccountsPanel, LoginBanner, LoginHint } from '../ClaudeAccountsModal';
+import { AccountRow, ClaudeAccountsPanel, LoginBanner, LoginHint, removalWarning, runningWarning } from '../ClaudeAccountsModal';
 import { ClaudeAccount } from '../../../shared/types';
 
 afterEach(cleanup);
@@ -139,13 +139,17 @@ describe('AccountRow', () => {
 describe('ClaudeAccountsPanel delete confirmation', () => {
   const listed: ClaudeAccount[] = [account({ id: 'a1', label: 'Personal' })];
 
-  function stubApi(live: Record<string, { accountId: string | null }>) {
+  function stubApi(
+    live: Record<string, { accountId: string | null }>,
+    cost: { sessions: number; conversations: number } = { sessions: 0, conversations: 0 },
+  ) {
     const deleted: string[] = [];
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       listAccounts: async () => listed,
       getLiveAccounts: async () => live,
       onPtyLiveAccount: () => () => {},
       onAccountLoginCompleted: () => () => {},
+      accountRemovalCost: async () => cost,
       deleteAccount: async (id: string) => { deleted.push(id); },
       setDefaultAccount: async () => true,
       startAccountLogin: async () => ({ account: listed[0], ptyId: 'p' }),
@@ -162,8 +166,11 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
     return deleted;
   }
 
-  async function openPanel(live: Record<string, { accountId: string | null }>) {
-    const deleted = stubApi(live);
+  async function openPanel(
+    live: Record<string, { accountId: string | null }>,
+    cost?: { sessions: number; conversations: number },
+  ) {
+    const deleted = stubApi(live, cost);
     const messages: string[] = [];
     (window as unknown as { confirm: (m: string) => boolean }).confirm = (m: string) => {
       messages.push(m);
@@ -173,6 +180,8 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
     return { deleted, messages };
   }
 
+  const clickDelete = () => act(async () => { fireEvent.click(screen.getByText('Delete')); });
+
   test('names the sessions that will lose their account directory', async () => {
     const { deleted, messages } = await openPanel({
       s1: { accountId: 'a1' },
@@ -180,19 +189,59 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
       s3: { accountId: 'other' },
     });
 
-    await act(async () => { fireEvent.click(screen.getByText('Delete')); });
+    await clickDelete();
 
-    expect(messages[0]).toContain('2 running sessions are using this account right now');
-    expect(messages[0]).toContain('their account directory goes away');
+    expect(messages[0]).toContain('2 sessions are using it right now');
+    expect(messages[0]).toContain('their account directory goes away underneath them');
     expect(deleted).toEqual(['a1']);
   });
 
   test('says nothing about running sessions when there are none', async () => {
     const { messages } = await openPanel({ s3: { accountId: 'other' } });
 
-    await act(async () => { fireEvent.click(screen.getByText('Delete')); });
+    await clickDelete();
 
-    expect(messages[0]).not.toContain('running session');
+    expect(messages[0]).not.toContain('using it right now');
+  });
+
+  /**
+   * The transcripts go with the config directory, and nothing else on disk
+   * records them. A confirmation that only lists what it unsets reads as
+   * reversible, which is how a machine handoff's carried history gets thrown
+   * away by someone tidying up stale accounts.
+   */
+  test('counts the conversations the delete destroys', async () => {
+    const { messages } = await openPanel({}, { sessions: 3, conversations: 12 });
+
+    await clickDelete();
+
+    expect(messages[0]).toContain('permanently deletes 12 saved conversations');
+    expect(messages[0]).toContain('The 3 sessions bound to this account stay in the sidebar');
+    expect(messages[0]).toContain('cannot be resumed');
+  });
+
+  /**
+   * Measuring the cost is a new round-trip standing between the button and the
+   * dialog. If it can reject, it can take the whole delete with it and leave a
+   * button that does nothing when clicked.
+   */
+  test('still offers the delete when the cost cannot be measured', async () => {
+    const deleted = stubApi({});
+    (window as unknown as { electronAPI: { accountRemovalCost: () => Promise<never> } })
+      .electronAPI.accountRemovalCost = () => Promise.reject(new Error('database is locked'));
+    const messages: string[] = [];
+    (window as unknown as { confirm: (m: string) => boolean }).confirm = (m: string) => {
+      messages.push(m);
+      return true;
+    };
+    await act(async () => { render(<ClaudeAccountsPanel />); });
+
+    await clickDelete();
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('removes its saved credentials');
+    expect(messages[0]).not.toContain('permanently deletes');
+    expect(deleted).toEqual(['a1']);
   });
 });
 
@@ -278,5 +327,67 @@ describe('LoginBanner', () => {
   test('an unstarted login claims nothing either', () => {
     render(<LoginBanner completed={false} verified={false} />);
     expect(banner()).toBeNull();
+  });
+});
+
+/**
+ * The confirmation's wording, tested where it is decided rather than through
+ * the panel. Both counts have a singular the plural branch never exercises,
+ * and a zero that has to read as reassurance rather than a warning about
+ * nothing.
+ */
+describe('removalWarning', () => {
+  test('names conversations and sessions in the plural', () => {
+    const text = removalWarning({ sessions: 3, conversations: 12 });
+    expect(text).toContain('permanently deletes 12 saved conversations');
+    expect(text).toContain('The 3 sessions bound to this account stay in the sidebar');
+    expect(text).toContain('they cannot be resumed');
+  });
+
+  test('speaks of one conversation and one session in the singular', () => {
+    const text = removalWarning({ sessions: 1, conversations: 1 });
+    expect(text).toContain('permanently deletes 1 saved conversation.');
+    expect(text).toContain('The session bound to this account stays in the sidebar');
+    expect(text).toContain('its history is gone');
+  });
+
+  // Conversations with nothing bound to them is reachable: the sessions were
+  // deleted, or the transcripts arrived in a bundle. Saying "The 0 sessions"
+  // is the failure this guards.
+  test('reports conversations with no sessions without inventing a session count', () => {
+    const text = removalWarning({ sessions: 0, conversations: 4 });
+    expect(text).toContain('permanently deletes 4 saved conversations.');
+    expect(text).not.toContain('0 sessions');
+    expect(text).not.toContain('bound to this account');
+  });
+
+  test('says plainly when there is nothing to lose', () => {
+    const text = removalWarning({ sessions: 0, conversations: 0 });
+    expect(text).toContain('no saved conversations, so nothing is lost');
+    expect(text).not.toContain('permanently deletes');
+  });
+
+  // A cost we could not measure must not be reported as a cost of zero, which
+  // is the one wrong answer that reads as safe.
+  test('claims nothing when the cost could not be measured', () => {
+    expect(removalWarning(null)).toBe('');
+  });
+});
+
+describe('runningWarning', () => {
+  test('is silent when nothing is running', () => {
+    expect(runningWarning(0)).toBe('');
+  });
+
+  test('agrees with itself in the singular', () => {
+    const text = runningWarning(1);
+    expect(text).toContain('1 session is using it right now');
+    expect(text).toContain('It keeps running, but its account directory goes away underneath it');
+  });
+
+  test('agrees with itself in the plural', () => {
+    const text = runningWarning(2);
+    expect(text).toContain('2 sessions are using it right now');
+    expect(text).toContain('They keep running, but their account directory goes away underneath them');
   });
 });
