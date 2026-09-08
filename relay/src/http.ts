@@ -34,6 +34,8 @@ import {
 import { createDevRoutes } from './dev';
 import { createWebClient } from './web';
 import { clientIp, createRateLimiter, type RateLimiter } from './rate-limit';
+import { isAllowedPushEndpoint } from './push/send';
+import type { Vapid } from './push/vapid';
 import { MAX_JSON_BODY_BYTES } from './server';
 import {
   bundlePath,
@@ -64,6 +66,9 @@ import {
  *   POST /api/shares/redeem           — guest redeems a code (session)
  *   GET  /api/shares                  — guest lists their grants (session)
  *   DEL  /api/shares/:grantId         — owner OR grantee ends a grant (session)
+ *   GET  /api/push/vapid-key          — application-server key to subscribe with
+ *   POST /api/push/subscribe          — register this browser (session)
+ *   POST /api/push/unsubscribe        — drop this browser (session)
  *   PUT  /api/machines/:id/handoff    — machine uploads a sealed handoff
  *   GET  /api/machines/:id/handoff    — what handoff is waiting, if any
  *   GET  /api/machines/:id/handoff/bundle — the sealed bytes
@@ -85,6 +90,23 @@ export interface RelayContext {
   onGrantRedeemed?: (grant: MachineGrant) => void;
   /** Called when a grant is revoked over HTTP, so live sockets can be cut. */
   onGrantRevoked?: (grant: MachineGrant) => void;
+  /**
+   * The application-server identity for web push. Absent in tests that don't
+   * exercise it; the push routes then answer 503 rather than pretending.
+   */
+  vapid?: Vapid;
+  /**
+   * A user's set of push subscriptions changed. The gateway re-sends it to that
+   * user's online agents, which are the things that actually seal payloads —
+   * same HTTP↔WebSocket seam as the grant callbacks above.
+   */
+  onPushSubscriptionsChanged?: (userId: string) => void;
+  /**
+   * Whether a machine's live agent can seal push payloads; null when it is
+   * offline. Without this the client cannot tell "notifications are on" from
+   * "notifications are on and this desktop will never send one".
+   */
+  isPushCapable?: (machineId: string) => boolean | null;
 }
 
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
@@ -97,6 +119,14 @@ const LINK_PER_KEY = 5;
 const CLAIM_PER_IP = 20;
 /** Minting invites is cheap for an owner and pointless to do in bulk. */
 const SHARE_PER_IP = 20;
+/**
+ * Subscribing is a once-per-device act. The window is generous enough for a
+ * browser that re-subscribes on every launch and tight enough that a script
+ * cannot walk the per-user cap with a stream of throwaway endpoints.
+ */
+export const PUSH_PER_IP = 30;
+/** Reading the public key is free and idempotent — this is anti-hammering only. */
+export const PUSH_KEY_PER_IP = 120;
 /** A handoff is a rare, deliberate act, and each one costs the disk a bundle. */
 const HANDOFF_UPLOAD_PER_IP = 5;
 const HANDOFF_UPLOAD_PER_MACHINE = 5;
@@ -113,7 +143,7 @@ const MAX_GRANT_TTL_SECONDS = 24 * 60 * 60;
 const MAX_INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function createRouter(ctx: RelayContext) {
-  const { config, logger, repos, onGrantRedeemed, onGrantRevoked } = ctx;
+  const { config, logger, repos, onGrantRedeemed, onGrantRevoked, onPushSubscriptionsChanged } = ctx;
   const limiter = ctx.rateLimiter ?? createRateLimiter();
   const version = pkg.version ?? '0.0.0';
   const secure = config.isProduction || config.trustProxy;
@@ -180,75 +210,20 @@ export function createRouter(ctx: RelayContext) {
         return json({ ok: true, version, uptime: process.uptime() });
       }
 
-      if (pathname === '/auth/github/login' && method === 'GET') {
-        if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
-        const state = randomToken(16);
-        return new Response(null, {
-          status: 302,
-          headers: {
-            location: buildAuthorizeUrl(githubConfig, state, !!config.allowedGithubOrg),
-            'set-cookie': serializeCookie(OAUTH_STATE_COOKIE, state, { secure, maxAgeSeconds: 600 }),
-          },
-        });
-      }
+      const authed = await authRoutes(req, url, pathname, method);
+      if (authed) return authed;
 
-      if (pathname === '/auth/github/callback' && method === 'GET') {
-        return handleOAuthCallback(url, req);
-      }
+      const account = accountRoutes(req, pathname, method);
+      if (account) return account;
 
-      if (pathname === '/auth/logout' && method === 'POST') {
-        const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
-        if (token) repos.deleteSession(token);
-        return new Response(null, {
-          status: 204,
-          headers: { 'set-cookie': clearCookie(SESSION_COOKIE, secure) },
-        });
-      }
+      const linked = await linkRoutes(req, peerIp, pathname, method);
+      if (linked) return linked;
 
-      if (pathname === '/api/me' && method === 'GET') {
-        const user = currentUser(req);
-        if (!user) return json({ error: 'unauthorized' }, 401);
-        return json({ user: publicUser(user) });
-      }
+      const shared = await shareRoutes(req, peerIp, pathname, method);
+      if (shared) return shared;
 
-      if (pathname === '/api/machines' && method === 'GET') {
-        const user = currentUser(req);
-        if (!user) return json({ error: 'unauthorized' }, 401);
-        return json({ machines: machinesFor(user) });
-      }
-
-      if (pathname === '/link' && method === 'POST') {
-        return limited(req, peerIp, 'link', LINK_PER_IP) ?? (await handleLink(req));
-      }
-
-      if (pathname === '/link/claim' && method === 'POST') {
-        return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
-      }
-
-      // --- sharing (M5.2) ---
-
-      const shares = matchMachineShares(pathname);
-      if (shares) {
-        if (method === 'POST' && !shares.inviteId) {
-          return limited(req, peerIp, 'share', SHARE_PER_IP) ?? (await handleCreateShare(req, shares.machineId));
-        }
-        if (method === 'GET' && !shares.inviteId) return handleListShares(req, shares.machineId);
-        if (method === 'DELETE' && shares.inviteId) {
-          return handleRevokeInvite(req, shares.machineId, shares.inviteId);
-        }
-      }
-
-      if (pathname === '/api/shares' && method === 'GET') {
-        return handleListMyShares(req);
-      }
-
-      if (pathname === '/api/shares/redeem' && method === 'POST') {
-        // Code-guessing surface, same as /link/claim.
-        return limited(req, peerIp, 'redeem', CLAIM_PER_IP) ?? (await handleRedeem(req));
-      }
-
-      const grantId = matchShareGrant(pathname);
-      if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
+      const pushed = await pushRoutes(req, peerIp, pathname, method);
+      if (pushed) return pushed;
 
       // --- machine handoff ---
 
@@ -284,6 +259,99 @@ export function createRouter(ctx: RelayContext) {
       return json({ error: 'internal_error' }, 500);
     }
   };
+
+  /** GitHub OAuth and the session cookie. Null when the path is not one of these. */
+  async function authRoutes(req: Request, url: URL, pathname: string, method: string): Promise<Response | null> {
+    if (pathname === '/auth/github/login' && method === 'GET') {
+      if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
+      const state = randomToken(16);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: buildAuthorizeUrl(githubConfig, state, !!config.allowedGithubOrg),
+          'set-cookie': serializeCookie(OAUTH_STATE_COOKIE, state, { secure, maxAgeSeconds: 600 }),
+        },
+      });
+    }
+    if (pathname === '/auth/github/callback' && method === 'GET') return handleOAuthCallback(url, req);
+    if (pathname === '/auth/logout' && method === 'POST') {
+      const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
+      if (token) repos.deleteSession(token);
+      return new Response(null, { status: 204, headers: { 'set-cookie': clearCookie(SESSION_COOKIE, secure) } });
+    }
+    return null;
+  }
+
+  /** What the signed-in user is and what they can reach. */
+  function accountRoutes(req: Request, pathname: string, method: string): Response | null {
+    if (method !== 'GET') return null;
+    if (pathname !== '/api/me' && pathname !== '/api/machines') return null;
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    return pathname === '/api/me' ? json({ user: publicUser(user) }) : json({ machines: machinesFor(user) });
+  }
+
+  /** Machine linking. Both routes carry a secret, so both are rate limited. */
+  async function linkRoutes(
+    req: Request,
+    peerIp: string | null,
+    pathname: string,
+    method: string,
+  ): Promise<Response | null> {
+    if (pathname === '/link' && method === 'POST') {
+      return limited(req, peerIp, 'link', LINK_PER_IP) ?? (await handleLink(req));
+    }
+    if (pathname === '/link/claim' && method === 'POST') {
+      return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
+    }
+    return null;
+  }
+
+  /** Sharing (M5.2). Null when the path is not one of these. */
+  async function shareRoutes(
+    req: Request,
+    peerIp: string | null,
+    pathname: string,
+    method: string,
+  ): Promise<Response | null> {
+    const shares = matchMachineShares(pathname);
+    if (shares) {
+      if (method === 'POST' && !shares.inviteId) {
+        return limited(req, peerIp, 'share', SHARE_PER_IP) ?? (await handleCreateShare(req, shares.machineId));
+      }
+      if (method === 'GET' && !shares.inviteId) return handleListShares(req, shares.machineId);
+      if (method === 'DELETE' && shares.inviteId) return handleRevokeInvite(req, shares.machineId, shares.inviteId);
+    }
+
+    if (pathname === '/api/shares' && method === 'GET') return handleListMyShares(req);
+    if (pathname === '/api/shares/redeem' && method === 'POST') {
+      // Code-guessing surface, same as /link/claim.
+      return limited(req, peerIp, 'redeem', CLAIM_PER_IP) ?? (await handleRedeem(req));
+    }
+
+    const grantId = matchShareGrant(pathname);
+    if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
+    return null;
+  }
+
+  /** Web push (M5.3). Null when the path is not one of these. */
+  async function pushRoutes(
+    req: Request,
+    peerIp: string | null,
+    pathname: string,
+    method: string,
+  ): Promise<Response | null> {
+    if (pathname === '/api/push/vapid-key' && method === 'GET') {
+      return limited(req, peerIp, 'push:key', PUSH_KEY_PER_IP) ?? (await handleVapidKey(req));
+    }
+    if (pathname === '/api/push/subscribe' && method === 'POST') {
+      return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushSubscribe(req));
+    }
+    if (pathname === '/api/push/unsubscribe' && method === 'POST') {
+      return limited(req, peerIp, 'push', PUSH_PER_IP) ?? (await handlePushUnsubscribe(req));
+    }
+    return null;
+  }
 
   async function handleOAuthCallback(url: URL, req: Request): Promise<Response> {
     if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
@@ -406,6 +474,9 @@ export function createRouter(ctx: RelayContext) {
     const owned = repos.listMachines(user.id).map((m) => ({
       ...publicMachine(m),
       relation: 'owner' as const,
+      // Only for machines you own: a guest never triggers a notification, so
+      // the answer would be noise on their row.
+      pushCapable: ctx.isPushCapable ? ctx.isPushCapable(m.id) : null,
       ownerName: null as string | null,
       grantId: null as string | null,
       role: null as string | null,
@@ -427,6 +498,7 @@ export function createRouter(ctx: RelayContext) {
       shared.push({
         ...publicMachine(machine),
         relation: 'grantee' as const,
+        pushCapable: null,
         // Label by person: "machine" is owner vocabulary.
         ownerName: owner?.display_name ?? null,
         grantId: grant.id,
@@ -590,6 +662,78 @@ export function createRouter(ctx: RelayContext) {
     return new Response(null, { status: 204 });
   }
 
+  // --- web push (M5.3) ---
+
+  /**
+   * The application-server public key a browser subscribes with. Session-gated
+   * though the value is public: only a signed-in browser has any use for it,
+   * and an anonymous surface is the cheapest way to fingerprint a relay.
+   */
+  async function handleVapidKey(req: Request): Promise<Response> {
+    if (!currentUser(req)) return json({ error: 'unauthorized' }, 401);
+    if (!ctx.vapid) return json({ error: 'push_unavailable' }, 503);
+    return json({ key: await ctx.vapid.publicKey() });
+  }
+
+  async function handlePushSubscribe(req: Request): Promise<Response> {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+
+    const body = await readJson(req);
+    if (!body) return json({ error: 'invalid_json' }, 400);
+    const { endpoint, keys } = body as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+    const p256dh = keys?.p256dh;
+    const auth = keys?.auth;
+
+    if (typeof endpoint !== 'string' || typeof p256dh !== 'string' || typeof auth !== 'string') {
+      return json({ error: 'invalid_request' }, 400);
+    }
+    // The endpoint is a URL this server will later make a request TO, so it is
+    // checked before it is stored, not before it is used. See `isAllowedPushEndpoint`.
+    if (!isAllowedPushEndpoint(endpoint)) return json({ error: 'invalid_endpoint' }, 400);
+    // Sized here so a malformed pair fails at subscribe time — where a person
+    // can see it — rather than as an unexplained delivery failure much later.
+    if (!isUncompressedP256Point(p256dh)) return json({ error: 'invalid_keys' }, 400);
+    if (!isAuthSecret(auth)) return json({ error: 'invalid_keys' }, 400);
+
+    const saved = repos.upsertPushSubscription(user.id, { endpoint, p256dh, auth });
+    if (!saved) {
+      logger.warn('push subscription refused: per-user cap reached', { userId: user.id });
+      return json({ error: 'too_many_subscriptions' }, 409);
+    }
+
+    logger.info('push subscription registered', { userId: user.id });
+    onPushSubscriptionsChanged?.(user.id);
+    // A shared device changed hands. The previous owner's agents are still
+    // sealing to it, and this is the only thing that tells them to stop.
+    if (saved.displacedUserId) {
+      logger.info('push endpoint moved between accounts', { to: user.id });
+      onPushSubscriptionsChanged?.(saved.displacedUserId);
+    }
+    return new Response(null, { status: 204 });
+  }
+
+  async function handlePushUnsubscribe(req: Request): Promise<Response> {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+
+    const body = await readJson(req);
+    const endpoint = body && typeof (body as { endpoint?: unknown }).endpoint === 'string'
+      ? (body as { endpoint: string }).endpoint
+      : null;
+    if (!endpoint) return json({ error: 'invalid_request' }, 400);
+
+    // 204 either way. The browser has already dropped its end by the time it
+    // calls this, so "there was nothing to remove" is a success from where the
+    // caller stands — and distinguishing the two would confirm whether a given
+    // endpoint is registered to the signed-in account.
+    if (repos.deletePushSubscriptionByEndpoint(user.id, endpoint)) {
+      logger.info('push subscription removed', { userId: user.id });
+      onPushSubscriptionsChanged?.(user.id);
+    }
+    return new Response(null, { status: 204 });
+  }
+
   // --- machine handoff ---
 
   /**
@@ -738,6 +882,18 @@ export function createRouter(ctx: RelayContext) {
     logger.info('handoff cleared after restore', { machineId });
     return new Response(null, { status: 204 });
   }
+}
+
+/** The subscription's public key: an uncompressed P-256 point, base64url. */
+function isUncompressedP256Point(value: string): boolean {
+  const bytes = fromBase64(value);
+  return !!bytes && bytes.length === 65 && bytes[0] === 0x04;
+}
+
+/** The subscription's auth secret: 16 bytes, base64url (RFC 8291 §3.2). */
+function isAuthSecret(value: string): boolean {
+  const bytes = fromBase64(value);
+  return !!bytes && bytes.length === 16;
 }
 
 /** `/api/machines/:machineId/shares[/:inviteId]` */
