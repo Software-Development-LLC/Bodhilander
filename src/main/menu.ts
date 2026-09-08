@@ -179,10 +179,10 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
         ...(isMac ? [] : [
           { type: 'separator' as const },
           {
-            // Hidden menu item to register Ctrl+, accelerator on Windows/Linux
-            label: 'Settings',
+            // Mirrors the macOS app menu's Preferences, which has no menu bar to live in
+            // off macOS. ',' is not a terminal key, so CmdOrCtrl is safe here.
+            label: 'Settings...',
             accelerator: 'CmdOrCtrl+,',
-            visible: false,
             click: () => {
               if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('open-settings');

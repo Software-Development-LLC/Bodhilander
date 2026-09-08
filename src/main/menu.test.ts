@@ -35,9 +35,30 @@ mock.module('electron', () => ({
 
 const { createApplicationMenu } = await import('./menu');
 
+const sent: string[] = [];
+
 function buildMenu(): void {
-  const fakeWindow = { webContents: { send: () => {} } } as never;
+  const fakeWindow = {
+    isDestroyed: () => false,
+    webContents: { send: (channel: string) => { sent.push(channel); } },
+  } as never;
   createApplicationMenu(fakeWindow);
+}
+
+/**
+ * The app menu is macOS-only, so everything it holds has to be mirrored
+ * elsewhere off macOS. Building under a forced platform is the only way to see
+ * that other branch from here.
+ */
+function sessionMenuOn(platform: string): MenuItem[] {
+  const real = process.platform;
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  try {
+    buildMenu();
+    return template.find((m) => m.label === 'Session')?.submenu ?? [];
+  } finally {
+    Object.defineProperty(process, 'platform', { value: real, configurable: true });
+  }
 }
 
 function sessionMenu(): MenuItem[] {
@@ -77,5 +98,30 @@ describe('the Session menu', () => {
     for (const label of ['Export…', 'Import…']) {
       expect((itemLabelled(label) as { accelerator?: string }).accelerator).toBeUndefined();
     }
+  });
+});
+
+describe('reaching Settings without the macOS app menu', () => {
+  for (const platform of ['win32', 'linux']) {
+    test(`${platform} shows Settings in a menu rather than hiding it behind a chord`, () => {
+      const item = sessionMenuOn(platform).find((i) => i.label?.startsWith('Settings'));
+
+      expect(item).toBeDefined();
+      // The bug was an item that existed only to register its accelerator, so
+      // asserting it exists proves nothing on its own.
+      expect((item as { visible?: boolean }).visible).not.toBe(false);
+
+      sent.length = 0;
+      item!.click!();
+      expect(sent).toContain('open-settings');
+    });
+  }
+
+  test('macOS keeps it in the app menu and does not duplicate it into Session', () => {
+    const labels = sessionMenuOn('darwin').map((i) => i.label);
+    expect(labels.filter((l) => l?.startsWith('Settings'))).toHaveLength(0);
+
+    const appMenu = template.find((m) => m.label === 'Bodhilander')?.submenu ?? [];
+    expect(appMenu.map((i) => i.label)).toContain('Preferences...');
   });
 });
