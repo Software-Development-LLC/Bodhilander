@@ -110,16 +110,12 @@ describe('reaching Settings without the macOS app menu', () => {
       // The bug was an item that existed only to register its accelerator, so
       // asserting it exists proves nothing on its own.
       expect((item as { visible?: boolean }).visible).not.toBe(false);
+
+      sent.length = 0;
+      item!.click!();
+      expect(sent).toContain('open-settings');
     });
   }
-
-  test('clicking it opens Settings', () => {
-    sent.length = 0;
-    const item = sessionMenuOn('win32').find((i) => i.label?.startsWith('Settings'));
-    item!.click!();
-
-    expect(sent).toContain('open-settings');
-  });
 
   test('macOS keeps it in the app menu and does not duplicate it into Session', () => {
     const labels = sessionMenuOn('darwin').map((i) => i.label);
