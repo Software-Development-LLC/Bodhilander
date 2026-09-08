@@ -8,6 +8,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
+import * as os from 'node:os';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
@@ -71,7 +72,10 @@ function freshDb(): Database {
   return d;
 }
 
-function insertSession(id: string, workingDir = '/tmp'): void {
+/** /start refuses a session whose folder is gone, so this has to exist. */
+const PRESENT_DIR = os.tmpdir();
+
+function insertSession(id: string, workingDir = PRESENT_DIR): void {
   db.prepare(`
     INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at)
     VALUES (?, 'g1', 'test', ?, 'idle', 'claude', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
@@ -259,7 +263,7 @@ describe('POST /sessions/:id/start', () => {
 
   test('a session whose folder is present still starts', async () => {
     const id = randomUUID();
-    insertSession(id, '/tmp');
+    insertSession(id, PRESENT_DIR);
     const spawned: string[] = [];
     patchable.getSession = () => undefined;
     patchable.createSession = (startedId: string) => { spawned.push(startedId); };
@@ -276,7 +280,7 @@ describe('POST /sessions/:id/start', () => {
 
   test('a spawn failure reports what actually went wrong', async () => {
     const id = randomUUID();
-    insertSession(id, '/tmp');
+    insertSession(id, PRESENT_DIR);
     patchable.getSession = () => undefined;
     patchable.createSession = () => { throw new Error('Shell not found: /bin/nope'); };
 

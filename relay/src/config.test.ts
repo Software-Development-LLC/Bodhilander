@@ -4,6 +4,8 @@
  * worth being able to see.
  */
 import { describe, expect, test } from 'bun:test';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { ConfigError, loadConfig } from './config';
 
 const BASE = { NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test' };
@@ -17,8 +19,13 @@ describe('handoff storage limits', () => {
   });
 
   test('put bundles beside the database, which is what the volume holds', () => {
-    const { config } = loadConfig({ ...BASE, DB_PATH: '/data/relay.db' });
-    expect(config.handoffDir).toBe('/data/handoffs');
+    // Stated as two independent facts rather than one path literal: the
+    // config resolves the db path, so a literal only holds on the platform
+    // that shaped it.
+    const dbPath = path.join(os.tmpdir(), 'relay-config-test', 'relay.db');
+    const { config } = loadConfig({ ...BASE, DB_PATH: dbPath });
+    expect(path.dirname(config.handoffDir)).toBe(path.dirname(dbPath));
+    expect(path.basename(config.handoffDir)).toBe('handoffs');
     expect(loadConfig({ ...BASE, HANDOFF_DIR: '/elsewhere' }).config.handoffDir).toBe('/elsewhere');
   });
 

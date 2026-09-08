@@ -18,8 +18,15 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Windows is a shipped platform, and its failures — path separators, 8.3
+    # short paths, POSIX-only shell syntax — are invisible from Linux.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows runners are markedly slower at install and native-free spawns.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
