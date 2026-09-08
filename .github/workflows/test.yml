@@ -18,8 +18,18 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Windows is a shipped platform, and until this ran there nothing stood
+    # between a Windows-only regression and a user: six tests failed there for
+    # months while this gate was green. Path handling is where it goes wrong —
+    # POSIX literals, `/tmp`, `$VAR` in a shell command — and none of it is
+    # visible from Linux.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows runners are markedly slower at install and native-free spawns.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 

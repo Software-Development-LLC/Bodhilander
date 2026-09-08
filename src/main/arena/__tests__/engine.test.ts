@@ -92,7 +92,10 @@ const FAKE_PROVIDERS: Record<string, any> = {
   keyed: {
     id: 'keyed',
     arena: {
-      buildCommand: () => 'echo "key=$FAKE_PROVIDER_KEY"',
+      // Contestants run through the user's shell, and `$VAR` is POSIX syntax
+      // that cmd.exe leaves as literal text — so reading the variable through
+      // node keeps this about env merging rather than about which shell ran it.
+      buildCommand: () => `node -e "console.log('key=' + (process.env.FAKE_PROVIDER_KEY || ''))"`,
       createParser: textParser,
     },
   },

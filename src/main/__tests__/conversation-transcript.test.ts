@@ -44,12 +44,20 @@ function writeTranscript(dir: string, slug: string, uuid: string, body: string):
   return file;
 }
 
-/** Every file under `root`, relative — used to prove nothing was written. */
+/**
+ * Every file under `root`, relative — used to prove nothing was written.
+ * Separators are normalised because these paths are only ever compared against
+ * literals in this file; `path.relative` hands back backslashes on Windows,
+ * which would fail the comparison without anything being wrong.
+ */
 function tree(root: string): string[] {
   if (!fs.existsSync(root)) return [];
   const out: string[] = [];
   for (const entry of fs.readdirSync(root, { withFileTypes: true, recursive: true }) as fs.Dirent[]) {
-    if (entry.isFile()) out.push(path.relative(root, path.join(entry.parentPath ?? root, entry.name)));
+    if (entry.isFile()) {
+      const rel = path.relative(root, path.join(entry.parentPath ?? root, entry.name));
+      out.push(rel.split(path.sep).join('/'));
+    }
   }
   return out.sort();
 }
