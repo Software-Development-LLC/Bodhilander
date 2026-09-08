@@ -1058,11 +1058,11 @@ safeHandle('handoff:decline', (handoffId: string) =>
 // What the last restore left outstanding, kept so it can be opened again
 safeHandle('arrival:read', () => readArrival());
 safeHandle('arrival:dismiss', () => dismissArrival());
-safeHandle('arrival:resolveRelink', (sessionId: string, workingDir: string) => {
+safeHandle('arrival:resolveRelink', (sessionId: string, workingDir: string, kind?: 'session' | 'group') => {
   const id = (sessionId ?? '').toString().trim();
   const dir = (workingDir ?? '').toString().trim();
   if (!id || !dir) throw new Error('A session id and a folder are both required');
-  const report = resolveRelink(id, dir);
+  const report = resolveRelink(id, dir, undefined, kind === 'group' ? 'group' : 'session');
   // Every renderer's session list derives `workingDirMissing` in main, so a
   // relink is only visible once they reload. This is the broadcast they
   // already listen to.

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { ArrivalReport, ClaudeAccount } from '../../shared/types';
+import type { ArrivalRelinkItem, ArrivalReport, ClaudeAccount } from '../../shared/types';
 import { ClaudeAccountLoginModal } from './ClaudeAccountsModal';
 import { accountsNeedingSignIn } from '../../shared/arrival';
 import './ArrivalReport.css';
@@ -27,13 +27,30 @@ export interface ArrivalReportViewProps {
   /** Run the sign-in flow for one restored account. */
   onSignIn: (accountId: string) => Promise<void> | void;
   /** Point one session at a folder on this machine. */
-  onRelink: (sessionId: string, currentDir: string) => Promise<void> | void;
+  onRelink: (sessionId: string, currentDir: string, kind: 'session' | 'group') => Promise<void> | void;
   /** Surfaced above the actions when something the report tried did not work. */
   error?: string | null;
 }
 
-function relinkLabel(count: number): string {
-  return count === 1 ? '1 session needs its folder' : `${count} sessions need their folder`;
+/**
+ * Sessions and group roots are both listed, so the heading counts "items"
+ * unless they are all of one kind — where naming the kind is more use than
+ * being uniformly vague.
+ */
+function relinkLabel(items: ArrivalRelinkItem[]): string {
+  const groups = items.filter((item) => item.kind === 'group').length;
+  let noun = 'item';
+  if (groups === 0) noun = 'session';
+  else if (groups === items.length) noun = 'group';
+
+  return items.length === 1
+    ? `1 ${noun} needs its folder`
+    : `${items.length} ${noun}s need their folder`;
+}
+
+/** A group row has to say it is one: the fix is the same, the stakes are not. */
+function relinkKey(item: ArrivalRelinkItem): string {
+  return `${item.kind ?? 'session'}:${item.sessionId}`;
 }
 
 export const ArrivalReportView: React.FC<ArrivalReportViewProps> = ({
@@ -91,30 +108,34 @@ export const ArrivalReportView: React.FC<ArrivalReportViewProps> = ({
       </section>
 
       {report.needsRelink.length > 0 && (
-        <section className="arrival-section" aria-label="Sessions needing a folder">
-          <h4>{relinkLabel(report.needsRelink.length)}</h4>
+        <section className="arrival-section" aria-label="Sessions and groups needing a folder">
+          <h4>{relinkLabel(report.needsRelink)}</h4>
           <p className="arrival-muted">
             These arrived pointing at a folder that is not on this machine. Point each one at its
-            folder here and it becomes launchable again.
+            folder here. A session becomes launchable again; a group is where its next session
+            would start, so fixing the root fixes every session made under it later.
           </p>
           <ul className="arrival-list">
             {report.needsRelink.map((item) => (
-              <li key={item.sessionId}>
-                <span className="arrival-name">{item.name}</span>
+              <li key={relinkKey(item)}>
+                <span className="arrival-name">
+                  {item.name}
+                  {item.kind === 'group' && <span className="arrival-kind"> (group)</span>}
+                </span>
                 <span className="arrival-path">{item.workingDir}</span>
                 <button
                   className="btn"
                   disabled={relinking !== null}
                   onClick={async () => {
-                    setRelinking(item.sessionId);
+                    setRelinking(relinkKey(item));
                     try {
-                      await onRelink(item.sessionId, item.workingDir);
+                      await onRelink(item.sessionId, item.workingDir, item.kind ?? 'session');
                     } finally {
                       setRelinking(null);
                     }
                   }}
                 >
-                  {relinking === item.sessionId ? 'Setting…' : 'Set Folder…'}
+                  {relinking === relinkKey(item) ? 'Setting…' : 'Set Folder…'}
                 </button>
               </li>
             ))}
@@ -239,7 +260,7 @@ export const ArrivalReportModal: React.FC<ArrivalReportProps> = ({ report, onClo
           setLoginFlow(await window.electronAPI.resumeAccountLogin(accountId));
         }}
         error={error}
-        onRelink={async (sessionId, currentDir) => {
+        onRelink={async (sessionId, currentDir, kind) => {
           setError(null);
           try {
             // Opened at the folder the session is looking for. On a restore
@@ -251,7 +272,7 @@ export const ArrivalReportModal: React.FC<ArrivalReportProps> = ({ report, onClo
             // when the last one is resolved: the counts are still worth
             // reading, and a dialog that vanishes as you finish with it reads
             // as a crash. It stops being *raised* on the next launch instead.
-            const next = await window.electronAPI.arrivalResolveRelink(sessionId, chosen);
+            const next = await window.electronAPI.arrivalResolveRelink(sessionId, chosen, kind);
             if (next) setLive(next);
           } catch (err) {
             // Without this the rejection is unhandled, the button quietly

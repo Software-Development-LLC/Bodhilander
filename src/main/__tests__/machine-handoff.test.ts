@@ -320,8 +320,13 @@ describe('restoring one', () => {
     // not one that can start — and the report says so rather than reporting
     // a restore of one session and leaving the rest to be discovered.
     expect(report!.resumable).toBe(0);
-    expect(report!.needsRelink.map((r) => r.sessionId)).toEqual(['s1']);
+    // The group root is missing too, and is listed beside the session: nothing
+    // fails until someone creates a session under it, which is precisely why
+    // waiting for a failure is no way to find out.
+    expect(report!.needsRelink.map((r) => `${r.kind}:${r.sessionId}`))
+      .toEqual(['session:s1', 'group:g1']);
   });
+
 
   test('reports only the accounts the bundle carried, not every account here', async () => {
     const { bytes, phrase } = preparedElsewhere();
@@ -347,16 +352,16 @@ describe('restoring one', () => {
     messageBoxResponses = [1];
     await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
 
-    expect(readArrival()!.needsRelink.map((r) => r.sessionId)).toEqual(['s1']);
     const here = path.join(tmp, 'dst', 'api');
     fs.mkdirSync(here, { recursive: true });
 
     const report = resolveRelink('s1', here);
 
-    // Both halves, or the report is describing work that is already done.
-    expect(report!.needsRelink).toEqual([]);
+    // Both halves, or the report is describing work that is already done. The
+    // group row survives: resolving a session says nothing about a group root.
+    expect(report!.needsRelink.map((r) => r.kind)).toEqual(['group']);
     expect(report!.resumable).toBe(1);
-    expect(readArrival()!.needsRelink).toEqual([]);
+    expect(readArrival()!.needsRelink.map((r) => r.kind)).toEqual(['group']);
     // The directory is the whole fix: `workingDirMissing` is derived from the
     // filesystem on every read, so a session pointed at a real folder stops
     // being parked without anything touching its state.
@@ -365,6 +370,31 @@ describe('restoring one', () => {
     };
     expect(row.working_dir).toBe(here);
     expect(sessionsRepo.getSession('s1')!.workingDirMissing).toBe(false);
+  });
+
+  /**
+   * The same act on a group: it writes the group row, not a session row of the
+   * same id, and strikes only the group off. Fixing a root is worth more than
+   * fixing one session — every session made under it later inherits it.
+   */
+  test('relinking a group root writes the group and leaves the session listed', async () => {
+    const { bytes, phrase } = preparedElsewhere();
+    const relay = standIn(bytes);
+    messageBoxResponses = [1];
+    await restoreMachineHandoff(relay.transport, phrase, legacyDir, noSuggestions);
+
+    const here = path.join(tmp, 'dst', 'work');
+    fs.mkdirSync(here, { recursive: true });
+
+    const report = resolveRelink('g1', here, undefined, 'group');
+
+    expect(report!.needsRelink.map((r) => r.kind)).toEqual(['session']);
+    // The session was never touched, so nothing about it became resumable.
+    expect(report!.resumable).toBe(0);
+    const group = db.query('SELECT working_dir FROM groups WHERE id = ?').get('g1') as {
+      working_dir: string;
+    };
+    expect(group.working_dir).toBe(here);
   });
 
   test('resolving the same session twice cannot walk the resumable count past the truth', async () => {

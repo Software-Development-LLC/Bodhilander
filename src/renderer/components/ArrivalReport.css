@@ -108,3 +108,8 @@
   gap: 8px;
   margin-top: 20px;
 }
+
+.arrival-kind {
+  opacity: 0.65;
+  font-weight: normal;
+}

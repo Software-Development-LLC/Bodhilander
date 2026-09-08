@@ -136,7 +136,7 @@ describe('what it says', () => {
 
   test('lists each session that cannot start, with the folder it looked for', () => {
     view();
-    const section = screen.getByRole('region', { name: 'Sessions needing a folder' });
+    const section = screen.getByRole('region', { name: 'Sessions and groups needing a folder' });
 
     expect(section.textContent).toContain('api');
     expect(section.textContent).toContain('/Users/will/Work/api');
@@ -166,7 +166,7 @@ describe('what it says', () => {
   test('a restore with nothing outstanding shows no job lists at all', () => {
     view({ ...REPORT, needsRelink: [], accounts: [{ accountId: 'a2', label: 'p', loggedIn: true }], providersNeedingKeys: [] });
 
-    expect(screen.queryByRole('region', { name: 'Sessions needing a folder' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Sessions and groups needing a folder' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Accounts needing a sign-in' })).toBeNull();
     expect(screen.queryByRole('region', { name: 'Provider keys to re-enter' })).toBeNull();
     // The counts still stand: this is a report, not only a to-do list.
@@ -243,12 +243,12 @@ describe('relinking a session from the report', () => {
 
   test('drops the row, and follows the count in the heading', async () => {
     render(<ArrivalReportModal report={REPORT} onClosed={() => {}} />);
-    expect(screen.getByRole('region', { name: 'Sessions needing a folder' }).textContent)
+    expect(screen.getByRole('region', { name: 'Sessions and groups needing a folder' }).textContent)
       .toContain('2 sessions need their folder');
 
     await clickRelink();
 
-    const section = screen.getByRole('region', { name: 'Sessions needing a folder' });
+    const section = screen.getByRole('region', { name: 'Sessions and groups needing a folder' });
     // Redrawn from what main stored, not from a local guess at it.
     expect(section.textContent).toContain('1 session needs its folder');
     expect(section.textContent).not.toContain('api');
@@ -262,7 +262,7 @@ describe('relinking a session from the report', () => {
     pickedDir = '/home/will/Work/web';
     await clickRelink();
 
-    expect(screen.queryByRole('region', { name: 'Sessions needing a folder' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Sessions and groups needing a folder' })).toBeNull();
     // Deliberately still open: the counts are worth reading, and a dialog that
     // vanishes as you finish with it reads as a crash. It stops being *raised*
     // on the next launch instead, which is the launch check's job.
@@ -282,7 +282,7 @@ describe('relinking a session from the report', () => {
     // re-enabling and the row still sitting there — which reads as the button
     // not working rather than as the folder being unusable.
     expect(screen.getByRole('alert').textContent).toContain('EACCES');
-    expect(screen.getByRole('region', { name: 'Sessions needing a folder' }).textContent)
+    expect(screen.getByRole('region', { name: 'Sessions and groups needing a folder' }).textContent)
       .toContain('2 sessions need their folder');
   });
 
@@ -311,7 +311,7 @@ describe('relinking a session from the report', () => {
     await clickRelink();
 
     expect(relinked).toEqual([]);
-    expect(screen.getByRole('region', { name: 'Sessions needing a folder' }).textContent)
+    expect(screen.getByRole('region', { name: 'Sessions and groups needing a folder' }).textContent)
       .toContain('2 sessions need their folder');
   });
 });
@@ -358,5 +358,77 @@ describe('signing in from the report', () => {
     render(<ArrivalReportModal report={null} onClosed={() => {}} />);
 
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+/**
+ * Group roots are listed beside sessions, so the row has to say which it is
+ * and the click has to carry that through — a group id sent as a session would
+ * write the wrong row, or no row at all.
+ */
+describe('group roots in the relink list', () => {
+  test('marks the group row and reports its kind on click', async () => {
+    const calls: Array<[string, string, string]> = [];
+    render(
+      <ArrivalReportView
+        report={{
+          ...REPORT,
+          needsRelink: [
+            { kind: 'session', sessionId: 's1', name: 'api', workingDir: '/Users/will/Work/api' },
+            { kind: 'group', sessionId: 'g1', name: 'Work', workingDir: '/Users/will/Work' },
+          ],
+        }}
+        onClose={() => {}}
+        onDismiss={() => {}}
+        onSignIn={() => {}}
+        onRelink={(id, dir, kind) => { calls.push([id, dir, kind]); }}
+      />
+    );
+
+    // Only the group is marked; a session row saying "(group)" would be worse
+    // than no marking at all.
+    expect(screen.getAllByText('(group)')).toHaveLength(1);
+
+    const buttons = screen.getAllByText('Set Folder…');
+    await act(async () => { fireEvent.click(buttons[1]); });
+
+    expect(calls).toEqual([['g1', '/Users/will/Work', 'group']]);
+  });
+
+  test('names the mixed list without calling a group a session', () => {
+    render(
+      <ArrivalReportView
+        report={{
+          ...REPORT,
+          needsRelink: [
+            { kind: 'session', sessionId: 's1', name: 'api', workingDir: '/a' },
+            { kind: 'group', sessionId: 'g1', name: 'Work', workingDir: '/b' },
+          ],
+        }}
+        onClose={() => {}}
+        onDismiss={() => {}}
+        onSignIn={() => {}}
+        onRelink={() => {}}
+      />
+    );
+
+    expect(screen.getByText('2 items need their folder')).toBeTruthy();
+  });
+
+  test('a list that is all groups says so', () => {
+    render(
+      <ArrivalReportView
+        report={{
+          ...REPORT,
+          needsRelink: [{ kind: 'group', sessionId: 'g1', name: 'Work', workingDir: '/b' }],
+        }}
+        onClose={() => {}}
+        onDismiss={() => {}}
+        onSignIn={() => {}}
+        onRelink={() => {}}
+      />
+    );
+
+    expect(screen.getByText('1 group needs its folder')).toBeTruthy();
   });
 });

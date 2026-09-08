@@ -62,6 +62,12 @@ export interface ImportOutcome {
   skippedSessions: number;
   /** Restored sessions whose working directory is not on this machine. */
   needsRelink: string[];
+  /**
+   * Restored groups whose working directory is not on this machine. Kept apart
+   * from the sessions because only sessions bear on how many conversations are
+   * resumable — a group root is where the NEXT session would be created.
+   */
+  groupsNeedingRelink: string[];
 }
 
 interface ParsedBundle {
@@ -140,6 +146,7 @@ interface RowCounts {
   skippedGroups: number;
   skippedSessions: number;
   needsRelink: string[];
+  groupsNeedingRelink: string[];
 }
 
 /**
@@ -171,6 +178,7 @@ function knownAccountIds(db: Db, tables: PortableTables): Set<string> {
 }
 
 function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, groupIds: Set<string>) {
+  const exists = options.directoryExists ?? ((dir: string) => fs.existsSync(dir));
   const accounts = knownAccountIds(db, tables);
   const insert = db.prepare(`
     INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id)
@@ -179,17 +187,25 @@ function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, g
 
   let inserted = 0;
   let skipped = 0;
+  const needsRelink: string[] = [];
+
   for (const group of tables.groups) {
     if (groupIds.has(group.id)) {
       skipped++;
       continue;
     }
+    const workingDir = remapWorkingDir(group.workingDir ?? '', options.mappings);
+    // A group with no directory at all is not broken — it is a plain folder in
+    // the sidebar. Only one that names a directory this machine does not have
+    // is something the arrival report has to raise.
+    if (workingDir !== '' && !exists(workingDir)) needsRelink.push(group.id);
+
     const accountId = (group as { claudeAccountId?: string | null }).claudeAccountId;
     insert.run(
       group.id,
       group.name,
       group.color ?? '#888888',
-      remapWorkingDir(group.workingDir ?? '', options.mappings),
+      workingDir,
       group.order ?? 0,
       group.createdAt,
       group.parentId ?? null,
@@ -199,7 +215,7 @@ function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, g
     groupIds.add(group.id);
     inserted++;
   }
-  return { inserted, skipped };
+  return { inserted, skipped, needsRelink };
 }
 
 function restoreSessions(
@@ -389,6 +405,7 @@ function restoreRows(db: Db, tables: PortableTables, options: ImportOptions): Ro
     skippedGroups: groups.skipped,
     skippedSessions: sessions.skipped,
     needsRelink: sessions.needsRelink,
+    groupsNeedingRelink: groups.needsRelink,
   };
 }
 
