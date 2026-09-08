@@ -16,7 +16,7 @@
 import React from 'react';
 import { describe, expect, test, afterEach } from 'bun:test';
 import { act, render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { AccountRow, ClaudeAccountsPanel, LoginBanner, LoginHint } from '../ClaudeAccountsModal';
+import { AccountRow, ClaudeAccountsPanel, LoginBanner, LoginHint, removalWarning, runningWarning } from '../ClaudeAccountsModal';
 import { ClaudeAccount } from '../../../shared/types';
 
 afterEach(cleanup);
@@ -220,23 +220,28 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
     expect(messages[0]).toContain('cannot be resumed');
   });
 
-  test('speaks of one conversation and one session in the singular', async () => {
-    const { messages } = await openPanel({}, { sessions: 1, conversations: 1 });
+  /**
+   * Measuring the cost is a new round-trip standing between the button and the
+   * dialog. If it can reject, it can take the whole delete with it and leave a
+   * button that does nothing when clicked.
+   */
+  test('still offers the delete when the cost cannot be measured', async () => {
+    const deleted = stubApi({});
+    (window as unknown as { electronAPI: { accountRemovalCost: () => Promise<never> } })
+      .electronAPI.accountRemovalCost = () => Promise.reject(new Error('database is locked'));
+    const messages: string[] = [];
+    (window as unknown as { confirm: (m: string) => boolean }).confirm = (m: string) => {
+      messages.push(m);
+      return true;
+    };
+    await act(async () => { render(<ClaudeAccountsPanel />); });
 
     await clickDelete();
 
-    expect(messages[0]).toContain('permanently deletes 1 saved conversation.');
-    expect(messages[0]).toContain('The session bound to this account stays in the sidebar');
-    expect(messages[0]).toContain('its history is gone');
-  });
-
-  test('says plainly when there is nothing to lose', async () => {
-    const { messages } = await openPanel({}, { sessions: 0, conversations: 0 });
-
-    await clickDelete();
-
-    expect(messages[0]).toContain('no saved conversations, so nothing is lost');
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('removes its saved credentials');
     expect(messages[0]).not.toContain('permanently deletes');
+    expect(deleted).toEqual(['a1']);
   });
 });
 
@@ -322,5 +327,67 @@ describe('LoginBanner', () => {
   test('an unstarted login claims nothing either', () => {
     render(<LoginBanner completed={false} verified={false} />);
     expect(banner()).toBeNull();
+  });
+});
+
+/**
+ * The confirmation's wording, tested where it is decided rather than through
+ * the panel. Both counts have a singular the plural branch never exercises,
+ * and a zero that has to read as reassurance rather than a warning about
+ * nothing.
+ */
+describe('removalWarning', () => {
+  test('names conversations and sessions in the plural', () => {
+    const text = removalWarning({ sessions: 3, conversations: 12 });
+    expect(text).toContain('permanently deletes 12 saved conversations');
+    expect(text).toContain('The 3 sessions bound to this account stay in the sidebar');
+    expect(text).toContain('they cannot be resumed');
+  });
+
+  test('speaks of one conversation and one session in the singular', () => {
+    const text = removalWarning({ sessions: 1, conversations: 1 });
+    expect(text).toContain('permanently deletes 1 saved conversation.');
+    expect(text).toContain('The session bound to this account stays in the sidebar');
+    expect(text).toContain('its history is gone');
+  });
+
+  // Conversations with nothing bound to them is reachable: the sessions were
+  // deleted, or the transcripts arrived in a bundle. Saying "The 0 sessions"
+  // is the failure this guards.
+  test('reports conversations with no sessions without inventing a session count', () => {
+    const text = removalWarning({ sessions: 0, conversations: 4 });
+    expect(text).toContain('permanently deletes 4 saved conversations.');
+    expect(text).not.toContain('0 sessions');
+    expect(text).not.toContain('bound to this account');
+  });
+
+  test('says plainly when there is nothing to lose', () => {
+    const text = removalWarning({ sessions: 0, conversations: 0 });
+    expect(text).toContain('no saved conversations, so nothing is lost');
+    expect(text).not.toContain('permanently deletes');
+  });
+
+  // A cost we could not measure must not be reported as a cost of zero, which
+  // is the one wrong answer that reads as safe.
+  test('claims nothing when the cost could not be measured', () => {
+    expect(removalWarning(null)).toBe('');
+  });
+});
+
+describe('runningWarning', () => {
+  test('is silent when nothing is running', () => {
+    expect(runningWarning(0)).toBe('');
+  });
+
+  test('agrees with itself in the singular', () => {
+    const text = runningWarning(1);
+    expect(text).toContain('1 session is using it right now');
+    expect(text).toContain('It keeps running, but its account directory goes away underneath it');
+  });
+
+  test('agrees with itself in the plural', () => {
+    const text = runningWarning(2);
+    expect(text).toContain('2 sessions are using it right now');
+    expect(text).toContain('They keep running, but their account directory goes away underneath them');
   });
 });
