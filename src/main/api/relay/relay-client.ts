@@ -100,7 +100,7 @@ export interface AssertedOwner {
 
 export type { RelayStatus } from '../../../shared/types';
 
-const DEFAULT_RELAY_URL = 'https://cl-relay.sytanek.tech';
+const DEFAULT_RELAY_URL = 'https://bodhilander.bodhilabs.dev';
 
 const PREF = {
   enabled: 'relay.enabled',
