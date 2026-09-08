@@ -35,6 +35,14 @@ export interface BuildArrivalReportInput {
   providersNeedingKeys: string[];
 }
 
+/**
+ * Items written before `kind` existed carry none, and every one of those was a
+ * session — so an absent kind counts as one rather than being dropped.
+ */
+function countSessions(items: ArrivalRelinkItem[]): number {
+  return items.filter((item) => item.kind !== 'group').length;
+}
+
 export function buildArrivalReport(input: BuildArrivalReportInput): ArrivalReport {
   return {
     restoredAt: input.restoredAt,
@@ -43,10 +51,11 @@ export function buildArrivalReport(input: BuildArrivalReportInput): ArrivalRepor
     sourcePlatform: input.manifest?.sourcePlatform ?? null,
     groups: input.groups,
     sessions: input.sessions,
-    // Never negative, even if a caller hands in a relink list longer than the
-    // session count — a wrong number here would read as a fact about the user's
-    // data rather than as the bug it is.
-    resumable: Math.max(0, input.sessions - input.needsRelink.length),
+    // Sessions only: the list also carries group roots, and a group is not a
+    // conversation that could have resumed. Never negative, even if a caller
+    // hands in a longer list than the session count — a wrong number here would
+    // read as a fact about the user's data rather than as the bug it is.
+    resumable: Math.max(0, input.sessions - countSessions(input.needsRelink)),
     transcripts: input.transcripts,
     skippedGroups: input.skippedGroups,
     skippedSessions: input.skippedSessions,

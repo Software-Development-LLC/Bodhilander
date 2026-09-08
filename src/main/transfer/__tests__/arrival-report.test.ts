@@ -59,6 +59,39 @@ describe('building the report', () => {
     expect(report.needsRelink).toHaveLength(2);
   });
 
+  /**
+   * Group roots share the list but are not sessions, so counting the list
+   * length would report conversations as unrecoverable that came back fine.
+   * The session count has to exceed the relinked sessions for this to show at
+   * all — with one session of each, Math.max(0, …) clamps both answers to zero.
+   */
+  test('group roots are listed without being counted against resumable', () => {
+    const report = buildArrivalReport({
+      ...BASE,
+      sessions: 4,
+      needsRelink: [
+        { kind: 'session', sessionId: 's1', name: 'api', workingDir: '/Users/will/Work/api' },
+        { kind: 'group', sessionId: 'g1', name: 'Work', workingDir: '/Users/will/Work' },
+        { kind: 'group', sessionId: 'g2', name: 'Me', workingDir: '/Users/will/Me' },
+      ],
+    });
+
+    expect(report.needsRelink).toHaveLength(3);
+    expect(report.resumable).toBe(3);
+  });
+
+  // Reports written before `kind` existed listed sessions only, so an item
+  // without one is a session and must keep counting as it always did.
+  test('an item with no kind is treated as the session it used to be', () => {
+    const report = buildArrivalReport({
+      ...BASE,
+      sessions: 4,
+      needsRelink: [{ sessionId: 's1', name: 'api', workingDir: '/x' }] as BuildArrivalReportInput['needsRelink'],
+    });
+
+    expect(report.resumable).toBe(3);
+  });
+
   test('never reports a negative count, however wrong the inputs are', () => {
     // A number below zero here would read as a claim about the user's data
     // rather than as the bug it would be.

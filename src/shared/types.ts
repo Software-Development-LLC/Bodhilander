@@ -583,6 +583,13 @@ export interface TransferBundleCounts {
 
 /** A session that arrived but cannot start until somebody says where it lives. */
 export interface ArrivalRelinkItem {
+  /**
+   * A group's directory is where its next session would start, so it goes
+   * missing quietly — nothing fails until someone creates a session in it.
+   * Only sessions bear on `resumable`.
+   */
+  kind: 'session' | 'group';
+  /** The session or group id, per `kind`. */
   sessionId: string;
   name: string;
   /** The directory as it was remapped, i.e. where we looked and did not find it. */

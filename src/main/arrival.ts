@@ -15,6 +15,7 @@ import * as os from 'os';
 import * as path from 'path';
 import log from 'electron-log';
 import * as accountsRepo from './repositories/accounts';
+import * as groupsRepo from './repositories/groups';
 import * as sessionsRepo from './repositories/sessions';
 import { deletePreference, getPreference, setPreference } from './repositories/preferences';
 import { resolveAccountIdentity } from './account-identity';
@@ -121,7 +122,23 @@ function relinkItems(sessionIds: string[]): ArrivalRelinkItem[] {
     // rather than reported as a session with no name.
     const session = sessionsRepo.getSession(sessionId);
     if (!session) continue;
-    items.push({ sessionId, name: session.name, workingDir: session.workingDir });
+    items.push({ kind: 'session', sessionId, name: session.name, workingDir: session.workingDir });
+  }
+  return items;
+}
+
+/**
+ * The same, for group roots. A group's directory is where its next session
+ * would be created, so a missing one fails nothing until someone tries — which
+ * is exactly why it has to be reported rather than waited for.
+ */
+function groupRelinkItems(groupIds: string[]): ArrivalRelinkItem[] {
+  const items: ArrivalRelinkItem[] = [];
+  const byId = new Map(groupsRepo.getAllGroups().map((group) => [group.id, group]));
+  for (const groupId of groupIds) {
+    const group = byId.get(groupId);
+    if (!group?.workingDir) continue;
+    items.push({ kind: 'group', sessionId: groupId, name: group.name, workingDir: group.workingDir });
   }
   return items;
 }
@@ -168,7 +185,10 @@ export function recordArrival(input: RecordArrivalInput): ArrivalReport | null {
       transcripts: input.outcome.transcripts,
       skippedGroups: input.outcome.skippedGroups,
       skippedSessions: input.outcome.skippedSessions,
-      needsRelink: relinkItems(input.outcome.needsRelink),
+      needsRelink: [
+        ...relinkItems(input.outcome.needsRelink),
+        ...groupRelinkItems(input.outcome.groupsNeedingRelink ?? []),
+      ],
       accounts: accountItems(input.outcome.accountIds),
       // The manifest names providers that had a key on the source. A bundle
       // written before that existed says nothing, and nothing is what gets
@@ -200,24 +220,30 @@ export function resolveRelink(
   sessionId: string,
   workingDir: string,
   store: ReportStore = preferenceStore,
+  kind: 'session' | 'group' = 'session',
 ): ArrivalReport | null {
   // The directory and nothing else. `workingDirMissing` — the parked marker —
   // is derived from the filesystem on every read, so a real directory is the
   // whole fix; a restored session is already `stopped`, which made writing the
   // state a no-op on the only path that reaches here and left this able to
   // stop a *running* session if it were ever called with another id.
-  sessionsRepo.updateSession(sessionId, { workingDir });
+  if (kind === 'group') groupsRepo.updateGroup(sessionId, { workingDir });
+  else sessionsRepo.updateSession(sessionId, { workingDir });
 
   const report = loadArrivalReport(store);
   if (!report) return null;
 
-  const needsRelink = report.needsRelink.filter((item) => item.sessionId !== sessionId);
+  // Matched on kind too: a group and a session are separate rows and could in
+  // principle carry the same id, and resolving one must not strike the other.
+  const needsRelink = report.needsRelink.filter(
+    (item) => item.sessionId !== sessionId || (item.kind ?? 'session') !== kind,
+  );
   const next: ArrivalReport = {
     ...report,
     needsRelink,
     // Recomputed rather than incremented, so a double-resolve of the same
     // session cannot walk the count past the number of sessions there are.
-    resumable: Math.max(0, report.sessions - needsRelink.length),
+    resumable: Math.max(0, report.sessions - needsRelink.filter((i) => i.kind !== 'group').length),
   };
   saveArrivalReport(store, next);
   return next;
