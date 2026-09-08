@@ -96,21 +96,31 @@ export const ClaudeAccountsPanel: React.FC = () => {
     await refresh();
   }, [refresh]);
 
-  // The panel computes "N sessions are running on this account" two inches
-  // above this button, and deleting removes the on-disk config dir out from
-  // under those live ptys (#165). Withholding the number here while the dialog
-  // reassures the user that "sessions themselves are kept" is the one place
-  // that count actually had a job to do.
+  // Deleting removes the on-disk config dir, which is where the transcripts
+  // live, so the confirmation has to name what that costs rather than only
+  // what it unsets.
   const handleDelete = useCallback(async (id: string, label: string, runningSessions: number) => {
-    const subject = runningSessions === 1 ? 'session is' : 'sessions are';
-    const warning = runningSessions > 0
-      ? `\n\n${runningSessions} running ${subject} `
-        + `using this account right now. They keep running, but their account directory goes away `
-        + `with it — restart them onto another account first if you need their conversations.`
+    const cost = await window.electronAPI.accountRemovalCost(id);
+
+    // The conversations are the part that does not come back, and counting them
+    // is the whole point of asking main first: the transcripts live in the
+    // config directory this deletes, and nothing else on disk records them.
+    const loss = cost.conversations > 0
+      ? `\n\nThis permanently deletes ${cost.conversations} saved `
+        + `${cost.conversations === 1 ? 'conversation' : 'conversations'}. `
+        + `${cost.sessions === 1 ? 'The session' : `The ${cost.sessions} sessions`} bound to this `
+        + `account ${cost.sessions === 1 ? 'stays' : 'stay'} in the sidebar, but ${cost.sessions === 1 ? 'its' : 'their'} `
+        + `history is gone and ${cost.sessions === 1 ? 'it' : 'they'} cannot be resumed.`
+      : '\n\nIt has no saved conversations, so nothing is lost.';
+
+    const running = runningSessions > 0
+      ? `\n\n${runningSessions} ${runningSessions === 1 ? 'session is' : 'sessions are'} using it right `
+        + `now. They keep running, but their account directory goes away underneath them.`
       : '';
+
     const confirmed = window.confirm(
       `Delete account "${label}"?\n\nThis removes its saved credentials and unsets any sessions or `
-      + `groups that were bound to it. Sessions themselves are kept.${warning}`
+      + `groups that were bound to it.${loss}${running}`
     );
     if (!confirmed) return;
     await window.electronAPI.deleteAccount(id);

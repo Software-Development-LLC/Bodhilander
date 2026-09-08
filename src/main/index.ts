@@ -955,6 +955,8 @@ safeHandle('accounts:confirmLoginMacOS', (ptyId: string) => {
   accountAuth.confirmLoginMacOS(mainWindow, ptyId);
 });
 
+safeHandle('accounts:removalCost', (id: string) => accountAuth.accountRemovalCost(id));
+
 safeHandle('accounts:delete', (id: string) => {
   accountAuth.deleteAccountAndDir(id);
 });

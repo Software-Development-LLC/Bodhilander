@@ -137,6 +137,14 @@ export function touchAccount(id: string): void {
  * neither a live account nor an assigned one — so the user is told their
  * account was removed and offered nothing to move to.
  */
+/** Counts what deleteAccount() is about to unset, using the same predicate. */
+export function countSessionsUsingAccount(id: string): number {
+  const row = getDatabase()
+    .prepare('SELECT COUNT(*) AS n FROM sessions WHERE claude_account_id = ?')
+    .get(id) as { n: number };
+  return row.n;
+}
+
 export function deleteAccount(id: string): void {
   const db = getDatabase();
   const tx = db.transaction(() => {
