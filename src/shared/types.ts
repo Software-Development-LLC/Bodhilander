@@ -587,8 +587,11 @@ export interface ArrivalRelinkItem {
    * A group's directory is where its next session would start, so it goes
    * missing quietly — nothing fails until someone creates a session in it.
    * Only sessions bear on `resumable`.
+   *
+   * Optional because reports persisted before this existed carry no kind, and
+   * every one of those was a session. Readers default accordingly.
    */
-  kind: 'session' | 'group';
+  kind?: 'session' | 'group';
   /** The session or group id, per `kind`. */
   sessionId: string;
   name: string;

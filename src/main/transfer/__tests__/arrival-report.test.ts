@@ -86,7 +86,7 @@ describe('building the report', () => {
     const report = buildArrivalReport({
       ...BASE,
       sessions: 4,
-      needsRelink: [{ sessionId: 's1', name: 'api', workingDir: '/x' }] as BuildArrivalReportInput['needsRelink'],
+      needsRelink: [{ sessionId: 's1', name: 'api', workingDir: '/x' }],
     });
 
     expect(report.resumable).toBe(3);

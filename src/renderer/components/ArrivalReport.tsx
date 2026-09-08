@@ -39,7 +39,10 @@ export interface ArrivalReportViewProps {
  */
 function relinkLabel(items: ArrivalRelinkItem[]): string {
   const groups = items.filter((item) => item.kind === 'group').length;
-  const noun = groups === 0 ? 'session' : (groups === items.length ? 'group' : 'item');
+  let noun = 'item';
+  if (groups === 0) noun = 'session';
+  else if (groups === items.length) noun = 'group';
+
   return items.length === 1
     ? `1 ${noun} needs its folder`
     : `${items.length} ${noun}s need their folder`;
