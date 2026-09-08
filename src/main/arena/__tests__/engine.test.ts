@@ -92,9 +92,8 @@ const FAKE_PROVIDERS: Record<string, any> = {
   keyed: {
     id: 'keyed',
     arena: {
-      // Contestants run through the user's shell, and `$VAR` is POSIX syntax
-      // that cmd.exe leaves as literal text — so reading the variable through
-      // node keeps this about env merging rather than about which shell ran it.
+      // Read through node, not `$VAR`: what is under test is that the vault's
+      // env reaches the child, not which shell expands a variable.
       buildCommand: () => `node -e "console.log('key=' + (process.env.FAKE_PROVIDER_KEY || ''))"`,
       createParser: textParser,
     },
@@ -298,8 +297,11 @@ describe('ArenaEngine', () => {
       const updates = await settled;
       expect(updates[updates.length - 1].status).toBe('done');
       const text = updates.map((u) => u.chunk).join('');
-      // realpath: the shell resolves symlinked tmpdirs (/tmp → /private/tmp).
-      expect(text).toContain(fs.realpathSync(dir));
+      // realpath because the shell resolves symlinked tmpdirs (/tmp →
+      // /private/tmp); `.native` because on Windows os.tmpdir() can hand back
+      // an 8.3 short path (C:\Users\RUNNER~1\...) where the shell prints the
+      // long one, and only the OS call expands it.
+      expect(text).toContain(fs.realpathSync.native(dir));
     } finally {
       fs.rmdirSync(dir);
     }

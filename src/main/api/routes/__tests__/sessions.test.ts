@@ -72,11 +72,7 @@ function freshDb(): Database {
   return d;
 }
 
-/**
- * The default has to be a directory that really exists: /start refuses to
- * launch a session whose folder is gone, and a POSIX-only literal makes that
- * guard fire on Windows for a reason the test never meant to exercise.
- */
+/** /start refuses a session whose folder is gone, so this has to exist. */
 const PRESENT_DIR = os.tmpdir();
 
 function insertSession(id: string, workingDir = PRESENT_DIR): void {

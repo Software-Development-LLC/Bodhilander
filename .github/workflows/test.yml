@@ -18,11 +18,8 @@ concurrency:
 
 jobs:
   test:
-    # Windows is a shipped platform, and until this ran there nothing stood
-    # between a Windows-only regression and a user: six tests failed there for
-    # months while this gate was green. Path handling is where it goes wrong —
-    # POSIX literals, `/tmp`, `$VAR` in a shell command — and none of it is
-    # visible from Linux.
+    # Windows is a shipped platform, and its failures — path separators, 8.3
+    # short paths, POSIX-only shell syntax — are invisible from Linux.
     strategy:
       fail-fast: false
       matrix:

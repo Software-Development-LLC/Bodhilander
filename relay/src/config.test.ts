@@ -19,10 +19,9 @@ describe('handoff storage limits', () => {
   });
 
   test('put bundles beside the database, which is what the volume holds', () => {
-    // "Beside the database" as two independent facts. The old assertion was a
-    // POSIX literal, and `path.resolve('/data/relay.db')` is `C:\data\relay.db`
-    // on Windows — so it failed there for a reason the relay, which only ever
-    // runs in a Linux container, does not actually have.
+    // Stated as two independent facts rather than one path literal: the
+    // config resolves the db path, so a literal only holds on the platform
+    // that shaped it.
     const dbPath = path.join(os.tmpdir(), 'relay-config-test', 'relay.db');
     const { config } = loadConfig({ ...BASE, DB_PATH: dbPath });
     expect(path.dirname(config.handoffDir)).toBe(path.dirname(dbPath));
