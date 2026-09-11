@@ -152,11 +152,40 @@ export function listActiveRuns(): RunRow[] {
  * One call, not two, because a state written without its event is a run whose
  * history has a hole exactly where someone will later ask what happened.
  */
+/** What an event may carry beyond its kind. */
+export interface EventDetail {
+  gate?: number;
+  repo?: string;
+  payload?: unknown;
+}
+
+const INSERT_EVENT =
+  'INSERT INTO run_events (run_id, kind, gate, repo, payload_json) VALUES (?, ?, ?, ?, ?)';
+
+/**
+ * One place that writes an event, so a column added to `run_events` cannot be
+ * filled on one path and left null on the other.
+ */
+function insertEvent(
+  db: ReturnType<typeof getDatabase>,
+  runId: string,
+  kind: string,
+  detail?: EventDetail,
+): void {
+  db.prepare(INSERT_EVENT).run(
+    runId,
+    kind,
+    detail?.gate ?? null,
+    detail?.repo ?? null,
+    detail?.payload === undefined ? null : JSON.stringify(detail.payload),
+  );
+}
+
 export function recordTransition(
   runId: string,
   state: RunState,
   kind: string,
-  detail?: { gate?: number; repo?: string; payload?: unknown; blockedReason?: string | null },
+  detail?: EventDetail & { blockedReason?: string | null },
 ): void {
   const db = getDatabase();
   const tx = db.transaction(() => {
@@ -165,36 +194,14 @@ export function recordTransition(
           SET state = ?, blocked_reason = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?`,
     ).run(state, detail?.blockedReason ?? null, runId);
-    db.prepare(
-      'INSERT INTO run_events (run_id, kind, gate, repo, payload_json) VALUES (?, ?, ?, ?, ?)',
-    ).run(
-      runId,
-      kind,
-      detail?.gate ?? null,
-      detail?.repo ?? null,
-      detail?.payload === undefined ? null : JSON.stringify(detail.payload),
-    );
+    insertEvent(db, runId, kind, detail);
   });
   tx();
 }
 
 /** An event that is not itself a transition — a note, a stream marker. */
-export function appendEvent(
-  runId: string,
-  kind: string,
-  detail?: { gate?: number; repo?: string; payload?: unknown },
-): void {
-  getDatabase()
-    .prepare(
-      'INSERT INTO run_events (run_id, kind, gate, repo, payload_json) VALUES (?, ?, ?, ?, ?)',
-    )
-    .run(
-      runId,
-      kind,
-      detail?.gate ?? null,
-      detail?.repo ?? null,
-      detail?.payload === undefined ? null : JSON.stringify(detail.payload),
-    );
+export function appendEvent(runId: string, kind: string, detail?: EventDetail): void {
+  insertEvent(getDatabase(), runId, kind, detail);
 }
 
 /** Oldest first: this is a history, and reading it backwards reads as nonsense. */

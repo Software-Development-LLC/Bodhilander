@@ -122,13 +122,25 @@ export interface Decision {
   note: string;
 }
 
-/** The gate that follows, or null when 4 is done. */
+/**
+ * The gate that follows, or null when 4 is done.
+ *
+ * A table rather than a chain of conditionals: the order of the gates is the
+ * thing being stated, and it should be readable as one.
+ */
+const FOLLOWING_GATE: Record<Gate, Gate | null> = { 2: 3, 3: 4, 4: null };
+
 function nextGate(gate: Gate): Gate | null {
-  return gate === 2 ? 3 : gate === 3 ? 4 : null;
+  return FOLLOWING_GATE[gate];
 }
 
 function stay(state: RunState, note: string): Decision {
   return { state, actions: [], note };
+}
+
+/** Send the branch back to its owner. The commonest arrow in the machine. */
+function backToOwner(note: string): Decision {
+  return { state: 'running', actions: [{ kind: 'spawnGate', gate: 2 }], note };
 }
 
 /**
@@ -141,192 +153,202 @@ function inconclusive(note: string): Decision {
 }
 
 /**
+ * A handler returns null for an event this state does not act on, and the
+ * caller turns that into "stay put". Each state is a small function rather
+ * than a branch in one large switch so the pairing under test is readable on
+ * its own.
+ */
+type Handler = (event: RunEvent) => Decision | null;
+
+function onPreparing(event: RunEvent): Decision | null {
+  if (event.kind !== 'prepared') return null;
+  return {
+    state: 'provisioning',
+    actions: [{ kind: 'provision' }],
+    note: 'worktrees cut; installing dependencies before gate 2',
+  };
+}
+
+/**
+ * Provisioning comes BEFORE gate 2 because an unprovisioned worktree makes
+ * verify.sh report a missing runner as FAIL — measured as "'jest' is not
+ * recognized", exit 1, over code that was fine. An engine reading that as red
+ * sends the owner back into the same red until the budget stops it.
+ */
+function onProvisioning(event: RunEvent): Decision | null {
+  if (event.kind === 'provisioned') {
+    return {
+      state: 'running',
+      actions: [{ kind: 'spawnGate', gate: 2 }],
+      note: 'dependencies installed; gate 2 (owner)',
+    };
+  }
+  if (event.kind === 'provisionFailed') {
+    return {
+      state: 'failed',
+      actions: [{ kind: 'notify', reason: 'install failed' }],
+      note: 'an install ran and failed — a real result',
+    };
+  }
+  if (event.kind === 'provisionUndriveable') {
+    // Nothing ran, so there is no result for the change. Calling this
+    // `failed` is the confusion the provisioning work exists to remove.
+    return inconclusive('nothing could be installed here — no result for the change');
+  }
+  return null;
+}
+
+function onGateFinished(gate: Gate, verdict: GateVerdict): Decision {
+  if (verdict === 'inconclusive') {
+    return inconclusive(`gate ${gate} could not establish a verdict`);
+  }
+  if (verdict === 'fail') {
+    // Red means the owner keeps working. It does not mean "note it on the
+    // PR" — and a failing gate 3 or 4 returns to gate 2 rather than ending
+    // the run, because the branch is still soft.
+    return backToOwner(`gate ${gate} red; back to gate 2`);
+  }
+  const next = nextGate(gate);
+  if (next) {
+    return {
+      state: 'running',
+      actions: [{ kind: 'spawnGate', gate: next }],
+      note: `gate ${gate} passed; gate ${next}`,
+    };
+  }
+  // Gate 4 passed: scribe has opened the PR. Checks decide what happens next.
+  return {
+    state: 'waitingChecks',
+    actions: [{ kind: 'reconcile' }],
+    note: 'PR open; waiting for checks',
+  };
+}
+
+function onRunning(event: RunEvent): Decision | null {
+  if (event.kind === 'gateFinished') return onGateFinished(event.gate, event.verdict);
+  if (event.kind === 'permissionRequested') {
+    return stay('waitingPermission', 'a tool needs approval');
+  }
+  if (event.kind === 'budgetExceeded') {
+    return inconclusive('budget ceiling reached before a verdict');
+  }
+  return null;
+}
+
+/**
+ * No timeout. A silent auto-deny is indistinguishable from a gate finding,
+ * and the run would then carry a verdict nobody gave.
+ */
+function onWaitingPermission(event: RunEvent): Decision | null {
+  return event.kind === 'permissionAnswered'
+    ? stay('running', 'permission answered; gate continues')
+    : null;
+}
+
+function onWaitingHumanGate(event: RunEvent): Decision | null {
+  return event.kind === 'humanApprovedGate'
+    ? backToOwner('manifest approved; gate 2')
+    : null;
+}
+
+function onWaitingChecks(event: RunEvent): Decision | null {
+  if (event.kind === 'checksGreen') {
+    // Green checks do NOT mean approved — they mean it is now worth asking.
+    // Requesting earlier spends an adversarial pass on a build that may still
+    // change, which is the same reasoning that puts gate 3 before the specs
+    // harden.
+    return {
+      state: 'reviewNotRequested',
+      actions: [{ kind: 'requestReview' }],
+      note: 'checks green; requesting review',
+    };
+  }
+  if (event.kind === 'checksFailed') return backToOwner('checks red; back to gate 2');
+  return null;
+}
+
+function onReviewNotRequested(event: RunEvent): Decision | null {
+  if (event.kind !== 'reviewRequested') return null;
+  return {
+    state: 'waitingReview',
+    actions: [{ kind: 'reconcile' }],
+    note: 'review requested; arbiter and the human queue can now see it',
+  };
+}
+
+function onWaitingReview(event: RunEvent): Decision | null {
+  if (event.kind === 'reviewApproved') {
+    // Released at approval, not at merge.
+    return {
+      state: 'approved',
+      actions: [{ kind: 'release' }],
+      note: 'approved and green; nothing further comes back',
+    };
+  }
+  if (event.kind !== 'reviewChangesRequested') return null;
+
+  const { actor, severity } = event.verdict;
+  if (actor === 'bot' && severity !== 'major') {
+    // Recorded and surfaced, not acted on. Re-entering gate 2 for a nit
+    // spends an owner cycle on a note.
+    return {
+      state: 'waitingReview',
+      actions: [{ kind: 'notify', reason: 'bot nit recorded' }],
+      note: 'bot finding below major; recorded, still waiting on review',
+    };
+  }
+  return backToOwner(`${actor} requested changes; back to gate 2`);
+}
+
+/**
+ * Only a person leaves this state. Whatever they fixed, the run resumes by
+ * re-entering gate 2 rather than trusting the earlier gate's result — which
+ * was produced before the fix.
+ */
+function onInconclusive(event: RunEvent): Decision | null {
+  return event.kind === 'humanApprovedGate'
+    ? backToOwner('resumed by a person after an inconclusive gate')
+    : null;
+}
+
+function onApproved(event: RunEvent): Decision | null {
+  return event.kind === 'merged' ? stay('done', 'merged') : null;
+}
+
+/** Terminal: nothing further happens on its own. */
+const absorbing: Handler = () => null;
+
+/**
+ * Every state has a handler, and the Record type makes that a compile error
+ * rather than a runtime hole — adding a state without deciding what it does
+ * is exactly the omission this machine exists to prevent.
+ */
+const HANDLERS: Record<RunState, Handler> = {
+  preparing: onPreparing,
+  provisioning: onProvisioning,
+  running: onRunning,
+  waitingPermission: onWaitingPermission,
+  waitingHumanGate: onWaitingHumanGate,
+  waitingChecks: onWaitingChecks,
+  reviewNotRequested: onReviewNotRequested,
+  waitingReview: onWaitingReview,
+  inconclusive: onInconclusive,
+  approved: onApproved,
+  failed: absorbing,
+  done: absorbing,
+};
+
+/**
  * `(state, event) -> decision`.
  *
- * Unknown pairings return the current state unchanged with a note rather than
- * throwing. A run is durable and resumable, so it will be handed stale and
- * duplicate events — a reconcile that races a webhook, a gate that reports
- * twice after a restart. Throwing there would turn a duplicate into an
- * outage; advancing on one would be worse.
+ * An unhandled pairing returns the current state unchanged with a note rather
+ * than throwing. A run is durable and resumable, so it will be handed stale
+ * and duplicate events — a reconcile that races a webhook, a gate that
+ * reports twice after a restart. Throwing there would turn a duplicate into
+ * an outage; advancing on one would be worse.
  */
 export function transition(state: RunState, event: RunEvent): Decision {
-  switch (state) {
-    case 'preparing':
-      if (event.kind === 'prepared') {
-        return {
-          state: 'provisioning',
-          actions: [{ kind: 'provision' }],
-          note: 'worktrees cut; installing dependencies before gate 2',
-        };
-      }
-      break;
-
-    case 'provisioning':
-      // Provisioning comes BEFORE gate 2 because an unprovisioned worktree
-      // makes verify.sh report a missing runner as FAIL — measured as
-      // "'jest' is not recognized", exit 1, over code that was fine. An
-      // engine reading that as red sends the owner back into the same red
-      // until the budget stops it.
-      if (event.kind === 'provisioned') {
-        return {
-          state: 'running',
-          actions: [{ kind: 'spawnGate', gate: 2 }],
-          note: 'dependencies installed; gate 2 (owner)',
-        };
-      }
-      if (event.kind === 'provisionFailed') {
-        return {
-          state: 'failed',
-          actions: [{ kind: 'notify', reason: 'install failed' }],
-          note: 'an install ran and failed — a real result',
-        };
-      }
-      if (event.kind === 'provisionUndriveable') {
-        // Nothing ran, so there is no result for the change. Calling this
-        // `failed` is the confusion the provisioning work exists to remove.
-        return inconclusive('nothing could be installed here — no result for the change');
-      }
-      break;
-
-    case 'running':
-      if (event.kind === 'gateFinished') {
-        if (event.verdict === 'inconclusive') {
-          return inconclusive(`gate ${event.gate} could not establish a verdict`);
-        }
-        if (event.verdict === 'fail') {
-          // Red means the owner keeps working. It does not mean "note it on
-          // the PR" — and a failing gate 3 or 4 returns to gate 2 rather than
-          // ending the run, because the branch is still soft.
-          return {
-            state: 'running',
-            actions: [{ kind: 'spawnGate', gate: 2 }],
-            note: `gate ${event.gate} red; back to gate 2`,
-          };
-        }
-        const next = nextGate(event.gate);
-        if (next) {
-          return {
-            state: 'running',
-            actions: [{ kind: 'spawnGate', gate: next }],
-            note: `gate ${event.gate} passed; gate ${next}`,
-          };
-        }
-        // Gate 4 passed: scribe has opened the PR. Checks decide what next.
-        return {
-          state: 'waitingChecks',
-          actions: [{ kind: 'reconcile' }],
-          note: 'PR open; waiting for checks',
-        };
-      }
-      if (event.kind === 'permissionRequested') {
-        return stay('waitingPermission', 'a tool needs approval');
-      }
-      if (event.kind === 'budgetExceeded') {
-        return inconclusive('budget ceiling reached before a verdict');
-      }
-      break;
-
-    case 'waitingPermission':
-      // No timeout. A silent auto-deny is indistinguishable from a gate
-      // finding, and the run would carry a verdict nobody gave.
-      if (event.kind === 'permissionAnswered') {
-        return stay('running', 'permission answered; gate continues');
-      }
-      break;
-
-    case 'waitingHumanGate':
-      if (event.kind === 'humanApprovedGate') {
-        return {
-          state: 'running',
-          actions: [{ kind: 'spawnGate', gate: 2 }],
-          note: 'manifest approved; gate 2',
-        };
-      }
-      break;
-
-    case 'waitingChecks':
-      if (event.kind === 'checksGreen') {
-        // Green checks do NOT mean approved — they mean it is now worth
-        // asking. Requesting earlier spends an adversarial pass on a build
-        // that may still change, which is the same reasoning that puts gate 3
-        // before the specs harden.
-        return {
-          state: 'reviewNotRequested',
-          actions: [{ kind: 'requestReview' }],
-          note: 'checks green; requesting review',
-        };
-      }
-      if (event.kind === 'checksFailed') {
-        return {
-          state: 'running',
-          actions: [{ kind: 'spawnGate', gate: 2 }],
-          note: 'checks red; back to gate 2',
-        };
-      }
-      break;
-
-    case 'reviewNotRequested':
-      if (event.kind === 'reviewRequested') {
-        return {
-          state: 'waitingReview',
-          actions: [{ kind: 'reconcile' }],
-          note: 'review requested; arbiter and the human queue can now see it',
-        };
-      }
-      break;
-
-    case 'waitingReview':
-      if (event.kind === 'reviewApproved') {
-        // Released at approval, not at merge.
-        return {
-          state: 'approved',
-          actions: [{ kind: 'release' }],
-          note: 'approved and green; nothing further comes back',
-        };
-      }
-      if (event.kind === 'reviewChangesRequested') {
-        const { actor, severity } = event.verdict;
-        if (actor === 'bot' && severity !== 'major') {
-          // Recorded and surfaced, not acted on. Re-entering gate 2 for a nit
-          // spends an owner cycle on a note.
-          return {
-            state: 'waitingReview',
-            actions: [{ kind: 'notify', reason: 'bot nit recorded' }],
-            note: 'bot finding below major; recorded, still waiting on review',
-          };
-        }
-        return {
-          state: 'running',
-          actions: [{ kind: 'spawnGate', gate: 2 }],
-          note: `${actor} requested changes; back to gate 2`,
-        };
-      }
-      break;
-
-    case 'approved':
-      if (event.kind === 'merged') {
-        return stay('done', 'merged');
-      }
-      break;
-
-    case 'inconclusive':
-      // Only a person leaves this state. Whatever they fixed, the run resumes
-      // by re-entering gate 2 rather than assuming the earlier gate's result.
-      if (event.kind === 'humanApprovedGate') {
-        return {
-          state: 'running',
-          actions: [{ kind: 'spawnGate', gate: 2 }],
-          note: 'resumed by a person after an inconclusive gate',
-        };
-      }
-      break;
-
-    case 'failed':
-    case 'done':
-      break;
-  }
-
-  return stay(state, `ignored ${event.kind} in ${state}`);
+  return HANDLERS[state](event) ?? stay(state, `ignored ${event.kind} in ${state}`);
 }
 
 /** States that cannot advance without a person. The run inbox is built on this. */
