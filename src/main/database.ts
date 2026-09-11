@@ -668,7 +668,6 @@ export function initializeRunTables(database: Database.Database): void {
   `);
 }
 
-
 /**
  * Clear every account cooldown once.
  *

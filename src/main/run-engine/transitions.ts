@@ -153,12 +153,30 @@ function inconclusive(note: string): Decision {
 }
 
 /**
+ * What the machine needs to know beyond the state itself.
+ *
+ * Required, not optional, and deliberately so. `activeGate` is the only
+ * defence against a stale gate report: a `gateFinished` for gate 2 arriving
+ * after the run reached gate 4 would otherwise spawn gate 3 again and throw
+ * away the work in between. The module's own contract says it WILL be handed
+ * duplicate and out-of-order events, so the guard belongs here rather than in
+ * a caller's discipline — a rule kept by convention is the thing this whole
+ * machine exists to replace.
+ *
+ * `null` means no gate is in flight. A gate report then belongs to nothing
+ * this run started, and is ignored.
+ */
+export interface RunContext {
+  activeGate: Gate | null;
+}
+
+/**
  * A handler returns null for an event this state does not act on, and the
  * caller turns that into "stay put". Each state is a small function rather
  * than a branch in one large switch so the pairing under test is readable on
  * its own.
  */
-type Handler = (event: RunEvent) => Decision | null;
+type Handler = (event: RunEvent, context: RunContext) => Decision | null;
 
 function onPreparing(event: RunEvent): Decision | null {
   if (event.kind !== 'prepared') return null;
@@ -224,8 +242,18 @@ function onGateFinished(gate: Gate, verdict: GateVerdict): Decision {
   };
 }
 
-function onRunning(event: RunEvent): Decision | null {
-  if (event.kind === 'gateFinished') return onGateFinished(event.gate, event.verdict);
+function onRunning(event: RunEvent, context: RunContext): Decision | null {
+  if (event.kind === 'gateFinished') {
+    // Only the gate actually in flight may move the run. A late report from
+    // an earlier gate is not news, and acting on it un-does everything since.
+    if (context.activeGate !== event.gate) {
+      return stay(
+        'running',
+        `ignored a gate ${event.gate} report while gate ${context.activeGate ?? 'none'} is in flight`,
+      );
+    }
+    return onGateFinished(event.gate, event.verdict);
+  }
   if (event.kind === 'permissionRequested') {
     return stay('waitingPermission', 'a tool needs approval');
   }
@@ -268,12 +296,21 @@ function onWaitingChecks(event: RunEvent): Decision | null {
 }
 
 function onReviewNotRequested(event: RunEvent): Decision | null {
-  if (event.kind !== 'reviewRequested') return null;
-  return {
-    state: 'waitingReview',
-    actions: [{ kind: 'reconcile' }],
-    note: 'review requested; arbiter and the human queue can now see it',
-  };
+  if (event.kind === 'reviewRequested') {
+    return {
+      state: 'waitingReview',
+      actions: [{ kind: 'reconcile' }],
+      note: 'review requested; arbiter and the human queue can now see it',
+    };
+  }
+  if (event.kind === 'checksFailed') {
+    // This state is meant to be transient — entered on green, left as soon as
+    // the engine asks an approver. But a commit landing in that window turns
+    // the checks red again, and without this the run parks here waiting for a
+    // review request that should no longer be made.
+    return backToOwner('checks went red before review was requested; back to gate 2');
+  }
+  return null;
 }
 
 function onWaitingReview(event: RunEvent): Decision | null {
@@ -347,8 +384,8 @@ const HANDLERS: Record<RunState, Handler> = {
  * reports twice after a restart. Throwing there would turn a duplicate into
  * an outage; advancing on one would be worse.
  */
-export function transition(state: RunState, event: RunEvent): Decision {
-  return HANDLERS[state](event) ?? stay(state, `ignored ${event.kind} in ${state}`);
+export function transition(state: RunState, event: RunEvent, context: RunContext): Decision {
+  return HANDLERS[state](event, context) ?? stay(state, `ignored ${event.kind} in ${state}`);
 }
 
 /** States that cannot advance without a person. The run inbox is built on this. */

@@ -17,6 +17,7 @@ import {
   transition,
   type Gate,
   type RunEvent,
+  type RunContext,
   type RunState,
 } from '../transitions';
 
@@ -49,40 +50,53 @@ const ALL_EVENTS: RunEvent[] = [
 
 const gates: Gate[] = [2, 3, 4];
 
+/**
+ * transition() with a context supplying the gate in flight.
+ *
+ * For a gateFinished event that is the gate the event names -- which is what
+ * every case below was implicitly assuming before the context existed. The
+ * out-of-order cases pass their own context instead, because that assumption
+ * is exactly what they exist to break.
+ */
+function go(state: RunState, event: RunEvent, context?: RunContext) {
+  const activeGate = event.kind === 'gateFinished' ? event.gate : null;
+  return transition(state, event, context ?? { activeGate });
+}
+
 describe('the happy path, single repo', () => {
   test('preparing provisions before it spawns an owner', () => {
-    const d = transition('preparing', { kind: 'prepared' });
+    const d = go('preparing', { kind: 'prepared' });
     expect(d.state).toBe('provisioning');
     expect(d.actions).toEqual([{ kind: 'provision' }]);
   });
 
   test('gate 2 is only spawned once dependencies are in', () => {
-    const d = transition('provisioning', { kind: 'provisioned' });
+    const d = go('provisioning', { kind: 'provisioned' });
     expect(d.state).toBe('running');
     expect(d.actions).toEqual([{ kind: 'spawnGate', gate: 2 }]);
   });
 
   test('gates advance 2 -> 3 -> 4', () => {
-    expect(transition('running', { kind: 'gateFinished', gate: 2, verdict: 'pass' }).actions)
+    expect(go('running', { kind: 'gateFinished', gate: 2, verdict: 'pass' }).actions)
       .toEqual([{ kind: 'spawnGate', gate: 3 }]);
-    expect(transition('running', { kind: 'gateFinished', gate: 3, verdict: 'pass' }).actions)
+    expect(go('running', { kind: 'gateFinished', gate: 3, verdict: 'pass' }).actions)
       .toEqual([{ kind: 'spawnGate', gate: 4 }]);
   });
 
   test('gate 4 passing opens the PR and waits on checks, not on review', () => {
-    const d = transition('running', { kind: 'gateFinished', gate: 4, verdict: 'pass' });
+    const d = go('running', { kind: 'gateFinished', gate: 4, verdict: 'pass' });
     expect(d.state).toBe('waitingChecks');
     expect(d.actions).toEqual([{ kind: 'reconcile' }]);
   });
 
   test('green checks request review rather than waiting for one', () => {
-    const d = transition('waitingChecks', { kind: 'checksGreen' });
+    const d = go('waitingChecks', { kind: 'checksGreen' });
     expect(d.state).toBe('reviewNotRequested');
     expect(d.actions).toEqual([{ kind: 'requestReview' }]);
   });
 
   test('approval releases the run', () => {
-    const d = transition('waitingReview', { kind: 'reviewApproved' });
+    const d = go('waitingReview', { kind: 'reviewApproved' });
     expect(d.state).toBe('approved');
     expect(d.actions).toEqual([{ kind: 'release' }]);
   });
@@ -90,7 +104,7 @@ describe('the happy path, single repo', () => {
 
 describe('inconclusive is never a pass and never a failure', () => {
   test.each(gates)('an inconclusive gate %i stops the run and notifies', (gate) => {
-    const d = transition('running', { kind: 'gateFinished', gate, verdict: 'inconclusive' });
+    const d = go('running', { kind: 'gateFinished', gate, verdict: 'inconclusive' });
     expect(d.state).toBe('inconclusive');
     expect(d.actions.some((a) => a.kind === 'notify')).toBe(true);
     // The two ways of getting this wrong, asserted directly.
@@ -100,21 +114,21 @@ describe('inconclusive is never a pass and never a failure', () => {
 
   test('an undriveable provision is inconclusive, not failed', () => {
     // Nothing ran, so there is no result for the change under test.
-    const d = transition('provisioning', { kind: 'provisionUndriveable' });
+    const d = go('provisioning', { kind: 'provisionUndriveable' });
     expect(d.state).toBe('inconclusive');
   });
 
   test('a failed install IS a failure, and must stay distinguishable from the above', () => {
-    const d = transition('provisioning', { kind: 'provisionFailed' });
+    const d = go('provisioning', { kind: 'provisionFailed' });
     expect(d.state).toBe('failed');
   });
 
   test('the budget running out is inconclusive: no verdict was reached', () => {
-    expect(transition('running', { kind: 'budgetExceeded' }).state).toBe('inconclusive');
+    expect(go('running', { kind: 'budgetExceeded' }).state).toBe('inconclusive');
   });
 
   test('only a person leaves inconclusive, and the run re-enters gate 2', () => {
-    const d = transition('inconclusive', { kind: 'humanApprovedGate' });
+    const d = go('inconclusive', { kind: 'humanApprovedGate' });
     expect(d.state).toBe('running');
     expect(d.actions).toEqual([{ kind: 'spawnGate', gate: 2 }]);
   });
@@ -122,14 +136,14 @@ describe('inconclusive is never a pass and never a failure', () => {
   test('inconclusive ignores everything else, including a later pass', () => {
     // A gate reporting pass after the run already stopped is stale, not a
     // reason to resume: it was produced before whatever a person fixed.
-    expect(transition('inconclusive', { kind: 'gateFinished', gate: 3, verdict: 'pass' }).state)
+    expect(go('inconclusive', { kind: 'gateFinished', gate: 3, verdict: 'pass' }).state)
       .toBe('inconclusive');
   });
 });
 
 describe('review', () => {
   test('a human change request returns to gate 2', () => {
-    const d = transition('waitingReview', {
+    const d = go('waitingReview', {
       kind: 'reviewChangesRequested', verdict: { actor: 'human' },
     });
     expect(d.state).toBe('running');
@@ -137,7 +151,7 @@ describe('review', () => {
   });
 
   test('a bot nit is recorded and does NOT re-enter gate 2', () => {
-    const d = transition('waitingReview', {
+    const d = go('waitingReview', {
       kind: 'reviewChangesRequested', verdict: { actor: 'bot', severity: 'nit' },
     });
     expect(d.state).toBe('waitingReview');
@@ -148,7 +162,7 @@ describe('review', () => {
   test('a bot MAJOR finding does re-enter gate 2', () => {
     // CONTROL for the nit case: without this, treating every bot finding as a
     // nit would pass the test above and silently drop real findings.
-    const d = transition('waitingReview', {
+    const d = go('waitingReview', {
       kind: 'reviewChangesRequested', verdict: { actor: 'bot', severity: 'major' },
     });
     expect(d.state).toBe('running');
@@ -158,7 +172,7 @@ describe('review', () => {
   test('a bot finding with no severity is treated as a nit, not as major', () => {
     // Absent severity means the bot did not say. Escalating an unstated
     // severity burns owner cycles on notes; the finding is still surfaced.
-    const d = transition('waitingReview', {
+    const d = go('waitingReview', {
       kind: 'reviewChangesRequested', verdict: { actor: 'bot' },
     });
     expect(d.state).toBe('waitingReview');
@@ -167,14 +181,14 @@ describe('review', () => {
   test('review is not requested until checks are green', () => {
     // Entering reviewNotRequested straight off gate 4 would ask an approver to
     // read a build that may still change, and would fire arbiter against it.
-    expect(transition('running', { kind: 'gateFinished', gate: 4, verdict: 'pass' }).state)
+    expect(go('running', { kind: 'gateFinished', gate: 4, verdict: 'pass' }).state)
       .toBe('waitingChecks');
-    expect(transition('waitingChecks', { kind: 'reviewRequested' }).state)
+    expect(go('waitingChecks', { kind: 'reviewRequested' }).state)
       .toBe('waitingChecks');
   });
 
   test('red checks return to gate 2 rather than requesting review', () => {
-    const d = transition('waitingChecks', { kind: 'checksFailed' });
+    const d = go('waitingChecks', { kind: 'checksFailed' });
     expect(d.state).toBe('running');
     expect(d.actions).toEqual([{ kind: 'spawnGate', gate: 2 }]);
   });
@@ -182,9 +196,9 @@ describe('review', () => {
 
 describe('permission', () => {
   test('a prompt parks the run and answering resumes it', () => {
-    const parked = transition('running', { kind: 'permissionRequested' });
+    const parked = go('running', { kind: 'permissionRequested' });
     expect(parked.state).toBe('waitingPermission');
-    expect(transition('waitingPermission', { kind: 'permissionAnswered' }).state).toBe('running');
+    expect(go('waitingPermission', { kind: 'permissionAnswered' }).state).toBe('running');
   });
 
   test('an unanswered prompt never times out on its own', () => {
@@ -192,25 +206,25 @@ describe('permission', () => {
     // would carry a verdict nobody gave. Every other event leaves it parked.
     for (const event of ALL_EVENTS) {
       if (event.kind === 'permissionAnswered') continue;
-      expect(transition('waitingPermission', event).state).toBe('waitingPermission');
+      expect(go('waitingPermission', event).state).toBe('waitingPermission');
     }
   });
 });
 
 describe('approval is the end of attention, merge is not', () => {
   test('approved releases and does not wait for a merge', () => {
-    expect(transition('waitingReview', { kind: 'reviewApproved' }).actions)
+    expect(go('waitingReview', { kind: 'reviewApproved' }).actions)
       .toContainEqual({ kind: 'release' });
   });
 
   test('a merge afterwards is recorded but changes nothing about attention', () => {
-    expect(transition('approved', { kind: 'merged' }).state).toBe('done');
+    expect(go('approved', { kind: 'merged' }).state).toBe('done');
   });
 
   test('terminal states absorb every event', () => {
     for (const state of ['failed', 'done'] as RunState[]) {
       for (const event of ALL_EVENTS) {
-        expect(transition(state, event).state).toBe(state);
+        expect(go(state, event).state).toBe(state);
       }
     }
   });
@@ -222,13 +236,13 @@ describe('durability', () => {
     // reconcile racing a webhook, a gate reporting twice after a restart.
     for (const state of ALL_STATES) {
       for (const event of ALL_EVENTS) {
-        expect(() => transition(state, event)).not.toThrow();
+        expect(() => go(state, event)).not.toThrow();
       }
     }
   });
 
   test('an unhandled pairing stays put and says so, rather than advancing', () => {
-    const d = transition('waitingReview', { kind: 'prepared' });
+    const d = go('waitingReview', { kind: 'prepared' });
     expect(d.state).toBe('waitingReview');
     expect(d.actions).toEqual([]);
     expect(d.note).toContain('ignored');
@@ -237,16 +251,74 @@ describe('durability', () => {
   test('every decision carries a note, because run_events is the audit trail', () => {
     for (const state of ALL_STATES) {
       for (const event of ALL_EVENTS) {
-        expect(transition(state, event).note.length).toBeGreaterThan(0);
+        expect(go(state, event).note.length).toBeGreaterThan(0);
       }
     }
   });
 
+  test('a LATE report from an earlier gate does not regress the run', () => {
+    // THE CASE THE SUITE WAS MISSING. Replaying the same event was covered;
+    // an earlier gate reporting after a later one started was not. Without a
+    // guard, a stale gate 2 pass arriving while gate 4 is in flight spawns
+    // gate 3 again and throws away everything since.
+    const d = transition(
+      'running',
+      { kind: 'gateFinished', gate: 2, verdict: 'pass' },
+      { activeGate: 4 },
+    );
+    expect(d.state).toBe('running');
+    expect(d.actions).toEqual([]);
+    expect(d.note).toContain('gate 2 report');
+  });
+
+  test('a late report cannot end the run either', () => {
+    // The same guard has to hold for the verdicts that STOP a run, or a stale
+    // inconclusive from gate 2 parks a run whose gate 4 is doing fine.
+    for (const verdict of ['fail', 'inconclusive'] as const) {
+      const d = transition(
+        'running',
+        { kind: 'gateFinished', gate: 2, verdict },
+        { activeGate: 4 },
+      );
+      expect({ verdict, state: d.state }).toEqual({ verdict, state: 'running' });
+    }
+  });
+
+  test('a gate report with nothing in flight is ignored', () => {
+    // It belongs to nothing this run started.
+    const d = transition(
+      'running',
+      { kind: 'gateFinished', gate: 3, verdict: 'pass' },
+      { activeGate: null },
+    );
+    expect(d.actions).toEqual([]);
+  });
+
+  test('the gate actually in flight is still acted on', () => {
+    // CONTROL: without this, a guard that ignored everything would pass the
+    // three cases above and stall every run.
+    const d = transition(
+      'running',
+      { kind: 'gateFinished', gate: 4, verdict: 'pass' },
+      { activeGate: 4 },
+    );
+    expect(d.state).toBe('waitingChecks');
+  });
+
+  test('checks going red before review is requested returns to gate 2', () => {
+    // reviewNotRequested is meant to be transient, but a commit landing in
+    // that window would otherwise park the run waiting for a review request
+    // that should no longer be made.
+    const d = go('reviewNotRequested', { kind: 'checksFailed' });
+    expect(d.state).toBe('running');
+    expect(d.actions).toEqual([{ kind: 'spawnGate', gate: 2 }]);
+  });
+
   test('a duplicate gate result does not double-advance', () => {
-    const first = transition('running', { kind: 'gateFinished', gate: 2, verdict: 'pass' });
+    const first = go('running', { kind: 'gateFinished', gate: 2, verdict: 'pass' });
     expect(first.actions).toEqual([{ kind: 'spawnGate', gate: 3 }]);
     // Replaying the SAME event must propose the same thing, not gate 4.
-    const replay = transition('running', { kind: 'gateFinished', gate: 2, verdict: 'pass' });
+    const replay = go('running', { kind: 'gateFinished', gate: 2, verdict: 'pass' });
     expect(replay).toEqual(first);
   });
 });
@@ -262,7 +334,7 @@ describe('the state taxonomy the run inbox is built on', () => {
     // Listing it beside the waits is how it stops being one: arbiter does not
     // fire until review is requested, so nothing is coming until we ask.
     expect(NEEDS_A_PERSON).not.toContain('reviewNotRequested');
-    expect(transition('waitingChecks', { kind: 'checksGreen' }).actions)
+    expect(go('waitingChecks', { kind: 'checksGreen' }).actions)
       .toEqual([{ kind: 'requestReview' }]);
   });
 

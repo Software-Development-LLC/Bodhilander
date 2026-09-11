@@ -146,12 +146,6 @@ export function listActiveRuns(): RunRow[] {
   return rows.map(toRun);
 }
 
-/**
- * Move a run to `state`, recording the reason in the same transaction.
- *
- * One call, not two, because a state written without its event is a run whose
- * history has a hole exactly where someone will later ask what happened.
- */
 /** What an event may carry beyond its kind. */
 export interface EventDetail {
   gate?: number;
@@ -181,6 +175,36 @@ function insertEvent(
   );
 }
 
+/**
+ * States that must say why they stopped.
+ *
+ * A run in the inbox saying it needs a person, without saying what for, sends
+ * whoever opens it back to the event log to work it out — which is the one
+ * thing the inbox exists to save them.
+ */
+type BlockedState = Extract<RunState, 'inconclusive' | 'failed'>;
+
+/**
+ * Move a run to `state`, recording the reason in the same transaction.
+ *
+ * One call, not two, because a state written without its event is a run whose
+ * history has a hole exactly where someone will later ask what happened.
+ *
+ * The overloads make `blockedReason` REQUIRED for the states that block, so
+ * omitting it is a compile error rather than an inbox entry with no reason.
+ */
+export function recordTransition(
+  runId: string,
+  state: BlockedState,
+  kind: string,
+  detail: EventDetail & { blockedReason: string },
+): void;
+export function recordTransition(
+  runId: string,
+  state: Exclude<RunState, BlockedState>,
+  kind: string,
+  detail?: EventDetail,
+): void;
 export function recordTransition(
   runId: string,
   state: RunState,
