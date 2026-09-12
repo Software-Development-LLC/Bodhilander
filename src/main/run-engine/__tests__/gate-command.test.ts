@@ -13,7 +13,12 @@
  * Run with: bun test src/main/run-engine
  */
 import { describe, expect, test } from 'bun:test';
-import { buildGateCommand, type GateSpec, type RunSpawnContext } from '../gate-command';
+import {
+  buildGateCommand,
+  GateCommandError,
+  type GateSpec,
+  type RunSpawnContext,
+} from '../gate-command';
 import type { AgentDefinition } from '../agent-definition';
 
 const CONTEXT: RunSpawnContext = {
@@ -142,6 +147,35 @@ describe('the tool grant comes from the plugin, not from here', () => {
     // It can afford to: its verdict is a receipt file, not structured output,
     // so it keeps --agent and with it the plugin's own composition and hooks.
     expect(buildGateCommand(OWNER, CONTEXT, 'go').argv).not.toContain('--tools');
+  });
+});
+
+describe('a reading gate refuses to run without its role', () => {
+  test('print mode with no systemPromptPath throws', () => {
+    // THE FAILURE. Skipping the flag would still emit --tools and
+    // --json-schema, so the gate runs with the right restrictions, returns a
+    // SCHEMA-VALID verdict from a generic assistant, and is recorded as
+    // bodhi:reviewer. A verdict that looks right and came from nobody is
+    // worse than none, because nothing downstream can tell.
+    for (const missing of [null, undefined, '']) {
+      expect(() =>
+        buildGateCommand(REVIEWER, { ...CONTEXT, systemPromptPath: missing }, 'go'),
+      ).toThrow(GateCommandError);
+    }
+  });
+
+  test('the refusal names the gate and the agent it would have impersonated', () => {
+    expect(() =>
+      buildGateCommand(REVIEWER, { ...CONTEXT, systemPromptPath: null }, 'go'),
+    ).toThrow(/gate 3.*bodhi:reviewer/s);
+  });
+
+  test('a BACKGROUND gate does not need one, because --agent carries the role', () => {
+    // CONTROL: without this, a guard that refused unconditionally would pass
+    // the cases above and stop every owner from ever starting.
+    expect(() =>
+      buildGateCommand(OWNER, { ...CONTEXT, systemPromptPath: null }, 'go'),
+    ).not.toThrow();
   });
 });
 

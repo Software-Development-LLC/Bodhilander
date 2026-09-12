@@ -110,3 +110,34 @@ describe('against the agents the plugin actually ships', () => {
     expect(parsed.tools).toContain('Edit');
   });
 });
+
+describe('shapes a Windows checkout or a future plugin can produce', () => {
+  test('a UTF-8 BOM does not hide the front matter', () => {
+    // An editor on a Windows checkout can add one, and the failure would be
+    // "no front matter" reported about a file that plainly has it.
+    const { tools } = parseAgentFile('reviewer', '﻿' + REAL);
+    expect(tools).toEqual(['Read', 'Bash', 'Grep', 'Glob', 'TodoWrite']);
+  });
+
+  test('a scoped grant keeps its own commas', () => {
+    // `Bash(git add:*, git commit:*)` is ONE entry. Splitting it naively
+    // yields two names that match nothing, and --tools would then grant
+    // neither -- a capability lost silently, which the agent file did give.
+    const scoped = [
+      '---',
+      'tools: Read, Bash(git add:*, git commit:*), Glob',
+      '---',
+      '',
+      'body',
+      '',
+    ].join('\n');
+    expect(parseAgentFile('x', scoped).tools)
+      .toEqual(['Read', 'Bash(git add:*, git commit:*)', 'Glob']);
+  });
+
+  test('an unbalanced paren does not swallow the rest of the list', () => {
+    // Malformed input should degrade, not consume every later entry.
+    const bad = ['---', 'tools: Read, Bash(oops, Glob', '---', '', 'body', ''].join('\n');
+    expect(parseAgentFile('x', bad).tools.length).toBeGreaterThan(1);
+  });
+});

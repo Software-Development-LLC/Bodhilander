@@ -50,6 +50,8 @@ import type { Gate } from './transitions';
 import type { AgentDefinition } from './agent-definition';
 import type { PermissionPosture } from '../repositories/runs';
 
+export class GateCommandError extends Error {}
+
 /** How a gate is invoked. The two are mutually exclusive — see the header. */
 export type GateMode = 'background' | 'print';
 
@@ -177,12 +179,23 @@ export function buildGateCommand(
   }
 
   if (spec.mode === 'print') {
+    // Refuse rather than build a command with no role. Skipping the flag
+    // would still emit --tools and --json-schema, so the gate would run with
+    // the right restrictions, produce a SCHEMA-VALID verdict from a generic
+    // assistant, and be recorded in the run history as bodhi:reviewer. A
+    // verdict that looks right and came from nobody is worse than no verdict,
+    // because nothing downstream can tell.
+    if (!context.systemPromptPath) {
+      throw new GateCommandError(
+        `gate ${spec.gate} (${spec.agent.name}): print mode needs systemPromptPath. ` +
+          'Without it the gate would answer as a generic assistant while the run ' +
+          'records the agent that never saw it.',
+      );
+    }
     // The agent's own body and grant, rather than --agent: that flag
     // suppresses structured_output, and a reading gate exists to produce a
     // verdict. Both values come from the agent file in the pinned harness.
-    if (context.systemPromptPath) {
-      argv.push('--append-system-prompt-file', context.systemPromptPath);
-    }
+    argv.push('--append-system-prompt-file', context.systemPromptPath);
     argv.push('--tools', spec.agent.tools.join(','));
     argv.push('--print', '--output-format', 'json');
     if (spec.schema) argv.push('--json-schema', JSON.stringify(spec.schema));

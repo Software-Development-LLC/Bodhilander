@@ -37,6 +37,37 @@ export class AgentParseError extends Error {}
 const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 /**
+ * Split a `tools:` list on commas that separate entries.
+ *
+ * Not a plain `.split(',')`. A scoped grant carries its own commas inside
+ * parentheses — `Bash(git add:*, git commit:*)` — and splitting naively turns
+ * one correct entry into two malformed ones. Those would then be passed to
+ * `--tools`, where a name that matches nothing grants nothing, so a gate would
+ * quietly lose a capability its agent file had given it.
+ *
+ * None of the shipped agents uses that syntax yet. This is here so that
+ * adopting it is a change in the plugin alone.
+ */
+function splitTools(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of list) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+
+    if (ch === ',' && depth === 0) {
+      out.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  out.push(current);
+  return out.map((t) => t.trim()).filter(Boolean);
+}
+
+/**
  * Parse an agent's markdown.
  *
  * Throws rather than defaulting. An agent whose `tools:` cannot be read must
@@ -45,7 +76,10 @@ const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
  * every gate this engine spawns.
  */
 export function parseAgentFile(name: string, text: string): AgentDefinition {
-  const match = FRONT_MATTER.exec(text);
+  // A UTF-8 BOM ahead of `---` would make the front matter unfindable, and
+  // this reads files from a Windows checkout where an editor can add one. The
+  // failure would be "no front matter" on a file that plainly has it.
+  const match = FRONT_MATTER.exec(text.replace(/^﻿/, ''));
   if (!match) {
     throw new AgentParseError(`${name}: no front matter, so no declared tools`);
   }
@@ -59,11 +93,7 @@ export function parseAgentFile(name: string, text: string): AgentDefinition {
     );
   }
 
-  const tools = toolsLine
-    .replace(/^tools:\s*/, '')
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
+  const tools = splitTools(toolsLine.replace(/^tools:\s*/, ''));
   if (tools.length === 0) {
     throw new AgentParseError(`${name}: tools: is empty`);
   }
