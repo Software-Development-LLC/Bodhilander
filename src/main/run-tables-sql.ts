@@ -40,6 +40,10 @@ export const RUN_TABLES_SQL = `
       branch TEXT NOT NULL,
       base TEXT NOT NULL,
       scratch TEXT DEFAULT NULL,
+      -- The role that runs gate 2 here. Recorded because where several
+      -- agents declare the repo, a PERSON chose between them, and a choice
+      -- that does not survive the process is one gate 2 has to ask again.
+      agent TEXT DEFAULT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       pr_number INTEGER DEFAULT NULL,
       pr_url TEXT DEFAULT NULL,

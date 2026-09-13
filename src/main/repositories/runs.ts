@@ -40,6 +40,8 @@ export interface RunOwnerRow {
   branch: string;
   base: string;
   scratch: string | null;
+  /** The role that runs gate 2 here, once a run has resolved it. */
+  agent?: string | null;
   status: string;
   prNumber: number | null;
   prUrl: string | null;
@@ -266,14 +268,18 @@ function safeParse(text: string): unknown {
 export function upsertOwner(owner: RunOwnerRow): void {
   getDatabase()
     .prepare(
-      `INSERT INTO run_owners (run_id, repo, worktree, branch, base, scratch, status,
-                               pr_number, pr_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO run_owners (run_id, repo, worktree, branch, base, scratch, agent,
+                               status, pr_number, pr_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(run_id, repo) DO UPDATE SET
          worktree = excluded.worktree,
          branch   = excluded.branch,
          base     = excluded.base,
          scratch  = excluded.scratch,
+         -- COALESCE, like the PR columns: spawn.sh is idempotent and this
+         -- mirror is re-run, and a later mirror that does not carry the role
+         -- must not erase the one a person chose.
+         agent    = COALESCE(excluded.agent, run_owners.agent),
          status   = excluded.status,
          pr_number = COALESCE(excluded.pr_number, run_owners.pr_number),
          pr_url    = COALESCE(excluded.pr_url, run_owners.pr_url)`,
@@ -285,6 +291,7 @@ export function upsertOwner(owner: RunOwnerRow): void {
       owner.branch,
       owner.base,
       owner.scratch ?? null,
+      owner.agent ?? null,
       owner.status,
       owner.prNumber ?? null,
       owner.prUrl ?? null,
@@ -301,6 +308,7 @@ export function listOwners(runId: string): RunOwnerRow[] {
     branch: string;
     base: string;
     scratch: string | null;
+    agent: string | null;
     status: string;
     pr_number: number | null;
     pr_url: string | null;
@@ -312,6 +320,7 @@ export function listOwners(runId: string): RunOwnerRow[] {
     branch: row.branch,
     base: row.base,
     scratch: row.scratch,
+    agent: row.agent,
     status: row.status,
     prNumber: row.pr_number,
     prUrl: row.pr_url,

@@ -595,6 +595,16 @@ export function initializeRunTables(database: Database.Database): void {
   // fixture that re-declares the tables by hand passes against a schema
   // nobody ships.
   database.exec(RUN_TABLES_SQL);
+
+  // Migration: run_owners.agent, for databases created before it existed.
+  // CREATE TABLE IF NOT EXISTS leaves an older table alone, so a column added
+  // to the SQL above reaches a fresh install and nobody else.
+  const ownerColumns = database.prepare('PRAGMA table_info(run_owners)').all() as {
+    name: string;
+  }[];
+  if (!ownerColumns.some((col) => col.name === 'agent')) {
+    database.exec('ALTER TABLE run_owners ADD COLUMN agent TEXT DEFAULT NULL');
+  }
 }
 
 /**
