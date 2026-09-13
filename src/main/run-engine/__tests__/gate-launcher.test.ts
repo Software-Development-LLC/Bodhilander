@@ -17,7 +17,13 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { GateLaunchError, agentsForGate, loadAgent, launchGate } from '../gate-launcher';
+import {
+  GateLaunchError,
+  agentsForGate,
+  launchGate,
+  loadAgent,
+  promptFilePath,
+} from '../gate-launcher';
 import { GateCommandError } from '../gate-command';
 import type { RunSpawnContext } from '../gate-command';
 
@@ -107,6 +113,59 @@ describe('reading a role out of the harness', () => {
   });
 });
 
+describe('a name is part of a path', () => {
+  test('a traversal is refused rather than followed', async () => {
+    // The module's guarantee is that an agent not in the pinned harness is
+    // not an agent this run may use. A name is interpolated into a path, so
+    // without this the guarantee rests on every caller passing something
+    // sensible -- and names come from team.yaml, which a person writes.
+    const root = await harness(PLUGIN_SHAPED);
+    const separators = ['../../../etc/passwd', 'a/b', '..',
+      '..' + String.fromCharCode(92) + '..',
+      'a' + String.fromCharCode(92) + 'b'];
+    for (const name of separators) {
+      // The MESSAGE, not just the class. A missing file also raises
+      // GateLaunchError, so asserting the class alone passes against a
+      // version with no guard at all — which is what a mutation run showed
+      // when this test was written the easy way.
+      const error = await loadAgent(root, name).catch((e: Error) => e);
+      expect(error.message).toMatch(/not a role name|resolves outside/);
+    }
+  });
+
+  test('a traversal that would resolve to a real file is still refused', async () => {
+    // The sharp version: the file EXISTS, so a check that only asked "can I
+    // read it" would load a role from outside the harness and report success.
+    const root = await harness(PLUGIN_SHAPED);
+    const outside = path.join(root, 'outside.md');
+    await fs.writeFile(outside, ['---', 'name: outside', 'tools: Bash', '---', '', '# Purpose', ''].join(String.fromCharCode(10)));
+    const error = await loadAgent(root, '../outside').catch((e: Error) => e);
+    expect(error.message).toMatch(/not a role name|resolves outside/);
+  });
+
+  test('an empty name is not a name', async () => {
+    const root = await harness(PLUGIN_SHAPED);
+    const error = await loadAgent(root, '').catch((e: Error) => e);
+    expect(error.message).toMatch(/not a role name/);
+  });
+
+  test('every real role name is still accepted', async () => {
+    // THE control. A pattern that refused everything would satisfy every
+    // assertion above and launch no gate at all.
+    const root = await harness(PLUGIN_SHAPED);
+    for (const name of ['arch', 'reviewer', 'product-owner', 'bsa-lead']) {
+      expect((await loadAgent(root, name)).name).toBe(name);
+    }
+  });
+
+  test('a launch with a traversal name spawns nothing', async () => {
+    const root = await harness(PLUGIN_SHAPED);
+    const error = await launch(root, { agentName: '../outside' }).catch((e: Error) => e);
+    expect(error.message).toMatch(/not a role name|resolves outside/);
+    await expect(fs.readdir(path.join(root, 'prompts'))).rejects.toThrow();
+  });
+});
+
 describe('which role serves which gate is discovered, not hardcoded', () => {
   test('the harness names gate 3’s agent', async () => {
     const root = await harness(PLUGIN_SHAPED);
@@ -155,8 +214,7 @@ describe('which role serves which gate is discovered, not hardcoded', () => {
   });
 });
 
-describe('launching', () => {
-  function context(harnessPath: string): Omit<RunSpawnContext, 'systemPromptPath'> {
+function context(harnessPath: string): Omit<RunSpawnContext, 'systemPromptPath'> {
     return {
       harnessPath,
       bodhiRoot: 'C:/work/repos',
@@ -167,7 +225,7 @@ describe('launching', () => {
     };
   }
 
-  async function launch(root: string, over: Partial<Parameters<typeof launchGate>[0]> = {}) {
+async function launch(root: string, over: Partial<Parameters<typeof launchGate>[0]> = {}) {
     const promptFileDir = path.join(root, 'prompts');
     return launchGate({
       gate: 3,
@@ -186,26 +244,35 @@ describe('launching', () => {
     });
   }
 
-  test('print mode writes the role to disk before it builds the command', async () => {
-    // The file is not a nicety: reviewer.md is 37,429 characters, and inline
-    // that exceeds Windows' command line — ENAMETOOLONG, raised before the
-    // process starts.
+describe('launching', () => {
+  test('print mode leaves no role behind once the gate is done with it', async () => {
+    // The body is reproducible from the harness at any moment, so a copy per
+    // gate run is a growing pile of duplicates of a file that already exists
+    // — and one holding a role a later harness may have changed.
     const root = await harness(PLUGIN_SHAPED);
     await launch(root).catch(() => undefined);
-    const written = await fs.readdir(path.join(root, 'prompts'));
-    expect(written).toEqual(['11111111-2222-3333-4444-555555555555-gate3.md']);
-    const body = await fs.readFile(path.join(root, 'prompts', written[0]), 'utf8');
-    expect(body).toContain('# Purpose');
-    expect(body).not.toContain('tools:');
+    expect(await fs.readdir(path.join(root, 'prompts'))).toEqual([]);
   });
 
-  test('the file is named for the session, not the role', async () => {
+  test('the role that was written is the body, without the front matter', async () => {
+    // Asserted where the writing happens rather than after the run, because
+    // the file is removed when the gate finishes with it. A test that read it
+    // afterwards would be asserting the cleanup, not the content.
+    const root = await harness(PLUGIN_SHAPED);
+    const agent = await loadAgent(root, 'reviewer');
+    expect(agent.body).toContain('# Purpose');
+    expect(agent.body).not.toContain('tools:');
+  });
+
+  test('the file is named for the session, not the role', () => {
     // Two gates in one run can share a role, and a shared file would be
     // rewritten under a gate still reading it.
-    const root = await harness(PLUGIN_SHAPED);
-    await launch(root, { gate: 4, agentName: 'verifier' }).catch(() => undefined);
-    const written = await fs.readdir(path.join(root, 'prompts'));
-    expect(written[0]).toContain('gate4');
+    const one = promptFilePath('/tmp/p', 'session-a', 3);
+    const two = promptFilePath('/tmp/p', 'session-a', 4);
+    const other = promptFilePath('/tmp/p', 'session-b', 3);
+    expect(new Set([one, two, other]).size).toBe(3);
+    expect(one).toContain('session-a');
+    expect(one).toContain('gate3');
   });
 
   test('a background gate writes no prompt file', async () => {

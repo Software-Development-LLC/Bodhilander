@@ -39,10 +39,46 @@ import { buildGateCommand, type GateMode, type RunSpawnContext } from './gate-co
 import { runGate, type GateOutcome, type GateSpawnOptions } from './gate-process';
 import { GATE_VERDICT_SCHEMA } from './gate-verdict';
 
-export class GateLaunchError extends Error {}
+export class GateLaunchError extends Error {
+  // Set explicitly: without it `error.name` reads "Error" in a log, and the
+  // person triaging one has to already know which module raised it.
+  name = 'GateLaunchError';
+}
 
 /** Where a role can live in the harness. Owners are in their own folder. */
 const AGENT_DIRS = ['agents', path.join('agents', 'staff')];
+
+/**
+ * A role name that can only ever name a file inside the harness.
+ *
+ * The module's guarantee is that an agent not in the pinned harness is not an
+ * agent this run may use, and a name is interpolated into a path — so without
+ * this the guarantee rests on every caller passing something sensible. Names
+ * come from `team.yaml` today, which a person writes, so "sensible" is a hope
+ * rather than a property.
+ *
+ * Every real agent matches: arch, reviewer, scribe, verifier, product-owner,
+ * bsa-lead, bma-care.
+ */
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function agentFile(harnessPath: string, dir: string, name: string): string {
+  if (!SAFE_NAME.test(name) || name.includes('..')) {
+    throw new GateLaunchError(
+      `"${name}" is not a role name. A name is part of a path, so it may hold only `
+        + 'letters, digits, dot, dash and underscore — never a separator or "..".',
+    );
+  }
+  const base = path.resolve(harnessPath, dir);
+  const file = path.resolve(base, `${name}.md`);
+  // Belt and braces, and the belt is the one that holds: a pattern can be
+  // out-argued by an encoding nobody thought of, while "is it under this
+  // directory" is the question actually being asked.
+  if (file !== path.join(base, `${name}.md`) || !file.startsWith(base + path.sep)) {
+    throw new GateLaunchError(`"${name}" resolves outside the pinned harness`);
+  }
+  return file;
+}
 
 /**
  * Read one agent out of the harness by name.
@@ -58,7 +94,7 @@ export async function loadAgent(
 ): Promise<AgentDefinition & { path: string }> {
   const tried: string[] = [];
   for (const dir of AGENT_DIRS) {
-    const file = path.join(harnessPath, dir, `${name}.md`);
+    const file = agentFile(harnessPath, dir, name);
     tried.push(file);
     let text: string;
     try {
@@ -109,7 +145,19 @@ export async function agentsForGate(harnessPath: string, gate: Gate): Promise<st
       if (match && declaresGate(match[1], gate)) found.push(entry.replace(/\.md$/, ''));
     }
   }
-  return found.sort();
+  return found.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Where a gate's role is written for print mode.
+ *
+ * Named for the SESSION rather than the role: two gates in one run can share
+ * a role, and a shared file would be rewritten under a gate that is still
+ * reading it. Its own function so the naming can be asserted without racing
+ * the cleanup that removes it.
+ */
+export function promptFilePath(dir: string, sessionId: string, gate: Gate): string {
+  return path.join(dir, `${sessionId}-gate${gate}.md`);
 }
 
 export interface GateLaunch {
@@ -142,10 +190,7 @@ export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
     // Named for the session rather than the agent: two gates in one run can
     // share a role, and a shared file would be rewritten under a gate that
     // is still reading it.
-    systemPromptPath = path.join(
-      launch.promptFileDir,
-      `${launch.context.sessionId}-gate${launch.gate}.md`,
-    );
+    systemPromptPath = promptFilePath(launch.promptFileDir, launch.context.sessionId, launch.gate);
     await fs.writeFile(systemPromptPath, agent.body, 'utf8');
   }
 
@@ -163,5 +208,18 @@ export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
     launch.prompt,
   );
 
-  return runGate(command, launch.spawn);
+  try {
+    return await runGate(command, launch.spawn);
+  } finally {
+    if (systemPromptPath) {
+      // Removed once the gate has finished with it. The body is reproducible
+      // from the harness at any moment, so keeping a copy per gate run is a
+      // growing pile of duplicates of a file that already exists — and one
+      // holding a role a later harness may have changed.
+      //
+      // A run interrupted before this leaves its file behind, which is why
+      // the directory is the caller's: it can be swept on start.
+      await fs.rm(systemPromptPath, { force: true }).catch(() => undefined);
+    }
+  }
 }
