@@ -114,9 +114,15 @@ function outcomeOf(check: ReportedCheck): Outcome {
   if (FAILING.has(conclusion)) return 'failed';
   if (ESTABLISHED_NOTHING.has(conclusion)) return 'nothing';
   if (IN_FLIGHT.has(conclusion)) return 'pending';
-  // No conclusion and no state saying why. Observed exactly this on a rollup
-  // queried mid-run: both fields empty. Unfinished, not failed.
-  return conclusion === '' ? 'pending' : 'nothing';
+  // A value this module has not seen is not evidence of anything. Treating
+  // the unrecognised as fine is how a new GitHub state becomes a green.
+  if (conclusion !== '') return 'nothing';
+  // No conclusion at all, so the row's own claim about itself decides. A
+  // check that says COMPLETED and carries no conclusion has finished and
+  // established nothing — undriveable, and a person is told. Anything else
+  // (a rollup queried mid-run answers with both fields empty, observed) has
+  // not finished, so it is pending.
+  return state === 'COMPLETED' ? 'nothing' : 'pending';
 }
 
 /**

@@ -126,6 +126,34 @@ describe('a null conclusion is not a failure', () => {
     expect(verdict.status).toBe('waiting');
   });
 
+  test('COMPLETED with no conclusion is undriveable, not waiting', () => {
+    // The row's own claim about itself decides. A check that says it finished
+    // and carries no conclusion has established nothing, and calling that
+    // pending parks the run in waitingChecks forever on something that will
+    // never change — the silent deadlock this module exists to prevent, in
+    // the module itself.
+    const verdict = before([
+      ...reported(ALL_GREEN).slice(0, 2),
+      { name: 'quality-gate', conclusion: null, status: 'COMPLETED' },
+    ]);
+    expect(verdict.status).toBe('undriveable');
+    if (verdict.status !== 'undriveable') throw new Error('unreachable');
+    expect(verdict.names).toEqual(['quality-gate']);
+  });
+
+  test('the status field is what separates the two null cases', () => {
+    // Asserted against each other, because the difference is one field. The
+    // test helper used to force IN_PROGRESS on every null conclusion, which
+    // made the COMPLETED branch unreachable and the bug invisible.
+    const row = (status: string | null) => [
+      ...reported(ALL_GREEN).slice(0, 2),
+      { name: 'quality-gate', conclusion: null, status },
+    ];
+    expect(before(row('COMPLETED')).status).toBe('undriveable');
+    expect(before(row('IN_PROGRESS')).status).toBe('waiting');
+    expect(before(row(null)).status).toBe('waiting');
+  });
+
   test('QUEUED in the status field is pending even with no conclusion', () => {
     const verdict = before([
       ...reported(ALL_GREEN).slice(0, 2),
