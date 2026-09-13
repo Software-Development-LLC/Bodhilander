@@ -40,6 +40,7 @@ const ALL_EVENTS: RunEvent[] = [
   { kind: 'prOpened' },
   { kind: 'checksGreen' },
   { kind: 'checksFailed' },
+  { kind: 'checksUndriveable', reason: 'no expected_checks recorded' },
   { kind: 'reviewRequested' },
   { kind: 'reviewApproved' },
   { kind: 'reviewChangesRequested', verdict: { actor: 'human' } },
@@ -191,6 +192,36 @@ describe('review', () => {
     const d = go('waitingChecks', { kind: 'checksFailed' });
     expect(d.state).toBe('running');
     expect(d.actions).toEqual([{ kind: 'spawnGate', gate: 2 }]);
+  });
+
+  test('checks that cannot be judged stop the run and tell a person', () => {
+    // Neither green nor red, and both shortcuts are defects: advancing is a
+    // green off a set nobody graded, and returning to gate 2 sends an owner
+    // back for a check that was SKIPPED or for a repo that declares none.
+    // GH-553 measured a repo with no required checks at all.
+    const d = go('waitingChecks', { kind: 'checksUndriveable', reason: 'test was SKIPPED' });
+    expect(d.state).toBe('inconclusive');
+    expect(d.actions).toEqual([
+      { kind: 'notify', reason: 'checks undriveable: test was SKIPPED' },
+    ]);
+  });
+
+  test('it does not spawn a gate and does not request review', () => {
+    // The two things it must NOT do, named rather than inferred from the
+    // state: either one turns an ungraded PR into a moving run.
+    const d = go('waitingChecks', { kind: 'checksUndriveable', reason: 'nothing declared' });
+    expect(d.actions.map((a) => a.kind)).not.toContain('spawnGate');
+    expect(d.actions.map((a) => a.kind)).not.toContain('requestReview');
+  });
+
+  test('the reason reaches the person being notified', () => {
+    // An inconclusive run's whole cost is a person opening it to find out
+    // why. A notify with no reason makes them go and look.
+    const d = go('waitingChecks', {
+      kind: 'checksUndriveable',
+      reason: 'quality-gate finished without establishing anything',
+    });
+    expect(d.note).toContain('quality-gate finished without establishing anything');
   });
 });
 
