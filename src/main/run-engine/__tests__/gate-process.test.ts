@@ -324,6 +324,22 @@ describe('what the child inherits', () => {
     expect(command.argv.join(' ')).not.toContain('review the diff');
   });
 
+  test('a gate that exits before reading its prompt still reports an outcome', async () => {
+    // POSIX answers a write to a pipe with no reader with EPIPE, and an
+    // unhandled one here is an uncaught error inside Electron's main process:
+    // the whole engine taken down by a gate that merely failed early. Caught
+    // by CI on Linux, where the failure surfaced against an unrelated test
+    // because it is raised asynchronously; Windows tolerates the write and
+    // says nothing.
+    //
+    // A prompt big enough not to fit the pipe buffer, so the write is still
+    // in flight when the child is already gone.
+    const command = printGate(envelope({ is_error: true }));
+    command.stdin = 'x'.repeat(256 * 1024);
+    const outcome = await run(command);
+    expect(outcome.status).toBe('undriveable');
+  });
+
   test('a background gate still gets its stdin closed', async () => {
     // A CLI reading a non-TTY stdin to EOF hangs forever on input that is
     // never coming. Without the close this test times out rather than fails.

@@ -271,6 +271,12 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
     // no quoting, no length ceiling, and a variadic option cannot swallow it.
     // Background mode still ends the pipe: a CLI reading a non-TTY stdin to
     // EOF hangs forever on input that is never coming.
+    // A gate that exits before reading its prompt leaves nothing on the other
+    // end of this pipe, and POSIX answers a write to a reader-less pipe with
+    // EPIPE. Unhandled that is an uncaught error inside Electron's main
+    // process — the engine taken down by a gate that merely failed early.
+    // Whatever the gate did is learned from `close` either way.
+    child.stdin?.on('error', () => undefined);
     if (command.stdin !== null) child.stdin?.end(command.stdin);
     else child.stdin?.end();
 
