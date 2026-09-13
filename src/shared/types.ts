@@ -666,3 +666,21 @@ export interface AccountRemovalCost {
   /** Conversation transcripts stored under the account's config dir. */
   conversations: number;
 }
+/**
+ * One line of the run inbox (CO-722).
+ *
+ * Mirrors `InboxRow` in the run repository. Declared here because the
+ * renderer may not import from `src/main`, and duplicated deliberately rather
+ * than widened: the shape a window is allowed to see is a decision, and a
+ * type shared by reference makes every column added in main visible in a
+ * window by default.
+ */
+export interface RunInboxRow {
+  id: string;
+  initiativeKey: string;
+  state: string;
+  /** Null when the run is waiting by design rather than stopped. */
+  blockedReason: string | null;
+  since: string;
+  repos: string[];
+}

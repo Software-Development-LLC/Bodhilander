@@ -13,7 +13,7 @@
  * YAML. Where the two disagree the file wins.
  */
 import { getDatabase } from '../database';
-import type { RunState } from '../run-engine/transitions';
+import { NEEDS_A_PERSON, type RunState } from '../run-engine/transitions';
 
 export type PermissionPosture = 'manual' | 'denyOnPrompt' | 'bypass';
 
@@ -457,4 +457,57 @@ export function listGates(runId: string): RunGateRow[] {
     .prepare('SELECT * FROM run_gates WHERE run_id = ? ORDER BY rowid ASC')
     .all(runId) as Parameters<typeof toGateRow>[0][];
   return rows.map(toGateRow);
+}
+/** One line of the inbox: a run that cannot move without somebody. */
+export interface InboxRow {
+  id: string;
+  initiativeKey: string;
+  state: RunState;
+  /**
+   * Why it stopped, when it stopped rather than merely waited.
+   *
+   * Null for the states that are waiting on somebody by design -- a review in
+   * progress has not gone wrong, so there is nothing to explain.
+   */
+  blockedReason: string | null;
+  /** When it last moved. What "waiting since" is measured from. */
+  since: string;
+  /** The repos this run touches, for a line a person can recognise. */
+  repos: string[];
+}
+
+/**
+ * Runs that cannot move without a person, oldest wait first.
+ *
+ * Oldest first because the one that has waited longest is the one most likely
+ * to have been forgotten, and an inbox sorted newest-first buries it exactly
+ * as it becomes urgent. The states come from the state machine's own
+ * NEEDS_A_PERSON rather than a list repeated here -- a state added there and
+ * missed here is a run nobody is ever told about.
+ */
+export function listInbox(): InboxRow[] {
+  const placeholders = NEEDS_A_PERSON.map(() => '?').join(', ');
+  const rows = getDatabase()
+    .prepare(
+      `SELECT id, initiative_key, state, blocked_reason, updated_at
+         FROM runs
+        WHERE state IN (${placeholders})
+        ORDER BY updated_at ASC, id ASC`,
+    )
+    .all(...NEEDS_A_PERSON) as {
+    id: string;
+    initiative_key: string;
+    state: string;
+    blocked_reason: string | null;
+    updated_at: string;
+  }[];
+
+  return rows.map((row) => ({
+    id: row.id,
+    initiativeKey: row.initiative_key,
+    state: row.state as RunState,
+    blockedReason: row.blocked_reason,
+    since: row.updated_at,
+    repos: listOwners(row.id).map((owner) => owner.repo),
+  }));
 }
