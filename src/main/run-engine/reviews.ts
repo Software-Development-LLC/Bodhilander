@@ -47,10 +47,27 @@ export interface ReviewRow {
   marker?: MarkerReading;
 }
 
-/** The payload `read-review.sh` prints, narrowed to what decides anything. */
+/**
+ * The payload `read-review.sh` prints, narrowed to what may decide anything.
+ *
+ * The script also reports `blocks`, and it is deliberately NOT here. Whether
+ * a review blocks is answered by the review's own GitHub state, which is
+ * authenticated; `blocks` is derived from markers anyone who can comment
+ * could type. Narrowing the type is what stops a later reader from reaching
+ * for the easier field — the markers say WHO reviewed and HOW SEVERELY, and
+ * nothing else.
+ */
 export interface MarkerReading {
   arbiter: boolean;
-  blocks: boolean | null;
+  /**
+   * Highest severity the markers reported, as `read-review.sh` ranks them.
+   *
+   * Four levels arrive and `ReviewVerdict.severity` has two, so `blocking`
+   * folds into `major`: the state machine's only question is whether a bot
+   * finding is major or below, and a blocking finding is emphatically not
+   * below. The distinction between blocking and major is not lost, only
+   * unused here — it is in the payload a run records.
+   */
   highest: 'blocking' | 'major' | 'minor' | 'nit' | null;
   /**
    * The script's exit code. 2 means markers were present and unreadable,
@@ -103,7 +120,12 @@ function currentPositions(rows: readonly ReviewRow[]): ReviewRow[] {
     const held = latest.get(key);
     if (!held || row.submittedAt > held.submittedAt) latest.set(key, row);
   }
-  return [...latest.values()];
+  // Oldest first, so which reviewer gets NAMED when several are in the same
+  // position does not depend on the order gh happened to return the rows in.
+  // The status would be right either way; the name in the notification is
+  // what a person reads, and it should not move between two polls that saw
+  // the same PR.
+  return [...latest.values()].sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
 }
 
 /**

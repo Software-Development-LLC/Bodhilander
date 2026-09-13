@@ -37,9 +37,9 @@ function read(rows: ReviewRow[], approvers: readonly string[] = APPROVERS) {
   return readReviews({ rows, approvers });
 }
 
-const ARBITER: MarkerReading = { arbiter: true, blocks: true, highest: 'nit', code: 1 };
-const NOT_ARBITER: MarkerReading = { arbiter: false, blocks: null, highest: null, code: 3 };
-const UNREADABLE: MarkerReading = { arbiter: true, blocks: null, highest: null, code: 2 };
+const ARBITER: MarkerReading = { arbiter: true, highest: 'nit', code: 1 };
+const NOT_ARBITER: MarkerReading = { arbiter: false, highest: null, code: 3 };
+const UNREADABLE: MarkerReading = { arbiter: true, highest: null, code: 2 };
 
 describe('GitHub keeps every review, not the current one', () => {
   test('an approval after a block is the position that stands', () => {
@@ -145,7 +145,7 @@ describe('only an approver decides', () => {
       row({
         author: 'a-passer-by',
         state: 'APPROVED',
-        marker: { arbiter: true, blocks: false, highest: null, code: 0 },
+        marker: { arbiter: true, highest: null, code: 0 },
       }),
     ]);
     expect(reading.status).toBe('waiting');
@@ -218,6 +218,41 @@ describe('a review is a person’s unless something proves otherwise', () => {
     }
     expect(human.verdict.actor).toBe('human');
     expect(bot.verdict.actor).toBe('bot');
+  });
+});
+
+describe('who gets named does not depend on the order gh returned', () => {
+  test('the same two blocks name the same reviewer either way round', () => {
+    // The status would be right either way. The NAME is what a person reads
+    // in the notification, and it should not move between two polls that saw
+    // the same PR.
+    const first = row({
+      author: 'brannon-bowden', state: 'CHANGES_REQUESTED', submittedAt: '2026-09-13T15:00:00Z',
+    });
+    const second = row({
+      author: 'William-Long-II', state: 'CHANGES_REQUESTED', submittedAt: '2026-09-13T16:00:00Z',
+    });
+    for (const rows of [[first, second], [second, first]]) {
+      const reading = read(rows);
+      if (reading.status !== 'changesRequested') throw new Error('expected changesRequested');
+      expect(reading.by).toBe('brannon-bowden');
+    }
+  });
+
+  test('the same is true of two unreadable reviews', () => {
+    const first = row({
+      author: 'brannon-bowden', state: 'APPROVED',
+      submittedAt: '2026-09-13T15:00:00Z', marker: UNREADABLE,
+    });
+    const second = row({
+      author: 'William-Long-II', state: 'APPROVED',
+      submittedAt: '2026-09-13T16:00:00Z', marker: UNREADABLE,
+    });
+    for (const rows of [[first, second], [second, first]]) {
+      const reading = read(rows);
+      if (reading.status !== 'undriveable') throw new Error('expected undriveable');
+      expect(reading.reason).toContain('brannon-bowden');
+    }
   });
 });
 
