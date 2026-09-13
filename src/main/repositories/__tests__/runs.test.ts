@@ -23,51 +23,20 @@ mock.module('../../database', () => ({
 }));
 
 const runs = await import('../runs');
+const { RUN_TABLES_SQL } = await import('../../run-tables-sql');
 
+/**
+ * A database with the SHIPPED schema, not a copy of it.
+ *
+ * This fixture used to declare the four tables itself, which meant a column
+ * added in database.ts and missed here produced tests that passed against a
+ * schema nobody runs. The SQL now lives in one module that both this and
+ * `initializeRunTables` read.
+ */
 function freshDb(): Database {
   const d = new Database(':memory:');
-  d.exec(`
-    CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL);
-
-    CREATE TABLE runs (
-      id TEXT PRIMARY KEY,
-      initiative_key TEXT NOT NULL,
-      initiative_dir TEXT NOT NULL,
-      harness_path TEXT NOT NULL,
-      bodhi_root TEXT NOT NULL,
-      python_path TEXT DEFAULT NULL,
-      state TEXT NOT NULL DEFAULT 'preparing',
-      permission_posture TEXT NOT NULL DEFAULT 'manual',
-      budget_usd REAL DEFAULT NULL,
-      group_id TEXT DEFAULT NULL REFERENCES groups(id) ON DELETE SET NULL,
-      blocked_reason TEXT DEFAULT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE run_owners (
-      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-      repo TEXT NOT NULL,
-      worktree TEXT NOT NULL,
-      branch TEXT NOT NULL,
-      base TEXT NOT NULL,
-      scratch TEXT DEFAULT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      pr_number INTEGER DEFAULT NULL,
-      pr_url TEXT DEFAULT NULL,
-      PRIMARY KEY (run_id, repo)
-    );
-
-    CREATE TABLE run_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-      at TEXT DEFAULT CURRENT_TIMESTAMP,
-      kind TEXT NOT NULL,
-      gate INTEGER DEFAULT NULL,
-      repo TEXT DEFAULT NULL,
-      payload_json TEXT DEFAULT NULL
-    );
-  `);
+  d.exec('CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL);');
+  d.exec(RUN_TABLES_SQL);
   return d;
 }
 
