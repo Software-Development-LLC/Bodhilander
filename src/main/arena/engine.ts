@@ -17,8 +17,7 @@
  * could emit its final update before the renderer knew the run id, leaving
  * a column stuck on "running".
  */
-import { spawn, execFile, ChildProcess } from 'child_process';
-import * as path from 'path';
+import { spawn } from 'child_process';
 import * as readline from 'readline';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -30,6 +29,7 @@ import { getPreference } from '../repositories/preferences';
 import * as arenaRepo from '../repositories/arena';
 import { vaultEnvFor } from '../key-vault';
 import { redactEnv } from '../redact-env';
+import { killTree } from '../process-tree';
 import { ArenaStreamParser, ollamaParser } from './parsers';
 import { ArenaResponse, ArenaRun, ArenaUpdate, ArenaResponseStatus } from '../../shared/types';
 
@@ -37,46 +37,6 @@ export const OLLAMA_CONTESTANT_ID = 'ollama';
 const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 /** Generous default cap so a hung CLI can't leave a column spinning forever. */
 const DEFAULT_CONTESTANT_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** Grace period between SIGTERM and the SIGKILL escalation. */
-const KILL_GRACE_MS = 3000;
-
-/**
- * Kill the contestant's whole process tree. The CLI runs as a child of the
- * wrapper shell, so signalling just the shell would leave the actual agent
- * process running detached. POSIX contestants are spawned detached (own
- * process group) and killed by group, escalating to SIGKILL if the tree
- * ignores SIGTERM — otherwise 'close' never fires and the column would sit
- * on "running" forever. Windows taskkill /F is already forceful.
- */
-function killTree(child: ChildProcess): void {
-  const pid = child.pid;
-  if (!pid) {
-    child.kill();
-    return;
-  }
-  if (process.platform === 'win32') {
-    // Absolute path so a poisoned PATH can't substitute the binary (S4036).
-    const taskkill = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
-    execFile(taskkill, ['/F', '/T', '/PID', String(pid)], () => undefined);
-    return;
-  }
-  try {
-    process.kill(-pid, 'SIGTERM');
-  } catch {
-    child.kill();
-    return;
-  }
-  const escalation = setTimeout(() => {
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch {
-      // Process group already gone — nothing to escalate.
-    }
-  }, KILL_GRACE_MS);
-  escalation.unref?.();
-  child.once('close', () => clearTimeout(escalation));
-}
 
 interface OllamaMessage {
   role: 'user' | 'assistant';
