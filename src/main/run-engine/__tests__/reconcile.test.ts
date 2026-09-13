@@ -140,6 +140,39 @@ describe('what a failure MEANS is not uniform', () => {
     ]);
   });
 
+  test('an exit code the lookup does not define is retryable, not a config fault', async () => {
+    // registry-entry answers 0, 2 or 3 and nothing else today, so another
+    // code is a crash, a spawn failure, or a version that grew a meaning this
+    // engine was never taught. None of those is evidence about the repo, and
+    // stopping a run for a crash is the mistake this module documents about
+    // gh -- applied to the other path.
+    const { deps } = fake({ checks: { code: 1, stdout: '', stderr: 'Traceback...' } });
+    const result = await reconcileOnce(TARGET, deps);
+    expect(result.events).toEqual([]);
+    expect(result.problems[0]).toContain('outside its own contract');
+  });
+
+  test('a lookup that exits 0 and prints rubbish is retryable too', async () => {
+    // It claimed to have answered and then said nothing readable. Most
+    // plausibly a half-written stream, and nothing about the registry.
+    const { deps } = fake({ checks: { code: 0, stdout: 'Traceback (most recent', stderr: '' } });
+    const result = await reconcileOnce(TARGET, deps);
+    expect(result.events).toEqual([]);
+    expect(result.problems[0]).toContain('not JSON');
+  });
+
+  test('2 and 3 still stop the run, and 1 still does not', async () => {
+    // The line itself, asserted across the codes rather than one at a time:
+    // the question is never "did it fail" but "could asking again help".
+    for (const code of [2, 3]) {
+      const { deps } = fake({ checks: { code, stdout: '{"detail":"no bar"}', stderr: '' } });
+      const result = await reconcileOnce(TARGET, deps);
+      expect(result.events).toEqual([{ kind: 'checksUndriveable', reason: 'no bar' }]);
+    }
+    const { deps } = fake({ checks: { code: 1, stdout: '{"detail":"no bar"}', stderr: '' } });
+    expect((await reconcileOnce(TARGET, deps)).events).toEqual([]);
+  });
+
   test('gh returning something that is not JSON is a problem, not a state', async () => {
     const { deps } = fake({ pr: { code: 0, stdout: 'rate limit exceeded', stderr: '' } });
     const result = await reconcileOnce(TARGET, deps);
@@ -260,6 +293,62 @@ describe('only an approver’s body reaches the marker parser', () => {
     await reconcileOnce({ ...TARGET, state: 'waitingReview' }, deps);
     const read = calls.find((c) => c.argv.some((a) => a.includes('read_review')));
     expect(read?.stdin).toBe("brannon's review");
+  });
+});
+
+describe('a marker parser answering outside its contract', () => {
+  test('an unknown exit code is undriveable, not "not an arbiter review"', async () => {
+    // The two readings are miles apart. 2 says nobody knows what this review
+    // decided, and the run stops. 3 says it is a person's review, and the
+    // run acts on its GitHub state -- here, releasing on an approval whose
+    // markers the parser choked on.
+    const { deps } = fake({
+      pr: ok({
+        statusCheckRollup: GREEN_ROLLUP,
+        reviews: [
+          {
+            author: { login: 'brannon-bowden' },
+            state: 'APPROVED',
+            submittedAt: '1',
+            body: '<!-- arbiter:verdict=approve -->',
+          },
+        ],
+        mergedAt: null,
+      }),
+      marker: { code: 99, stdout: JSON.stringify({ arbiter: true, highest: null }), stderr: '' },
+    });
+    const result = await reconcileOnce({ ...TARGET, state: 'waitingReview' }, deps);
+    expect(result.events).toContainEqual({
+      kind: 'reviewUndriveable',
+      reason: "brannon-bowden's review carries arbiter markers that could not be read, so "
+        + 'what it decided is unknown',
+    });
+  });
+
+  test('a parser that printed nothing readable leaves the review unmarked', async () => {
+    // No marker at all, which reads as a person's review -- the safe default,
+    // because the mistake it can make costs an owner cycle and the opposite
+    // ignores somebody who said stop.
+    const { deps } = fake({
+      pr: ok({
+        statusCheckRollup: GREEN_ROLLUP,
+        reviews: [
+          {
+            author: { login: 'brannon-bowden' },
+            state: 'CHANGES_REQUESTED',
+            submittedAt: '1',
+            body: 'x',
+          },
+        ],
+        mergedAt: null,
+      }),
+      marker: { code: 2, stdout: 'Traceback (most recent', stderr: '' },
+    });
+    const result = await reconcileOnce({ ...TARGET, state: 'waitingReview' }, deps);
+    expect(result.events).toContainEqual({
+      kind: 'reviewChangesRequested',
+      verdict: { actor: 'human' },
+    });
   });
 });
 

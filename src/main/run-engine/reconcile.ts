@@ -132,9 +132,72 @@ async function readMarkers(
   return {
     arbiter: payload.arbiter === true,
     highest: payload.highest ?? null,
-    code: (result.code === 0 || result.code === 1 || result.code === 2 || result.code === 3
-      ? result.code
-      : 2) as MarkerReading['code'],
+    code: markerCode(result.code),
+  };
+}
+
+/**
+ * The parser's exit code, or 2 for one this engine does not know.
+ *
+ * 2 is the honest answer for an unrecognised code: a parser that answered
+ * something outside its own contract has not established a verdict, and
+ * `undriveable` is what "nobody knows" is called here. Reading it as 3 would
+ * say "not an arbiter review", which is a claim about the body rather than
+ * about the tool.
+ */
+function markerCode(code: number): MarkerReading['code'] {
+  return code === 0 || code === 1 || code === 3 ? code : 2;
+}
+
+/**
+ * What the recorded-check-set lookup established.
+ *
+ * Three answers, and the split is the same one the whole module turns on:
+ * whether asking again could change it.
+ *
+ * - **recorded** — 0, and the payload reads.
+ * - **noBar** — 2 or 3. The repo is not registered, or records no set. Both
+ *   are configuration, and no number of retries defines a bar.
+ * - **retry** — anything else. `registry-entry` answers 0, 2 or 3 and nothing
+ *   else today, so another code is a crash, a spawn failure, or a version
+ *   that has grown a meaning this engine has not been taught. None of those
+ *   is evidence about the repo, and stopping a run for one would be the very
+ *   mistake this module documents about `gh`.
+ *
+ * A 0 with output that will not parse lands in `retry` too. The tool claimed
+ * to have answered and then said nothing readable — a contradiction, most
+ * plausibly a half-written stream, and nothing about the registry.
+ */
+type ChecksLookup =
+  | { kind: 'recorded'; expected: ReturnType<typeof toExpectedChecks> }
+  | { kind: 'noBar'; reason: string }
+  | { kind: 'retry'; reason: string };
+
+function classifyLookup(result: CommandResult): ChecksLookup {
+  const payload = parseJson<{ expected_checks?: RawExpectedChecks | null; detail?: string }>(
+    result.stdout,
+  );
+  if (result.code === 0) {
+    if (!payload) {
+      return {
+        kind: 'retry',
+        reason: 'registry-entry exited 0 and printed output that is not JSON, so what it '
+          + 'read cannot be known',
+      };
+    }
+    return { kind: 'recorded', expected: toExpectedChecks(payload.expected_checks) };
+  }
+  if (result.code === 2 || result.code === 3) {
+    return {
+      kind: 'noBar',
+      reason: payload?.detail
+        ?? 'this repo records no usable expected_checks, so nothing defines green for it',
+    };
+  }
+  const why = result.stderr.trim() || `exit ${result.code}`;
+  return {
+    kind: 'retry',
+    reason: `registry-entry answered outside its own contract: ${why}`,
   };
 }
 
@@ -150,9 +213,8 @@ export async function reconcileOnce(
   if (pr.code !== 0) {
     // Retrying might fix it, so it is not a state. A run parked on a flaky
     // connection is worse than a run that is simply a minute behind.
-    problems.push(
-      `gh could not read ${target.repo}#${target.prNumber}: ${pr.stderr.trim() || `exit ${pr.code}`}`,
-    );
+    const why = pr.stderr.trim() || `exit ${pr.code}`;
+    problems.push(`gh could not read ${target.repo}#${target.prNumber}: ${why}`);
     return { events, problems };
   }
   const snapshot = parseJson<Snapshot>(pr.stdout);
@@ -172,25 +234,32 @@ export async function reconcileOnce(
   const recorded = await deps.plugin(
     expectedChecksArgv(target.pythonPath, target.harnessPath, target.registryRepo),
   );
-  const payload = parseJson<{ expected_checks?: RawExpectedChecks | null; detail?: string }>(
-    recorded.stdout,
-  );
-  // 3 is "this repo records no set" and 2 is "not registered, or unusable".
-  // Both mean nobody defined a bar, both are configuration, and no number of
-  // retries changes either — so both are an event rather than a problem.
-  const expected = toExpectedChecks(recorded.code === 0 ? payload?.expected_checks : null);
-
-  const phase = phaseFor(target.state);
-  const verdict = evaluateChecks(expected, flattenRollup(snapshot.statusCheckRollup ?? []), phase);
-  const checks = checksEvent(verdict);
-  if (checks) {
-    // The plugin's own sentence is better than anything this module could
-    // write about a file it does not own, so it is preferred when present.
-    events.push(
-      checks.kind === 'checksUndriveable' && recorded.code !== 0 && payload?.detail
-        ? { kind: 'checksUndriveable', reason: payload.detail }
-        : checks,
+  const lookup = classifyLookup(recorded);
+  if (lookup.kind === 'retry') {
+    // The same rule as `gh` above, applied to the same kind of failure: the
+    // tool did not answer within its own contract, which says nothing about
+    // the repo's configuration. Folding this into "nobody defined a bar"
+    // would stop a run for a crash, and a crash is the thing most likely to
+    // be gone on the next pass.
+    problems.push(lookup.reason);
+  } else {
+    const expected = lookup.kind === 'recorded' ? lookup.expected : [];
+    const phase = phaseFor(target.state);
+    const verdict = evaluateChecks(
+      expected,
+      flattenRollup(snapshot.statusCheckRollup ?? []),
+      phase,
     );
+    const checks = checksEvent(verdict);
+    if (checks) {
+      // The plugin's own sentence beats anything this module could write
+      // about a file it does not own, so it is preferred when present.
+      events.push(
+        checks.kind === 'checksUndriveable' && lookup.kind === 'noBar'
+          ? { kind: 'checksUndriveable', reason: lookup.reason }
+          : checks,
+      );
+    }
   }
 
   const { rows, dropped } = toReviewRows(snapshot.reviews ?? []);
