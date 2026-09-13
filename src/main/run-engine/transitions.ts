@@ -86,6 +86,17 @@ export type RunEvent =
   | { kind: 'prOpened' }
   | { kind: 'checksGreen' }
   | { kind: 'checksFailed' }
+  /**
+   * The named set could not be judged: no `expected_checks` recorded for the
+   * repo, or a required check that finished without establishing anything.
+   *
+   * Separate from `checksFailed` for the reason every exit-2 case in this
+   * engine is separate from failure: sending an owner back to fix a branch
+   * because a check was SKIPPED is a red for something the branch did not do,
+   * and advancing is the green-having-checked-nothing defect. GH-553 measured
+   * a repo with no required checks at all, so this is the live case.
+   */
+  | { kind: 'checksUndriveable'; reason: string }
   | { kind: 'reviewRequested' }
   | { kind: 'reviewApproved' }
   | { kind: 'reviewChangesRequested'; verdict: ReviewVerdict }
@@ -292,6 +303,7 @@ function onWaitingChecks(event: RunEvent): Decision | null {
     };
   }
   if (event.kind === 'checksFailed') return backToOwner('checks red; back to gate 2');
+  if (event.kind === 'checksUndriveable') return inconclusive(`checks undriveable: ${event.reason}`);
   return null;
 }
 
