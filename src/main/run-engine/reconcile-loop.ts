@@ -20,10 +20,13 @@
  * APPROVAL rather than at merge, because the wait for somebody to press merge
  * is unbounded and one initiative sat twelve hours in it.
  *
- * `reviewNotRequested` is not polled either, and that one is worth saying out
- * loud: it is a state the engine ACTS on. Polling it would ask GitHub the
- * same question repeatedly about a request nobody has made yet. Making the
- * request is the executor's job, not the poller's.
+ * `reviewNotRequested` is here for a different reason, and an earlier version
+ * of this file had it wrong. It is a state the engine ACTS on, so waking for
+ * it does not mean asking GitHub anything — it means re-attempting the review
+ * request. Left unscheduled, a request that failed once (a rate limit, a
+ * dropped connection) would strand the run there permanently, because nothing
+ * else was ever going to come back to it. What the loop schedules is
+ * ATTENTION; what attention means is the state's business.
  *
  * The scheduling decisions here are pure. A timer is one line; deciding
  * whether a run is due, and when to wake next, is the part worth asserting.
@@ -34,6 +37,14 @@ import type { RunState } from './transitions';
 export const CHECKS_INTERVAL_MS = 60_000;
 /** A review is a person's work: hours to days, so asking often buys nothing. */
 export const REVIEW_INTERVAL_MS = 300_000;
+
+/**
+ * Re-attempting an action the engine already decided to take.
+ *
+ * The same cadence as checks, for the same reason: it is the engine's own
+ * work, it is quick, and somebody is waiting on the far side of it.
+ */
+export const ACTION_RETRY_INTERVAL_MS = 60_000;
 /**
  * The ceiling a backed-off run reaches.
  *
@@ -51,9 +62,17 @@ export const MAX_INTERVAL_MS = 900_000;
  */
 export const ESCALATE_AFTER = 5;
 
-/** How long to wait before asking about this run again, or null to stop asking. */
+/**
+ * How long before this run wants attention again, or null when it wants none.
+ *
+ * `reviewNotRequested` is on the fast cadence deliberately: the work there is
+ * one `gh` call the engine already decided to make, and a person is waiting
+ * on the far side of it. A failed request should be re-attempted in a minute,
+ * not in five.
+ */
 export function baseIntervalFor(state: RunState): number | null {
   if (state === 'waitingChecks') return CHECKS_INTERVAL_MS;
+  if (state === 'reviewNotRequested') return ACTION_RETRY_INTERVAL_MS;
   if (state === 'waitingReview') return REVIEW_INTERVAL_MS;
   return null;
 }

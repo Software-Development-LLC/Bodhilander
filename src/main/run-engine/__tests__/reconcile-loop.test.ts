@@ -11,6 +11,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
+  ACTION_RETRY_INTERVAL_MS,
   CHECKS_INTERVAL_MS,
   ESCALATE_AFTER,
   MAX_INTERVAL_MS,
@@ -70,16 +71,39 @@ describe('what is deliberately not polled', () => {
     }
   });
 
-  test('reviewNotRequested is not polled, because the engine acts there', () => {
-    // Polling would ask GitHub the same question about a request nobody has
-    // made. Making the request is the executor's job, not the poller's.
-    expect(baseIntervalFor('reviewNotRequested')).toBeNull();
+  test('a run waiting on nothing external is still not polled', () => {
+    // preparing and provisioning are driven by a process finishing, not by
+    // anything GitHub or a person will say.
+    expect(baseIntervalFor('preparing')).toBeNull();
   });
 
   test('an inconclusive run is not polled', () => {
     // It stopped and told a person. Asking again cannot unstick it, and a
     // run that polls while nobody is coming is a run that looks busy.
     expect(baseIntervalFor('inconclusive')).toBeNull();
+  });
+});
+
+describe('a state the engine acts on is re-attempted, not re-asked', () => {
+  test('reviewNotRequested gets a cadence of its own', () => {
+    // An earlier version returned null here on the reasoning that polling
+    // would ask GitHub about a request nobody had made. True, and beside the
+    // point: waking for this state means RE-ATTEMPTING the request. Left
+    // unscheduled, a request that failed once stranded the run permanently,
+    // because nothing else was ever coming back to it.
+    expect(baseIntervalFor('reviewNotRequested')).toBe(ACTION_RETRY_INTERVAL_MS);
+  });
+
+  test('and it is the fast cadence, because somebody is waiting', () => {
+    // The work is one gh call the engine already decided to make, and a
+    // person is waiting on the far side of it.
+    expect(ACTION_RETRY_INTERVAL_MS).toBe(CHECKS_INTERVAL_MS);
+    expect(ACTION_RETRY_INTERVAL_MS).toBeLessThan(REVIEW_INTERVAL_MS);
+  });
+
+  test('a run stuck there is due again after that interval', () => {
+    const stuck = run({ state: 'reviewNotRequested', lastPassAt: NOW - ACTION_RETRY_INTERVAL_MS });
+    expect(dueRuns([stuck], NOW)).toHaveLength(1);
   });
 });
 
