@@ -229,7 +229,23 @@ describe('review rows', () => {
     const { rows } = toReviewRows([
       { author: { login: 'x' }, state: 'PENDING', submittedAt: null },
     ]);
-    expect(rows).toEqual([{ author: 'x', state: 'PENDING', submittedAt: '' }]);
+    expect(rows).toEqual([{ author: 'x', state: 'PENDING', submittedAt: '', body: '' }]);
+  });
+
+  test('the body travels on the row, so a dropped row cannot misattribute it', () => {
+    // The alternative is matching bodies back by index, and the index moves:
+    // the dropped row here shifts every one after it, so a body fetched by
+    // position would read the first approver's review as the second's -- and
+    // any marker in it would be attributed to somebody who never wrote it.
+    const { rows } = toReviewRows([
+      { author: null, state: 'APPROVED', submittedAt: '1', body: 'from a deleted account' },
+      { author: { login: 'alice' }, state: 'APPROVED', submittedAt: '2', body: "alice's review" },
+      { author: { login: 'bob' }, state: 'APPROVED', submittedAt: '3', body: "bob's review" },
+    ]);
+    expect(rows.map((r) => [r.author, r.body])).toEqual([
+      ['alice', "alice's review"],
+      ['bob', "bob's review"],
+    ]);
   });
 
   test('a state in the wrong case is still read', () => {
