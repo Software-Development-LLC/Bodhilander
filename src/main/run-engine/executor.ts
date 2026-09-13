@@ -148,6 +148,57 @@ async function provision(
 }
 
 /**
+ * Perform one action, and say whether the rest of the decision may proceed.
+ *
+ * Returns the reason to halt, or null. Separate from the loop because the two
+ * are different jobs — this one knows what each action means, the loop knows
+ * what a failure costs the ones after it — and because a switch that also
+ * carried the skip logic and the error handling was one function doing three
+ * things, which is what Sonar counted.
+ */
+async function performAction(
+  action: RunAction,
+  target: ExecutorTarget,
+  deps: ExecutorDeps,
+  result: ExecutorResult,
+): Promise<string | null> {
+  switch (action.kind) {
+    case 'provision': {
+      const before = result.events.length;
+      await provision(target, deps, result);
+      const event = result.events[before];
+      return event?.kind === 'provisioned' ? null : 'the worktrees were not provisioned';
+    }
+    case 'requestReview': {
+      const before = result.events.length;
+      await requestReview(target, deps, result);
+      return result.events.length === before ? 'the review was not requested' : null;
+    }
+    case 'spawnGate': {
+      const outcome = await deps.spawnGate(action.gate);
+      const event = gateEvent(action.gate, outcome);
+      if (event) result.events.push(event);
+      if (outcome.status !== 'undriveable') return null;
+      result.notifications.push(outcome.reason);
+      return `gate ${action.gate} could not be driven`;
+    }
+    case 'notify':
+      result.notifications.push(action.reason);
+      return null;
+    case 'release':
+      // Nothing to undo and nothing to call. Attending is something the
+      // caller stops doing, so saying so is the whole action.
+      result.released = true;
+      return null;
+    default:
+      // `reconcile` lands here and does nothing on purpose: the loop owns
+      // when to ask, and a pass here would ask twice for one decision and
+      // race the pass already scheduled.
+      return null;
+  }
+}
+
+/**
  * Perform a decision's actions, in order, stopping at the first that failed.
  *
  * In order because they ARE ordered: a decision that provisions and then
@@ -186,49 +237,8 @@ export async function execute(
       result.problems.push(`${action.kind} was not performed: ${halted}`);
       continue;
     }
-
     try {
-      switch (action.kind) {
-        case 'provision': {
-          const before = result.events.length;
-          await provision(target, deps, result);
-          const event = result.events[before];
-          if (!event || event.kind !== 'provisioned') {
-            halted = 'the worktrees were not provisioned';
-          }
-          break;
-        }
-        case 'requestReview': {
-          const before = result.events.length;
-          await requestReview(target, deps, result);
-          if (result.events.length === before) halted = 'the review was not requested';
-          break;
-        }
-        case 'spawnGate': {
-          const outcome = await deps.spawnGate(action.gate);
-          const event = gateEvent(action.gate, outcome);
-          if (event) result.events.push(event);
-          if (outcome.status === 'undriveable') {
-            result.notifications.push(outcome.reason);
-            halted = `gate ${action.gate} could not be driven`;
-          }
-          break;
-        }
-        case 'notify':
-          result.notifications.push(action.reason);
-          break;
-        case 'release':
-          // Nothing to undo and nothing to call. Attending is something the
-          // caller stops doing, so saying so is the whole action.
-          result.released = true;
-          break;
-        case 'reconcile':
-          // The loop owns when to ask. Performing a pass here would ask twice
-          // for one decision and race the pass already scheduled.
-          break;
-        default:
-          break;
-      }
+      halted = await performAction(action, target, deps, result);
     } catch (error) {
       // The dependencies are documented not to throw, and one of them can:
       // `runGate` throws synchronously for a call it cannot make at all — no
