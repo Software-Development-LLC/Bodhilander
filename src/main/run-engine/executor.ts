@@ -30,6 +30,7 @@ import type { Gate, RunAction, RunEvent } from './transitions';
 import type { GateOutcome } from './gate-process';
 import { readGateVerdict } from './gate-verdict';
 import type { CommandResult } from './reconcile';
+import type { PermissionPosture } from '../repositories/runs';
 
 export interface ExecutorDeps {
   gh(argv: readonly string[]): Promise<CommandResult>;
@@ -46,6 +47,24 @@ export interface ExecutorTarget {
   approvers: readonly string[];
   /** The initiative directory `provision.sh` reads worktrees out of. */
   initiativePath: string | null;
+  /**
+   * Which role serves each gate on THIS run.
+   *
+   * Gate 2's is the repo's owner, read from the run; gates 3 and 4 come from
+   * the harness's own `gate:` declarations. Supplied as data because the
+   * engine must not hold that mapping — and a gate with no role recorded is
+   * refused rather than launched under a placeholder, because the column
+   * exists precisely so somebody can tell afterwards who ran.
+   */
+  agents: Partial<Record<Gate, string>>;
+  /**
+   * How this run answers permission prompts.
+   *
+   * Recorded per gate rather than per run, because if you cannot tell
+   * afterwards whether an owner ran unsandboxed, you cannot trust what it
+   * produced.
+   */
+  posture: PermissionPosture;
   harnessPath: string;
   pythonPath: string;
 }

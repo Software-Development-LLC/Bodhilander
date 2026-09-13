@@ -317,3 +317,129 @@ export function listOwners(runId: string): RunOwnerRow[] {
     prUrl: row.pr_url,
   }));
 }
+/** One attempt at one gate. */
+export interface RunGateRow {
+  id: string;
+  runId: string;
+  gate: number;
+  agent: string;
+  attempt: number;
+  /** What `claude attach` takes. Null until a background gate reports one. */
+  bgSessionId: string | null;
+  claudeSessionId: string | null;
+  status: string;
+  verdictJson: string | null;
+  posture: PermissionPosture;
+}
+
+export interface StartGateInput {
+  id: string;
+  runId: string;
+  gate: number;
+  agent: string;
+  posture: PermissionPosture;
+  claudeSessionId?: string | null;
+  bgSessionId?: string | null;
+}
+
+/**
+ * Record a gate as running, and say which attempt this is.
+ *
+ * The attempt number is counted here rather than passed in, because the
+ * caller that spawns a gate is not the one that remembers how many times it
+ * already has — and a retry recorded as attempt 1 makes a loop look like a
+ * first try in both the view and the audit trail.
+ */
+export function startGate(input: StartGateInput): void {
+  const db = getDatabase();
+  const prior = db
+    .prepare('SELECT COUNT(*) AS n FROM run_gates WHERE run_id = ? AND gate = ?')
+    .get(input.runId, input.gate) as { n: number };
+  db.prepare(
+    `INSERT INTO run_gates (id, run_id, gate, agent, attempt, bg_session_id,
+                            claude_session_id, status, posture)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)`,
+  ).run(
+    input.id,
+    input.runId,
+    input.gate,
+    input.agent,
+    prior.n + 1,
+    input.bgSessionId ?? null,
+    input.claudeSessionId ?? null,
+    input.posture,
+  );
+}
+
+/**
+ * Close a gate out.
+ *
+ * `verdict` is stored as given, including an inconclusive one. A gate that
+ * established nothing is a row worth keeping: it is the difference between a
+ * run that was never attempted and one that was attempted and could not be
+ * judged, and only the second means somebody should look at the harness.
+ */
+export function finishGate(id: string, status: string, verdict?: unknown): void {
+  getDatabase()
+    .prepare(
+      `UPDATE run_gates
+          SET status = ?, verdict_json = ?, ended_at = CURRENT_TIMESTAMP
+        WHERE id = ?`,
+    )
+    .run(status, verdict === undefined ? null : JSON.stringify(verdict), id);
+}
+
+function toGateRow(row: {
+  id: string;
+  run_id: string;
+  gate: number;
+  agent: string;
+  attempt: number;
+  bg_session_id: string | null;
+  claude_session_id: string | null;
+  status: string;
+  verdict_json: string | null;
+  posture: string;
+}): RunGateRow {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    gate: row.gate,
+    agent: row.agent,
+    attempt: row.attempt,
+    bgSessionId: row.bg_session_id,
+    claudeSessionId: row.claude_session_id,
+    status: row.status,
+    verdictJson: row.verdict_json,
+    posture: row.posture as PermissionPosture,
+  };
+}
+
+/**
+ * The gate this run is currently inside, or null.
+ *
+ * The state machine needs it to refuse a report from a gate that has already
+ * been left — a stale gate-2 verdict arriving after gate 4 would otherwise
+ * regress the run, which is a real ordering hazard rather than a theoretical
+ * one.
+ *
+ * Newest first, because a gate re-spawned after a retry is the one in flight.
+ */
+export function activeGate(runId: string): RunGateRow | null {
+  const row = getDatabase()
+    .prepare(
+      `SELECT * FROM run_gates
+        WHERE run_id = ? AND status = 'running'
+        ORDER BY rowid DESC LIMIT 1`,
+    )
+    .get(runId);
+  return row ? toGateRow(row as Parameters<typeof toGateRow>[0]) : null;
+}
+
+/** Every attempt at every gate, oldest first: this is a history. */
+export function listGates(runId: string): RunGateRow[] {
+  const rows = getDatabase()
+    .prepare('SELECT * FROM run_gates WHERE run_id = ? ORDER BY rowid ASC')
+    .all(runId) as Parameters<typeof toGateRow>[0][];
+  return rows.map(toGateRow);
+}

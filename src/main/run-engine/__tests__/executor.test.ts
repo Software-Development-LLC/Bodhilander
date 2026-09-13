@@ -26,6 +26,8 @@ const TARGET: ExecutorTarget = {
   initiativePath: 'C:/work/initiatives/CO-722',
   harnessPath: '/plugins/bodhi',
   pythonPath: 'C:/py/python.exe',
+  agents: { 2: 'bsa-lead', 3: 'reviewer', 4: 'verifier' },
+  posture: 'manual',
 };
 
 const OK = { code: 0, stdout: '', stderr: '' };
