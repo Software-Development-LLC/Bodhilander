@@ -100,6 +100,16 @@ export type RunEvent =
   | { kind: 'reviewRequested' }
   | { kind: 'reviewApproved' }
   | { kind: 'reviewChangesRequested'; verdict: ReviewVerdict }
+  /**
+   * A review exists and what it decided cannot be established -- arbiter
+   * markers that could not be read, or no approver empowered to decide.
+   *
+   * Its own event rather than checksUndriveable, because the two arrive in
+   * different states and an event a state does not handle is silently
+   * ignored. A run that ignores an unreadable review waits forever on a
+   * verdict that already came.
+   */
+  | { kind: 'reviewUndriveable'; reason: string }
   | { kind: 'humanApprovedGate' }
   | { kind: 'budgetExceeded' }
   | { kind: 'merged' };
@@ -333,6 +343,9 @@ function onWaitingReview(event: RunEvent): Decision | null {
       actions: [{ kind: 'release' }],
       note: 'approved and green; nothing further comes back',
     };
+  }
+  if (event.kind === 'reviewUndriveable') {
+    return inconclusive(`review undriveable: ${event.reason}`);
   }
   if (event.kind !== 'reviewChangesRequested') return null;
 
