@@ -26,6 +26,7 @@
  */
 import { randomUUID } from 'crypto';
 import { agentsForRepo } from './gate-launcher';
+import { firstText } from './first-text';
 import type { CommandResult } from './reconcile';
 import * as runs from '../repositories/runs';
 import type { PermissionPosture } from '../repositories/runs';
@@ -186,7 +187,10 @@ export async function armRun(
       // The plugin's own sentence: it knows whether this is a directory
       // nobody started or one whose owners spawn.sh has not filled in yet,
       // and those have different answers.
-      fix: payload?.detail ?? read.stderr.trim() ?? 'Check the path.',
+      // firstText, not `??`: `.trim()` returns '' rather than null, so a
+      // fallback after one is unreachable and the refusal ships with a blank
+      // `fix` -- which is precisely what this module promises not to do.
+      fix: firstText(payload?.detail, read.stderr) ?? 'Check the path.',
     });
     return { status: 'refused', refusals };
   }
@@ -217,6 +221,11 @@ export async function armRun(
       branch: owner.branch ?? '',
       base: owner.base ?? '',
       scratch: owner.scratch ?? null,
+      // Persisted, not merely returned. Where a person had to choose between
+      // a lead and a domain owner, that choice is the run's and must survive
+      // the process -- otherwise gate 2 asks again, and the second answer
+      // need not match the first.
+      agent: resolved.owners[repo] ?? null,
       status: 'pending',
       prNumber: null,
       prUrl: null,

@@ -177,6 +177,29 @@ describe('a run that does not start', () => {
     expect(result.refusals[0].fix).toContain('spawn.sh');
   });
 
+  test('a refusal always says what to do, even with nothing to quote', async () => {
+    // The reachable case: initiative.py exits non-zero writing nothing to
+    // stderr -- an uncaught traceback on stdout, or a silent non-zero exit.
+    // `payload?.detail ?? read.stderr.trim() ?? fallback` ships '' there,
+    // because .trim() returns a string and `??` passes it through, so the
+    // fallback was unreachable and the refusal arrived blank.
+    const result = await armRun(await request(), fake({
+      initiative: { code: 1, stdout: 'Traceback (most recent call last):', stderr: '' },
+    }));
+    if (result.status !== 'refused') throw new Error('expected refusal');
+    expect(result.refusals[0].fix).toBe('Check the path.');
+  });
+
+  test('and prefers what the tool said when it said anything', async () => {
+    // CONTROL: a fallback that always won would throw away the only sentence
+    // that knows what actually happened.
+    const result = await armRun(await request(), fake({
+      initiative: { code: 1, stdout: 'not json', stderr: '  python: no such file  ' },
+    }));
+    if (result.status !== 'refused') throw new Error('expected refusal');
+    expect(result.refusals[0].fix).toBe('python: no such file');
+  });
+
   test('nothing is written when a run is refused', async () => {
     // THE property. A half-written run is worse than none: it appears in
     // every list, and the next thing to look at it has no idea it never
@@ -221,6 +244,29 @@ describe('who owns gate 2 is discovered, and never guessed', () => {
     );
     if (result.status !== 'refused') throw new Error('expected refusal');
     expect(result.refusals[0].what).toContain('does not own');
+  });
+
+  test('the chosen role is persisted, not merely returned', async () => {
+    // Where a person chose between a lead and a domain owner, that choice is
+    // the run's. Returned only, it dies with the process and gate 2 has to
+    // ask again -- and the second answer need not match the first.
+    const harnessPath = await harness({ 'demo-lead': 'demo-repo', 'demo-care': 'demo-repo' });
+    const result = await armRun(
+      await request({ harnessPath, owners: { 'demo-repo': 'demo-care' } }),
+      fake(),
+    );
+    if (result.status !== 'armed') throw new Error('expected armed');
+    expect(runs.listOwners(result.runId)[0].agent).toBe('demo-care');
+  });
+
+  test('a re-mirror that does not carry the role does not erase it', async () => {
+    // spawn.sh is idempotent and this mirror is re-run. COALESCE, like the PR
+    // columns beside it.
+    const result = await armRun(await request(), fake());
+    if (result.status !== 'armed') throw new Error('expected armed');
+    const [owner] = runs.listOwners(result.runId);
+    runs.upsertOwner({ ...owner, agent: null, status: 'working' });
+    expect(runs.listOwners(result.runId)[0].agent).toBe('demo-lead');
   });
 
   test('a repo nobody owns is refused', async () => {
