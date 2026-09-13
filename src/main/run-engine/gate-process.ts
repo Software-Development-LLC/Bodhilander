@@ -148,6 +148,26 @@ function reportsSuccess(result: CliResult): boolean {
   return result.terminal_reason === undefined || result.terminal_reason === 'completed';
 }
 
+/**
+ * The first candidate with something in it, or null.
+ *
+ * Written out rather than chained with `||` or `??`, because neither operator
+ * is right here and the two are wrong in opposite directions. `??` passes an
+ * empty string through — `.trim()` returns `''`, not null, so a gate that
+ * failed with no output would report `detail: ''` against a `string | null`
+ * contract, and a caller rendering "detail if present" shows a blank row.
+ * `||` behaves correctly and reads as a defect to any linter that sees a
+ * nullable left operand (S6606, raised on exactly this line). A function says
+ * the intent once: emptiness disqualifies a candidate, not nullness.
+ */
+function firstDetail(...candidates: (string | null | undefined)[]): string | null {
+  for (const candidate of candidates) {
+    const text = candidate?.trim();
+    if (text) return text;
+  }
+  return null;
+}
+
 /** First 8 characters of the session id — what `claude attach` takes. */
 export function backgroundIdFor(sessionId: string): string {
   return sessionId.slice(0, 8);
@@ -269,7 +289,7 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
         if (code !== 0) {
           undriveable(
             `the background gate exited ${code ?? 'on a signal'} instead of launching`,
-            stderrTail.trim() || null,
+            firstDetail(stderrTail),
           );
           return;
         }
@@ -296,7 +316,7 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
       if (!result) {
         undriveable(
           'the gate returned output that is not the JSON result envelope',
-          (stderrTail.trim() || stdout.slice(-500)) || null,
+          firstDetail(stderrTail, stdout.slice(-500)),
         );
         return;
       }
@@ -304,7 +324,7 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
         undriveable(
           `the gate reported ${result.subtype ?? 'no subtype'}` +
             (result.terminal_reason ? ` (${result.terminal_reason})` : ''),
-          result.result?.slice(-500) || stderrTail.trim() || null,
+          firstDetail(result.result?.slice(-500), stderrTail),
         );
         return;
       }

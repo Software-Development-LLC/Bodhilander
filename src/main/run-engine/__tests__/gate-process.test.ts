@@ -134,6 +134,17 @@ describe('a print gate that established nothing', () => {
     expect(outcome.detail).toBeNull();
   });
 
+  test('whitespace-only stderr is nothing to show, not a detail', async () => {
+    // The other half of the same rule: `??` would pass '' through, and a
+    // truthiness check on an untrimmed string would pass a lone newline
+    // through. Both render as a blank row wherever a detail is shown.
+    const outcome = await run(
+      backgroundGate('process.stderr.write("  " + String.fromCharCode(10) + " "); process.exit(1)'),
+    );
+    if (outcome.status !== 'undriveable') throw new Error(`expected undriveable, got ${outcome.status}`);
+    expect(outcome.detail).toBeNull();
+  });
+
   test('an interrupted terminal_reason is undriveable', async () => {
     const outcome = await run(
       printGate(envelope({ terminal_reason: 'interrupted', structured_output: { verdict: 'pass' } })),
