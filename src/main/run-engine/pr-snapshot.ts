@@ -88,6 +88,17 @@ export function flattenRollup(entries: readonly RawRollupEntry[]): ReportedCheck
   return flat;
 }
 
+/**
+ * A review row with the body it came with.
+ *
+ * The body travels ON the row because the alternative is matching it back by
+ * index, and the index moves: any dropped row shifts every one after it, so a
+ * body fetched that way can be a different person's review entirely.
+ */
+export interface SnapshotReview extends ReviewRow {
+  body: string;
+}
+
 /** A row that could not be translated, and what about it could not be. */
 export interface DroppedReview {
   author: string;
@@ -110,10 +121,10 @@ export interface DroppedReview {
  * difference between a mystery and a line in a log.
  */
 export function toReviewRows(raw: readonly RawReview[]): {
-  rows: ReviewRow[];
+  rows: SnapshotReview[];
   dropped: DroppedReview[];
 } {
-  const rows: ReviewRow[] = [];
+  const rows: SnapshotReview[] = [];
   const dropped: DroppedReview[] = [];
   for (const review of raw) {
     const author = (review.author?.login ?? '').trim();
@@ -138,6 +149,11 @@ export function toReviewRows(raw: readonly RawReview[]): {
     rows.push({
       author,
       state: state as ReviewRow['state'],
+      // Carried WITH the row, never matched back by index later. Dropping a
+      // row shifts every index after it, so a body looked up that way is the
+      // wrong person's review read as this one's — and a marker in it would
+      // be attributed to somebody who never wrote it.
+      body: review.body ?? '',
       // A PENDING review has no submittedAt. Empty sorts before every real
       // timestamp, and PENDING is not a position anyway — but a missing field
       // must not become `undefined` in a comparison.
