@@ -168,44 +168,86 @@ describe('the translation reaches the right verdict end to end', () => {
 
 describe('review rows', () => {
   test('the author login is lifted out of its object', () => {
-    const rows = toReviewRows(REVIEWS);
+    const { rows } = toReviewRows(REVIEWS);
     expect(rows.map((r) => r.author)).toEqual(['brannon-bowden', 'brannon-bowden']);
   });
 
   test('both rows survive, because both are kept forever by GitHub', () => {
-    expect(toReviewRows(REVIEWS)).toHaveLength(2);
+    const { rows, dropped } = toReviewRows(REVIEWS);
+    expect(rows).toHaveLength(2);
+    expect(dropped).toEqual([]);
   });
 
   test('the rows read as the later position through the real reducer', () => {
     const reading = readReviews({
-      rows: toReviewRows(REVIEWS),
+      rows: toReviewRows(REVIEWS).rows,
       approvers: ['brannon-bowden'],
     });
     expect(reading.status).toBe('approved');
   });
 
-  test('a review with no readable author is dropped', () => {
+  test('a review with no readable author is dropped and reported', () => {
     // A deleted account still has reviews. Carried as '', it would match an
     // approver list that contained an empty string.
-    expect(toReviewRows([{ author: null, state: 'APPROVED', submittedAt: 'x' }])).toEqual([]);
-    expect(toReviewRows([{ author: {}, state: 'APPROVED', submittedAt: 'x' }])).toEqual([]);
+    for (const author of [null, {}]) {
+      const { rows, dropped } = toReviewRows([{ author, state: 'APPROVED', submittedAt: 'x' }]);
+      expect(rows).toEqual([]);
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0].why).toContain('no readable author');
+    }
   });
 
-  test('a state this engine does not know is dropped rather than guessed', () => {
-    expect(
-      toReviewRows([{ author: { login: 'x' }, state: 'SOMETHING_NEW', submittedAt: 'y' }]),
-    ).toEqual([]);
+  test('a state this engine does not know is dropped, and says so', () => {
+    // The quiet failure this reports: GitHub adds a review state, a real
+    // review vanishes from the reconciliation, and the run simply waits. A
+    // caller can log this; it cannot log an absence.
+    const { rows, dropped } = toReviewRows([
+      { author: { login: 'brannon-bowden' }, state: 'SOMETHING_NEW', submittedAt: 'y' },
+    ]);
+    expect(rows).toEqual([]);
+    expect(dropped).toEqual([
+      {
+        author: 'brannon-bowden',
+        state: 'SOMETHING_NEW',
+        why: 'SOMETHING_NEW is not a review state this engine knows, so what it decided '
+          + 'cannot be read',
+      },
+    ]);
+  });
+
+  test('a dropped row names the author, so a person can go and look', () => {
+    // An unrecognised state is only actionable if you know whose review it
+    // was. Reporting the count alone would be a mystery with a number on it.
+    const { dropped } = toReviewRows([
+      { author: { login: 'someone' }, state: 'INVENTED', submittedAt: 'y' },
+    ]);
+    expect(dropped[0].author).toBe('someone');
   });
 
   test('a PENDING review with no timestamp does not become undefined', () => {
     // It is not a position, but it must not poison a comparison either.
-    const rows = toReviewRows([{ author: { login: 'x' }, state: 'PENDING', submittedAt: null }]);
+    const { rows } = toReviewRows([
+      { author: { login: 'x' }, state: 'PENDING', submittedAt: null },
+    ]);
     expect(rows).toEqual([{ author: 'x', state: 'PENDING', submittedAt: '' }]);
   });
 
   test('a state in the wrong case is still read', () => {
-    const rows = toReviewRows([{ author: { login: 'x' }, state: 'approved', submittedAt: 'y' }]);
+    const { rows } = toReviewRows([
+      { author: { login: 'x' }, state: 'approved', submittedAt: 'y' },
+    ]);
     expect(rows[0].state).toBe('APPROVED');
+  });
+
+  test('a known state is never reported as dropped', () => {
+    // CONTROL: a reporter that flagged everything would be as useless as one
+    // that flagged nothing, and noisier.
+    for (const state of ['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED', 'PENDING']) {
+      const { dropped } = toReviewRows([
+        { author: { login: 'x' }, state, submittedAt: 'y' },
+      ]);
+      expect(dropped).toEqual([]);
+    }
   });
 });
 

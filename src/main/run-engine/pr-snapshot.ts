@@ -88,24 +88,53 @@ export function flattenRollup(entries: readonly RawRollupEntry[]): ReportedCheck
   return flat;
 }
 
+/** A row that could not be translated, and what about it could not be. */
+export interface DroppedReview {
+  author: string;
+  state: string;
+  why: string;
+}
+
 /**
- * Review rows, with the bodies kept.
+ * Review rows, and what was dropped getting them.
  *
- * The body is what `read-review.sh` is given, and only for an approver's own
- * row — that script says outright that it reads markers, cannot authenticate
- * them, and that where the body came from is the caller's problem.
+ * A row whose author cannot be read is dropped: a deleted account still has
+ * reviews, and one carried as `''` would match an approver list containing an
+ * empty string.
  *
- * A row whose author cannot be read is dropped. A deleted account still has
- * reviews, and one with no login can never match an approver; keeping it as
- * `''` would leave a row that an approver list containing an empty string
- * would match.
+ * A row whose STATE this engine does not recognise is dropped too, and that
+ * one is reported rather than merely discarded. GitHub adding a review state
+ * is a thing that happens, and the failure it would cause here is the quiet
+ * kind: a real review vanishing from the reconciliation with the run simply
+ * waiting on. Returning it means a caller can say so out loud, which is the
+ * difference between a mystery and a line in a log.
  */
-export function toReviewRows(raw: readonly RawReview[]): ReviewRow[] {
+export function toReviewRows(raw: readonly RawReview[]): {
+  rows: ReviewRow[];
+  dropped: DroppedReview[];
+} {
   const rows: ReviewRow[] = [];
+  const dropped: DroppedReview[] = [];
   for (const review of raw) {
     const author = (review.author?.login ?? '').trim();
     const state = (review.state ?? '').toUpperCase();
-    if (!author || !REVIEW_STATES.has(state)) continue;
+    if (!author) {
+      dropped.push({
+        author: '',
+        state,
+        why: 'the review has no readable author, so it can never match an approver',
+      });
+      continue;
+    }
+    if (!REVIEW_STATES.has(state)) {
+      dropped.push({
+        author,
+        state,
+        why: `${state || 'an empty state'} is not a review state this engine knows, so what `
+          + 'it decided cannot be read',
+      });
+      continue;
+    }
     rows.push({
       author,
       state: state as ReviewRow['state'],
@@ -115,7 +144,7 @@ export function toReviewRows(raw: readonly RawReview[]): ReviewRow[] {
       submittedAt: review.submittedAt ?? '',
     });
   }
-  return rows;
+  return { rows, dropped };
 }
 
 /**
