@@ -103,7 +103,40 @@ function blockedReasonFor(state: RunState, event: RunEvent, note: string): strin
  * a caller holding a state it read a minute ago would overwrite the other's
  * work with a decision made from a stale position.
  */
-export async function advance(
+export function advance(
+  runId: string,
+  first: RunEvent,
+  target: ExecutorTarget,
+  deps: ExecutorDeps,
+): Promise<AdvanceResult> {
+  // One at a time per run. Two things advance a run -- a reconcile pass and a
+  // gate reporting back -- and they arrive independently. Reading the state,
+  // deciding, and writing it are three steps with an `await` in the middle,
+  // so two calls interleaving would have the second decide from a position
+  // the first is in the middle of leaving.
+  //
+  // A promise chain rather than a lock: there is nothing to time out and
+  // nothing to deadlock, and a caller that never gets a turn is a caller
+  // whose predecessor never returned, which is a different bug and a louder
+  // one. Runs do not block each other -- the chain is per run id.
+  const queued = (inFlight.get(runId) ?? Promise.resolve()).then(() =>
+    advanceOnce(runId, first, target, deps),
+  );
+  // Kept even when it rejects, so one failure does not wedge the run's queue.
+  inFlight.set(
+    runId,
+    queued.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return queued;
+}
+
+/** One run's turn, held only while that run is advancing. */
+const inFlight = new Map<string, Promise<void>>();
+
+async function advanceOnce(
   runId: string,
   first: RunEvent,
   target: ExecutorTarget,
@@ -165,12 +198,15 @@ export async function advance(
     pending = next;
   }
 
-  // Not a wait. A run still producing events after eight rounds is one whose
-  // decisions are feeding each other, and continuing would spin for as long
-  // as the process lives.
-  result.runaway =
-    `stopped after ${MAX_ROUNDS} rounds still producing events. This is a cycle, not progress.`;
-  result.problems.push(result.runaway);
+  // STILL producing events, which is not the same as having used every round.
+  // A run that settles on the last permitted round exits the loop here too,
+  // and reporting that as a cycle would put a fault on a run that finished
+  // correctly — it merely took the long way.
+  if (pending.length > 0) {
+    result.runaway =
+      `stopped after ${MAX_ROUNDS} rounds still producing events. This is a cycle, not progress.`;
+    result.problems.push(result.runaway);
+  }
   return result;
 }
 

@@ -351,24 +351,30 @@ export interface StartGateInput {
  * first try in both the view and the audit trail.
  */
 export function startGate(input: StartGateInput): void {
-  const db = getDatabase();
-  const prior = db
-    .prepare('SELECT COUNT(*) AS n FROM run_gates WHERE run_id = ? AND gate = ?')
-    .get(input.runId, input.gate) as { n: number };
-  db.prepare(
-    `INSERT INTO run_gates (id, run_id, gate, agent, attempt, bg_session_id,
-                            claude_session_id, status, posture)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)`,
-  ).run(
-    input.id,
-    input.runId,
-    input.gate,
-    input.agent,
-    prior.n + 1,
-    input.bgSessionId ?? null,
-    input.claudeSessionId ?? null,
-    input.posture,
-  );
+  // One statement, so the count and the insert cannot be separated by another
+  // writer. Read-then-insert would let two spawns racing for the same gate
+  // both read 1 and both record attempt 2 — and the attempt number exists to
+  // make a retry loop visible, which two rows claiming the same attempt
+  // quietly undoes.
+  getDatabase()
+    .prepare(
+      `INSERT INTO run_gates (id, run_id, gate, agent, attempt, bg_session_id,
+                              claude_session_id, status, posture)
+       SELECT ?, ?, ?, ?,
+              (SELECT COUNT(*) + 1 FROM run_gates WHERE run_id = ? AND gate = ?),
+              ?, ?, 'running', ?`,
+    )
+    .run(
+      input.id,
+      input.runId,
+      input.gate,
+      input.agent,
+      input.runId,
+      input.gate,
+      input.bgSessionId ?? null,
+      input.claudeSessionId ?? null,
+      input.posture,
+    );
 }
 
 /**

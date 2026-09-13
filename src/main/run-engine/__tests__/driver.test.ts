@@ -296,6 +296,115 @@ describe('the loop', () => {
   });
 });
 
+describe('the round limit', () => {
+  test('a run that settles on the last permitted round is not a cycle', async () => {
+    // The loop exits by falling off the `for` condition here, not by the
+    // early return at the top — so an unconditional "runaway" puts a fault on
+    // a run that finished correctly and merely took the long way.
+    //
+    // The fake touches no rows: openGates opens gate 2 each round and the
+    // driver closes it when the report is accepted, so a failing gate 2
+    // cycles on its own. An earlier version juggled run_gates itself and
+    // broke the chain at round one, which is why it passed against the bug.
+    const id = seed('running');
+    runs.startGate({ id: 'g2', runId: id, gate: 2, agent: 'bsa-lead', posture: 'manual' });
+    let spawns = 0;
+    const result = await advance(id, { kind: 'gateFinished', gate: 2, verdict: 'fail' }, TARGET, {
+      ...deps(),
+      spawnGate: async () => {
+        spawns += 1;
+        // MAX_ROUNDS, not one less: settling a round early means the loop
+        // returns from the check at the TOP and never reaches the boundary
+        // this test exists for. Off by one here and it passes against the bug.
+        if (spawns >= MAX_ROUNDS) {
+          // Settles: a launch reports no event, so this round produces none.
+          return { status: 'launched' as const, backgroundId: '1', sessionId: 's', durationMs: 1 };
+        }
+        return {
+          status: 'completed' as const,
+          structuredOutput: { verdict: 'fail', summary: 'again' },
+          sessionId: null,
+          costUsd: null,
+          durationMs: 1,
+        };
+      },
+    });
+    expect(spawns).toBe(MAX_ROUNDS);
+    expect(result.runaway).toBeNull();
+  });
+});
+
+describe('one run advances at a time', () => {
+  test('a second call waits for the first to finish', async () => {
+    // What the queue actually guarantees, asserted as what can be observed.
+    //
+    // Not a timing-overlap test: reading, deciding and writing are
+    // synchronous inside one round, so a single advance is already atomic and
+    // an overlap assertion passes with no queue at all — which is what two
+    // earlier versions of this test did. What the queue adds is that a
+    // MULTI-ROUND advance is atomic too, and the visible consequence is that
+    // the second call does not begin until the first has returned.
+    const id = seed('provisioning');
+    const order: string[] = [];
+    const label = (name: string) =>
+      deps({
+        spawnGate: async () => {
+          order.push(`${name}:start`);
+          await new Promise((resolve) => { setTimeout(resolve, 10); });
+          order.push(`${name}:end`);
+          return { status: 'launched' as const, backgroundId: '1', sessionId: 's', durationMs: 1 };
+        },
+      });
+    await Promise.all([
+      advance(id, { kind: 'provisioned' }, TARGET, label('first')),
+      advance(id, { kind: 'gateFinished', gate: 2, verdict: 'fail' }, TARGET, label('second')),
+    ]);
+    // Interleaved, this reads first:start, second:start, ... Serialised, the
+    // first pair closes before the second opens.
+    expect(order.slice(0, 2)).toEqual(['first:start', 'first:end']);
+  });
+
+  test('a different run is not held up behind it', async () => {
+    // CONTROL: a single global lock would serialise every run in the app
+    // behind whichever one is slowest, which is a worse problem than the one
+    // being solved.
+    seed('preparing');
+    runs.createRun({
+      id: 'run-2',
+      initiativeKey: 'CO-723',
+      initiativeDir: 'C:/work/initiatives/CO-723',
+      harnessPath: '/plugins/bodhi',
+      bodhiRoot: 'C:/work/repos',
+      permissionPosture: 'manual',
+    });
+    const order: string[] = [];
+    const first = advance('run-1', { kind: 'prepared' }, TARGET, deps({
+      plugin: async () => {
+        await new Promise((resolve) => { setTimeout(resolve, 20); });
+        order.push('run-1');
+        return OK;
+      },
+    }));
+    const second = advance('run-2', { kind: 'prepared' }, TARGET, deps({
+      plugin: async () => {
+        order.push('run-2');
+        return OK;
+      },
+    }));
+    await Promise.all([first, second]);
+    expect(order).toEqual(['run-2', 'run-1']);
+  });
+
+  test('a failure does not wedge the queue behind it', async () => {
+    const id = seed('preparing');
+    await advance(id, { kind: 'prepared' }, TARGET, deps({
+      plugin: async () => { throw new Error('boom'); },
+    }));
+    const after = await advance(id, { kind: 'provisioned' }, TARGET, deps());
+    expect(after.problems.filter((p) => p.includes('boom'))).toEqual([]);
+  });
+});
+
 describe('what the caller is told', () => {
   test('notifications and problems come back together with the state', async () => {
     const id = seed('provisioning');
