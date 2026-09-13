@@ -44,6 +44,7 @@ const ALL_EVENTS: RunEvent[] = [
   { kind: 'reviewRequested' },
   { kind: 'reviewApproved' },
   { kind: 'reviewChangesRequested', verdict: { actor: 'human' } },
+  { kind: 'reviewUndriveable', reason: 'markers could not be read' },
   { kind: 'humanApprovedGate' },
   { kind: 'budgetExceeded' },
   { kind: 'merged' },
@@ -192,6 +193,29 @@ describe('review', () => {
     const d = go('waitingChecks', { kind: 'checksFailed' });
     expect(d.state).toBe('running');
     expect(d.actions).toEqual([{ kind: 'spawnGate', gate: 2 }]);
+  });
+
+  test('a review that cannot be read stops the run', () => {
+    // Its own event rather than checksUndriveable, and this is why: an event
+    // a state does not handle is silently ignored, so a run would wait
+    // forever on a verdict that had already arrived and could not be read.
+    const d = go('waitingReview', {
+      kind: 'reviewUndriveable',
+      reason: "brannon-bowden's review carries markers that could not be read",
+    });
+    expect(d.state).toBe('inconclusive');
+    expect(d.actions.map((a) => a.kind)).toEqual(['notify']);
+    expect(d.note).toContain('could not be read');
+  });
+
+  test('it does not release the run and does not send the owner back', () => {
+    // The two shortcuts, named. Releasing treats an unread verdict as an
+    // approval; returning to gate 2 treats it as a rejection. Nobody knows
+    // which it was, which is the whole point of the state.
+    const d = go('waitingReview', { kind: 'reviewUndriveable', reason: 'x' });
+    const kinds = d.actions.map((a) => a.kind);
+    expect(kinds).not.toContain('release');
+    expect(kinds).not.toContain('spawnGate');
   });
 
   test('checks that cannot be judged stop the run and tell a person', () => {
