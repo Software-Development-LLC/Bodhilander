@@ -39,8 +39,20 @@ export interface RunCommandOptions {
   signal?: AbortSignal;
 }
 
-/** How much of a stream is kept. Enough to diagnose, bounded so a runaway cannot eat memory. */
-const MAX_CAPTURE = 1_000_000;
+/**
+ * How much of a stream is kept: enough to diagnose, and a hard bound.
+ *
+ * Hard, not approximate. Checking the length before appending lets one chunk
+ * land whole on top of a nearly-full buffer, so the real ceiling becomes this
+ * plus whatever the OS happened to hand over — which is not what a caller
+ * reading "bounded" would plan for. `keep` truncates the chunk instead.
+ */
+export const MAX_CAPTURE = 1_000_000;
+
+function keep(captured: string, chunk: Buffer): string {
+  if (captured.length >= MAX_CAPTURE) return captured;
+  return captured + chunk.toString().slice(0, MAX_CAPTURE - captured.length);
+}
 
 export function runCommand(
   executable: string,
@@ -85,10 +97,10 @@ export function runCommand(
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (data: Buffer) => {
-      if (stdout.length < MAX_CAPTURE) stdout += data.toString();
+      stdout = keep(stdout, data);
     });
     child.stderr?.on('data', (data: Buffer) => {
-      if (stderr.length < MAX_CAPTURE) stderr += data.toString();
+      stderr = keep(stderr, data);
     });
 
     // A command that exits before reading its input leaves nothing on the far

@@ -13,8 +13,15 @@
  *
  * Run with: bun test src/main/run-engine
  */
-import { describe, expect, test } from 'bun:test';
-import { NOT_STARTED, TIMED_OUT, exitCodeOf, processDeps, runCommand } from '../command-runner';
+import { afterEach, describe, expect, test } from 'bun:test';
+import {
+  MAX_CAPTURE,
+  NOT_STARTED,
+  TIMED_OUT,
+  exitCodeOf,
+  processDeps,
+  runCommand,
+} from '../command-runner';
 
 const node = (script: string): string[] => ['-e', script];
 
@@ -153,7 +160,39 @@ describe('stdin', () => {
   });
 });
 
+describe('what is captured is bounded', () => {
+  test('a runaway stream stops at the cap, not a chunk past it', async () => {
+    // Checking the length BEFORE appending lets one chunk land whole on a
+    // nearly-full buffer, so the real ceiling becomes the cap plus whatever
+    // the OS handed over. Not what a caller reading "bounded" would plan for.
+    const result = await runCommand(
+      process.execPath,
+      node(`const line = "x".repeat(64 * 1024);
+        for (let i = 0; i < 40; i += 1) process.stdout.write(line);`),
+      { timeoutMs: 20_000 },
+    );
+    expect(result.stdout.length).toBe(MAX_CAPTURE);
+  });
+
+  test('and an ordinary answer is not truncated', async () => {
+    // CONTROL: a cap that clipped everything would satisfy the case above and
+    // corrupt every JSON payload this engine reads.
+    const result = await runCommand(
+      process.execPath,
+      node('process.stdout.write(JSON.stringify({ arbiter: false }))'),
+      { timeoutMs: 10_000 },
+    );
+    expect(JSON.parse(result.stdout)).toEqual({ arbiter: false });
+  });
+});
+
 describe('the environment a command inherits', () => {
+  // Unconditional, because an assertion that throws would otherwise leak this
+  // variable into every test after it in the file.
+  afterEach(() => {
+    delete process.env.BODHI_RUNNER_INHERITED;
+  });
+
   test('env is added to the parent’s, never swapped for it', async () => {
     // A child with no PATH cannot find git, and gh shells out to git
     // constantly. Asserted on a variable this test sets, because bun's spawn
@@ -170,7 +209,6 @@ describe('the environment a command inherits', () => {
       ),
       { timeoutMs: 10_000, env: { PYTHONUTF8: '1' } },
     );
-    delete process.env.BODHI_RUNNER_INHERITED;
     expect(JSON.parse(result.stdout)).toEqual({ inherited: 'from the parent', added: '1' });
   });
 });
