@@ -110,11 +110,8 @@ export async function loadAgent(
 }
 
 /** `gate: 4` and `gate: 0,4` both declare gate 4. */
-function declaresGate(frontMatter: string, gate: number): boolean {
-  const line = frontMatter.split(/\r?\n/).find((l) => /^gate:\s*/.test(l));
-  if (!line) return false;
-  return line
-    .replace(/^gate:\s*/, '')
+function declaresGate(front: string, gate: number): boolean {
+  return declared(front, 'gate')
     .split(',')
     .map((value) => value.trim())
     .includes(String(gate));
@@ -130,22 +127,11 @@ function declaresGate(frontMatter: string, gate: number): boolean {
  * caller that picks by position gets a wrong one, loudly, on the first run.
  */
 export async function agentsForGate(harnessPath: string, gate: Gate): Promise<string[]> {
-  const found: string[] = [];
-  for (const dir of AGENT_DIRS) {
-    let entries: string[];
-    try {
-      entries = await fs.readdir(path.join(harnessPath, dir));
-    } catch {
-      continue;
-    }
-    for (const entry of entries.filter((e) => e.endsWith('.md'))) {
-      const file = path.join(harnessPath, dir, entry);
-      const text = await fs.readFile(file, 'utf8').catch(() => '');
-      const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text.replace(/^﻿/, ''));
-      if (match && declaresGate(match[1], gate)) found.push(entry.replace(/\.md$/, ''));
-    }
-  }
-  return found.sort((a, b) => a.localeCompare(b));
+  const agents = await eachAgent(harnessPath);
+  return agents
+    .filter((a) => declaresGate(a.front, gate))
+    .map((a) => a.name)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -160,6 +146,63 @@ export function promptFilePath(dir: string, sessionId: string, gate: Gate): stri
   return path.join(dir, `${sessionId}-gate${gate}.md`);
 }
 
+/**
+ * The front matter of an agent file, or null.
+ *
+ * One reader for both lookups below. The regex was written twice and the
+ * second copy was wrong -- which is the ordinary fate of a duplicated
+ * pattern, and the reason the BOM strip belongs here rather than in each.
+ * A UTF-8 BOM ahead of `---` makes the front matter unfindable, and these
+ * files come from a Windows checkout where an editor can add one.
+ */
+async function frontMatter(file: string): Promise<string | null> {
+  const text = await fs.readFile(file, 'utf8').catch(() => '');
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text.replace(/^\ufeff/, ''));
+  return match ? match[1] : null;
+}
+
+/** Every agent file in the harness, as (name, front matter). */
+async function eachAgent(harnessPath: string): Promise<{ name: string; front: string }[]> {
+  const out: { name: string; front: string }[] = [];
+  for (const dir of AGENT_DIRS) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(path.join(harnessPath, dir));
+    } catch {
+      continue;
+    }
+    for (const entry of entries.filter((e) => e.endsWith('.md'))) {
+      const front = await frontMatter(path.join(harnessPath, dir, entry));
+      if (front !== null) out.push({ name: entry.replace(/\.md$/, ''), front });
+    }
+  }
+  return out;
+}
+
+/** A front-matter value, trimmed, or ''. */
+function declared(front: string, key: string): string {
+  const line = front.split(/\r?\n/).find((l) => l.startsWith(`${key}:`));
+  return line ? line.slice(key.length + 1).trim() : '';
+}
+
+/**
+ * Which owners the harness says belong to a repo.
+ *
+ * Staff agents declare `repo:` in their front matter the same way gate agents
+ * declare `gate:`, so this mapping is discovered too -- the engine never holds
+ * a list of who owns what.
+ *
+ * Several agents can declare the same repo: a lead who owns what cuts across
+ * it, and domain owners who own their own modules. Choosing between them is
+ * judgment, so every candidate is returned and the choice is somebody else's.
+ */
+export async function agentsForRepo(harnessPath: string, repo: string): Promise<string[]> {
+  const agents = await eachAgent(harnessPath);
+  return agents
+    .filter((a) => declared(a.front, 'repo') === repo)
+    .map((a) => a.name)
+    .sort((a, b) => a.localeCompare(b));
+}
 export interface GateLaunch {
   gate: Gate;
   /** Which role. Read from the harness; for gate 2 it is the repo's owner. */
