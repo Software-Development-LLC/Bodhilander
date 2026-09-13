@@ -148,12 +148,21 @@ async function provision(
 }
 
 /**
- * Perform a decision's actions, in order.
+ * Perform a decision's actions, in order, stopping at the first that failed.
  *
- * In order because they are ordered: a decision that provisions and then
- * spawns a gate means the install happens first, and running them
- * concurrently would start an owner in a worktree that has no dependencies —
- * the exact failure `verify.sh` now reports as undriveable.
+ * In order because they ARE ordered: a decision that provisions and then
+ * spawns a gate means the install happens first. Stopping because ordering
+ * alone does not deliver that — an install that fails and a gate launched
+ * anyway is an owner started in a worktree with no dependencies, which is
+ * exactly the failure `verify.sh` now reports as undriveable, arrived at by
+ * the engine rather than by a person.
+ *
+ * `notify` is the one action that still runs after a halt. It changes nothing
+ * outside the process; it is how a person finds out. Suppressing it would
+ * make the halt itself the quietest thing in the run.
+ *
+ * `release` is NOT exempt. Releasing a run whose actions failed stops the
+ * engine attending to the one run that most needs attending to.
  */
 export async function execute(
   actions: readonly RunAction[],
@@ -166,36 +175,69 @@ export async function execute(
     notifications: [],
     released: false,
   };
+  /** Why the rest of this decision is not being performed, once something is. */
+  let halted: string | null = null;
 
   for (const action of actions) {
-    switch (action.kind) {
-      case 'provision':
-        await provision(target, deps, result);
-        break;
-      case 'requestReview':
-        await requestReview(target, deps, result);
-        break;
-      case 'spawnGate': {
-        const outcome = await deps.spawnGate(action.gate);
-        const event = gateEvent(action.gate, outcome);
-        if (event) result.events.push(event);
-        if (outcome.status === 'undriveable') result.notifications.push(outcome.reason);
-        break;
+    if (halted !== null && action.kind !== 'notify') {
+      // Named rather than skipped silently: a decision that half happened is
+      // a run whose state and world disagree, and the caller has to know
+      // which half.
+      result.problems.push(`${action.kind} was not performed: ${halted}`);
+      continue;
+    }
+
+    try {
+      switch (action.kind) {
+        case 'provision': {
+          const before = result.events.length;
+          await provision(target, deps, result);
+          const event = result.events[before];
+          if (!event || event.kind !== 'provisioned') {
+            halted = 'the worktrees were not provisioned';
+          }
+          break;
+        }
+        case 'requestReview': {
+          const before = result.events.length;
+          await requestReview(target, deps, result);
+          if (result.events.length === before) halted = 'the review was not requested';
+          break;
+        }
+        case 'spawnGate': {
+          const outcome = await deps.spawnGate(action.gate);
+          const event = gateEvent(action.gate, outcome);
+          if (event) result.events.push(event);
+          if (outcome.status === 'undriveable') {
+            result.notifications.push(outcome.reason);
+            halted = `gate ${action.gate} could not be driven`;
+          }
+          break;
+        }
+        case 'notify':
+          result.notifications.push(action.reason);
+          break;
+        case 'release':
+          // Nothing to undo and nothing to call. Attending is something the
+          // caller stops doing, so saying so is the whole action.
+          result.released = true;
+          break;
+        case 'reconcile':
+          // The loop owns when to ask. Performing a pass here would ask twice
+          // for one decision and race the pass already scheduled.
+          break;
+        default:
+          break;
       }
-      case 'notify':
-        result.notifications.push(action.reason);
-        break;
-      case 'release':
-        // Nothing to undo and nothing to call. Attending is something the
-        // caller stops doing, so saying so is the whole action.
-        result.released = true;
-        break;
-      case 'reconcile':
-        // The loop owns when to ask. Performing a pass here would ask twice
-        // for one decision and race the pass already scheduled.
-        break;
-      default:
-        break;
+    } catch (error) {
+      // The dependencies are documented not to throw, and one of them can:
+      // `runGate` throws synchronously for a call it cannot make at all — no
+      // executable, an argv past the Windows ceiling. Letting that escape
+      // would lose every event and problem already collected in this call,
+      // including the ones that explain how the run got here.
+      const why = error instanceof Error ? error.message : String(error);
+      result.problems.push(`${action.kind} could not be performed: ${why}`);
+      halted = `${action.kind} raised before it could run`;
     }
   }
 

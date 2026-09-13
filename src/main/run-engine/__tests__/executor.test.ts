@@ -237,6 +237,96 @@ describe('order', () => {
     expect(calls.map((c) => c.kind)).toEqual(['plugin', 'spawnGate:2']);
   });
 
+  test('a failed install does not launch a gate into the worktree', async () => {
+    // Ordering alone does not deliver "the install happens first" -- it has
+    // to STOP. An install that failed and a gate launched anyway is an owner
+    // started in a worktree with no dependencies, which is the exact failure
+    // verify.sh now reports as undriveable, arrived at by the engine rather
+    // than by a person.
+    const { deps, calls } = fake({ plugin: { code: 1, stdout: 'yarn install failed', stderr: '' } });
+    const result = await execute(
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }],
+      TARGET,
+      deps,
+    );
+    expect(calls.map((c) => c.kind)).toEqual(['plugin']);
+    expect(result.events).toEqual([{ kind: 'provisionFailed' }]);
+    expect(result.problems[0]).toContain('spawnGate was not performed');
+  });
+
+  test('an undriveable install stops the decision too', async () => {
+    const { deps, calls } = fake({ plugin: { code: 2, stdout: 'yarn is not on PATH', stderr: '' } });
+    await execute([{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }], TARGET, deps);
+    expect(calls.map((c) => c.kind)).toEqual(['plugin']);
+  });
+
+  test('a guard that refused before calling anything stops it as well', async () => {
+    // The initiativePath guard returns without running provision at all, and
+    // an early return that did not halt would be the quietest version of this
+    // bug -- no failure event to notice, and a gate launched regardless.
+    const { deps, calls } = fake();
+    await execute(
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }],
+      { ...TARGET, initiativePath: null },
+      deps,
+    );
+    expect(calls).toEqual([]);
+  });
+
+  test('a person is still told after a halt', async () => {
+    // notify changes nothing outside the process; it is how somebody finds
+    // out. Suppressing it would make the halt the quietest thing in the run.
+    const { deps } = fake({ plugin: { code: 1, stdout: 'install failed', stderr: '' } });
+    const result = await execute(
+      [{ kind: 'provision' }, { kind: 'notify', reason: 'gate 2 is blocked' }],
+      TARGET,
+      deps,
+    );
+    expect(result.notifications).toContain('gate 2 is blocked');
+  });
+
+  test('a halted run is not released', async () => {
+    // Releasing a run whose actions failed stops the engine attending to the
+    // one run that most needs attending to.
+    const { deps } = fake({ gh: { code: 1, stdout: '', stderr: 'HTTP 403' } });
+    const result = await execute(
+      [{ kind: 'requestReview' }, { kind: 'release' }],
+      TARGET,
+      deps,
+    );
+    expect(result.released).toBe(false);
+  });
+
+  test('a dependency that throws does not lose what was already collected', async () => {
+    // runGate throws synchronously for a call it cannot make at all -- no
+    // executable, an argv past the Windows ceiling. Letting that escape would
+    // discard the events explaining how the run got here.
+    const { deps } = fake();
+    deps.spawnGate = async () => {
+      throw new Error('gate command is 31000 characters of argv');
+    };
+    const result = await execute(
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }],
+      TARGET,
+      deps,
+    );
+    expect(result.events).toEqual([{ kind: 'provisioned' }]);
+    expect(result.problems[0]).toContain('31000 characters');
+  });
+
+  test('everything still runs when nothing fails', async () => {
+    // CONTROL: halting on success would stop every decision after its first
+    // action, which is a quieter failure than the one being fixed.
+    const { deps, calls } = fake();
+    const result = await execute(
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }, { kind: 'notify', reason: 'x' }],
+      TARGET,
+      deps,
+    );
+    expect(calls.map((c) => c.kind)).toEqual(['plugin', 'spawnGate:2']);
+    expect(result.problems).toEqual([]);
+  });
+
   test('a decision from the real machine is performed end to end', async () => {
     // Bound to transitions rather than a hand-written action list, because an
     // action shape that drifts from what the machine emits is a switch arm

@@ -116,15 +116,25 @@ export function readGateVerdict(structuredOutput: unknown): GateReading {
     return inconclusive('the gate returned no verdict object');
   }
 
+  const present = 'verdict' in output && output.verdict !== null && output.verdict !== undefined;
   const raw = typeof output.verdict === 'string' ? output.verdict.trim().toLowerCase() : '';
   if (!VERDICTS.has(raw)) {
     // Not coerced. `approved` is a word a model reaches for naturally, and
     // mapping it to `pass` here would mean accepting a verdict the schema
     // rejected — the schema's job is to make this case impossible, and its
     // presence means something upstream did not hold.
+    // A present-but-unreadable verdict and an absent one say different things
+    // to whoever reads the note: one is a gate answering wrongly, the other a
+    // gate not answering. Reporting both as "no verdict field" sends the
+    // first person to look in the wrong place.
+    if (raw) {
+      return inconclusive(
+        `the gate answered "${raw}", which is not one of pass, fail or inconclusive`,
+      );
+    }
     return inconclusive(
-      raw
-        ? `the gate answered "${raw}", which is not one of pass, fail or inconclusive`
+      present
+        ? `the gate's verdict was ${typeof output.verdict}, not one of pass, fail or inconclusive`
         : 'the gate returned no verdict field',
     );
   }
