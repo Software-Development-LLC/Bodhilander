@@ -13,7 +13,7 @@
  *
  * Run with: bun test src/main/run-engine
  */
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { runGate, backgroundIdFor, GateSpawnError, type GateOutcome } from '../gate-process';
 import type { GateCommand } from '../gate-command';
 
@@ -123,6 +123,15 @@ describe('a print gate that established nothing', () => {
     expect(outcome.status).toBe('undriveable');
     if (outcome.status !== 'undriveable') throw new Error('unreachable');
     expect(outcome.reason).toContain('error_max_turns');
+  });
+
+  test('a failure with nothing to show reports null, not an empty string', async () => {
+    // `.trim()` returns '' rather than null, so `??` chains past neither --
+    // the detail arrives as an empty string against a `string | null`
+    // contract, and a caller rendering "detail if present" shows a blank row.
+    const outcome = await run(printGate(envelope({ subtype: 'error_during_execution', result: '' })));
+    if (outcome.status !== 'undriveable') throw new Error(`expected undriveable, got ${outcome.status}`);
+    expect(outcome.detail).toBeNull();
   });
 
   test('an interrupted terminal_reason is undriveable', async () => {
@@ -252,6 +261,13 @@ describe('calls that are unusable', () => {
 });
 
 describe('what the child inherits', () => {
+  // Restored rather than left set: --isolate gives each FILE its own process,
+  // not each test, so a variable one test plants is visible to every test
+  // after it in this file.
+  afterEach(() => {
+    delete process.env.BODHI_TEST_INHERITED;
+  });
+
   test("the gate's env is added to the parent's, not swapped for it", async () => {
     // A gate with no inherited env cannot find git, gh or python, and the
     // plugin shells out to all three. It would fail in a way that reads like a

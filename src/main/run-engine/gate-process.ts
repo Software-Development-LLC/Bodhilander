@@ -172,6 +172,13 @@ function sessionIdIn(argv: string[]): string | null {
  * returns nothing readable is an OUTCOME, and a run has to record it. It
  * throws only when the call itself is unusable: no executable, or an argv
  * that cannot be spawned.
+ *
+ * That throw is SYNCHRONOUS, before any process starts. `try { await
+ * runGate(...) }` catches it; `runGate(...).catch(...)` does not, because
+ * there is no promise yet to reject. Both unusable calls are programming
+ * errors rather than run outcomes, which is why they are not a fourth status:
+ * a run should never record "the engine called itself wrongly" as something
+ * the branch did.
  */
 export function runGate(command: GateCommand, options: GateSpawnOptions): Promise<GateOutcome> {
   if (!options.executable) {
@@ -297,7 +304,7 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
         undriveable(
           `the gate reported ${result.subtype ?? 'no subtype'}` +
             (result.terminal_reason ? ` (${result.terminal_reason})` : ''),
-          result.result?.slice(-500) ?? stderrTail.trim() ?? null,
+          result.result?.slice(-500) || stderrTail.trim() || null,
         );
         return;
       }
