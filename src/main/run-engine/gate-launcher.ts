@@ -186,6 +186,40 @@ function declared(front: string, key: string): string {
 }
 
 /**
+ * Whether a front matter's `repo:` claims this repo.
+ *
+ * The key is not one name. Measured against the harness on disk:
+ *
+ *     repo: bodhi-service-api                                   one name
+ *     repo: bodhi-service-api, bodhi-service-notify-v2, ...     a list
+ *     repo: bodhi-provider-*, bodhi-service-connector*          globs
+ *
+ * Reading it as a single exact string -- which this did -- reported no owner
+ * for bodhi-service-insights, which bsa-platform owns, and dropped
+ * bsa-platform from bodhi-service-api's candidates. The second is the
+ * dangerous one: FEWER candidates turns "several, ask a person" into "one,
+ * decided", and the run picks an owner nobody chose.
+ *
+ * Only `*` is a wildcard. Anything else is matched literally, because a
+ * `repo:` value is a repository name and treating a dot or a dash as a
+ * pattern would let one agent claim repos it never named.
+ */
+function declaresRepo(front: string, repo: string): boolean {
+  return declared(front, 'repo')
+    .split(',')
+    .map((claim) => claim.trim())
+    .filter(Boolean)
+    .some((claim) => {
+      if (!claim.includes('*')) return claim === repo;
+      const pattern = claim
+        .split('*')
+        .map((part) => part.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&'))
+        .join('.*');
+      return new RegExp(`^${pattern}$`).test(repo);
+    });
+}
+
+/**
  * Which owners the harness says belong to a repo.
  *
  * Staff agents declare `repo:` in their front matter the same way gate agents
@@ -199,10 +233,11 @@ function declared(front: string, key: string): string {
 export async function agentsForRepo(harnessPath: string, repo: string): Promise<string[]> {
   const agents = await eachAgent(harnessPath);
   return agents
-    .filter((a) => declared(a.front, 'repo') === repo)
+    .filter((a) => declaresRepo(a.front, repo))
     .map((a) => a.name)
     .sort((a, b) => a.localeCompare(b));
 }
+
 export interface GateLaunch {
   gate: Gate;
   /** Which role. Read from the harness; for gate 2 it is the repo's owner. */
