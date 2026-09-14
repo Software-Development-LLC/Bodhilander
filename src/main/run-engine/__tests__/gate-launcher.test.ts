@@ -20,6 +20,7 @@ import * as path from 'path';
 import {
   GateLaunchError,
   agentsForGate,
+  rolesFromHarness,
   agentsForRepo,
   launchGate,
   loadAgent,
@@ -423,5 +424,46 @@ describe('what the builder refuses', () => {
         'prompt',
       ),
     ).toThrow(GateCommandError);
+  });
+});
+
+describe('which role serves each gate, according to the harness', () => {
+  test('a gate exactly one agent declares is ready to run', async () => {
+    const root = await harness(PLUGIN_SHAPED);
+    const found = await rolesFromHarness(root, [3]);
+    expect(found.roles).toEqual({ 3: 'reviewer' });
+    expect(found.sequences).toEqual([]);
+    expect(found.unclaimed).toEqual([]);
+  });
+
+  test('a gate several agents declare is a sequence, not a choice', async () => {
+    // Gate 4 is verifier AND scribe, and both run. `agents` holds one role
+    // per gate, so picking either would run half a gate and record it as the
+    // whole thing. Reported instead.
+    const root = await harness(PLUGIN_SHAPED);
+    const found = await rolesFromHarness(root, [4]);
+    expect(found.roles).toEqual({});
+    expect(found.sequences).toEqual([{ gate: 4, agents: ['scribe', 'verifier'] }]);
+  });
+
+  test('a gate nothing declares is said out loud', async () => {
+    // Silence here becomes "no role recorded, so it was not started" much
+    // later, at a point that does not say the harness was the reason.
+    const root = await harness({ reviewer: { gate: '3' } });
+    const found = await rolesFromHarness(root, [3, 4]);
+    expect(found.roles).toEqual({ 3: 'reviewer' });
+    expect(found.unclaimed).toEqual([4]);
+  });
+
+  test('every gate asked about lands in exactly one list', async () => {
+    // A caller must not be able to skip a gate it did not think about.
+    const root = await harness(PLUGIN_SHAPED);
+    const found = await rolesFromHarness(root, [2, 3, 4]);
+    const accounted = [
+      ...Object.keys(found.roles).map(Number),
+      ...found.sequences.map((s) => s.gate),
+      ...found.unclaimed,
+    ].sort();
+    expect(accounted).toEqual([2, 3, 4]);
   });
 });

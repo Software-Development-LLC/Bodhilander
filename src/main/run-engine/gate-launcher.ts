@@ -38,6 +38,7 @@ import { parseAgentFile, type AgentDefinition } from './agent-definition';
 import { buildGateCommand, type GateMode, type RunSpawnContext } from './gate-command';
 import { runGate, type GateOutcome, type GateSpawnOptions } from './gate-process';
 import { GATE_VERDICT_SCHEMA } from './gate-verdict';
+import { channelDirFor, mcpConfigText, PERMISSION_TOOL } from './permission-channel';
 
 export class GateLaunchError extends Error {
   // Set explicitly: without it `error.name` reads "Error" in a log, and the
@@ -132,6 +133,56 @@ export async function agentsForGate(harnessPath: string, gate: Gate): Promise<st
     .filter((a) => declaresGate(a.front, gate))
     .map((a) => a.name)
     .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * A gate the harness assigns more than one role.
+ *
+ * Not ambiguity, which is what several OWNERS for a repo means. Gate 4 is
+ * verifier and then scribe, and both run -- so this is a sequence, and the
+ * engine's `agents` map holds one role per gate and cannot express it.
+ *
+ * Reported rather than resolved, because picking one of them would run half
+ * a gate and record it as the whole thing.
+ */
+export interface GateSequence {
+  gate: Gate;
+  /** In harness order, which is alphabetical and therefore NOT run order. */
+  agents: string[];
+}
+
+export interface HarnessRoles {
+  /** Gates exactly one agent declares. Safe to run as they are. */
+  roles: Partial<Record<Gate, string>>;
+  /** Gates several declare. See {@link GateSequence}. */
+  sequences: GateSequence[];
+  /** Gates nothing in this harness declares at all. */
+  unclaimed: Gate[];
+}
+
+/**
+ * Which role serves each gate, according to the harness rather than to us.
+ *
+ * Gate 2's role is the repo's owner and comes from the run; these are the
+ * gates whose roles are a property of the pinned harness, so reading them
+ * here is what keeps the engine from holding a mapping it would then have to
+ * maintain against a plugin that changes without it.
+ *
+ * Every gate asked about gets an answer in exactly one of the three lists, so
+ * a caller cannot silently skip one it did not think about.
+ */
+export async function rolesFromHarness(
+  harnessPath: string,
+  gates: readonly Gate[],
+): Promise<HarnessRoles> {
+  const result: HarnessRoles = { roles: {}, sequences: [], unclaimed: [] };
+  for (const gate of gates) {
+    const candidates = await agentsForGate(harnessPath, gate);
+    if (candidates.length === 1) result.roles[gate] = candidates[0];
+    else if (candidates.length === 0) result.unclaimed.push(gate);
+    else result.sequences.push({ gate, agents: candidates });
+  }
+  return result;
 }
 
 /**
@@ -252,8 +303,31 @@ export interface GateLaunch {
   prompt: string;
   /** Where the body is written for print mode. The caller owns the directory. */
   promptFileDir: string;
-  context: Omit<RunSpawnContext, 'systemPromptPath'>;
+  context: Omit<RunSpawnContext, 'systemPromptPath' | 'permissionPromptTool' | 'mcpConfigPath'>;
   spawn: GateSpawnOptions;
+  /**
+   * Where a gate that cannot be prompted sends its prompts.
+   *
+   * Omitted and the gate is launched exactly as before -- which for the
+   * `manual` posture means it blocks on the first tool needing approval,
+   * because `--permission-prompts host` has no host with a person at it.
+   * That is #288, and it is the reason this is wired rather than optional in
+   * spirit only.
+   */
+  permissions?: {
+    /** Parent of the per-gate channel directories. The caller owns it. */
+    root: string;
+    /** `permission-broker.js`, absolute. Launched by the CLI, not by us. */
+    brokerPath: string;
+    /**
+     * Names this gate's channel directory.
+     *
+     * Supplied rather than derived, because whoever has to find this again
+     * to unblock the gate is the only one who knows what they can look up.
+     * Must differ between attempts, or a retry inherits the stale request.
+     */
+    channelKey: string;
+  };
 }
 
 /**
@@ -267,6 +341,22 @@ export interface GateLaunch {
  */
 export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
   const agent = await loadAgent(launch.context.harnessPath, launch.agentName);
+
+  // Only the posture that asks needs somewhere to ask. `bypass` prompts for
+  // nothing and `denyOnPrompt` refuses without asking, so handing either a
+  // channel would stand up a broker nobody will ever call.
+  let permission: { permissionPromptTool: string; mcpConfigPath: string } | null = null;
+  if (launch.permissions && launch.context.posture === 'manual') {
+    const channelDir = channelDirFor(launch.permissions.root, launch.permissions.channelKey);
+    await fs.mkdir(channelDir, { recursive: true });
+    const mcpConfigPath = `${channelDir}.mcp.json`;
+    await fs.writeFile(
+      mcpConfigPath,
+      mcpConfigText(launch.permissions.brokerPath, channelDir),
+      'utf8',
+    );
+    permission = { permissionPromptTool: PERMISSION_TOOL, mcpConfigPath };
+  }
 
   let systemPromptPath: string | null = null;
   if (launch.mode === 'print') {
@@ -288,7 +378,7 @@ export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
       // its verdict comes from a receipt.
       schema: launch.mode === 'print' ? GATE_VERDICT_SCHEMA : undefined,
     },
-    { ...launch.context, systemPromptPath },
+    { ...launch.context, systemPromptPath, ...permission },
     launch.prompt,
   );
 
