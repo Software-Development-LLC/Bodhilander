@@ -24,10 +24,14 @@ let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string;
 // channel published alongside stable from the development branch.
 export type UpdateChannel = 'stable' | 'beta';
 const UPDATE_CHANNEL_PREF_KEY = 'updateChannel';
-// Set right before every quitAndInstall() and checked on the next launch
-// (see ./update-verify) so a macOS install that silently fails to land is
-// reported instead of looping forever unnoticed (#294).
+// Set when a download completes and checked on the next launch (see
+// ./update-verify) so a macOS install that silently fails to land is reported
+// instead of looping forever unnoticed (#294). Squirrel.Mac's ShipIt is the
+// only handoff this app has seen fail silently, so this stays mac-only —
+// Windows (NSIS) and Linux go through different install mechanisms entirely,
+// and the log line / notification below are worded for the mac case.
 const PENDING_UPDATE_VERSION_PREF_KEY = 'pendingUpdateVersion';
+const IS_MAC = process.platform === 'darwin';
 
 function parseChannel(raw: string | null): UpdateChannel {
   return raw === 'beta' ? 'beta' : 'stable';
@@ -89,19 +93,24 @@ function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
  * Compare the version a previous session restarted to install (#294) against
  * the version actually running now, and report a mismatch instead of letting
  * it go unnoticed. Runs once, early in `initAutoUpdater`, before the first
- * background check can overwrite the pending marker.
+ * background check can overwrite the pending marker. Mac-only — see
+ * `PENDING_UPDATE_VERSION_PREF_KEY`.
+ *
+ * The marker is set as soon as a download completes, not right before an
+ * install is actually attempted, so it can also be left behind if the user
+ * dismisses "Restart Now" and then quits abnormally (crash, force-quit)
+ * before ever restarting — `autoInstallOnAppQuit` covers a normal quit by
+ * installing anyway, so this gap is abnormal termination only, and it
+ * self-clears (as a single false report) the next time the app runs.
  */
 function verifyPendingInstall(): void {
-  const { nextPendingVersion, failedInstall } = checkPendingInstall(
+  if (!IS_MAC) return;
+
+  const { failedInstall } = checkPendingInstall(
     getPreference(PENDING_UPDATE_VERSION_PREF_KEY),
     app.getVersion()
   );
-
-  if (nextPendingVersion === null) {
-    deletePreference(PENDING_UPDATE_VERSION_PREF_KEY);
-  } else {
-    setPreference(PENDING_UPDATE_VERSION_PREF_KEY, nextPendingVersion);
-  }
+  deletePreference(PENDING_UPDATE_VERSION_PREF_KEY);
 
   if (!failedInstall) return;
 
@@ -261,8 +270,9 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
   // Record what we're about to restart into (#294) *before* any restart path
   // (this dialog's "Restart Now", or the About dialog's restart button) can
   // fire, so a silently-failed macOS install is caught on the next launch
-  // regardless of which path the user took.
-  setPreference(PENDING_UPDATE_VERSION_PREF_KEY, info.version);
+  // regardless of which path the user took. Mac-only — see
+  // `PENDING_UPDATE_VERSION_PREF_KEY`.
+  if (IS_MAC) setPreference(PENDING_UPDATE_VERSION_PREF_KEY, info.version);
   isDownloading = false;
   const wasFromAbout = isDownloadingFromAbout;
   isDownloadingFromAbout = false;

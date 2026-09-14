@@ -13,8 +13,6 @@
 // Kept free of any `electron` import so it is unit-testable under `bun test`.
 
 export interface PendingInstallCheck {
-  /** What to persist for the `pendingUpdateVersion` preference going forward. */
-  nextPendingVersion: string | null;
   /** Set when a previous restart-to-install did not take effect. */
   failedInstall: { expected: string; actual: string } | null;
 }
@@ -25,19 +23,18 @@ export interface PendingInstallCheck {
  * against the version actually running now.
  *
  * - No pending version recorded → nothing to verify.
- * - Pending version matches current → the install succeeded; clear it.
- * - Pending version differs from current → the install silently failed;
- *   clear it (so this isn't reported again next launch) and report it.
+ * - Pending version matches current → the install succeeded.
+ * - Pending version differs from current → the install silently failed.
+ *
+ * Either way the caller clears the marker unconditionally: this check only
+ * ever runs once per restart, so there is nothing to carry forward.
  */
 export function checkPendingInstall(
   pendingVersion: string | null,
   currentVersion: string
 ): PendingInstallCheck {
   if (!pendingVersion || pendingVersion === currentVersion) {
-    return { nextPendingVersion: null, failedInstall: null };
+    return { failedInstall: null };
   }
-  return {
-    nextPendingVersion: null,
-    failedInstall: { expected: pendingVersion, actual: currentVersion },
-  };
+  return { failedInstall: { expected: pendingVersion, actual: currentVersion } };
 }
