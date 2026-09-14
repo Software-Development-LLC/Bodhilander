@@ -40,6 +40,7 @@ afterEach(async () => {
 interface FakeAgent {
   tools?: string;
   gate?: string;
+  gateOrder?: string;
   repo?: string;
   body?: string;
   staff?: boolean;
@@ -54,6 +55,7 @@ async function harness(agents: Record<string, FakeAgent>): Promise<string> {
       '---',
       `name: ${name}`,
       ...(agent.gate === undefined ? [] : [`gate: ${agent.gate}`]),
+      ...(agent.gateOrder === undefined ? [] : [`gate_order: ${agent.gateOrder}`]),
       ...(agent.repo === undefined ? [] : [`repo: ${agent.repo}`]),
       `tools: ${agent.tools ?? 'Read, Bash, Grep, Glob'}`,
       '---',
@@ -68,8 +70,8 @@ async function harness(agents: Record<string, FakeAgent>): Promise<string> {
 const PLUGIN_SHAPED = {
   arch: { gate: '1' },
   reviewer: { gate: '3', tools: 'Read, Bash, Grep, Glob, TodoWrite' },
-  verifier: { gate: '4' },
-  scribe: { gate: '0,4', tools: 'Read, Write, Edit, Bash' },
+  verifier: { gate: '4', gateOrder: '1' },
+  scribe: { gate: '0,4', gateOrder: '2', tools: 'Read, Write, Edit, Bash' },
   'product-owner': {},
   'bsa-lead': { staff: true, tools: 'Read, Write, Edit, Bash' },
 };
@@ -436,14 +438,79 @@ describe('which role serves each gate, according to the harness', () => {
     expect(found.unclaimed).toEqual([]);
   });
 
-  test('a gate several agents declare is a sequence, not a choice', async () => {
-    // Gate 4 is verifier AND scribe, and both run. `agents` holds one role
-    // per gate, so picking either would run half a gate and record it as the
-    // whole thing. Reported instead.
+  test('a gate several agents declare comes back in the order the harness set', async () => {
+    // verifier is gate_order 1 and scribe 2, so RUN order -- which is the
+    // reverse of the alphabetical order this used to return. The verifier
+    // judges whether green proves anything and only the scribe opens the PR
+    // carrying that evidence; reversed, the PR claims a verdict nobody
+    // reached.
     const root = await harness(PLUGIN_SHAPED);
     const found = await rolesFromHarness(root, [4]);
     expect(found.roles).toEqual({});
-    expect(found.sequences).toEqual([{ gate: 4, agents: ['scribe', 'verifier'] }]);
+    expect(found.unordered).toEqual([]);
+    expect(found.sequences).toEqual([{ gate: 4, agents: ['verifier', 'scribe'] }]);
+  });
+
+  test('a position nobody declared leaves the gate unordered', async () => {
+    // One missing is worse than none: the gate LOOKS ordered and is not.
+    const root = await harness({
+      verifier: { gate: '4', gateOrder: '1' },
+      scribe: { gate: '4' },
+    });
+    const found = await rolesFromHarness(root, [4]);
+    expect(found.sequences).toEqual([]);
+    expect(found.unordered).toEqual([{ gate: 4, agents: ['scribe', 'verifier'] }]);
+  });
+
+  test('a tie is not an order', async () => {
+    // Two at position 1 leaves the sequence to whatever the filesystem
+    // listed first, which is how one initiative runs differently on two
+    // machines and both report honestly.
+    const root = await harness({
+      verifier: { gate: '4', gateOrder: '1' },
+      scribe: { gate: '4', gateOrder: '1' },
+    });
+    const found = await rolesFromHarness(root, [4]);
+    expect(found.sequences).toEqual([]);
+    expect(found.unordered.map((s) => s.gate)).toEqual([4]);
+  });
+
+  test.each([['last'], ['2nd'], [''], ['-1'], ['1.5']])(
+    'gate_order %p is not a position',
+    async (order) => {
+      // Strict on purpose. Number('') is 0 and parseInt('2nd') is 2, so a
+      // lenient reader would turn a declaration nobody checked into a
+      // position this engine acted on.
+      const root = await harness({
+        verifier: { gate: '4', gateOrder: '1' },
+        scribe: { gate: '4', gateOrder: order },
+      });
+      const found = await rolesFromHarness(root, [4]);
+      expect(found.sequences).toEqual([]);
+      expect(found.unordered.map((s) => s.gate)).toEqual([4]);
+    },
+  );
+
+  test('positions sort as numbers, not as text', async () => {
+    // "10" must not land between "1" and "2".
+    const root = await harness({
+      a: { gate: '4', gateOrder: '1' },
+      b: { gate: '4', gateOrder: '10' },
+      c: { gate: '4', gateOrder: '2' },
+    });
+    const found = await rolesFromHarness(root, [4]);
+    expect(found.sequences[0].agents).toEqual(['a', 'c', 'b']);
+  });
+
+  test('positions need not start at one or be contiguous', async () => {
+    // The harness declares relative order, not an index. Requiring 1..n
+    // would make inserting an agent a rewrite of every other declaration.
+    const root = await harness({
+      late: { gate: '4', gateOrder: '90' },
+      early: { gate: '4', gateOrder: '20' },
+    });
+    const found = await rolesFromHarness(root, [4]);
+    expect(found.sequences[0].agents).toEqual(['early', 'late']);
   });
 
   test('a gate nothing declares is said out loud', async () => {
@@ -462,6 +529,7 @@ describe('which role serves each gate, according to the harness', () => {
     const accounted = [
       ...Object.keys(found.roles).map(Number),
       ...found.sequences.map((s) => s.gate),
+      ...found.unordered.map((s) => s.gate),
       ...found.unclaimed,
     ].sort();
     expect(accounted).toEqual([2, 3, 4]);
