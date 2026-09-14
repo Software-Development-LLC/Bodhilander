@@ -24,6 +24,7 @@ mock.module('../../database', () => ({
 
 const runs = await import('../runs');
 const { RUN_TABLES_SQL } = await import('../../run-tables-sql');
+const { NEEDS_A_PERSON } = await import('../../run-engine/transitions');
 
 /**
  * A database with the SHIPPED schema, not a copy of it.
@@ -235,5 +236,104 @@ describe('listActiveRuns', () => {
     runs.createRun({ ...BASE, id: 'a' });
     runs.recordTransition('a', 'failed', 'x');
     expect(runs.listActiveRuns()).toHaveLength(0);
+  });
+});
+
+describe('the inbox', () => {
+  function seed(id: string, state: string, over: { reason?: string; at?: string } = {}): void {
+    runs.createRun({
+      id,
+      initiativeKey: `K-${id}`,
+      initiativeDir: `C:/i/${id}`,
+      harnessPath: '/plugins/bodhi',
+      bodhiRoot: 'C:/work/repos',
+      permissionPosture: 'manual',
+    });
+    db.prepare('UPDATE runs SET state = ?, blocked_reason = ?, updated_at = ? WHERE id = ?')
+      .run(state, over.reason ?? null, over.at ?? '2026-09-13T12:00:00Z', id);
+  }
+
+  test('every state the machine says needs a person is listed', () => {
+    // Taken from NEEDS_A_PERSON rather than a list repeated here: a state
+    // added there and missed here is a run nobody is ever told about.
+    for (const [i, state] of NEEDS_A_PERSON.entries()) seed(`r${i}`, state);
+    expect(runs.listInbox()).toHaveLength(NEEDS_A_PERSON.length);
+  });
+
+  test('a run the engine is working is not in it', () => {
+    // The inbox answers "what needs me". A run mid-gate needs nobody, and
+    // listing it is how an inbox becomes a list of everything.
+    for (const state of ['preparing', 'provisioning', 'running', 'waitingChecks']) {
+      seed(`w-${state}`, state);
+    }
+    expect(runs.listInbox()).toEqual([]);
+  });
+
+  test('a run the engine is about to act on is not in it either', () => {
+    // reviewNotRequested is a state the engine ACTS on, so a person seeing it
+    // would be told to do something the engine is already doing.
+    seed('acting', 'reviewNotRequested');
+    expect(runs.listInbox()).toEqual([]);
+  });
+
+  test('a finished run is not in it', () => {
+    for (const state of ['approved', 'done', 'failed']) seed(`f-${state}`, state);
+    expect(runs.listInbox()).toEqual([]);
+  });
+
+  test('the longest wait comes first', () => {
+    // The one waiting longest is the one most likely forgotten, and a
+    // newest-first inbox buries it exactly as it becomes urgent.
+    seed('recent', 'inconclusive', { at: '2026-09-13T18:00:00Z' });
+    seed('ancient', 'waitingReview', { at: '2026-09-10T09:00:00Z' });
+    seed('middle', 'waitingPermission', { at: '2026-09-13T12:00:00Z' });
+    expect(runs.listInbox().map((r) => r.id)).toEqual(['ancient', 'middle', 'recent']);
+  });
+
+  test('a blocked run carries its reason', () => {
+    seed('stuck', 'inconclusive', { reason: 'no expected_checks recorded' });
+    expect(runs.listInbox()[0].blockedReason).toBe('no expected_checks recorded');
+  });
+
+  test('a run merely waiting carries no reason, and that is not a gap', () => {
+    // A review in progress has not gone wrong. Inventing a sentence for it
+    // would make the column meaningless where it matters.
+    seed('waiting', 'waitingReview');
+    expect(runs.listInbox()[0].blockedReason).toBeNull();
+  });
+
+  test('the repos it touches come with it', () => {
+    // A line a person can recognise. The initiative key alone is a ticket
+    // number, and the inbox is read by somebody deciding what to open.
+    seed('withrepos', 'inconclusive');
+    runs.upsertOwner({
+      runId: 'withrepos', repo: 'bodhi-service-api', worktree: 'C:/w', branch: 'b',
+      base: 'origin/development', scratch: null, status: 'pending', prNumber: null, prUrl: null,
+    });
+    expect(runs.listInbox()[0].repos).toEqual(['bodhi-service-api']);
+  });
+
+  test('an empty inbox is empty, not a row saying so', () => {
+    expect(runs.listInbox()).toEqual([]);
+  });
+
+  test('every run keeps its own repos when several are waiting', () => {
+    // The owners come back in one query and are grouped by run id. Grouped
+    // wrongly, every row would carry the same repos -- which reads as a bug
+    // in the engine rather than in the query, because the names would be
+    // real ones belonging to a real run.
+    seed('one', 'inconclusive', { at: '2026-09-13T10:00:00Z' });
+    seed('two', 'waitingReview', { at: '2026-09-13T11:00:00Z' });
+    const owner = {
+      worktree: 'C:/w', branch: 'b', base: 'origin/development', scratch: null,
+      status: 'pending', prNumber: null, prUrl: null,
+    };
+    runs.upsertOwner({ ...owner, runId: 'one', repo: 'repo-a' });
+    runs.upsertOwner({ ...owner, runId: 'two', repo: 'repo-b' });
+    runs.upsertOwner({ ...owner, runId: 'two', repo: 'repo-c' });
+    expect(runs.listInbox().map((r) => [r.id, r.repos])).toEqual([
+      ['one', ['repo-a']],
+      ['two', ['repo-b', 'repo-c']],
+    ]);
   });
 });

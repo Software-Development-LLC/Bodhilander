@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -167,6 +167,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dialogs
   selectDirectory: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectDirectory', defaultPath),
+
+  // The run inbox (CO-722). Read-only by design -- see the handler.
+  getRunInbox: (): Promise<RunInboxRow[]> =>
+    ipcRenderer.invoke('db:runs:inbox'),
 
   // Database - Groups
   getAllGroups: (): Promise<Group[]> =>

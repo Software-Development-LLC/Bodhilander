@@ -10,6 +10,7 @@ import { detectProviders } from './provider-detector';
 import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
+import * as runsRepo from './repositories/runs';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -858,6 +859,12 @@ safeHandle('pty:get-live-accounts', () => ptyManager.getLiveAccounts());
 safeOn('pty:prime', (id: string) => {
   ptyManager.primePty(id);
 });
+
+// The run inbox (CO-722). Read-only: nothing here starts, stops or advances a
+// run. The engine ships dark until one real run has passed, and a read
+// channel is what lets somebody watch that happen without being able to
+// set it off from a window.
+safeHandle('db:runs:inbox', () => runsRepo.listInbox());
 
 // Database IPC Handlers - Groups
 safeHandle('db:groups:getAll', () => {
