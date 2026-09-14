@@ -35,6 +35,21 @@ import type { PermissionPosture } from '../repositories/runs';
 export interface ExecutorDeps {
   gh(argv: readonly string[]): Promise<CommandResult>;
   plugin(argv: readonly string[], stdin?: string): Promise<CommandResult>;
+  /**
+   * Provisioning, which is a plugin call with a different clock.
+   *
+   * Separate from `plugin` because the two are not the same kind of work and
+   * one deadline cannot serve both. Every other plugin call reads something
+   * and answers in about a second; provisioning installs a dependency tree
+   * and compiles native modules, and takes minutes on a cold worktree.
+   *
+   * Sharing `plugin`'s deadline cost a real run: the install was killed
+   * part-way and reported as `python did not finish within 60000ms`, which
+   * sends whoever reads that line to look at Python. The install's own
+   * failure -- the thing actually wrong -- was never printed, because the
+   * process that would have printed it had been killed.
+   */
+  provision(argv: readonly string[]): Promise<CommandResult>;
   /** Launch one gate. The launcher owns agent resolution; this owns what it meant. */
   spawnGate(gate: Gate): Promise<GateOutcome>;
 }
@@ -152,7 +167,7 @@ async function provision(
     result.problems.push('cannot provision without an initiative directory');
     return;
   }
-  const run = await deps.plugin([
+  const run = await deps.provision([
     target.pythonPath,
     `${target.harnessPath}/scripts/lib/provision.py`,
     target.initiativePath,

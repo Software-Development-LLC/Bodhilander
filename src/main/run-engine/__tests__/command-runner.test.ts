@@ -233,6 +233,38 @@ describe('the reconciler’s dependencies', () => {
     expect(result.stdout).toBe('the review body');
   });
 
+  test('provisioning outlives the deadline a plugin read gets', async () => {
+    // The bug this pins cost a real run. Provisioning shared `plugin`'s
+    // one-minute deadline, so a cold `bun install` -- dependency tree plus
+    // native modules -- was killed part-way and reported as `python did not
+    // finish within 60000ms`. That sends whoever reads it to look at Python,
+    // and the install's own failure was never printed, because the process
+    // that would have printed it was gone.
+    //
+    // Same script, same work, one call each: the only difference is which
+    // clock it was spawned on. Fold `provision` back onto `plugin`'s timeout
+    // and this fails on the second expectation.
+    const deps = processDeps({
+      ghPath: 'gh',
+      pythonPath: process.execPath,
+      pluginTimeoutMs: 250,
+      provisionTimeoutMs: 30_000,
+    });
+    const slow = [process.execPath, ...node('setTimeout(() => process.stdout.write("installed"), 1500)')];
+
+    expect((await deps.plugin(slow)).code).toBe(TIMED_OUT);
+    expect(await deps.provision(slow)).toEqual({ code: 0, stdout: 'installed', stderr: '' });
+  });
+
+  test('provisioning is given the same treatment every plugin call gets', async () => {
+    // A second dependency is a second place to forget something. It is built
+    // from the same factory as `plugin` for exactly that reason, and this is
+    // what says so: the interpreter comes from the argv, not from config.
+    const deps = processDeps({ ghPath: 'gh', pythonPath: '/not/this/one' });
+    const result = await deps.provision([process.execPath, ...node('process.stdout.write("ran")')]);
+    expect(result).toEqual({ code: 0, stdout: 'ran', stderr: '' });
+  });
+
   test('a missing gh is an outcome the reconciler can read', async () => {
     // It becomes a `problem` rather than an event: gh being absent is not
     // evidence about the branch, and it may well be there next time.
