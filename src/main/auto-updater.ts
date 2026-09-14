@@ -1,8 +1,9 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater';
-import { BrowserWindow, dialog, Notification } from 'electron';
+import { app, BrowserWindow, dialog, Notification } from 'electron';
 import * as log from 'electron-log';
-import { getPreference, setPreference } from './repositories/preferences';
+import { getPreference, setPreference, deletePreference } from './repositories/preferences';
 import { markAppQuitting } from './quit-state';
+import { checkPendingInstall } from './update-verify';
 
 // Configure logging
 autoUpdater.logger = log;
@@ -23,6 +24,10 @@ let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string;
 // channel published alongside stable from the development branch.
 export type UpdateChannel = 'stable' | 'beta';
 const UPDATE_CHANNEL_PREF_KEY = 'updateChannel';
+// Set right before every quitAndInstall() and checked on the next launch
+// (see ./update-verify) so a macOS install that silently fails to land is
+// reported instead of looping forever unnoticed (#294).
+const PENDING_UPDATE_VERSION_PREF_KEY = 'pendingUpdateVersion';
 
 function parseChannel(raw: string | null): UpdateChannel {
   return raw === 'beta' ? 'beta' : 'stable';
@@ -80,8 +85,42 @@ function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
   });
 }
 
+/**
+ * Compare the version a previous session restarted to install (#294) against
+ * the version actually running now, and report a mismatch instead of letting
+ * it go unnoticed. Runs once, early in `initAutoUpdater`, before the first
+ * background check can overwrite the pending marker.
+ */
+function verifyPendingInstall(): void {
+  const { nextPendingVersion, failedInstall } = checkPendingInstall(
+    getPreference(PENDING_UPDATE_VERSION_PREF_KEY),
+    app.getVersion()
+  );
+
+  if (nextPendingVersion === null) {
+    deletePreference(PENDING_UPDATE_VERSION_PREF_KEY);
+  } else {
+    setPreference(PENDING_UPDATE_VERSION_PREF_KEY, nextPendingVersion);
+  }
+
+  if (!failedInstall) return;
+
+  log.error(
+    `[auto-updater] Restarted to install ${failedInstall.expected} but is still running ${failedInstall.actual} — the macOS install did not take effect`
+  );
+
+  if (Notification.isSupported()) {
+    new Notification({
+      title: 'Update Did Not Install',
+      body: `Bodhilander ${failedInstall.expected} downloaded and restarted, but is still on ${failedInstall.actual}. Download it manually from GitHub if this keeps happening.`,
+    }).show();
+  }
+}
+
 export function initAutoUpdater(window: BrowserWindow): void {
   mainWindow = window;
+
+  verifyPendingInstall();
 
   // Honor the saved update channel preference before the first check so
   // existing beta opt-ins pick up beta.yml on startup (BDHLNDR-32).
@@ -219,6 +258,11 @@ autoUpdater.on('download-progress', (progress) => {
 // Update downloaded
 autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
   log.info('Update downloaded:', info.version);
+  // Record what we're about to restart into (#294) *before* any restart path
+  // (this dialog's "Restart Now", or the About dialog's restart button) can
+  // fire, so a silently-failed macOS install is caught on the next launch
+  // regardless of which path the user took.
+  setPreference(PENDING_UPDATE_VERSION_PREF_KEY, info.version);
   isDownloading = false;
   const wasFromAbout = isDownloadingFromAbout;
   isDownloadingFromAbout = false;
