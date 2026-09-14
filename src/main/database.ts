@@ -1,7 +1,6 @@
 import Database from 'better-sqlite3';
 import { RUN_TABLES_SQL } from './run-tables-sql';
 import * as path from 'path';
-import { app } from 'electron';
 import log from 'electron-log';
 import { RELAY_SHARING_SCHEMA } from './api/relay/grant-sql';
 
@@ -9,6 +8,13 @@ let db: Database.Database | null = null;
 export function getDatabase(): Database.Database {
   if (db) return db;
 
+  // Required here rather than imported at the top, so this module can be
+  // loaded outside Electron -- by a tool, or by a test that supplies its own
+  // handle. `electron` throws on import in a plain Node or bun process, and
+  // an import that only one line needs should not decide who may read this
+  // file. Inside the app it resolves exactly as before.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const { app } = require('electron') as typeof import('electron');
   const userDataPath = app.getPath('userData');
   const dbPath = path.join(userDataPath, 'bodhilander.db');
 

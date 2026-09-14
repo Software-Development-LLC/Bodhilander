@@ -48,3 +48,7 @@ yarn-error.log*
 screenshot_coms/
 .claude/.bodhilander-memory.md
 nul
+
+# Scratch store and role files for scripts/run-console.ts
+.run-console/
+.run-console-prompts/
