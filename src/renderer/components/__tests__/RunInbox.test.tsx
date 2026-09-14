@@ -162,6 +162,65 @@ describe('the reason line', () => {
   });
 });
 
+describe('a refresh that fails over a list we already have', () => {
+  test('keeps the list and says it is stale', async () => {
+    // Blanking three waiting runs because the database was briefly locked
+    // loses the answer to keep the warning, which is the wrong way round.
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      if (calls === 1) return [row({ initiativeKey: 'CO-722' })];
+      throw new Error('database is locked');
+    };
+    render(<RunInbox load={load} now={() => NOW} pollMs={5} />);
+    await screen.findByText('CO-722');
+    await screen.findByRole('status');
+    // Still there, and still the answer.
+    expect(screen.getByText('CO-722')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('but a first load that fails has nothing to keep', async () => {
+    // CONTROL for the rule above: with no previous reading, an empty list is
+    // the wrong answer and the error is the whole page.
+    render(
+      <RunInbox load={async () => { throw new Error('locked'); }} now={() => NOW} pollMs={5} />,
+    );
+    await screen.findByRole('alert');
+    expect(screen.queryByText('Nothing is waiting on you')).toBeNull();
+  });
+});
+
+describe('asking again', () => {
+  test('it polls', async () => {
+    // The inbox has no way of being told a run stopped, so the only thing
+    // keeping it current is this.
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      return [];
+    };
+    render(<RunInbox load={load} now={() => NOW} pollMs={5} />);
+    await waitFor(() => expect(calls).toBeGreaterThan(1));
+  });
+
+  test('and stops when the view goes away', async () => {
+    // An interval left running in a long-lived app is a query every minute
+    // for a window nobody is looking at, forever.
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      return [];
+    };
+    const view = render(<RunInbox load={load} now={() => NOW} pollMs={5} />);
+    await waitFor(() => expect(calls).toBeGreaterThan(1));
+    view.unmount();
+    const after = calls;
+    await new Promise((resolve) => { setTimeout(resolve, 40); });
+    expect(calls).toBe(after);
+  });
+});
+
 describe('what it cannot do', () => {
   test('there is nothing here that acts on a run', async () => {
     // Read-only by design, matching the channel behind it: no start, no stop,

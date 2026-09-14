@@ -78,3 +78,11 @@
   opacity: 0.7;
   font-size: 13px;
 }
+
+/* A refresh that failed over a list we already have. A note, not a page:
+   the list is a minute stale and that is what this says. */
+.run-inbox__stale {
+  margin: 0 0 12px;
+  font-size: 12px;
+  opacity: 0.75;
+}

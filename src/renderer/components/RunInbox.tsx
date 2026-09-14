@@ -55,15 +55,21 @@ interface RunInboxProps {
   load?: () => Promise<RunInboxRow[]>;
   /** Injected in tests so "waiting 2h" is not a clock the suite races. */
   now?: () => number;
+  /** How often to ask again. A minute in the app; milliseconds in tests. */
+  pollMs?: number;
 }
 
-export const RunInbox: React.FC<RunInboxProps> = ({ load, now }) => {
+export const RunInbox: React.FC<RunInboxProps> = ({ load, now, pollMs }) => {
   const [rows, setRows] = useState<RunInboxRow[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
 
   const fetch = useCallback(async () => {
     try {
-      const next = await (load ?? window.electronAPI.getRunInbox)();
+      // Called through the object rather than detached. The preload's method
+      // does not use `this` today, and a call written this way keeps working
+      // if that ever stops being true -- which is the kind of thing that
+      // breaks silently.
+      const next = await (load ? load() : window.electronAPI.getRunInbox());
       setRows(next);
       setFailed(null);
     } catch (err) {
@@ -78,11 +84,13 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now }) => {
     // A run enters the inbox when the engine stops it, which this window has
     // no way of being told about yet. A minute is far below anything a person
     // is waiting on and far above anything that costs.
-    const timer = setInterval(() => void fetch(), 60_000);
+    const timer = setInterval(() => void fetch(), pollMs ?? 60_000);
     return () => clearInterval(timer);
-  }, [fetch]);
+  }, [fetch, pollMs]);
 
-  if (failed !== null) {
+  // A failure with nothing to fall back on is the whole page: there is no
+  // answer to show, and an empty list would be the wrong one.
+  if (failed !== null && rows === null) {
     return (
       <div className="run-inbox run-inbox--problem" role="alert">
         <h2>The inbox could not be read</h2>
@@ -96,11 +104,22 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now }) => {
     return <div className="run-inbox run-inbox--loading">Reading the inbox…</div>;
   }
 
+  // A refresh that failed over a list we already have is a NOTE, not a page.
+  // Blanking three waiting runs because the database was briefly locked loses
+  // the answer to keep the warning, which is the wrong way round -- the list
+  // is a minute stale, and the staleness is what the note says.
+  const staleNote = failed !== null && (
+    <p className="run-inbox__stale" role="status">
+      Could not refresh ({failed}). Showing the last reading.
+    </p>
+  );
+
   if (rows.length === 0) {
     return (
       <div className="run-inbox run-inbox--empty">
         <h2>Nothing is waiting on you</h2>
         <p>Runs appear here when they stop and need a person.</p>
+        {staleNote}
       </div>
     );
   }
@@ -111,6 +130,7 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now }) => {
       <h2>
         {rows.length} run{rows.length === 1 ? '' : 's'} waiting on you
       </h2>
+      {staleNote}
       <ul className="run-inbox__list">
         {rows.map((row) => (
           <li key={row.id} className={`run-inbox__row run-inbox__row--${row.state}`}>
