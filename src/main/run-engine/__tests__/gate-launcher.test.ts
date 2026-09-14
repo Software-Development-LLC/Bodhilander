@@ -20,6 +20,7 @@ import * as path from 'path';
 import {
   GateLaunchError,
   agentsForGate,
+  agentsForRepo,
   launchGate,
   loadAgent,
   promptFilePath,
@@ -38,6 +39,7 @@ afterEach(async () => {
 interface FakeAgent {
   tools?: string;
   gate?: string;
+  repo?: string;
   body?: string;
   staff?: boolean;
 }
@@ -51,6 +53,7 @@ async function harness(agents: Record<string, FakeAgent>): Promise<string> {
       '---',
       `name: ${name}`,
       ...(agent.gate === undefined ? [] : [`gate: ${agent.gate}`]),
+      ...(agent.repo === undefined ? [] : [`repo: ${agent.repo}`]),
       `tools: ${agent.tools ?? 'Read, Bash, Grep, Glob'}`,
       '---',
       '',
@@ -243,6 +246,100 @@ async function launch(root: string, over: Partial<Parameters<typeof launchGate>[
       ...over,
     });
   }
+
+describe('which owners belong to a repo', () => {
+  // The three shapes the harness on disk actually uses, measured rather than
+  // imagined: one name, a comma-separated list, and globs.
+  const OWNERS = {
+    'bsa-lead': { staff: true, repo: 'bodhi-service-api' },
+    'bsa-platform': {
+      staff: true,
+      repo: 'bodhi-service-api, bodhi-service-notify-v2, bodhi-service-insights',
+    },
+    integrations: { staff: true, repo: 'bodhi-provider-*, bodhi-service-connector*' },
+    reviewer: { gate: '3' },
+  };
+
+  test('a single name is claimed', async () => {
+    const root = await harness(OWNERS);
+    expect(await agentsForRepo(root, 'bodhi-service-notify-v2')).toEqual(['bsa-platform']);
+  });
+
+  test('every name in a list is claimed', async () => {
+    // Read as one exact string -- which it was -- this repo reports NO owner
+    // though bsa-platform owns it, and the run refuses to start.
+    const root = await harness(OWNERS);
+    expect(await agentsForRepo(root, 'bodhi-service-insights')).toEqual(['bsa-platform']);
+  });
+
+  test('a list does not hide a candidate from a repo that has others', async () => {
+    // The dangerous direction. FEWER candidates turns "several, ask a person"
+    // into "one, decided", and the run picks an owner nobody chose.
+    const root = await harness(OWNERS);
+    expect(await agentsForRepo(root, 'bodhi-service-api')).toEqual(['bsa-lead', 'bsa-platform']);
+  });
+
+  test('a glob claims what it matches', async () => {
+    const root = await harness(OWNERS);
+    expect(await agentsForRepo(root, 'bodhi-provider-demo-service')).toEqual(['integrations']);
+  });
+
+  test('and only what it matches', async () => {
+    const root = await harness(OWNERS);
+    expect(await agentsForRepo(root, 'bodhi-web-apps')).toEqual([]);
+  });
+
+  test('a repo nobody claims has no owner, and that is an answer', async () => {
+    // Bodhilander is one: the harness covers the product repos, not the
+    // tooling ones. Ignition refuses on it rather than guessing.
+    const root = await harness(OWNERS);
+    expect(await agentsForRepo(root, 'Bodhilander')).toEqual([]);
+  });
+
+  test('a name claims that repo and not one that merely starts with it', async () => {
+    // Without a glob a claim is exact. `bodhi-service-api` owning
+    // `bodhi-service-api-v2` would hand a new repo to whoever owns the old
+    // one, silently, on the day it is created -- and the agent would be told
+    // it owns something nobody gave it.
+    const root = await harness({ 'bsa-lead': { staff: true, repo: 'bodhi-service-api' } });
+    expect(await agentsForRepo(root, 'bodhi-service-api')).toEqual(['bsa-lead']);
+    expect(await agentsForRepo(root, 'bodhi-service-api-v2')).toEqual([]);
+  });
+
+  test('a dot is not a wildcard in a plain claim', async () => {
+    // A `repo:` value is a repository name. Treating regex punctuation as
+    // pattern would let one agent claim repos it never named.
+    const root = await harness({ odd: { staff: true, repo: 'a.c' } });
+    expect(await agentsForRepo(root, 'abc')).toEqual([]);
+    expect(await agentsForRepo(root, 'a.c')).toEqual(['odd']);
+  });
+
+  test('and it is not a wildcard inside a GLOB either', async () => {
+    // The case the escaping exists for, and the one the test above does not
+    // reach: a plain claim never builds a regex at all, so it proved nothing
+    // about escaping. The character class was malformed -- it closed early,
+    // the escape was a no-op, and `a.b-*` matched `aXb-x`.
+    const root = await harness({ odd: { staff: true, repo: 'a.b-*' } });
+    expect(await agentsForRepo(root, 'a.b-x')).toEqual(['odd']);
+    expect(await agentsForRepo(root, 'aXb-x')).toEqual([]);
+  });
+
+  test('and neither is any other metacharacter', async () => {
+    // One assertion per class member is noise; what matters is that none of
+    // them widens a claim beyond the name somebody wrote.
+    const root = await harness({ odd: { staff: true, repo: 'a+b(c)-*' } });
+    expect(await agentsForRepo(root, 'a+b(c)-x')).toEqual(['odd']);
+    expect(await agentsForRepo(root, 'aab(c)-x')).toEqual([]);
+    expect(await agentsForRepo(root, 'a+bc-x')).toEqual([]);
+  });
+
+  test('an agent that declares no repo owns none', async () => {
+    const root = await harness(OWNERS);
+    for (const repo of ['bodhi-service-api', 'bodhi-provider-demo-service']) {
+      expect(await agentsForRepo(root, repo)).not.toContain('reviewer');
+    }
+  });
+});
 
 describe('launching', () => {
   test('print mode leaves no role behind once the gate is done with it', async () => {
