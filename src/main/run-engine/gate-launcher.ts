@@ -38,6 +38,7 @@ import { parseAgentFile, type AgentDefinition } from './agent-definition';
 import { buildGateCommand, type GateMode, type RunSpawnContext } from './gate-command';
 import { runGate, type GateOutcome, type GateSpawnOptions } from './gate-process';
 import { GATE_VERDICT_SCHEMA } from './gate-verdict';
+import { channelDirFor, mcpConfigText, PERMISSION_TOOL } from './permission-channel';
 
 export class GateLaunchError extends Error {
   // Set explicitly: without it `error.name` reads "Error" in a log, and the
@@ -252,8 +253,31 @@ export interface GateLaunch {
   prompt: string;
   /** Where the body is written for print mode. The caller owns the directory. */
   promptFileDir: string;
-  context: Omit<RunSpawnContext, 'systemPromptPath'>;
+  context: Omit<RunSpawnContext, 'systemPromptPath' | 'permissionPromptTool' | 'mcpConfigPath'>;
   spawn: GateSpawnOptions;
+  /**
+   * Where a gate that cannot be prompted sends its prompts.
+   *
+   * Omitted and the gate is launched exactly as before -- which for the
+   * `manual` posture means it blocks on the first tool needing approval,
+   * because `--permission-prompts host` has no host with a person at it.
+   * That is #288, and it is the reason this is wired rather than optional in
+   * spirit only.
+   */
+  permissions?: {
+    /** Parent of the per-gate channel directories. The caller owns it. */
+    root: string;
+    /** `permission-broker.js`, absolute. Launched by the CLI, not by us. */
+    brokerPath: string;
+    /**
+     * Names this gate's channel directory.
+     *
+     * Supplied rather than derived, because whoever has to find this again
+     * to unblock the gate is the only one who knows what they can look up.
+     * Must differ between attempts, or a retry inherits the stale request.
+     */
+    channelKey: string;
+  };
 }
 
 /**
@@ -267,6 +291,22 @@ export interface GateLaunch {
  */
 export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
   const agent = await loadAgent(launch.context.harnessPath, launch.agentName);
+
+  // Only the posture that asks needs somewhere to ask. `bypass` prompts for
+  // nothing and `denyOnPrompt` refuses without asking, so handing either a
+  // channel would stand up a broker nobody will ever call.
+  let permission: { permissionPromptTool: string; mcpConfigPath: string } | null = null;
+  if (launch.permissions && launch.context.posture === 'manual') {
+    const channelDir = channelDirFor(launch.permissions.root, launch.permissions.channelKey);
+    await fs.mkdir(channelDir, { recursive: true });
+    const mcpConfigPath = `${channelDir}.mcp.json`;
+    await fs.writeFile(
+      mcpConfigPath,
+      mcpConfigText(launch.permissions.brokerPath, channelDir),
+      'utf8',
+    );
+    permission = { permissionPromptTool: PERMISSION_TOOL, mcpConfigPath };
+  }
 
   let systemPromptPath: string | null = null;
   if (launch.mode === 'print') {
@@ -288,7 +328,7 @@ export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
       // its verdict comes from a receipt.
       schema: launch.mode === 'print' ? GATE_VERDICT_SCHEMA : undefined,
     },
-    { ...launch.context, systemPromptPath },
+    { ...launch.context, systemPromptPath, ...permission },
     launch.prompt,
   );
 

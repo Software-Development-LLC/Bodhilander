@@ -99,6 +99,43 @@ export interface ChannelFile {
 const REQUEST_SUFFIX = '.request.json';
 const REPLY_SUFFIX = '.reply.json';
 
+/**
+ * The MCP name the gate is told to ask.
+ *
+ * `mcp__<server>__<tool>`, where the server half is the key in the config
+ * below. The two are written together here because a mismatch between them
+ * fails in the worst possible way: the flag is accepted, no server answers,
+ * and the gate blocks exactly as it did before the channel existed.
+ */
+export const PERMISSION_TOOL = 'mcp__bodhi_permissions__ask';
+
+/**
+ * Where one gate's requests live.
+ *
+ * The key is the caller's, deliberately. This module has no way to know what
+ * a given caller can look up later, and guessing wrong is not a small error:
+ * a channel nobody can find again is a gate nobody can unblock. The one rule
+ * is that a retry must not collide with the attempt it is retrying, or a
+ * stale request would read as the new one's.
+ */
+export function channelDirFor(root: string, channelKey: string): string {
+  return `${root}/${channelKey}`;
+}
+
+/**
+ * The `--mcp-config` the gate is launched with.
+ *
+ * Returned as text rather than written, so the composition is assertable. The
+ * server key must match {@link PERMISSION_TOOL}'s middle segment.
+ */
+export function mcpConfigText(brokerPath: string, channelDir: string): string {
+  return JSON.stringify(
+    { mcpServers: { bodhi_permissions: { command: 'node', args: [brokerPath, channelDir] } } },
+    null,
+    2,
+  );
+}
+
 /** The file the broker waits on, for a decision a person made. */
 export function replyFileName(toolUseId: string): string {
   return `${toolUseId}${REPLY_SUFFIX}`;

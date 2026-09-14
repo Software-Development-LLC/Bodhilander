@@ -52,3 +52,4 @@ nul
 # Scratch store and role files for scripts/run-console.ts
 .run-console/
 .run-console-prompts/
+.run-console-permissions/

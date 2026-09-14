@@ -47,6 +47,14 @@ import { advance } from '../src/main/run-engine/driver';
 import { launchGate } from '../src/main/run-engine/gate-launcher';
 import { runCommand, processDeps } from '../src/main/run-engine/command-runner';
 import type { Gate, RunEvent } from '../src/main/run-engine/transitions';
+import {
+  channelDirFor,
+  encodeDecision,
+  isWaiting,
+  readChannel,
+  replyFileName,
+  type PermissionDecision,
+} from '../src/main/run-engine/permission-channel';
 
 function flag(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -155,11 +163,14 @@ function events(): void {
   }
 }
 
-async function step(): Promise<void> {
-  const runId = process.argv[3];
-  const kind = process.argv[4];
-  if (!runId || !kind) throw new Error('usage: step <run-id> <event>');
-
+/**
+ * The run, shaped as the executor's target.
+ *
+ * Shared by every command that advances, so `perms` and `answer` cannot drift
+ * from `step` on what a run IS -- two readings of the same row disagreeing is
+ * how a run ends up advanced under a target nobody configured.
+ */
+function targetFor(runId: string) {
   const run = runs.getRun(runId);
   if (!run) throw new Error(`no run ${runId}`);
   const owners = runs.listOwners(runId);
@@ -179,7 +190,7 @@ async function step(): Promise<void> {
   const agents: Record<number, string> = {};
   if (owners[0]?.agent) agents[2] = owners[0].agent;
 
-  const target = {
+  return {
     repo: env('BODHI_REPO', ''),
     prNumber: Number(env('BODHI_PR', '0')) || null,
     // No default. Baking real logins into a tool makes it request review
@@ -192,6 +203,40 @@ async function step(): Promise<void> {
     agents,
     posture: run.permissionPosture,
   };
+}
+
+/**
+ * Dependencies for an advance that must not DO anything.
+ *
+ * `permissionRequested` and `permissionAnswered` only move the run between
+ * `running` and `waitingPermission`, and neither transition carries an
+ * action. Passing the real `gh` and the real spawner would leave a gate that
+ * is alive and working liable to be launched a second time by the act of
+ * looking at it -- so these refuse instead, loudly, if the machine ever
+ * decides otherwise.
+ */
+function stubDeps() {
+  const refuse = (what: string) => async () => {
+    throw new Error(`a permission command tried to ${what}, which it must never do`);
+  };
+  return {
+    gh: refuse('call gh'),
+    plugin: refuse('run a plugin script'),
+    provision: refuse('provision'),
+    spawnGate: refuse('launch a gate'),
+  } as unknown as Parameters<typeof advance>[3];
+}
+
+async function step(): Promise<void> {
+  const runId = process.argv[3];
+  const kind = process.argv[4];
+  if (!runId || !kind) throw new Error('usage: step <run-id> <event>');
+  const run = runs.getRun(runId);
+  if (!run) throw new Error(`no run ${runId}`);
+  const owners = runs.listOwners(runId);
+  const agents: Record<number, string> = {};
+  if (owners[0]?.agent) agents[2] = owners[0].agent;
+  const target = targetFor(runId);
 
   const commands = processDeps({
     ghPath: env('BODHI_GH', 'gh'),
@@ -207,9 +252,22 @@ async function step(): Promise<void> {
       return launchGate({
         gate,
         agentName: agents[gate] ?? 'reviewer',
-        mode: gate === 2 ? 'background' : 'print',
+        // Gate 2 is background by default so a long owner run does not hold
+        // the console open. BODHI_GATE_MODE overrides it, because the
+        // permission channel is only consulted in print mode -- `--help` says
+        // `--permission-prompts` applies "with --print", and a background gate
+        // starts the broker and then never asks it anything.
+        mode: (env('BODHI_GATE_MODE', gate === 2 ? 'background' : 'print') as 'background' | 'print'),
         prompt: env('BODHI_PROMPT', `Work gate ${gate} for ${run.initiativeKey}.`),
         promptFileDir: path.join(process.cwd(), '.run-console-prompts'),
+        // Without this a `manual` gate blocks on its first gated tool and
+        // nothing can answer it (#288). The key is what `perms` looks up, so
+        // it is built from what a person already has in front of them.
+        permissions: {
+          root: permissionRoot(),
+          brokerPath: path.join(__dirname, '..', 'scripts', 'permission-broker.js'),
+          channelKey: channelKeyFor(runId, gate, runs.listGates(runId).filter((g) => g.gate === gate).length),
+        },
         context: {
           harnessPath: run.harnessPath,
           bodhiRoot: run.bodhiRoot,
@@ -233,6 +291,113 @@ async function step(): Promise<void> {
   if (result.runaway) console.log(`RUNAWAY   ${result.runaway}`);
 }
 
+/** Where every gate's channel lives, under the scratch store. */
+function permissionRoot(): string {
+  return path.join(process.cwd(), '.run-console-permissions');
+}
+
+/**
+ * Names one attempt's channel.
+ *
+ * Run, gate and attempt, because those are what a person reading `status`
+ * already has -- and because a retry must not inherit the request its
+ * predecessor left behind.
+ */
+function channelKeyFor(runId: string, gate: number, attempt: number): string {
+  return `${runId}-g${gate}-a${attempt}`;
+}
+
+/** The channel of the gate currently in flight, or null when none is. */
+function activeChannel(runId: string): string | null {
+  const gate = runs.activeGate(runId);
+  if (!gate) return null;
+  return channelDirFor(permissionRoot(), channelKeyFor(runId, gate.gate, gate.attempt));
+}
+
+function readActiveChannel(runId: string) {
+  const dir = activeChannel(runId);
+  if (!dir || !fs.existsSync(dir)) return null;
+  const files = fs.readdirSync(dir).map((name) => {
+    try {
+      return { name, text: fs.readFileSync(path.join(dir, name), 'utf8') };
+    } catch {
+      // Null rather than skipped: an unreadable request still blocks the gate.
+      return { name, text: null };
+    }
+  });
+  return { dir, reading: readChannel(files) };
+}
+
+/**
+ * What the gate is stuck on, and move the run to say so.
+ *
+ * The event is applied here rather than by a person typing it, because
+ * `waitingPermission` is a fact about the channel, not a decision anybody
+ * makes. Answering is the decision.
+ */
+async function perms(): Promise<void> {
+  const runId = process.argv[3];
+  if (!runId) throw new Error('usage: perms <run-id>');
+  const found = readActiveChannel(runId);
+  if (!found) {
+    console.log('no gate in flight, so nothing can be waiting on you');
+    return;
+  }
+  const { dir, reading } = found;
+  console.log(`channel   ${dir}`);
+  for (const request of reading.pending) {
+    console.log(`\nPENDING   ${request.toolUseId}`);
+    console.log(`  tool    ${request.toolName}`);
+    console.log(`  asked   ${request.askedAt}`);
+    // Indented whole rather than truncated: a person approving a Bash call
+    // is approving its command line, and an approval given against an
+    // elided version is not an approval of what runs.
+    const shown = JSON.stringify(request.input, null, 2).split('\n').join('\n          ');
+    console.log(`  input   ${shown}`);
+  }
+  for (const bad of reading.unreadable) {
+    console.log(`\nUNREADABLE ${bad.toolUseId}: ${bad.reason}`);
+  }
+  if (!isWaiting(reading)) {
+    console.log('\nnothing pending');
+    return;
+  }
+  const run = runs.getRun(runId);
+  if (run && run.state === 'running') {
+    const result = await advance(runId, { kind: 'permissionRequested' }, targetFor(runId), stubDeps());
+    console.log(`\nstate     ${result.state}`);
+  }
+  console.log(`\nto answer: bun run console -- answer ${runId} <tool-use-id> allow`);
+  console.log(`           bun run console -- answer ${runId} <tool-use-id> deny "why"`);
+}
+
+/** Write the decision the broker is waiting on, and let the run go again. */
+async function answer(): Promise<void> {
+  const [, , , runId, toolUseId, verdict, ...rest] = process.argv;
+  if (!runId || !toolUseId || (verdict !== 'allow' && verdict !== 'deny')) {
+    throw new Error('usage: answer <run-id> <tool-use-id> allow|deny [message]');
+  }
+  const dir = activeChannel(runId);
+  if (!dir) throw new Error('no gate is in flight for that run');
+  const message = rest.join(' ').trim();
+  if (verdict === 'deny' && !message) {
+    // A refusal the model cannot read teaches an owner to retry. The CLI
+    // passes this through, so requiring it costs nothing and buys a gate
+    // that knows WHY it was stopped.
+    throw new Error('a refusal needs a message: answer <run-id> <id> deny "why"');
+  }
+  const decision: PermissionDecision =
+    verdict === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', message };
+  fs.writeFileSync(path.join(dir, replyFileName(toolUseId)), encodeDecision(decision));
+  console.log(`answered  ${toolUseId} ${verdict}`);
+
+  const run = runs.getRun(runId);
+  if (run && run.state === 'waitingPermission') {
+    const result = await advance(runId, { kind: 'permissionAnswered' }, targetFor(runId), stubDeps());
+    console.log(`state     ${result.state}`);
+  }
+}
+
 async function main(): Promise<void> {
   const dir = useScratchStore();
   // The app's own getDatabase, with its pragmas, its tables and its
@@ -246,6 +411,8 @@ async function main(): Promise<void> {
   else if (command === 'status') status();
   else if (command === 'events') events();
   else if (command === 'step') await step();
+  else if (command === 'perms') await perms();
+  else if (command === 'answer') await answer();
   else {
     console.log(`unknown command ${command ?? '(none)'}. See the header of this file.`);
     process.exitCode = 64;

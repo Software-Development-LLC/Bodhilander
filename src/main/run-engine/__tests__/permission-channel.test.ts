@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
   type ChannelFile,
+  channelDirFor,
   encodeDecision,
   isWaiting,
+  mcpConfigText,
+  PERMISSION_TOOL,
   readChannel,
   replyFileName,
   requestFileName,
@@ -175,5 +178,37 @@ describe('the answer a person gives', () => {
   test('the two files for one request agree on its id', () => {
     expect(requestFileName('toolu_01')).toBe('toolu_01.request.json');
     expect(replyFileName('toolu_01')).toBe('toolu_01.reply.json');
+  });
+});
+
+describe('how the gate is told where to ask', () => {
+  test('the tool name and the config agree on the server', () => {
+    // The failure this pins is the worst-shaped one available: a mismatch
+    // between these two is ACCEPTED by the CLI, no server ever answers, and
+    // the gate blocks exactly as it did before the channel existed.
+    const config = JSON.parse(mcpConfigText('C:/app/scripts/permission-broker.js', 'C:/chan/s1'));
+    const server = PERMISSION_TOOL.split('__')[1];
+    expect(Object.keys(config.mcpServers)).toEqual([server]);
+  });
+
+  test('the broker is launched on the channel it is meant to serve', () => {
+    const config = JSON.parse(mcpConfigText('C:/app/scripts/permission-broker.js', 'C:/chan/s1'));
+    expect(config.mcpServers.bodhi_permissions).toEqual({
+      command: 'node',
+      args: ['C:/app/scripts/permission-broker.js', 'C:/chan/s1'],
+    });
+  });
+
+  test('each gate gets its own directory, under a key its caller chose', () => {
+    // A channel nobody can find again is a gate nobody can unblock, so the
+    // key belongs to whoever has to look it up, not to this module.
+    expect(channelDirFor('C:/chan', 'run-1-g2-a1')).toBe('C:/chan/run-1-g2-a1');
+  });
+
+  test('a retry does not inherit the attempt it is retrying', () => {
+    // Same run, same gate, second attempt. Sharing a directory would let a
+    // stale request read as the new one's, and a person would answer a
+    // question the running gate never asked.
+    expect(channelDirFor('C:/chan', 'run-1-g2-a2')).not.toBe(channelDirFor('C:/chan', 'run-1-g2-a1'));
   });
 });
