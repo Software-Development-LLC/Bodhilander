@@ -136,6 +136,56 @@ export async function agentsForGate(harnessPath: string, gate: Gate): Promise<st
 }
 
 /**
+ * A gate the harness assigns more than one role.
+ *
+ * Not ambiguity, which is what several OWNERS for a repo means. Gate 4 is
+ * verifier and then scribe, and both run -- so this is a sequence, and the
+ * engine's `agents` map holds one role per gate and cannot express it.
+ *
+ * Reported rather than resolved, because picking one of them would run half
+ * a gate and record it as the whole thing.
+ */
+export interface GateSequence {
+  gate: Gate;
+  /** In harness order, which is alphabetical and therefore NOT run order. */
+  agents: string[];
+}
+
+export interface HarnessRoles {
+  /** Gates exactly one agent declares. Safe to run as they are. */
+  roles: Partial<Record<Gate, string>>;
+  /** Gates several declare. See {@link GateSequence}. */
+  sequences: GateSequence[];
+  /** Gates nothing in this harness declares at all. */
+  unclaimed: Gate[];
+}
+
+/**
+ * Which role serves each gate, according to the harness rather than to us.
+ *
+ * Gate 2's role is the repo's owner and comes from the run; these are the
+ * gates whose roles are a property of the pinned harness, so reading them
+ * here is what keeps the engine from holding a mapping it would then have to
+ * maintain against a plugin that changes without it.
+ *
+ * Every gate asked about gets an answer in exactly one of the three lists, so
+ * a caller cannot silently skip one it did not think about.
+ */
+export async function rolesFromHarness(
+  harnessPath: string,
+  gates: readonly Gate[],
+): Promise<HarnessRoles> {
+  const result: HarnessRoles = { roles: {}, sequences: [], unclaimed: [] };
+  for (const gate of gates) {
+    const candidates = await agentsForGate(harnessPath, gate);
+    if (candidates.length === 1) result.roles[gate] = candidates[0];
+    else if (candidates.length === 0) result.unclaimed.push(gate);
+    else result.sequences.push({ gate, agents: candidates });
+  }
+  return result;
+}
+
+/**
  * Where a gate's role is written for print mode.
  *
  * Named for the SESSION rather than the role: two gates in one run can share

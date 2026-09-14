@@ -44,7 +44,8 @@ import { getDatabase } from '../src/main/database';
 import * as runs from '../src/main/repositories/runs';
 import { armRun } from '../src/main/run-engine/ignition';
 import { advance } from '../src/main/run-engine/driver';
-import { launchGate } from '../src/main/run-engine/gate-launcher';
+import { launchGate, rolesFromHarness } from '../src/main/run-engine/gate-launcher';
+import { gateBrief } from '../src/main/run-engine/gate-brief';
 import { runCommand, processDeps } from '../src/main/run-engine/command-runner';
 import type { Gate, RunEvent } from '../src/main/run-engine/transitions';
 import {
@@ -234,9 +235,23 @@ async function step(): Promise<void> {
   const run = runs.getRun(runId);
   if (!run) throw new Error(`no run ${runId}`);
   const owners = runs.listOwners(runId);
-  const agents: Record<number, string> = {};
+  // Gate 2's role is the repo's owner, recorded when the run was armed.
+  // Gates 3 and 4 belong to the harness, so they are READ rather than held
+  // here -- an engine carrying that mapping would have to maintain it
+  // against a plugin that changes without it.
+  const fromHarness = await rolesFromHarness(run.harnessPath, [3, 4]);
+  const agents: Record<number, string> = { ...fromHarness.roles };
   if (owners[0]?.agent) agents[2] = owners[0].agent;
-  const target = targetFor(runId);
+  for (const gate of fromHarness.unclaimed) {
+    console.log(`  note      no agent in this harness declares gate ${gate}`);
+  }
+  for (const seq of fromHarness.sequences) {
+    // Not a choice to make quietly. Gate 4 is verifier AND scribe and both
+    // run; `agents` holds one role per gate, so picking either would run
+    // half a gate and record it as the whole thing.
+    console.log(`  note      gate ${seq.gate} is a sequence (${seq.agents.join(', ')}), which this model cannot hold yet`);
+  }
+  const target = { ...targetFor(runId), agents };
 
   const commands = processDeps({
     ghPath: env('BODHI_GH', 'gh'),
@@ -258,7 +273,21 @@ async function step(): Promise<void> {
         // `--permission-prompts` applies "with --print", and a background gate
         // starts the broker and then never asks it anything.
         mode: (env('BODHI_GATE_MODE', gate === 2 ? 'background' : 'print') as 'background' | 'print'),
-        prompt: env('BODHI_PROMPT', `Work gate ${gate} for ${run.initiativeKey}.`),
+        // The harness says HOW to work a gate; only the run knows WHAT it is
+        // working on, and none of it is derivable from an agent file. The
+        // first real launch was handed a bare sentence and opened by
+        // guessing at directories that did not exist.
+        prompt: gateBrief(
+          {
+            initiativeKey: run.initiativeKey,
+            initiativePath: run.initiativeDir ?? '(not recorded)',
+            repo: owner?.repo ?? '(not recorded)',
+            worktree: owner?.worktree ?? process.cwd(),
+            harnessPath: run.harnessPath,
+            gate,
+          },
+          env('BODHI_TASK', `Work gate ${gate} for ${run.initiativeKey}.`),
+        ),
         promptFileDir: path.join(process.cwd(), '.run-console-prompts'),
         // Without this a `manual` gate blocks on its first gated tool and
         // nothing can answer it (#288). The key is what `perms` looks up, so
