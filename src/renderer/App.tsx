@@ -17,6 +17,7 @@ import { GroupColorPicker } from './components/GroupColorPicker';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
+import { RunInbox } from './components/RunInbox';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
 import { FailoverNotice } from './components/FailoverNotice';
 import { AccountSwitchNotice } from './components/AccountSwitchNotice';
@@ -1271,6 +1272,7 @@ const App: React.FC = () => {
     onViewTerminal: () => setContentView('terminal'),
     onViewAnalytics: () => setContentView('analytics'),
     onViewArena: () => setContentView('arena'),
+    onViewRuns: () => setContentView('runs'),
   }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect]);
 
   useKeyboardShortcuts(shortcutHandlers);
@@ -1295,6 +1297,7 @@ const App: React.FC = () => {
       window.electronAPI.onMenuViewTerminal(() => setContentView('terminal')),
       window.electronAPI.onMenuViewAnalytics(() => setContentView('analytics')),
       window.electronAPI.onMenuViewArena(() => setContentView('arena')),
+      window.electronAPI.onMenuViewRuns(() => setContentView('runs')),
       window.electronAPI.onMenuFocusSidebar(handleFocusSidebar),
       // "Claude Accounts..." is the only discoverable entry point to accounts
       // now that the sidebar key button is gone, so it deep-links Settings
@@ -1742,6 +1745,7 @@ const App: React.FC = () => {
             initialGroupId={arenaGroupId}
           />
         )}
+        {contentView === 'runs' && <RunInbox />}
         {/* The terminal area is HIDDEN, never unmounted, when another view is
             selected. Unmounting would dispose every xterm instance and kill the
             PTYs, so switching tabs would visually reset all live sessions.

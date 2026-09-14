@@ -478,16 +478,41 @@ export interface InboxRow {
 }
 
 /**
- * Runs that cannot move without a person, oldest wait first.
+ * States that need a person but not THIS person, here, now.
+ *
+ * `waitingReview` is the whole list, and the distinction is worth keeping
+ * rather than collapsing. The state machine is right that a run cannot
+ * advance without somebody: a PR sits until a reviewer answers. But that
+ * somebody is a reviewer on GitHub, working from a review queue that already
+ * exists, not an operator in this window. Putting it here would fill the
+ * inbox with rows whose only action is "go and do your normal reviews", and
+ * an inbox that lists things you cannot act on from where you are standing
+ * stops being read.
+ */
+export const NOT_THE_OPERATOR: readonly RunState[] = ['waitingReview'];
+
+/**
+ * The states the inbox shows: every state that needs a person, minus the ones
+ * that need a different person.
+ *
+ * DERIVED, not restated. A state added to NEEDS_A_PERSON and missed here is a
+ * run nobody is ever told about -- the failure an inbox exists to prevent,
+ * arriving through the inbox -- so a new state appears here by default, and
+ * leaving it out has to be a deliberate line in the list above.
+ */
+export const INBOX_STATES: readonly RunState[] = NEEDS_A_PERSON.filter(
+  (state) => !NOT_THE_OPERATOR.includes(state),
+);
+
+/**
+ * Runs waiting on the person at this window, oldest wait first.
  *
  * Oldest first because the one that has waited longest is the one most likely
  * to have been forgotten, and an inbox sorted newest-first buries it exactly
- * as it becomes urgent. The states come from the state machine's own
- * NEEDS_A_PERSON rather than a list repeated here -- a state added there and
- * missed here is a run nobody is ever told about.
+ * as it becomes urgent.
  */
 export function listInbox(): InboxRow[] {
-  const placeholders = NEEDS_A_PERSON.map(() => '?').join(', ');
+  const placeholders = INBOX_STATES.map(() => '?').join(', ');
   const rows = getDatabase()
     .prepare(
       `SELECT id, initiative_key, state, blocked_reason, updated_at
@@ -495,7 +520,7 @@ export function listInbox(): InboxRow[] {
         WHERE state IN (${placeholders})
         ORDER BY updated_at ASC, id ASC`,
     )
-    .all(...NEEDS_A_PERSON) as {
+    .all(...INBOX_STATES) as {
     id: string;
     initiative_key: string;
     state: string;
