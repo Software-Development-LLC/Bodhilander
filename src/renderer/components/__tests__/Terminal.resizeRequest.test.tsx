@@ -5,7 +5,7 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { RelayResizeRequest } from '../../../shared/types';
 
 class FakeBuffer {
@@ -129,12 +129,21 @@ afterEach(() => {
 });
 
 /**
- * Mount, then let the startup path settle: creating the pty sends one resize
- * of its own, and that is not what any of these tests are about.
+ * Mount, then let the startup path settle: creating the pty sends resizes of
+ * its own, and those are not what any of these tests are about.
+ *
+ * Waits for the startup resize to ARRIVE rather than for a duration. A fixed
+ * 60ms was enough on a developer machine and not on a loaded ubuntu runner,
+ * where the startup resizes landed after the window closed and therefore
+ * after the clear below -- so `ptyResizes` held 3 entries in a test asserting
+ * it was empty, and the failure named the prompt rather than the mount.
  */
 async function renderTerminal() {
   const rendered = render(<Terminal sessionId="s1" cwd="/tmp" launchClaude provider="claude" isActive />);
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+  await waitFor(() => { expect(ptyResizes.length).toBeGreaterThan(0); });
+  // The prompt these tests act on cannot appear before the terminal does, so
+  // waiting for the mount to finish is part of the same settling.
+  await act(async () => { await Promise.resolve(); });
   ptyResizes = [];
   termResizes = [];
   return rendered;
