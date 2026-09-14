@@ -200,7 +200,13 @@ function declared(front: string, key: string): string {
  * dangerous one: FEWER candidates turns "several, ask a person" into "one,
  * decided", and the run picks an owner nobody chose.
  *
- * Only `*` is a wildcard. Anything else is matched literally, because a
+ * Only `*` is a wildcard, and every other metacharacter is escaped before
+ * the pattern is built. The character class does that and is easy to get
+ * wrong: it must escape both the `]` and the `\\` inside itself, or the class
+ * closes early and the escape silently becomes a no-op -- which it did,
+ * leaving a claim like `a.b-*` matching `aXb-x`.
+ *
+ * Anything else is matched literally, because a
  * `repo:` value is a repository name and treating a dot or a dash as a
  * pattern would let one agent claim repos it never named.
  */
@@ -213,7 +219,7 @@ function declaresRepo(front: string, repo: string): boolean {
       if (!claim.includes('*')) return claim === repo;
       const pattern = claim
         .split('*')
-        .map((part) => part.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&'))
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
         .join('.*');
       return new RegExp(`^${pattern}$`).test(repo);
     });

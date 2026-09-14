@@ -306,12 +306,31 @@ describe('which owners belong to a repo', () => {
     expect(await agentsForRepo(root, 'bodhi-service-api-v2')).toEqual([]);
   });
 
-  test('a dot is not a wildcard', async () => {
+  test('a dot is not a wildcard in a plain claim', async () => {
     // A `repo:` value is a repository name. Treating regex punctuation as
     // pattern would let one agent claim repos it never named.
     const root = await harness({ odd: { staff: true, repo: 'a.c' } });
     expect(await agentsForRepo(root, 'abc')).toEqual([]);
     expect(await agentsForRepo(root, 'a.c')).toEqual(['odd']);
+  });
+
+  test('and it is not a wildcard inside a GLOB either', async () => {
+    // The case the escaping exists for, and the one the test above does not
+    // reach: a plain claim never builds a regex at all, so it proved nothing
+    // about escaping. The character class was malformed -- it closed early,
+    // the escape was a no-op, and `a.b-*` matched `aXb-x`.
+    const root = await harness({ odd: { staff: true, repo: 'a.b-*' } });
+    expect(await agentsForRepo(root, 'a.b-x')).toEqual(['odd']);
+    expect(await agentsForRepo(root, 'aXb-x')).toEqual([]);
+  });
+
+  test('and neither is any other metacharacter', async () => {
+    // One assertion per class member is noise; what matters is that none of
+    // them widens a claim beyond the name somebody wrote.
+    const root = await harness({ odd: { staff: true, repo: 'a+b(c)-*' } });
+    expect(await agentsForRepo(root, 'a+b(c)-x')).toEqual(['odd']);
+    expect(await agentsForRepo(root, 'aab(c)-x')).toEqual([]);
+    expect(await agentsForRepo(root, 'a+bc-x')).toEqual([]);
   });
 
   test('an agent that declares no repo owns none', async () => {
