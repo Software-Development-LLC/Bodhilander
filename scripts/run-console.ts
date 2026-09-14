@@ -246,10 +246,16 @@ async function step(): Promise<void> {
     console.log(`  note      no agent in this harness declares gate ${gate}`);
   }
   for (const seq of fromHarness.sequences) {
-    // Not a choice to make quietly. Gate 4 is verifier AND scribe and both
-    // run; `agents` holds one role per gate, so picking either would run
-    // half a gate and record it as the whole thing.
-    console.log(`  note      gate ${seq.gate} is a sequence (${seq.agents.join(', ')}), which this model cannot hold yet`);
+    // The order is the harness's, read from `gate_order:`. `agents` still
+    // holds one role per gate, so these are reported rather than run -- but
+    // reported in the order they would run, which is the half that was
+    // missing.
+    console.log(`  note      gate ${seq.gate} runs ${seq.agents.join(' then ')}, which this model cannot hold yet`);
+  }
+  for (const seq of fromHarness.unordered) {
+    // Worse than a sequence, and worth saying differently: the harness put
+    // several agents on this gate and did not say which comes first.
+    console.log(`  note      gate ${seq.gate} has ${seq.agents.length} agents (${seq.agents.join(', ')}) and no declared order`);
   }
   const target = { ...targetFor(runId), agents };
 

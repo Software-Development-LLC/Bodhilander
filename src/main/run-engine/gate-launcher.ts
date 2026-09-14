@@ -119,6 +119,20 @@ function declaresGate(front: string, gate: number): boolean {
 }
 
 /**
+ * Where in its gate an agent runs, or null if the harness does not say.
+ *
+ * Deliberately strict: anything that is not a run of digits is null rather
+ * than coerced. `Number('')` is 0 and `parseInt('2nd')` is 2, and either
+ * would turn a declaration nobody checked into a position this engine acted
+ * on -- which is the whole failure the plugin's own invariants exist to
+ * prevent, arriving through the reader instead.
+ */
+function gateOrder(front: string): number | null {
+  const raw = declared(front, 'gate_order').trim();
+  return /^\d+$/.test(raw) ? Number(raw) : null;
+}
+
+/**
  * Which agents the harness says serve this gate, by name, sorted.
  *
  * Sorted for determinism, NOT for sequence: gate 4 is verifier then scribe,
@@ -136,26 +150,58 @@ export async function agentsForGate(harnessPath: string, gate: Gate): Promise<st
 }
 
 /**
+ * One agent's claim on a gate, and where in that gate it runs.
+ *
+ * `order` is null when the harness declares no usable position for it. That
+ * is a fact to report, not a default to invent -- see {@link HarnessRoles}.
+ */
+interface GateClaim {
+  name: string;
+  order: number | null;
+}
+
+/**
  * A gate the harness assigns more than one role.
  *
  * Not ambiguity, which is what several OWNERS for a repo means. Gate 4 is
- * verifier and then scribe, and both run -- so this is a sequence, and the
- * engine's `agents` map holds one role per gate and cannot express it.
- *
- * Reported rather than resolved, because picking one of them would run half
- * a gate and record it as the whole thing.
+ * verifier and then scribe, and BOTH run -- so this is a sequence, and the
+ * order is part of what the gate means: the verifier judges whether green
+ * proves anything, and only the scribe opens the PR carrying that evidence.
+ * Reversed, the PR claims a verdict nobody reached.
  */
 export interface GateSequence {
   gate: Gate;
-  /** In harness order, which is alphabetical and therefore NOT run order. */
+  /**
+   * In RUN order when this sequence came back ordered, and alphabetical when
+   * it came back unordered -- which is why the two live in separate lists
+   * rather than in one with a flag. A caller holding an `unordered` entry
+   * must not be able to iterate it and believe it sequenced anything.
+   */
   agents: string[];
 }
 
 export interface HarnessRoles {
   /** Gates exactly one agent declares. Safe to run as they are. */
   roles: Partial<Record<Gate, string>>;
-  /** Gates several declare. See {@link GateSequence}. */
+  /**
+   * Gates several agents serve, in the order the harness declares.
+   *
+   * The order is READ, never decided here. Which agent must precede which is
+   * domain knowledge about what a gate means; running them in the declared
+   * order is sequencing. An engine holding "verifier then scribe" would carry
+   * a fact about a workflow that is free to change without it, and the two
+   * would disagree silently because nothing compares them.
+   */
   sequences: GateSequence[];
+  /**
+   * Gates several agents serve where no usable order was declared.
+   *
+   * A missing position, a tie, or a non-numeric one all land here. A tie is
+   * not an order: it leaves the sequence to whatever the filesystem listed
+   * first, which is how one initiative runs differently on two machines and
+   * both report honestly.
+   */
+  unordered: GateSequence[];
   /** Gates nothing in this harness declares at all. */
   unclaimed: Gate[];
 }
@@ -175,14 +221,42 @@ export async function rolesFromHarness(
   harnessPath: string,
   gates: readonly Gate[],
 ): Promise<HarnessRoles> {
-  const result: HarnessRoles = { roles: {}, sequences: [], unclaimed: [] };
+  const agents = await eachAgent(harnessPath);
+  const result: HarnessRoles = { roles: {}, sequences: [], unordered: [], unclaimed: [] };
   for (const gate of gates) {
-    const candidates = await agentsForGate(harnessPath, gate);
-    if (candidates.length === 1) result.roles[gate] = candidates[0];
-    else if (candidates.length === 0) result.unclaimed.push(gate);
-    else result.sequences.push({ gate, agents: candidates });
+    const claims: GateClaim[] = agents
+      .filter((a) => declaresGate(a.front, gate))
+      .map((a) => ({ name: a.name, order: gateOrder(a.front) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (claims.length === 0) {
+      result.unclaimed.push(gate);
+      continue;
+    }
+    if (claims.length === 1) {
+      result.roles[gate] = claims[0].name;
+      continue;
+    }
+    const ordered = sequence(claims);
+    const names = (ordered ?? claims).map((claim) => claim.name);
+    (ordered ? result.sequences : result.unordered).push({ gate, agents: names });
   }
   return result;
+}
+
+/**
+ * The claims in run order, or null when the harness did not give one.
+ *
+ * Null for a missing position, a tie, or a non-numeric one. All three mean
+ * the same thing to a caller -- nobody said what order to run these in -- and
+ * inventing one would run half a gate in the wrong sequence and record it as
+ * the whole thing.
+ */
+function sequence(claims: readonly GateClaim[]): GateClaim[] | null {
+  const orders = claims.map((claim) => claim.order);
+  if (orders.some((order) => order === null)) return null;
+  if (new Set(orders).size !== orders.length) return null;
+  return [...claims].sort((a, b) => (a.order as number) - (b.order as number));
 }
 
 /**
