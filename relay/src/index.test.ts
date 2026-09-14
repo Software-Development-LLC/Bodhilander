@@ -28,7 +28,15 @@ afterEach(async () => {
 const OVER_THE_OLD_CEILING = 4 * 1024 * 1024;
 
 test('the entry point serves at the shipped body ceiling', async () => {
-  const port = 40000 + Math.floor(Math.random() * 20000);
+  // Below BOTH platforms' dynamic port ranges, which is the whole point of
+  // the number: Linux hands out 32768-60999 and Windows 49152-65535, so the
+  // old 40000-59999 window sat inside Linux's. CI makes enough outbound
+  // connections that one of them held the port this test then tried to bind,
+  // and the failure looked like the change under review rather than the
+  // runner. `PORT=0` would be stricter still, but `loadConfig` rejects it on
+  // purpose - a deployment that typos the port should not silently listen
+  // somewhere nobody can find it.
+  const port = 20000 + Math.floor(Math.random() * 10000);
   Object.assign(process.env, {
     NODE_ENV: 'test',
     PORT: String(port),
