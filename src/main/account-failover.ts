@@ -216,16 +216,35 @@ export function failbackCandidates(now: Date = new Date()): FailbackCandidate[] 
 }
 
 /**
+ * How long a session must have sat continuously idle before fail-back trusts
+ * it (#297). pty-manager's idle detection is a silence timeout — 2s without
+ * substantial terminal output — which is exactly what the pty looks like
+ * between a parallel subagent's updates, not just between turns. A sweep runs
+ * on every session's state change, not only the 60s timer, so a session
+ * passing through that few-second blip gets many chances to be caught and
+ * respawned mid-task, taking every subagent under it down with it. Requiring
+ * idleness to hold for a full sweep interval turns a live task's ordinary
+ * quiet stretches back into a non-event.
+ */
+export const FAILBACK_MIN_IDLE_MS = 60_000;
+
+/**
  * Whether a session can be moved back right now without anyone noticing.
  *
  * This is the whole reason fail-back is safe to do unprompted. Going home costs
  * a pty respawn, and a respawn in the middle of a turn throws away work in
- * flight — so it waits for a session that is demonstrably between turns. A
- * stopped session is the easiest case of all: it has no pty to interrupt and
- * picks the account up whenever it is next started.
+ * flight — so it waits for a session that is demonstrably between turns.
+ *
+ * A stopped session is the easiest case of all: it has no pty to interrupt and
+ * picks the account up whenever it is next started, so it skips the idle-time
+ * check entirely. An idle session still has a live pty, and "idle" is only a
+ * silence-timeout guess (see `FAILBACK_MIN_IDLE_MS`) — it must hold for long
+ * enough to trust before a respawn is allowed to act on it.
  */
-export function canFailBackNow(state: SessionState): boolean {
-  return state === 'idle' || state === 'stopped';
+export function canFailBackNow(state: SessionState, idleSinceMs: number): boolean {
+  if (state === 'stopped') return true;
+  if (state !== 'idle') return false;
+  return idleSinceMs >= FAILBACK_MIN_IDLE_MS;
 }
 
 /**
