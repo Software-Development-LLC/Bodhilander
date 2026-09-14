@@ -491,6 +491,21 @@ describe('which role serves each gate, according to the harness', () => {
     },
   );
 
+  test('one tie poisons the whole gate, not just the tied pair', async () => {
+    // Three claims, two of them at position 1. The untied third cannot be
+    // sequenced around an ambiguity either: "a then (b or c)" is not an
+    // order, and a caller handed a partial one would run it as though it
+    // were. All or nothing is the only answer that cannot be misread.
+    const root = await harness({
+      a: { gate: '4', gateOrder: '1' },
+      b: { gate: '4', gateOrder: '1' },
+      c: { gate: '4', gateOrder: '2' },
+    });
+    const found = await rolesFromHarness(root, [4]);
+    expect(found.sequences).toEqual([]);
+    expect(found.unordered).toEqual([{ gate: 4, agents: ['a', 'b', 'c'] }]);
+  });
+
   test('positions sort as numbers, not as text', async () => {
     // "10" must not land between "1" and "2".
     const root = await harness({
