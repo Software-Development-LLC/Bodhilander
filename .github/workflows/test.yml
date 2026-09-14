@@ -111,5 +111,23 @@ jobs:
       - name: Install for real, postinstall included
         run: bun install --frozen-lockfile
 
-      - name: The native module loads and works
+      - name: The native module loads and works under node
         run: node .github/scripts/check-native.js
+
+      # The one that actually answers the question. On linux there is no
+      # prebuild, so node-pty is compiled by node-gyp against NODE's headers
+      # -- and what ships is loaded by ELECTRON. node-pty builds against
+      # node-addon-api, so N-API is supposed to make those the same thing.
+      # "Supposed to" is not a check, and running the node binary under node
+      # proves nothing about the pairing that matters.
+      #
+      # xvfb on linux because Electron initialises a display even for a script
+      # that never opens a window.
+      - name: The native module loads and works under Electron
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a ./node_modules/.bin/electron --no-sandbox .github/scripts/check-native.js
+          else
+            ./node_modules/.bin/electron .github/scripts/check-native.js
+          fi
