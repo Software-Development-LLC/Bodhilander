@@ -122,7 +122,11 @@ async function arm(): Promise<void> {
     console.log(`  ${repo} -> ${agent}`);
   }
   console.log('\nNothing has been cut, launched or pushed. To move it:');
-  console.log(`  bun scripts/run-console.ts step ${result.runId} prepared`);
+  // Through the npm script, not the raw file: run directly under bun, the
+  // `electron` import resolves to the package's path STRING rather than the
+  // app API, and useScratchStore throws on app.setPath. A hand-off that
+  // crashes if followed is worse than none.
+  console.log(`  bun run console -- step ${result.runId} prepared`);
 }
 
 function status(): void {
@@ -159,15 +163,29 @@ async function step(): Promise<void> {
   const run = runs.getRun(runId);
   if (!run) throw new Error(`no run ${runId}`);
   const owners = runs.listOwners(runId);
-  const agents: Record<number, string> = {};
+  if (owners.length > 1) {
+    // Not last-write-wins. `ExecutorTarget.agents` is keyed by GATE, so it
+    // holds exactly one role for gate 2 -- which is sound for slice one,
+    // where the design scopes a run to a single repo, and wrong the moment a
+    // run has two owners. Refusing here says that; quietly keeping the last
+    // owner would run one repo's gate under another repo's role.
+    throw new Error(
+      `run ${runId} has ${owners.length} owners (${owners.map((o) => o.repo).join(', ')}). ` +
+      'This slice drives one repo: the gate-2 role is held per gate, not per repo.',
+    );
+  }
   // Gate 2's role is the owner's, recorded when the run was armed. Gates 3
   // and 4 are read from the harness, so they are not named here.
-  for (const owner of owners) if (owner.agent) agents[2] = owner.agent;
+  const agents: Record<number, string> = {};
+  if (owners[0]?.agent) agents[2] = owners[0].agent;
 
   const target = {
     repo: env('BODHI_REPO', ''),
     prNumber: Number(env('BODHI_PR', '0')) || null,
-    approvers: env('BODHI_APPROVERS', 'brannon-bowden,William-Long-II').split(','),
+    // No default. Baking real logins into a tool makes it request review
+    // from people who did not ask for it, and the engine already refuses
+    // clearly when nobody is recorded.
+    approvers: env('BODHI_APPROVERS', '').split(',').filter(Boolean),
     initiativePath: run.initiativeDir,
     harnessPath: run.harnessPath,
     pythonPath: run.pythonPath ?? 'python',
