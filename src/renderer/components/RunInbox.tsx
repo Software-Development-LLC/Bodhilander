@@ -109,9 +109,13 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now, pollMs }) => {
   // the answer to keep the warning, which is the wrong way round -- the list
   // is a minute stale, and the staleness is what the note says.
   const staleNote = failed !== null && (
-    <p className="run-inbox__stale" role="status">
+    // <output>, not a <p role="status">: it carries that role implicitly and
+    // is announced more reliably by assistive technology (S6819). The role is
+    // the point here -- a person who cannot see the note is the one most
+    // likely to act on a stale list believing it current.
+    <output className="run-inbox__stale">
       Could not refresh ({failed}). Showing the last reading.
-    </p>
+    </output>
   );
 
   if (rows.length === 0) {
