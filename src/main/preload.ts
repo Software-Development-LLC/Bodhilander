@@ -127,6 +127,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('menu:view-arena', callback);
     return () => ipcRenderer.removeListener('menu:view-arena', callback);
   },
+  onMenuViewRuns: (callback: () => void) => {
+    ipcRenderer.on('menu:view-runs', callback);
+    return () => ipcRenderer.removeListener('menu:view-runs', callback);
+  },
   onMenuFocusSidebar: (callback: () => void) => {
     ipcRenderer.on('menu:focus-sidebar', callback);
     return () => ipcRenderer.removeListener('menu:focus-sidebar', callback);

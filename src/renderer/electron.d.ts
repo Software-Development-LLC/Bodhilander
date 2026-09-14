@@ -37,6 +37,7 @@ interface ElectronAPI {
   onMenuViewTerminal: (callback: () => void) => () => void;
   onMenuViewAnalytics: (callback: () => void) => () => void;
   onMenuViewArena: (callback: () => void) => () => void;
+  onMenuViewRuns: (callback: () => void) => () => void;
   onMenuFocusSidebar: (callback: () => void) => () => void;
 
   // Edit menu events

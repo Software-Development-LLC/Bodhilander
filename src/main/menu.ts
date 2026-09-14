@@ -299,6 +299,15 @@ export function createApplicationMenu(mainWindow: BrowserWindow): void {
           accelerator: `${mod}+3`,
           click: () => mainWindow.webContents.send('menu:view-arena'),
         },
+        {
+          // The run inbox (CO-722). Reachable deliberately: the design said
+          // ship dark until one real run had passed, and the beta channel is
+          // the vehicle for that test -- so it is here to be looked at rather
+          // than waiting to be remembered.
+          label: 'Runs',
+          accelerator: `${mod}+4`,
+          click: () => mainWindow.webContents.send('menu:view-runs'),
+        },
         { type: 'separator' },
         {
           // Replaces the old Mod+Q binding, which was unreachable on macOS: the App

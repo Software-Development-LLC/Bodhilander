@@ -1,0 +1,80 @@
+/* The run inbox (CO-722). Reuses the app's own tokens rather than introducing
+   a palette: this is a list of things that need a person, and it should look
+   like the rest of the app rather than like a new product. */
+
+.run-inbox {
+  padding: 24px 28px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.run-inbox h2 {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.run-inbox__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-inbox__row {
+  border: 1px solid var(--border-color, #2a2a2a);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: var(--bg-secondary, #1a1a1a);
+}
+
+/* A stopped run is the one to open first, so it is the one that is marked.
+   Runs that are merely waiting keep the ordinary border. */
+.run-inbox__row--inconclusive {
+  border-left-color: var(--status-error, #c15b5b);
+}
+
+.run-inbox__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.run-inbox__key {
+  font-weight: 600;
+}
+
+.run-inbox__waited {
+  font-size: 12px;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.run-inbox__reason {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.run-inbox__repos {
+  margin: 6px 0 0;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.run-inbox--empty,
+.run-inbox--loading,
+.run-inbox--problem {
+  padding: 40px 28px;
+}
+
+.run-inbox--empty p,
+.run-inbox--problem p {
+  margin: 6px 0 12px;
+  opacity: 0.7;
+  font-size: 13px;
+}

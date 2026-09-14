@@ -253,11 +253,30 @@ describe('the inbox', () => {
       .run(state, over.reason ?? null, over.at ?? '2026-09-13T12:00:00Z', id);
   }
 
-  test('every state the machine says needs a person is listed', () => {
-    // Taken from NEEDS_A_PERSON rather than a list repeated here: a state
-    // added there and missed here is a run nobody is ever told about.
+  test('every state that needs a person is listed, or deliberately excluded', () => {
+    // The tripwire. A state added to NEEDS_A_PERSON and missed here is a run
+    // nobody is ever told about, so it must land in the inbox by default --
+    // leaving one out has to be a deliberate line in NOT_THE_OPERATOR rather
+    // than an omission nobody notices.
     for (const [i, state] of NEEDS_A_PERSON.entries()) seed(`r${i}`, state);
-    expect(runs.listInbox()).toHaveLength(NEEDS_A_PERSON.length);
+    const listed = runs.listInbox().map((r) => r.state);
+    for (const state of NEEDS_A_PERSON) {
+      const excluded = runs.NOT_THE_OPERATOR.includes(state);
+      expect(listed.includes(state)).toBe(!excluded);
+    }
+  });
+
+  test('a run waiting on a reviewer is not the operator’s to act on', () => {
+    // It needs a person -- but a reviewer working from a queue that already
+    // exists, not an operator in this window. An inbox listing things you
+    // cannot act on from where you are standing stops being read.
+    seed('inreview', 'waitingReview');
+    expect(runs.listInbox()).toEqual([]);
+  });
+
+  test('and that exclusion is the only one', () => {
+    // CONTROL: a growing exclusion list is an inbox quietly becoming empty.
+    expect(runs.NOT_THE_OPERATOR).toEqual(['waitingReview']);
   });
 
   test('a run the engine is working is not in it', () => {
@@ -285,7 +304,7 @@ describe('the inbox', () => {
     // The one waiting longest is the one most likely forgotten, and a
     // newest-first inbox buries it exactly as it becomes urgent.
     seed('recent', 'inconclusive', { at: '2026-09-13T18:00:00Z' });
-    seed('ancient', 'waitingReview', { at: '2026-09-10T09:00:00Z' });
+    seed('ancient', 'waitingHumanGate', { at: '2026-09-10T09:00:00Z' });
     seed('middle', 'waitingPermission', { at: '2026-09-13T12:00:00Z' });
     expect(runs.listInbox().map((r) => r.id)).toEqual(['ancient', 'middle', 'recent']);
   });
@@ -296,9 +315,9 @@ describe('the inbox', () => {
   });
 
   test('a run merely waiting carries no reason, and that is not a gap', () => {
-    // A review in progress has not gone wrong. Inventing a sentence for it
-    // would make the column meaningless where it matters.
-    seed('waiting', 'waitingReview');
+    // A run parked on a permission prompt has not gone wrong. Inventing a
+    // sentence for it would make the column meaningless where it matters.
+    seed('waiting', 'waitingPermission');
     expect(runs.listInbox()[0].blockedReason).toBeNull();
   });
 
@@ -323,7 +342,7 @@ describe('the inbox', () => {
     // in the engine rather than in the query, because the names would be
     // real ones belonging to a real run.
     seed('one', 'inconclusive', { at: '2026-09-13T10:00:00Z' });
-    seed('two', 'waitingReview', { at: '2026-09-13T11:00:00Z' });
+    seed('two', 'waitingHumanGate', { at: '2026-09-13T11:00:00Z' });
     const owner = {
       worktree: 'C:/w', branch: 'b', base: 'origin/development', scratch: null,
       status: 'pending', prNumber: null, prUrl: null,
