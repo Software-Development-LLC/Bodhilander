@@ -666,6 +666,7 @@ export interface AccountRemovalCost {
   /** Conversation transcripts stored under the account's config dir. */
   conversations: number;
 }
+
 /**
  * One line of the run inbox (CO-722).
  *

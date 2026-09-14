@@ -458,6 +458,7 @@ export function listGates(runId: string): RunGateRow[] {
     .all(runId) as Parameters<typeof toGateRow>[0][];
   return rows.map(toGateRow);
 }
+
 /** One line of the inbox: a run that cannot move without somebody. */
 export interface InboxRow {
   id: string;
@@ -502,12 +503,31 @@ export function listInbox(): InboxRow[] {
     updated_at: string;
   }[];
 
+  // Two queries, not one per row. The inbox is small today and the shape of
+  // this loop is what decides whether it stays cheap when it is not: a
+  // listOwners() per row is fine at five and silly at fifty, and nobody
+  // notices the moment in between.
+  const byRun = new Map<string, string[]>();
+  if (rows.length > 0) {
+    const ids = rows.map((row) => row.id);
+    const owners = getDatabase()
+      .prepare(
+        `SELECT run_id, repo FROM run_owners
+          WHERE run_id IN (${ids.map(() => '?').join(', ')})
+          ORDER BY repo ASC`,
+      )
+      .all(...ids) as { run_id: string; repo: string }[];
+    for (const owner of owners) {
+      byRun.set(owner.run_id, [...(byRun.get(owner.run_id) ?? []), owner.repo]);
+    }
+  }
+
   return rows.map((row) => ({
     id: row.id,
     initiativeKey: row.initiative_key,
     state: row.state as RunState,
     blockedReason: row.blocked_reason,
     since: row.updated_at,
-    repos: listOwners(row.id).map((owner) => owner.repo),
+    repos: byRun.get(row.id) ?? [],
   }));
 }

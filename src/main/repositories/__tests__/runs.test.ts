@@ -316,4 +316,24 @@ describe('the inbox', () => {
   test('an empty inbox is empty, not a row saying so', () => {
     expect(runs.listInbox()).toEqual([]);
   });
+
+  test('every run keeps its own repos when several are waiting', () => {
+    // The owners come back in one query and are grouped by run id. Grouped
+    // wrongly, every row would carry the same repos -- which reads as a bug
+    // in the engine rather than in the query, because the names would be
+    // real ones belonging to a real run.
+    seed('one', 'inconclusive', { at: '2026-09-13T10:00:00Z' });
+    seed('two', 'waitingReview', { at: '2026-09-13T11:00:00Z' });
+    const owner = {
+      worktree: 'C:/w', branch: 'b', base: 'origin/development', scratch: null,
+      status: 'pending', prNumber: null, prUrl: null,
+    };
+    runs.upsertOwner({ ...owner, runId: 'one', repo: 'repo-a' });
+    runs.upsertOwner({ ...owner, runId: 'two', repo: 'repo-b' });
+    runs.upsertOwner({ ...owner, runId: 'two', repo: 'repo-c' });
+    expect(runs.listInbox().map((r) => [r.id, r.repos])).toEqual([
+      ['one', ['repo-a']],
+      ['two', ['repo-b', 'repo-c']],
+    ]);
+  });
 });
