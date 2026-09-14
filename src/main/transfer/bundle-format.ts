@@ -219,6 +219,10 @@ const LOCAL_PREFERENCE_KEYS = new Set([
   'legacyMemoryCleanupDone',
   'legacyMemoryMcpCleanupDone',
   'quotaCooldownsCleared',
+  // Records a restart-to-install in progress on THIS machine's app bundle
+  // (#294). Meaningless anywhere else, and a stale value on the destination
+  // would misreport an install that machine never attempted.
+  'pendingUpdateVersion',
 ]);
 
 export function isPortablePreferenceKey(key: string): boolean {
