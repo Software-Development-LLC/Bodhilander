@@ -35,6 +35,7 @@ const OK = { code: 0, stdout: '', stderr: '' };
 interface FakeOptions {
   gh?: { code: number; stdout: string; stderr: string };
   plugin?: { code: number; stdout: string; stderr: string };
+  provision?: { code: number; stdout: string; stderr: string };
   gate?: GateOutcome;
 }
 
@@ -48,6 +49,14 @@ function fake(options: FakeOptions = {}) {
     plugin: async (argv) => {
       calls.push({ kind: 'plugin', argv: [...argv] });
       return options.plugin ?? OK;
+    },
+    // Recorded under its OWN name, not folded in with `plugin`. The two are
+    // separate dependencies because they are spawned on different clocks, and
+    // a test that could not tell which one ran would not notice provisioning
+    // being put back on the one-minute deadline that killed a real install.
+    provision: async (argv) => {
+      calls.push({ kind: 'provision', argv: [...argv] });
+      return options.provision ?? OK;
     },
     spawnGate: async (gate) => {
       calls.push({ kind: `spawnGate:${gate}` });
@@ -133,7 +142,7 @@ describe('provisioning', () => {
   test('a failure carries the plugin’s own words to a person', async () => {
     // A code says what happened; the plugin's output says what to do.
     const { deps } = fake({
-      plugin: { code: 2, stdout: 'yarn is not on PATH', stderr: '' },
+      provision: { code: 2, stdout: 'yarn is not on PATH', stderr: '' },
     });
     const result = await execute([{ kind: 'provision' }], TARGET, deps);
     expect(result.events).toEqual([{ kind: 'provisionUndriveable' }]);
@@ -236,7 +245,7 @@ describe('order', () => {
     // dependencies — the exact failure verify.sh now reports as undriveable.
     const { deps, calls } = fake();
     await execute([{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }], TARGET, deps);
-    expect(calls.map((c) => c.kind)).toEqual(['plugin', 'spawnGate:2']);
+    expect(calls.map((c) => c.kind)).toEqual(['provision', 'spawnGate:2']);
   });
 
   test('a failed install does not launch a gate into the worktree', async () => {
@@ -245,21 +254,21 @@ describe('order', () => {
     // started in a worktree with no dependencies, which is the exact failure
     // verify.sh now reports as undriveable, arrived at by the engine rather
     // than by a person.
-    const { deps, calls } = fake({ plugin: { code: 1, stdout: 'yarn install failed', stderr: '' } });
+    const { deps, calls } = fake({ provision: { code: 1, stdout: 'yarn install failed', stderr: '' } });
     const result = await execute(
       [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }],
       TARGET,
       deps,
     );
-    expect(calls.map((c) => c.kind)).toEqual(['plugin']);
+    expect(calls.map((c) => c.kind)).toEqual(['provision']);
     expect(result.events).toEqual([{ kind: 'provisionFailed' }]);
     expect(result.problems[0]).toContain('spawnGate was not performed');
   });
 
   test('an undriveable install stops the decision too', async () => {
-    const { deps, calls } = fake({ plugin: { code: 2, stdout: 'yarn is not on PATH', stderr: '' } });
+    const { deps, calls } = fake({ provision: { code: 2, stdout: 'yarn is not on PATH', stderr: '' } });
     await execute([{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }], TARGET, deps);
-    expect(calls.map((c) => c.kind)).toEqual(['plugin']);
+    expect(calls.map((c) => c.kind)).toEqual(['provision']);
   });
 
   test('a guard that refused before calling anything stops it as well', async () => {
@@ -278,7 +287,7 @@ describe('order', () => {
   test('a person is still told after a halt', async () => {
     // notify changes nothing outside the process; it is how somebody finds
     // out. Suppressing it would make the halt the quietest thing in the run.
-    const { deps } = fake({ plugin: { code: 1, stdout: 'install failed', stderr: '' } });
+    const { deps } = fake({ provision: { code: 1, stdout: 'install failed', stderr: '' } });
     const result = await execute(
       [{ kind: 'provision' }, { kind: 'notify', reason: 'gate 2 is blocked' }],
       TARGET,
@@ -325,7 +334,7 @@ describe('order', () => {
       TARGET,
       deps,
     );
-    expect(calls.map((c) => c.kind)).toEqual(['plugin', 'spawnGate:2']);
+    expect(calls.map((c) => c.kind)).toEqual(['provision', 'spawnGate:2']);
     expect(result.problems).toEqual([]);
   });
 

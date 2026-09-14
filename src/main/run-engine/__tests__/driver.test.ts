@@ -45,6 +45,7 @@ function deps(over: Partial<ExecutorDeps> = {}): ExecutorDeps {
   return {
     gh: async () => OK,
     plugin: async () => OK,
+    provision: async () => OK,
     spawnGate: async () => ({
       status: 'launched' as const,
       backgroundId: '11111111',
@@ -379,14 +380,14 @@ describe('one run advances at a time', () => {
     });
     const order: string[] = [];
     const first = advance('run-1', { kind: 'prepared' }, TARGET, deps({
-      plugin: async () => {
+      provision: async () => {
         await new Promise((resolve) => { setTimeout(resolve, 20); });
         order.push('run-1');
         return OK;
       },
     }));
     const second = advance('run-2', { kind: 'prepared' }, TARGET, deps({
-      plugin: async () => {
+      provision: async () => {
         order.push('run-2');
         return OK;
       },
@@ -398,7 +399,7 @@ describe('one run advances at a time', () => {
   test('a failure does not wedge the queue behind it', async () => {
     const id = seed('preparing');
     await advance(id, { kind: 'prepared' }, TARGET, deps({
-      plugin: async () => { throw new Error('boom'); },
+      provision: async () => { throw new Error('boom'); },
     }));
     const after = await advance(id, { kind: 'provisioned' }, TARGET, deps());
     expect(after.problems.filter((p) => p.includes('boom'))).toEqual([]);

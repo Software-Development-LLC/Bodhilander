@@ -152,7 +152,27 @@ export interface ProcessDepsConfig {
    */
   ghTimeoutMs?: number;
   pluginTimeoutMs?: number;
+  /**
+   * Provisioning's own deadline, because it is not the same kind of work.
+   *
+   * A plugin read answers in about a second, so a minute is already generous
+   * for it. Provisioning runs the repo's installer, which resolves a
+   * dependency tree and compiles native modules -- minutes on a cold
+   * worktree, and longer on the first one a machine has ever cut. The
+   * default is 15 minutes: long enough that a slow install finishes, short
+   * enough that an install waiting on a prompt nobody will answer still ends.
+   */
+  provisionTimeoutMs?: number;
 }
+
+/**
+ * What `processDeps` hands back: the reconciler's dependencies, plus the one
+ * the executor needs. Provisioning is not the reconciler's business, but it
+ * is spawned the same way and belongs beside the calls it shares a shape with.
+ */
+export type ProcessDeps = ReconcileDeps & {
+  provision(argv: readonly string[]): Promise<CommandResult>;
+};
 
 /**
  * The real `gh` and the real plugin, shaped as the reconciler's dependencies.
@@ -161,26 +181,30 @@ export interface ProcessDepsConfig {
  * against a fake — which is where they belong, because they are decisions
  * rather than plumbing. This is the plumbing.
  */
-export function processDeps(config: ProcessDepsConfig): ReconcileDeps {
+export function processDeps(config: ProcessDepsConfig): ProcessDeps {
+  // Both plugin calls spawn the same way; only the clock differs, and the
+  // clock is the whole point of there being two of them.
+  const pluginCall = (timeoutMs: number) => (argv: readonly string[], stdin?: string) => {
+    // The argv already starts with the interpreter -- `pluginScriptArgv`
+    // builds it that way so the .sh wrappers, which Windows cannot spawn
+    // without a shell, are never involved.
+    const [executable, ...rest] = argv;
+    return runCommand(executable ?? config.pythonPath, rest, {
+      timeoutMs,
+      cwd: config.cwd,
+      stdin,
+      // Without these the plugin's em-dashes arrive as replacement
+      // characters on Windows, and those lines end up in run notes.
+      env: { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
+    });
+  };
   return {
     gh: (argv) =>
       runCommand(config.ghPath, argv, {
         timeoutMs: config.ghTimeoutMs ?? 30_000,
         cwd: config.cwd,
       }),
-    plugin: (argv, stdin) => {
-      // The argv already starts with the interpreter — `pluginScriptArgv`
-      // builds it that way so the .sh wrappers, which Windows cannot spawn
-      // without a shell, are never involved.
-      const [executable, ...rest] = argv;
-      return runCommand(executable ?? config.pythonPath, rest, {
-        timeoutMs: config.pluginTimeoutMs ?? 60_000,
-        cwd: config.cwd,
-        stdin,
-        // Without these the plugin's em-dashes arrive as replacement
-        // characters on Windows, and those lines end up in run notes.
-        env: { PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
-      });
-    },
+    plugin: pluginCall(config.pluginTimeoutMs ?? 60_000),
+    provision: pluginCall(config.provisionTimeoutMs ?? 900_000),
   };
 }
