@@ -364,12 +364,26 @@ describe('going home', () => {
   /**
    * Going home costs a respawn, and a respawn mid-turn throws away work in
    * flight. This gate is the only reason an unprompted switch back is safe.
+   * A stopped session has no pty to interrupt, so it's exempt from the
+   * idle-duration check; working/waiting are never safe regardless of how
+   * long that's been true.
    */
-  test('only moves a session that is between turns', () => {
-    expect(failover.canFailBackNow('idle')).toBe(true);
-    expect(failover.canFailBackNow('stopped')).toBe(true);
-    expect(failover.canFailBackNow('working')).toBe(false);
-    expect(failover.canFailBackNow('waiting')).toBe(false);
+  test('only moves a session that is between turns, and long enough to trust it', () => {
+    expect(failover.canFailBackNow('stopped', 0)).toBe(true);
+    expect(failover.canFailBackNow('working', Number.MAX_SAFE_INTEGER)).toBe(false);
+    expect(failover.canFailBackNow('waiting', Number.MAX_SAFE_INTEGER)).toBe(false);
+  });
+
+  /**
+   * The bug this guards against (#297): pty-manager's idle detection is a 2s
+   * silence timeout, which is exactly what the terminal looks like between a
+   * parallel subagent's updates — not evidence a turn actually ended. A brief
+   * idle blip must not be enough to trigger a mid-task respawn.
+   */
+  test('idle is only trusted once it has held for FAILBACK_MIN_IDLE_MS', () => {
+    expect(failover.canFailBackNow('idle', failover.FAILBACK_MIN_IDLE_MS - 1)).toBe(false);
+    expect(failover.canFailBackNow('idle', failover.FAILBACK_MIN_IDLE_MS)).toBe(true);
+    expect(failover.canFailBackNow('idle', failover.FAILBACK_MIN_IDLE_MS + 1)).toBe(true);
   });
 
   test('a deleted home retires the pending move instead of stranding it', () => {

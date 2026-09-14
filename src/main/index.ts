@@ -391,7 +391,9 @@ function sweepFailbacks(): void {
   try {
     for (const candidate of accountFailover.failbackCandidates()) {
       const session = sessionsRepo.getSession(candidate.sessionId);
-      if (!session || !accountFailover.canFailBackNow(session.state)) continue;
+      if (!session) continue;
+      const idleSinceMs = Date.now() - session.lastActivityAt.getTime();
+      if (!accountFailover.canFailBackNow(session.state, idleSinceMs)) continue;
       const event = accountFailover.failBackSession(candidate.sessionId);
       if (event) publishFailover(event, candidate.sessionId);
     }
@@ -505,7 +507,13 @@ function createWindow(): void {
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
     // A session that just went idle may be one parked off its own account,
-    // waiting for a free moment to go back (#207).
+    // waiting for a free moment to go back (#207). In practice this handler
+    // is the dead half of the pair below: nothing currently connects to
+    // StateMonitor's socket and writes it a StateEvent, so `idle`/`working`
+    // state is driven entirely by the pty's own silence-timeout detection —
+    // see the sibling comment on the ptyManager 'stateChange' handler, and
+    // `canFailBackNow`'s idle-duration guard (#297), which exists because
+    // that silence timeout alone is not a reliable "between turns" signal.
     sweepFailbacks();
   });
 
@@ -736,9 +744,12 @@ function createWindow(): void {
     logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
-    // The pty's own idle detection is the main way a session becomes safe to
-    // move back to its own account (#207) — the hook-driven monitor
-    // above sees Claude's own stop events, this sees the terminal go quiet.
+    // The pty's own idle detection is the ONLY way a session becomes safe to
+    // move back to its own account (#207). The comment above this one, on the
+    // StateMonitor handler, used to claim a second "hook-driven" signal here
+    // as corroboration; investigating #297 found nothing wires Claude Code's
+    // Stop hook to that socket, so this silence-based detection alone is what
+    // `canFailBackNow`'s idle-duration guard exists to distrust.
     sweepFailbacks();
     // Broadcast to mobile clients
     getApiServer().broadcastSessionState(event.sessionId, event.state, event.event);
