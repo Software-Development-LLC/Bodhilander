@@ -5,6 +5,9 @@
  *   bun run console -- status
  *   bun run console -- events <run-id>
  *   bun run console -- step   <run-id> <event>
+ *   bun run console -- perms  <run-id>
+ *   bun run console -- answer <run-id> <tool-use-id> allow|deny [message]
+ *   bun run console -- watch  <run-id>
  *
  * A first run is where assumptions get tested, and the ones this engine makes
  * are about paths, flags and which copy of the harness is on disk -- none of
@@ -46,6 +49,8 @@ import { armRun } from '../src/main/run-engine/ignition';
 import { advance } from '../src/main/run-engine/driver';
 import { launchGate, rolesFromHarness } from '../src/main/run-engine/gate-launcher';
 import { gateBrief } from '../src/main/run-engine/gate-brief';
+import { readReceipt, receiptPathFor } from '../src/main/run-engine/gate-receipt';
+import { attend } from '../src/main/run-engine/gate-attention';
 import { runCommand, processDeps } from '../src/main/run-engine/command-runner';
 import type { Gate, RunEvent } from '../src/main/run-engine/transitions';
 import {
@@ -232,6 +237,17 @@ async function step(): Promise<void> {
   const runId = process.argv[3];
   const kind = process.argv[4];
   if (!runId || !kind) throw new Error('usage: step <run-id> <event>');
+  await driveEvent(runId, { kind } as RunEvent);
+}
+
+/**
+ * Apply one event with the real dependencies, and say what happened.
+ *
+ * Shared by `step`, which takes the event from a person, and `watch`, which
+ * derives it from a gate's receipt -- so a gate finishing by receipt spawns
+ * the next gate exactly as one finishing by structured output does.
+ */
+async function driveEvent(runId: string, event: RunEvent): Promise<void> {
   const run = runs.getRun(runId);
   if (!run) throw new Error(`no run ${runId}`);
   const owners = runs.listOwners(runId);
@@ -264,8 +280,8 @@ async function step(): Promise<void> {
     pythonPath: target.pythonPath,
   });
 
-  console.log(`stepping ${runId}: ${run.state} + ${kind}\n`);
-  const result = await advance(runId, { kind } as RunEvent, target, {
+  console.log(`stepping ${runId}: ${run.state} + ${event.kind}\n`);
+  const result = await advance(runId, event, target, {
     ...commands,
     spawnGate: async (gate: Gate, agent: string) => {
       const owner = owners[0];
@@ -386,6 +402,80 @@ function readActiveChannel(runId: string) {
  * `waitingPermission` is a fact about the channel, not a decision anybody
  * makes. Answering is the decision.
  */
+/**
+ * Look at the gate in flight again (#287).
+ *
+ * A background gate reports by receipt, and until this nothing read it: the
+ * gate finished, its process exited, and the run said `gate 2 running` for as
+ * long as anyone cared to look. This gathers the two facts `attend` decides
+ * from -- the receipt, and whether the session is alive -- and applies what
+ * it decides through the same path `step` uses.
+ */
+async function watch(): Promise<void> {
+  const runId = process.argv[3];
+  if (!runId) throw new Error('usage: watch <run-id>');
+  const run = runs.getRun(runId);
+  if (!run) throw new Error(`no run ${runId}`);
+  const gate = runs.activeGate(runId);
+  if (!gate) {
+    console.log('no gate in flight, so there is nothing to look at');
+    return;
+  }
+  if (gate.gate !== 2 && gate.gate !== 3 && gate.gate !== 4) {
+    throw new Error(`the open row is for gate ${gate.gate}, which this engine does not know`);
+  }
+  const receiptPath = receiptPathFor(run.initiativeDir ?? '', gate.gate, gate.agent);
+  // Read once, no existence check first: another process writes this file,
+  // and a check-then-read has a window in which it can vanish. A missing file
+  // is "no receipt yet", which is the normal state of a working gate, not an
+  // error to crash on.
+  const receipt = readReceipt(readIfPresent(receiptPath));
+  const alive = await sessionAlive(gate.bgSessionId);
+  console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt})`);
+  console.log(`  receipt ${receipt ? receipt.verdict : 'none'}  ${receiptPath}`);
+  console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  alive: ${alive === null ? 'unknown' : alive}`);
+
+  // A row from before sessions were recorded cannot be pronounced dead: with
+  // no receipt and no way to check, the only honest move is to leave it.
+  const { event, note } = attend({ gate: gate.gate, agent: gate.agent, receipt, alive: alive ?? true });
+  if (note) console.log(`  note    ${note}`);
+  if (!event) {
+    console.log('nothing to do; as far as can be seen, the gate is working');
+    return;
+  }
+  await driveEvent(runId, event);
+}
+
+/** The file's text, or null when there is no file. Anything else is thrown. */
+function readIfPresent(file: string): string | null {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/**
+ * Whether a background session is still running, per `claude agents`.
+ *
+ * Null when it cannot be known: no id was recorded, or the CLI could not be
+ * asked. The caller treats null as alive, because "gone" is a verdict about
+ * the gate and must not be reached by failing to look.
+ */
+async function sessionAlive(bgSessionId: string | null): Promise<boolean | null> {
+  if (!bgSessionId) return null;
+  const result = await runCommand(env('BODHI_CLAUDE', 'claude'), ['agents', '--json'], { timeoutMs: 30_000 });
+  if (result.code !== 0) return null;
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    const rows = Array.isArray(parsed) ? parsed : ((parsed as { agents?: unknown[] }).agents ?? []);
+    return rows.some((row) => (row as { id?: string }).id === bgSessionId);
+  } catch {
+    return null;
+  }
+}
+
 async function perms(): Promise<void> {
   const runId = process.argv[3];
   if (!runId) throw new Error('usage: perms <run-id>');
@@ -464,6 +554,7 @@ async function main(): Promise<void> {
   else if (command === 'step') await step();
   else if (command === 'perms') await perms();
   else if (command === 'answer') await answer();
+  else if (command === 'watch') await watch();
   else {
     console.log(`unknown command ${command ?? '(none)'}. See the header of this file.`);
     process.exitCode = 64;

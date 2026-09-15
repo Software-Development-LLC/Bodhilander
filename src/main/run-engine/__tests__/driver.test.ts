@@ -578,3 +578,61 @@ describe('a gate served by several roles in sequence', () => {
     expect(result.problems.some((p) => p.includes('auditor') && p.includes('verifier then scribe'))).toBe(true);
   });
 });
+
+describe('a launched gate is written down', () => {
+  test('the session it became lands on its row', async () => {
+    // `launched` produces no event -- the verdict comes later, by receipt --
+    // so this is the only record that the gate exists as a session at all. A
+    // row with no session is a gate nothing can look at again.
+    const id = seed('provisioning');
+    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+      spawnGate: async () => ({
+        status: 'launched', backgroundId: 'abcd1234', sessionId: 'abcd1234-0000-0000-0000-000000000000', durationMs: 1,
+      }),
+    }));
+    expect(runs.activeGate(id)).toMatchObject({
+      gate: 2,
+      agent: 'bsa-lead',
+      claudeSessionId: 'abcd1234-0000-0000-0000-000000000000',
+      bgSessionId: 'abcd1234',
+    });
+  });
+
+  test('a print gate that completed leaves the session columns alone', async () => {
+    // Nothing to attach to: the verdict already arrived, and the row is
+    // closed by the machine accepting it.
+    const id = seed('provisioning');
+    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+      spawnGate: async () => ({
+        status: 'completed', structuredOutput: { verdict: 'pass', summary: 'ok' }, sessionId: 's', costUsd: null, durationMs: 1,
+      }),
+    }));
+    const rows = runs.listGates(id).filter((g) => g.gate === 2);
+    expect(rows[0]).toMatchObject({ status: 'done', claudeSessionId: null, bgSessionId: null });
+  });
+});
+
+describe('a launch is recorded on the row opened for it', () => {
+  test('not on whatever running row is newest with the same gate number', async () => {
+    // The concern from review, constructed rather than argued: while the
+    // spawn is in flight, ANOTHER running row for the same gate appears --
+    // a concurrent opener, a stale attempt, a bug elsewhere. Resolving "the
+    // active gate" by number would put this launch's session on that row
+    // and leave the real one blank: a gate nothing can look at again, which
+    // is the failure this bookkeeping exists to end.
+    const id = seed('provisioning');
+    let intruder: string | null = null;
+    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+      spawnGate: async () => {
+        intruder = 'intruder-' + Math.random().toString(16).slice(2);
+        runs.startGate({ id: intruder, runId: id, gate: 2, agent: 'bsa-lead', posture: 'manual' });
+        return { status: 'launched', backgroundId: 'abcd1234', sessionId: 'abcd1234-0000-0000-0000-000000000000', durationMs: 1 };
+      },
+    }));
+    const rows = runs.listGates(id).filter((g) => g.gate === 2);
+    const opened = rows.find((g) => g.id !== intruder);
+    const stray = rows.find((g) => g.id === intruder);
+    expect(opened?.claudeSessionId).toBe('abcd1234-0000-0000-0000-000000000000');
+    expect(stray?.claudeSessionId).toBeNull();
+  });
+});

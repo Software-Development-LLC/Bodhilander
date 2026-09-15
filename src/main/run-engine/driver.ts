@@ -186,8 +186,9 @@ async function advanceOnce(
       // Recorded BEFORE the gate runs, for the same reason the transition is:
       // a gate that starts and then crashes must leave a row, and the guard
       // that stops a stale report from regressing the run reads that row.
-      const actions = openGates(runId, decision, target, result);
+      const { actions, opened } = openGates(runId, decision, target, result);
       const performed = await execute(actions, target, deps);
+      recordLaunches(performed, opened);
       collect(result, performed);
       next.push(...performed.events);
     }
@@ -226,8 +227,9 @@ function openGates(
   decision: { actions: readonly RunAction[] },
   target: ExecutorTarget,
   result: AdvanceResult,
-): ResolvedAction[] {
+): { actions: ResolvedAction[]; opened: OpenedRows } {
   const allowed: ResolvedAction[] = [];
+  const opened: OpenedRows = new Map();
   for (const action of decision.actions) {
     if (action.kind !== 'spawnGate') {
       allowed.push(action);
@@ -243,10 +245,15 @@ function openGates(
       );
       continue;
     }
-    allowed.push(startStep(runId, action.gate, first, target));
+    const step = startStep(runId, action.gate, first, target);
+    opened.set(action.gate, step.rowId);
+    allowed.push(step.action);
   }
-  return allowed;
+  return { actions: allowed, opened };
 }
+
+/** The `run_gates` row opened for each gate spawned in one batch of actions. */
+type OpenedRows = Map<Gate, string>;
 
 /**
  * Write the decision down, when there is something to write.
@@ -319,7 +326,9 @@ async function continueSequence(
   const following = stepAfter(target.agents[event.gate], gate.agent, result, event.gate);
   if (!following) return null;
   runs.finishGate(gate.id, 'done', { verdict: 'pass' });
-  const performed = await execute([startStep(runId, event.gate, following, target)], target, deps);
+  const step = startStep(runId, event.gate, following, target);
+  const performed = await execute([step.action], target, deps);
+  recordLaunches(performed, new Map([[event.gate, step.rowId]]));
   collect(result, performed);
   return performed.events;
 }
@@ -336,9 +345,10 @@ function startStep(
   gate: Gate,
   agent: string,
   target: ExecutorTarget,
-): ResolvedAction {
-  runs.startGate({ id: randomUUID(), runId, gate, agent, posture: target.posture });
-  return { kind: 'spawnGate', gate, agent };
+): { action: ResolvedAction; rowId: string } {
+  const rowId = randomUUID();
+  runs.startGate({ id: rowId, runId, gate, agent, posture: target.posture });
+  return { action: { kind: 'spawnGate', gate, agent }, rowId };
 }
 
 /**
@@ -368,6 +378,29 @@ function stepAfter(
     return null;
   }
   return sequence[at + 1] ?? null;
+}
+
+/**
+ * Write down which session each launched gate became.
+ *
+ * The row was opened before the spawn and the launcher named the session
+ * during it, so this is the first moment both are known. A gate with no
+ * session recorded is a gate nothing can look at again -- the receipt can
+ * still be found by path, but whether the process is alive cannot.
+ */
+function recordLaunches(performed: ExecutorResult, opened: OpenedRows): void {
+  for (const launch of performed.launched) {
+    // The row opened for THIS spawn, by id -- not the latest running row that
+    // happens to carry the same gate number. Today a decision spawns at most
+    // one gate and the row is opened moments before the spawn, so the two
+    // would agree; but a session written onto the wrong row is exactly the
+    // "gate nothing can look at again" this exists to end, and agreement by
+    // circumstance is not a guarantee.
+    const rowId = opened.get(launch.gate);
+    if (rowId) {
+      runs.recordGateSession(rowId, { claudeSessionId: launch.sessionId, bgSessionId: launch.backgroundId });
+    }
+  }
 }
 
 function collect(result: AdvanceResult, performed: ExecutorResult): void {
