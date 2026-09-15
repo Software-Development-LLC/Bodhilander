@@ -53,14 +53,23 @@ describe('handoff storage limits', () => {
 
 describe('build stamp', () => {
   test('carries the commit the image was built from', () => {
-    expect(loadConfig({ ...BASE, RELAY_COMMIT: '7d5cb5d' }).config.commit).toBe('7d5cb5d');
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d' }).config.commit).toBe('7d5cb5d');
   });
 
   test('is null, not empty, when the build did not stamp one', () => {
     // An unset --build-arg reaches the process as "", so the absent case has
     // to collapse to one value a reader can test against.
     expect(loadConfig(BASE).config.commit).toBeNull();
-    expect(loadConfig({ ...BASE, RELAY_COMMIT: '' }).config.commit).toBeNull();
-    expect(loadConfig({ ...BASE, RELAY_COMMIT: '   ' }).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '' }).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '   ' }).config.commit).toBeNull();
+  });
+
+  test('ignores the build arg name, which .env can reach and must not win', () => {
+    // --env-file is applied over the image's ENV, so a RELAY_COMMIT left in
+    // .env would outrank the baked stamp and date the relay wrongly.
+    expect(loadConfig({ ...BASE, RELAY_COMMIT: 'stale99' }).config.commit).toBeNull();
+    expect(
+      loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d', RELAY_COMMIT: 'stale99' }).config.commit,
+    ).toBe('7d5cb5d');
   });
 });

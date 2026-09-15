@@ -171,7 +171,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       vapidSubject: env.VAPID_SUBJECT ?? 'mailto:admin@localhost',
       nodeEnv,
       isProduction,
-      commit: env.RELAY_COMMIT?.trim() || null,
+      commit: env.RELAY_BUILD_COMMIT?.trim() || null,
     },
     warnings,
   };

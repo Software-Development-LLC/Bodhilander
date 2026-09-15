@@ -94,7 +94,7 @@ describe('http router', () => {
   });
 
   test('GET /health reports the commit the image was built from', async () => {
-    const stamped = loadConfig({ RELAY_COMMIT: 'abc1234' }).config;
+    const stamped = loadConfig({ RELAY_BUILD_COMMIT: 'abc1234' }).config;
     const res = await createRouter({ config: stamped, logger, repos })(new Request('http://relay.test/health'));
     expect(((await res.json()) as { commit: string | null }).commit).toBe('abc1234');
 

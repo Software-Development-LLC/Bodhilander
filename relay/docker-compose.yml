@@ -14,8 +14,9 @@ services:
   relay:
     build:
       context: .
-      # Set RELAY_COMMIT in the environment (or .env) to stamp the build;
-      # unset leaves /health reporting a null commit.
+      # Set RELAY_COMMIT in the build environment to stamp the build; unset
+      # leaves /health reporting a null commit. Not a runtime value — .env
+      # below is read at run time and cannot supply it.
       args:
         RELAY_COMMIT: "${RELAY_COMMIT:-}"
     ports:

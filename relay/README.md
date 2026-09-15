@@ -37,7 +37,8 @@ Docker is the supported deployment path. The image is a single-stage `oven/bun`
 build — no toolchain, no compile step.
 
 ```bash
-RELAY_COMMIT=$(git rev-parse --short HEAD) docker compose up --build -d
+COMMIT=$(git rev-parse --short HEAD)$([ -n "$(git status --porcelain relay)" ] && echo -dirty)
+RELAY_COMMIT=$COMMIT docker compose up --build -d
 docker compose logs -f relay          # relay on http://localhost:${PORT:-8080}
 ```
 
@@ -119,10 +120,12 @@ after changing code or `.env` you must **rebuild and recreate** (a plain
 
 Run this from the repo root — `$COMMIT` is read from your checkout, and the
 double quotes around the `ssh` argument are what expand it locally rather than
-on the host:
+on the host. `rsync` ships the working tree rather than the commit, so the
+`-dirty` suffix is what keeps the stamp from naming code that is not the code
+being deployed:
 
 ```bash
-COMMIT=$(git rev-parse --short HEAD)
+COMMIT=$(git rev-parse --short HEAD)$([ -n "$(git status --porcelain relay)" ] && echo -dirty)
 rsync -az --delete --exclude node_modules --exclude data --exclude .env \
   relay/ host:/home/bodhilabs/bodhi-relay/
 ssh host "cd /home/bodhilabs/bodhi-relay \
@@ -148,7 +151,16 @@ curl -s https://relay.example.com/health
 `version` is the `package.json` version and moves rarely, so it cannot tell two
 builds apart; `commit` is the answer. It is `null` on an image built without
 `RELAY_COMMIT`, and **absent entirely** on one built before `/health` carried
-it — which is itself a useful thing to see.
+it — which is itself a useful thing to see. A `-dirty` suffix means the tree
+that was shipped had uncommitted changes, so the sha names its parent rather
+than what is running.
+
+The same value is on the `relay listening` line at startup, which is where to
+look when the container is crash-looping and there is nothing to `curl`:
+
+```bash
+docker logs bodhi-relay | head -1
+```
 
 ## Configuration
 
