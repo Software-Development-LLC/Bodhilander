@@ -66,12 +66,17 @@ describe('what is deliberately not polled', () => {
     }
   });
 
-  test('a run preparing or provisioning is not polled', () => {
-    // Those ARE processes that exit and say so: provision.py returns, and the
-    // driver applies what it returned in the same call.
-    for (const state of ['preparing', 'provisioning'] as RunState[]) {
-      expect(baseIntervalFor(state)).toBeNull();
-    }
+  test('a preparing run IS polled, so the loop can start it (CO-722)', () => {
+    // An armed run sits in preparing until the loop provisions it and opens its
+    // gates; nothing else dispatches `prepared`, so it must be due.
+    expect(baseIntervalFor('preparing')).toBe(GATE_INTERVAL_MS);
+  });
+
+  test('a provisioning run is not polled: it is inside one advance call', () => {
+    // provision.py returns and the driver applies what it returned in the same
+    // call, so a run only rests in `provisioning` if that call crashed -- not a
+    // steady state to poll.
+    expect(baseIntervalFor('provisioning')).toBeNull();
   });
 
   test('a running gate IS looked at, because a background gate cannot say so', () => {
@@ -92,10 +97,8 @@ describe('what is deliberately not polled', () => {
     expect(GATE_BUSY_CEILING_MS).toBeGreaterThan(10 * GATE_INTERVAL_MS);
   });
 
-  test('a run waiting on nothing external is still not polled', () => {
-    // preparing and provisioning are driven by a process finishing, not by
-    // anything GitHub or a person will say.
-    expect(baseIntervalFor('preparing')).toBeNull();
+  test('provisioning is driven by a process finishing, not by anything external', () => {
+    expect(baseIntervalFor('provisioning')).toBeNull();
   });
 
   test('an inconclusive run is not polled', () => {

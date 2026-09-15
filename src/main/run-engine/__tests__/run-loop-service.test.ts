@@ -26,6 +26,9 @@ mock.module('../driver', () => ({
     advanceCalls.push({ runId, repo, kind: event.kind });
     return { state: 'running', applied: [event], problems: [], notifications: [], released: false, runaway: null };
   },
+  // Imported by run-loop-service for the loop's startOwner dep; not exercised
+  // by these permission tests, but the export must resolve.
+  startOwnerGate: async () => ({ state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null }),
 }));
 mock.module('../gate-spawner', () => ({
   agentsForOwner: async () => ({ agents: {}, notes: [] }),

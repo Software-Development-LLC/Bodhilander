@@ -61,6 +61,7 @@ function fake(over: Partial<LoopDeps> & { runs?: RunRow[]; owners?: Record<strin
     recordPr: (_r, _o, pr) => { calls.push(`record:${pr.number}`); },
     reconcile: async (_r, t) => { calls.push(`reconcile:${t.repo}#${t.prNumber}:${t.state}`); return { events: [], problems: [] }; },
     advance: async (_r, _o, e) => { calls.push(`advance:${e.kind}`); return { state: 'running', applied: [e], problems: [], notifications: [], released: false, runaway: null }; },
+    startOwner: async (_r, o) => { calls.push(`startOwner:${o.repo}`); return { state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null }; },
     approvers: () => ['brannon-bowden'],
     log: (line) => { calls.push(`log:${line.slice(0, 40)}`); },
     ...over,
@@ -378,5 +379,45 @@ describe('scheduling a run off its fastest owner', () => {
     // interval keeps the run out of dueRuns.
     expect(schedulingState(['waitingPermission', 'approved'], 'waitingPermission')).toBe('waitingPermission');
     expect(schedulingState([null, null], 'preparing')).toBe('preparing');
+  });
+});
+
+describe('starting a run that has been armed but never run (CO-722)', () => {
+  test('a preparing run provisions once by advancing its first owner with prepared', async () => {
+    const f = fake({
+      runs: [run('r1', 'preparing')],
+      owners: { r1: [owner('r1', { repo: 'repo-a', state: null }), owner('r1', { repo: 'repo-b', state: null })] },
+    });
+    const report = await createRunLoop(f.deps).tick();
+    expect(report.due).toContain('r1');
+    // Provision runs once, via the first owner's bootstrap -- not per owner.
+    expect(f.calls).toEqual(['advance:prepared']);
+  });
+
+  test('a null-state owner of a running run is started at its gate 2', async () => {
+    // The first owner rode the provision and is running; the second was left
+    // null and must be brought onto its own track.
+    const f = fake({
+      runs: [run('r1', 'running')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'repo-a', state: 'running' }),
+          owner('r1', { repo: 'repo-b', state: null }),
+        ],
+      },
+    });
+    await createRunLoop(f.deps).tick();
+    expect(f.calls).toContain('startOwner:repo-b');
+    // repo-a (already running) is looked at, not re-started.
+    expect(f.calls).not.toContain('startOwner:repo-a');
+    expect(f.calls).toContain('look');
+  });
+
+  test('a preparing run is due immediately, and stays due while an owner is unstarted', () => {
+    // schedulingState maps a null owner to the preparing cadence, so a run with
+    // an unstarted owner keeps ticking even once its started owners settle.
+    expect(schedulingState([null, null], 'preparing')).toBe('preparing');
+    expect(schedulingState(['approved', null], 'approved')).toBe('preparing');
+    expect(schedulingState(['approved', 'done'], 'approved')).toBe('approved');
   });
 });

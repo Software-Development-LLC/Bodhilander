@@ -23,7 +23,7 @@ mock.module('../../database', () => ({ getDatabase: () => db }));
 
 const runs = await import('../../repositories/runs');
 const { RUN_TABLES_SQL } = await import('../../run-tables-sql');
-const { MAX_ROUNDS, advance } = await import('../driver');
+const { MAX_ROUNDS, advance, startOwnerGate } = await import('../driver');
 const { execute } = await import('../executor');
 import type { ExecutorDeps, ExecutorTarget } from '../executor';
 import type { RunEvent } from '../transitions';
@@ -701,5 +701,33 @@ describe('two owners advance on their own tracks (multi-owner)', () => {
     await advance(id, 'repo-b', { kind: 'gateFinished', gate: 2, verdict: 'pass' }, TARGET, deps());
     expect(runs.activeGate(id, 'repo-a')).toMatchObject({ gate: 4, id: 'a4' });
     expect(runs.activeGate(id, 'repo-b')).toMatchObject({ gate: 3 });
+  });
+});
+
+describe('starting an owner onto its track after provisioning (multi-owner)', () => {
+  test('seeds a null-state owner running and opens its gate 2', async () => {
+    runs.createRun({
+      id: 'run-1', initiativeKey: 'CO-722', initiativeDir: 'C:/i',
+      harnessPath: '/plugins/bodhi', bodhiRoot: 'C:/work/repos',
+      pythonPath: null, permissionPosture: 'manual',
+    });
+    runs.upsertOwner({
+      runId: 'run-1', repo: 'repo-b', worktree: 'C:/wt-b', branch: 'b', base: 'origin/development',
+      scratch: null, agent: 'b-lead', status: 'pending', prNumber: null, prUrl: null,
+    });
+    const target = { ...TARGET, agents: { 2: ['b-lead'] } };
+    const r = await startOwnerGate('run-1', 'repo-b', target, deps());
+    expect(r.problems).toEqual([]);
+    expect(runs.ownerState('run-1', 'repo-b')).toBe('running');
+    expect(runs.activeGate('run-1', 'repo-b')).toMatchObject({ gate: 2, agent: 'b-lead', repo: 'repo-b' });
+  });
+
+  test('is idempotent: an owner already on a track is not restarted', async () => {
+    const id = seed('running'); // owner REPO already at state 'running'
+    let spawned = false;
+    const r = await startOwnerGate(id, REPO, TARGET, deps({ spawnGate: async () => { spawned = true; throw new Error('unreachable'); } }));
+    expect(r.problems).toEqual([]);
+    expect(spawned).toBe(false);
+    expect(runs.listGates(id)).toEqual([]);
   });
 });

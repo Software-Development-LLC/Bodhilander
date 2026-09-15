@@ -105,6 +105,10 @@ export const ESCALATE_AFTER = 5;
  * not in five.
  */
 export function baseIntervalFor(state: RunState): number | null {
+  // A preparing run has never run its installer; it is due at once so the loop
+  // can provision it and open its gates (CO-722). A never-started owner is
+  // scheduled at this same cadence -- see run-loop's schedulingState.
+  if (state === 'preparing') return GATE_INTERVAL_MS;
   if (state === 'running') return GATE_INTERVAL_MS;
   if (state === 'waitingChecks') return CHECKS_INTERVAL_MS;
   if (state === 'reviewNotRequested') return ACTION_RETRY_INTERVAL_MS;
