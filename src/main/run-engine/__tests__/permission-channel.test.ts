@@ -3,6 +3,9 @@ import {
   type ChannelFile,
   channelDirFor,
   encodeDecision,
+  HOOK_ANSWER_BY_SECONDS,
+  HOOK_TIMEOUT_SECONDS,
+  hookSettingsText,
   isWaiting,
   mcpConfigText,
   PERMISSION_TOOL,
@@ -210,5 +213,44 @@ describe('how the gate is told where to ask', () => {
     // stale request read as the new one's, and a person would answer a
     // question the running gate never asked.
     expect(channelDirFor('C:/chan', 'run-1-g2-a2')).not.toBe(channelDirFor('C:/chan', 'run-1-g2-a1'));
+  });
+});
+
+describe('how a background gate is told where to ask', () => {
+  test('the hook runs the broker in hook mode on the same channel', () => {
+    // Same broker, same directory, same request shape: the reader, the
+    // console and the inbox must not be able to tell which route a request
+    // took. --permission-prompt-tool is not consulted for a --bg gate, so
+    // this is the only route such a gate has.
+    const settings = JSON.parse(hookSettingsText('C:/app/scripts/permission-broker.js', 'C:/chan/run-g2-a1'));
+    const [rule] = settings.hooks.PreToolUse;
+    expect(rule.hooks).toHaveLength(1);
+    expect(rule.hooks[0].type).toBe('command');
+    expect(rule.hooks[0].command).toBe(
+      `node "C:/app/scripts/permission-broker.js" --hook "C:/chan/run-g2-a1" ${HOOK_ANSWER_BY_SECONDS}`,
+    );
+  });
+
+  test('every tool is matched, because deciding which are dangerous is not this module’s', () => {
+    const settings = JSON.parse(hookSettingsText('b', 'c'));
+    expect(settings.hooks.PreToolUse[0].matcher).toBe('');
+  });
+
+  test('the broker answers before the CLI would kill the hook', () => {
+    // A killed hook neither allows nor denies: the call falls through to an
+    // interactive prompt a background gate has nobody at. Measured. So the
+    // broker's own deadline must sit strictly inside the hook timeout, with
+    // room for the answer to be written and read.
+    const settings = JSON.parse(hookSettingsText('b', 'c'));
+    expect(settings.hooks.PreToolUse[0].hooks[0].timeout).toBe(HOOK_TIMEOUT_SECONDS);
+    expect(HOOK_ANSWER_BY_SECONDS).toBeLessThan(HOOK_TIMEOUT_SECONDS);
+    expect(HOOK_TIMEOUT_SECONDS - HOOK_ANSWER_BY_SECONDS).toBeGreaterThanOrEqual(60);
+  });
+
+  test('the hook timeout is in the range a person needs', () => {
+    // Measured honoured at 3600 for a 70s hold. Anything under the reconcile
+    // cadences would make waitingPermission a state a run can only leave by
+    // being refused.
+    expect(HOOK_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(1800);
   });
 });

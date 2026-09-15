@@ -14,6 +14,7 @@
  * Run with: bun test src/main/run-engine
  */
 import { afterEach, describe, expect, test } from 'bun:test';
+import { channelDirFor } from '../permission-channel';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -402,6 +403,59 @@ describe('launching', () => {
     expect(outcome).not.toBeInstanceOf(Error);
     if (outcome instanceof Error) throw outcome;
     expect(outcome.status).toBe('undriveable');
+  });
+});
+
+describe('where a gate is told to ask for permission', () => {
+  // The files are written BEFORE the spawn, so they can be asserted whether
+  // or not the fake executable makes it through the launch.
+  const permissions = (root: string) => ({
+    root: path.join(root, 'perms'),
+    brokerPath: 'C:/app/scripts/permission-broker.js',
+    channelKey: 'run-g2-owner-a1',
+  });
+
+  test('a background gate carries the broker as a PreToolUse hook', async () => {
+    // --permission-prompt-tool is not consulted for a --bg gate: the broker
+    // starts and is never asked (#291). A hook is consulted, in both modes,
+    // so the background route is the same broker in hook mode, on the same
+    // channel directory.
+    const root = await harness(PLUGIN_SHAPED);
+    await launch(root, {
+      gate: 2, agentName: 'bsa-lead', mode: 'background', permissions: permissions(root),
+    }).catch(() => undefined);
+    // Computed the way the launcher computes it, separators and all: the
+    // channel directory is a string the broker is handed verbatim, and a
+    // normalised expectation would pass against a path it never receives.
+    const dir = channelDirFor(path.join(root, 'perms'), 'run-g2-owner-a1');
+    const settings = JSON.parse(await fs.readFile(`${dir}.settings.json`, 'utf8'));
+    const [rule] = settings.hooks.PreToolUse;
+    expect(rule.hooks[0].command).toContain('permission-broker.js" --hook "');
+    expect(rule.hooks[0].command).toContain(`"${dir}"`);
+    // Not BOTH routes: a background gate given an MCP config would start a
+    // broker that is never asked, beside the one that is.
+    await expect(fs.access(`${dir}.mcp.json`)).rejects.toThrow();
+  });
+
+  test('a print gate carries the broker as an MCP tool', async () => {
+    const root = await harness(PLUGIN_SHAPED);
+    await launch(root, { mode: 'print', permissions: permissions(root) }).catch(() => undefined);
+    const dir = channelDirFor(path.join(root, 'perms'), 'run-g2-owner-a1');
+    const mcp = JSON.parse(await fs.readFile(`${dir}.mcp.json`, 'utf8'));
+    expect(mcp.mcpServers.bodhi_permissions.args).toEqual(['C:/app/scripts/permission-broker.js', dir]);
+    await expect(fs.access(`${dir}.settings.json`)).rejects.toThrow();
+  });
+
+  test('a posture that never asks gets no channel at all', async () => {
+    // bypass prompts for nothing and denyOnPrompt refuses without asking, so
+    // a channel for either would stand up a broker nobody will ever call.
+    const root = await harness(PLUGIN_SHAPED);
+    await launch(root, {
+      mode: 'background',
+      permissions: permissions(root),
+      context: { ...context(root), posture: 'denyOnPrompt' },
+    }).catch(() => undefined);
+    await expect(fs.access(path.join(root, 'perms'))).rejects.toThrow();
   });
 });
 

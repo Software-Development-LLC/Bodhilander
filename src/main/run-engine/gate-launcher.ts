@@ -38,7 +38,7 @@ import { parseAgentFile, type AgentDefinition } from './agent-definition';
 import { buildGateCommand, type GateMode, type RunSpawnContext } from './gate-command';
 import { runGate, type GateOutcome, type GateSpawnOptions } from './gate-process';
 import { GATE_VERDICT_SCHEMA } from './gate-verdict';
-import { channelDirFor, mcpConfigText, PERMISSION_TOOL } from './permission-channel';
+import { channelDirFor, hookSettingsText, mcpConfigText, PERMISSION_TOOL } from './permission-channel';
 
 export class GateLaunchError extends Error {
   // Set explicitly: without it `error.name` reads "Error" in a log, and the
@@ -377,7 +377,7 @@ export interface GateLaunch {
   prompt: string;
   /** Where the body is written for print mode. The caller owns the directory. */
   promptFileDir: string;
-  context: Omit<RunSpawnContext, 'systemPromptPath' | 'permissionPromptTool' | 'mcpConfigPath'>;
+  context: Omit<RunSpawnContext, 'systemPromptPath' | 'permissionPromptTool' | 'mcpConfigPath' | 'settingsPath'>;
   spawn: GateSpawnOptions;
   /**
    * Where a gate that cannot be prompted sends its prompts.
@@ -419,17 +419,23 @@ export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
   // Only the posture that asks needs somewhere to ask. `bypass` prompts for
   // nothing and `denyOnPrompt` refuses without asking, so handing either a
   // channel would stand up a broker nobody will ever call.
-  let permission: { permissionPromptTool: string; mcpConfigPath: string } | null = null;
+  let permission: Pick<RunSpawnContext, 'permissionPromptTool' | 'mcpConfigPath' | 'settingsPath'> = {};
   if (launch.permissions && launch.context.posture === 'manual') {
     const channelDir = channelDirFor(launch.permissions.root, launch.permissions.channelKey);
     await fs.mkdir(channelDir, { recursive: true });
-    const mcpConfigPath = `${channelDir}.mcp.json`;
-    await fs.writeFile(
-      mcpConfigPath,
-      mcpConfigText(launch.permissions.brokerPath, channelDir),
-      'utf8',
-    );
-    permission = { permissionPromptTool: PERMISSION_TOOL, mcpConfigPath };
+    if (launch.mode === 'background') {
+      // `--permission-prompt-tool` is not consulted for a --bg gate: the
+      // broker starts and is never asked (#291). A PreToolUse hook is, so a
+      // background gate carries the same broker as a hook, on the same
+      // channel, filing requests in the same shape.
+      const settingsPath = `${channelDir}.settings.json`;
+      await fs.writeFile(settingsPath, hookSettingsText(launch.permissions.brokerPath, channelDir), 'utf8');
+      permission = { settingsPath };
+    } else {
+      const mcpConfigPath = `${channelDir}.mcp.json`;
+      await fs.writeFile(mcpConfigPath, mcpConfigText(launch.permissions.brokerPath, channelDir), 'utf8');
+      permission = { permissionPromptTool: PERMISSION_TOOL, mcpConfigPath };
+    }
   }
 
   let systemPromptPath: string | null = null;

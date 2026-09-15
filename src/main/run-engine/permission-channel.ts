@@ -136,6 +136,53 @@ export function mcpConfigText(brokerPath: string, channelDir: string): string {
   );
 }
 
+/**
+ * How long a background gate's hook may hold a request, in seconds.
+ *
+ * Measured against claude 2.1.270: a hook configured with 3600 held a
+ * decision for 70s and was honoured; 900 held one for 150s. Whether the CLI
+ * caps it higher is not known, which is why the broker keeps its own
+ * deadline INSIDE this one -- see {@link hookSettingsText}.
+ */
+export const HOOK_TIMEOUT_SECONDS = 3600;
+
+/**
+ * The broker's own deadline, strictly inside the hook's.
+ *
+ * A hook the CLI kills does not deny and does not allow: the tool call falls
+ * through to an interactive prompt, and a background gate has nobody at it.
+ * Measured -- the session sat on that prompt with the file unwritten. So the
+ * broker must answer before the CLI stops waiting, and when it does so
+ * because nobody replied, it says exactly that, so the gate ends with a
+ * reason a person can read rather than a hang nobody can see.
+ */
+export const HOOK_ANSWER_BY_SECONDS = HOOK_TIMEOUT_SECONDS - 300;
+
+/**
+ * The `--settings` a background gate is launched with.
+ *
+ * `--permission-prompt-tool` is not consulted for a `--bg` gate; a
+ * `PreToolUse` hook is (#291). The hook runs the same broker in hook mode,
+ * on the same channel directory, filing requests in the same shape -- so the
+ * reader, the console and the inbox do not know which route a request took.
+ *
+ * Every tool is matched. The CLI decides which calls need permission and only
+ * invokes the hook for those; matching narrowly here would be this module
+ * holding an opinion about what is dangerous, which is not its to hold.
+ */
+export function hookSettingsText(brokerPath: string, channelDir: string): string {
+  const command = `node "${brokerPath}" --hook "${channelDir}" ${HOOK_ANSWER_BY_SECONDS}`;
+  return JSON.stringify(
+    {
+      hooks: {
+        PreToolUse: [{ matcher: '', hooks: [{ type: 'command', command, timeout: HOOK_TIMEOUT_SECONDS }] }],
+      },
+    },
+    null,
+    2,
+  );
+}
+
 /** The file the broker waits on, for a decision a person made. */
 export function replyFileName(toolUseId: string): string {
   return `${toolUseId}${REPLY_SUFFIX}`;
