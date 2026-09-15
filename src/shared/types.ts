@@ -668,6 +668,25 @@ export interface AccountRemovalCost {
 }
 
 /**
+ * One tool call a gate is waiting for permission on (CO-722, #288).
+ *
+ * Mirrors `PermissionRequest` in the run engine. The input is carried whole:
+ * a person approving a Bash call is approving its command line, and a
+ * summary is not a thing to consent to.
+ */
+export interface RunPermissionRequest {
+  toolUseId: string;
+  toolName: string;
+  input: unknown;
+  askedAt: string;
+}
+
+/** What arming a run reported: the run, or the list of things to fix (CO-722). */
+export type RunArmResult =
+  | { status: 'armed'; runId: string; initiativeKey: string; owners: Record<string, string> }
+  | { status: 'refused'; refusals: { what: string; fix: string }[] };
+
+/**
  * One line of the run inbox (CO-722).
  *
  * Mirrors `InboxRow` in the run repository. Declared here because the
@@ -676,25 +695,6 @@ export interface AccountRemovalCost {
  * type shared by reference makes every column added in main visible in a
  * window by default.
  */
-/**
- * One tool call a gate is waiting for permission on (CO-722, #288).
- *
- * Mirrors `PermissionRequest` in the run engine. The input is carried whole:
- * a person approving a Bash call is approving its command line, and a
- * summary is not a thing to consent to.
- */
-/** What arming a run reported: the run, or the list of things to fix (CO-722). */
-export type RunArmResult =
-  | { status: 'armed'; runId: string; initiativeKey: string; owners: Record<string, string> }
-  | { status: 'refused'; refusals: { what: string; fix: string }[] };
-
-export interface RunPermissionRequest {
-  toolUseId: string;
-  toolName: string;
-  input: unknown;
-  askedAt: string;
-}
-
 export interface RunInboxRow {
   id: string;
   initiativeKey: string;

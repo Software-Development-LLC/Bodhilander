@@ -259,6 +259,9 @@ const App: React.FC = () => {
   // Analytics and Arena all live in the same content area, so they are one
   // value rather than a boolean each.
   const [contentView, setContentView] = useState<ContentView>('terminal');
+  // Bumped when a run is armed so the inbox beside RunArm re-reads at once
+  // rather than waiting out its poll -- the newly armed run shows immediately.
+  const [runsRefresh, setRunsRefresh] = useState(0);
   // Group whose working dir the arena panel should scope to ("Ask Arena" menu).
   const [arenaGroupId, setArenaGroupId] = useState<string | null>(null);
 
@@ -1748,8 +1751,8 @@ const App: React.FC = () => {
         )}
         {contentView === 'runs' && (
           <>
-            <RunArm />
-            <RunInbox />
+            <RunArm onArmed={() => setRunsRefresh((n) => n + 1)} />
+            <RunInbox key={runsRefresh} />
           </>
         )}
         {/* The terminal area is HIDDEN, never unmounted, when another view is

@@ -33,7 +33,10 @@ export function harnessFromTeamYaml(text: string): string | null {
   for (const line of text.split(/\r?\n/)) {
     const match = /^harness:\s*(.+?)\s*$/.exec(line);
     if (match) {
-      return match[1].replace(/^["']|["']$/g, '').trim() || null;
+      // Strip a MATCHED pair of quotes only, so a path that merely contains a
+      // quote is left intact rather than losing its first and last characters.
+      const value = match[1].replace(/^(["'])(.*)\1$/, '$2').trim();
+      return value || null;
     }
   }
   return null;

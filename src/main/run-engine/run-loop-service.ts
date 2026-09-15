@@ -40,8 +40,11 @@ import { lookAtGate, type AttentionDeps } from './attention-pass';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
 import { reconcileOnce } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
-import { pendingRequests, type ChannelIo } from './permission-inbox';
+import { pendingRequests, writeDecision, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
+import type { PermissionRequest } from './permission-channel';
+import { armInitiative } from './arm-run';
+import { armRun, type IgnitionResult } from './ignition';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
 const TICK_MS = 15_000;
@@ -88,7 +91,7 @@ export function permissionsRoot(userData: string): string {
 
 /** Approvers a review request goes to. Empty until configured; the engine refuses clearly then. */
 function approvers(): readonly string[] {
-  return (process.env.BODHI_APPROVERS || '').split(',').filter(Boolean);
+  return (process.env.BODHI_APPROVERS || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 /** The real attention dependencies: read the receipt file, ask `claude agents`. */
@@ -176,12 +179,6 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
   };
 }
 
-import { pendingRequests as readPending, writeDecision } from './permission-inbox';
-import type { PermissionRequest } from './permission-channel';
-import { armInitiative } from './arm-run';
-import { armRun } from './ignition';
-import type { IgnitionResult } from './ignition';
-
 /**
  * Arm the run in a prepared initiative directory, from the app.
  *
@@ -195,6 +192,8 @@ export function armInitiativeDir(initiativeDir: string): Promise<IgnitionResult>
     initiativeDir,
     { readFile: readIfPresent },
     (request) => armRun(request, { run: (exe, argv) => runCommand(exe, argv, { timeoutMs: 60_000 }) }),
+    // The same `BODHI_GH || 'gh'` the loop is threaded with in startRunLoopService,
+    // so arming checks the gh the loop will later drive with, not a different one.
     { pythonPath: process.env.BODHI_PYTHON || 'python', ghPath: process.env.BODHI_GH || 'gh' },
   );
 }
@@ -202,7 +201,7 @@ export function armInitiativeDir(initiativeDir: string): Promise<IgnitionResult>
 /** The pending permission requests for a run's gate in flight, for the inbox. */
 export function listRunPermissions(userData: string, runId: string): PermissionRequest[] {
   const gate = runsRepo.activeGate(runId);
-  return readPending(permissionsRoot(userData), runId, gate, channelIo);
+  return pendingRequests(permissionsRoot(userData), runId, gate, channelIo);
 }
 
 /**

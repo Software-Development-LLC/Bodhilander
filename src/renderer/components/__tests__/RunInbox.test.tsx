@@ -269,17 +269,49 @@ describe('answering a permission request', () => {
     await waitFor(() => expect(answered).toBe(1));
   });
 
-  test('Deny sends deny', async () => {
-    const sent: string[] = [];
+  test('Deny with no reason sends an empty message, letting the broker word it', async () => {
+    const sent: Array<[string, string]> = [];
     render(
       <PermissionRequests
         runId="run-1"
         loadPermissions={async () => [req()]}
-        answer={async (_r, _id, verdict) => { sent.push(verdict); return true; }}
+        answer={async (_r, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
       />,
     );
     fireEvent.click(await screen.findByRole('button', { name: 'Deny' }));
-    await waitFor(() => expect(sent).toEqual(['deny']));
+    await waitFor(() => expect(sent).toEqual([['deny', '']]));
+  });
+
+  test('a typed reason is carried on the deny, so the model reads why', async () => {
+    const sent: Array<[string, string]> = [];
+    render(
+      <PermissionRequests
+        runId="run-1"
+        loadPermissions={async () => [req()]}
+        answer={async (_r, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
+      />,
+    );
+    fireEvent.change(await screen.findByLabelText('Reason for denying (optional)'), {
+      target: { value: 'delete the dist dir, not the whole build' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    await waitFor(() => expect(sent).toEqual([['deny', 'delete the dist dir, not the whole build']]));
+  });
+
+  test('an allow never carries the deny reason box', async () => {
+    const sent: Array<[string, string]> = [];
+    render(
+      <PermissionRequests
+        runId="run-1"
+        loadPermissions={async () => [req()]}
+        answer={async (_r, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
+      />,
+    );
+    fireEvent.change(await screen.findByLabelText('Reason for denying (optional)'), {
+      target: { value: 'ignored on allow' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
+    await waitFor(() => expect(sent).toEqual([['allow', '']]));
   });
 
   test('nothing pending renders nothing at all', () => {

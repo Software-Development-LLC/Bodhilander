@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import * as path from 'path';
 import type { IgnitionRequest, IgnitionResult } from '../ignition';
 import { armInitiative, harnessFromTeamYaml } from '../arm-run';
 
@@ -11,6 +12,12 @@ describe('the harness a team.yaml pins the run to', () => {
 
   test('a quoted path is unquoted, because the raw value is what --plugin-dir takes', () => {
     expect(harnessFromTeamYaml('harness: "C:/a b/harness"')).toBe('C:/a b/harness');
+  });
+
+  test('a mismatched quote pair is left intact rather than trimmed to nonsense', () => {
+    // A leading " with a trailing ' is not a quoted string; stripping both
+    // would silently corrupt the path, so neither is removed.
+    expect(harnessFromTeamYaml("harness: \"C:/weird'")).toBe("\"C:/weird'");
   });
 
   test('no harness line is null, not an empty string', () => {
@@ -26,11 +33,19 @@ describe('arming an initiative directory', () => {
 
   test('hands armRun the harness from team.yaml and the repo root beside it', async () => {
     let seen: IgnitionRequest | null = null;
-    const io = { readFile: () => 'initiative: BDH-239\nharness: C:/work/repos/claude-team-workflow\n' };
+    let readPath: string | null = null;
+    const io = {
+      readFile: (p: string) => {
+        readPath = p;
+        return 'initiative: BDH-239\nharness: C:/work/repos/claude-team-workflow\n';
+      },
+    };
     const result = await armInitiative('C:/init/BDH-239', io, async (req) => { seen = req; return okArm(req); }, {
       pythonPath: 'python',
       ghPath: 'gh',
     });
+    // It reads the initiative's OWN team.yaml, not app settings.
+    expect(readPath).toBe(path.join('C:/init/BDH-239', 'team.yaml'));
     expect(result.status).toBe('armed');
     expect(seen).toMatchObject({
       initiativePath: 'C:/init/BDH-239',

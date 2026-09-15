@@ -82,6 +82,10 @@ export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
 }) => {
   const [requests, setRequests] = useState<RunPermissionRequest[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // A denial can carry a reason the model reads back. Kept per request so two
+  // pending calls do not share one box; allow needs none (there is nothing to
+  // say to an approval), so only deny reads this.
+  const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -104,14 +108,17 @@ export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
       setBusy(toolUseId);
       try {
         const send = answer ?? window.electronAPI.answerRunPermission;
-        await send(runId, toolUseId, verdict, '');
+        // Only a denial carries a message; the broker supplies its own words
+        // when this is blank, so an empty reason is a plain deny, not a bug.
+        const message = verdict === 'deny' ? (denyReasons[toolUseId] ?? '') : '';
+        await send(runId, toolUseId, verdict, message);
         await refresh();
         onAnswered?.();
       } finally {
         setBusy(null);
       }
     },
-    [answer, onAnswered, refresh, runId],
+    [answer, denyReasons, onAnswered, refresh, runId],
   );
 
   if (!requests || requests.length === 0) return null;
@@ -131,6 +138,17 @@ export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
             >
               Allow
             </button>
+            <input
+              type="text"
+              className="run-inbox__deny-reason"
+              aria-label="Reason for denying (optional)"
+              placeholder="Reason (optional)"
+              value={denyReasons[req.toolUseId] ?? ''}
+              disabled={busy !== null}
+              onChange={(e) =>
+                setDenyReasons((prev) => ({ ...prev, [req.toolUseId]: e.target.value }))
+              }
+            />
             <button
               type="button"
               className="run-inbox__deny"

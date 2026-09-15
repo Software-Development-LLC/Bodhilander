@@ -121,6 +121,20 @@
 .run-inbox__perm-actions {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
+}
+.run-inbox__deny-reason {
+  flex: 2;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--border, #555);
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+}
+.run-inbox__deny-reason:disabled {
+  opacity: 0.5;
 }
 .run-inbox__allow,
 .run-inbox__deny {
