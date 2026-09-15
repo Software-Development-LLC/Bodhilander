@@ -142,7 +142,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   // Nothing else enforces the ARG/ENV pair in the Dockerfile, and an unstamped
   // image fails by answering `null` forever — on the day someone needs to know
   // what is deployed, which is too late to learn it was never wired.
-  const commit = env.RELAY_BUILD_COMMIT?.trim() || null;
+  // An unset --build-arg arrives as "", so empty and absent mean the same here.
+  const stamp = env.RELAY_BUILD_COMMIT?.trim() ?? '';
+  const commit = stamp === '' ? null : stamp;
   if (isProduction && !commit) {
     warnings.push(
       'RELAY_BUILD_COMMIT is not set — /health cannot identify this deployment. ' +
