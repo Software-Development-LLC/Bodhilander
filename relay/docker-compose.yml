@@ -12,7 +12,12 @@
 
 services:
   relay:
-    build: .
+    build:
+      context: .
+      # Set RELAY_COMMIT in the environment (or .env) to stamp the build;
+      # unset leaves /health reporting a null commit.
+      args:
+        RELAY_COMMIT: "${RELAY_COMMIT:-}"
     ports:
       - "${PORT:-8080}:8080"
     environment:

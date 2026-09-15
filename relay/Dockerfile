@@ -22,6 +22,11 @@ COPY --chown=bun:bun web ./web
 RUN bun run build:web
 COPY --chown=bun:bun src ./src
 
+# The source commit, surfaced on /health. Last in the file so that stamping a
+# new one reuses every layer above it.
+ARG RELAY_COMMIT
+ENV RELAY_COMMIT=$RELAY_COMMIT
+
 USER bun
 VOLUME /data
 EXPOSE 8080

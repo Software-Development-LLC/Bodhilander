@@ -36,6 +36,8 @@ export interface RelayConfig {
   vapidSubject: string;
   nodeEnv: string;
   isProduction: boolean;
+  /** Source commit baked into the image at build time; null when unstamped. */
+  commit: string | null;
 }
 
 export interface LoadedConfig {
@@ -169,6 +171,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       vapidSubject: env.VAPID_SUBJECT ?? 'mailto:admin@localhost',
       nodeEnv,
       isProduction,
+      commit: env.RELAY_COMMIT?.trim() || null,
     },
     warnings,
   };

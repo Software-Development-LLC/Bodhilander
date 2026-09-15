@@ -50,3 +50,17 @@ describe('handoff storage limits', () => {
     expect(() => loadConfig({ ...BASE, HANDOFF_TTL_SECONDS: '-1' })).toThrow(ConfigError);
   });
 });
+
+describe('build stamp', () => {
+  test('carries the commit the image was built from', () => {
+    expect(loadConfig({ ...BASE, RELAY_COMMIT: '7d5cb5d' }).config.commit).toBe('7d5cb5d');
+  });
+
+  test('is null, not empty, when the build did not stamp one', () => {
+    // An unset --build-arg reaches the process as "", so the absent case has
+    // to collapse to one value a reader can test against.
+    expect(loadConfig(BASE).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_COMMIT: '' }).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_COMMIT: '   ' }).config.commit).toBeNull();
+  });
+});

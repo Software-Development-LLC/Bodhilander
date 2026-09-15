@@ -93,6 +93,19 @@ describe('http router', () => {
     expect(typeof body.version).toBe('string');
   });
 
+  test('GET /health reports the commit the image was built from', async () => {
+    const stamped = loadConfig({ RELAY_COMMIT: 'abc1234' }).config;
+    const res = await createRouter({ config: stamped, logger, repos })(new Request('http://relay.test/health'));
+    expect(((await res.json()) as { commit: string | null }).commit).toBe('abc1234');
+
+    // An unstamped build answers with null rather than omitting the key, so a
+    // relay too old to carry a commit stays distinguishable from one that is
+    // merely unstamped.
+    const plain = (await (await route(new Request('http://relay.test/health'))).json()) as Record<string, unknown>;
+    expect(plain.commit).toBeNull();
+    expect(Object.hasOwn(plain, 'commit')).toBe(true);
+  });
+
   test('unknown paths return a JSON 404', async () => {
     const res = await route(new Request('http://relay.test/nope'));
     expect(res.status).toBe(404);
