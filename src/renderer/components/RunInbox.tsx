@@ -81,7 +81,9 @@ export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
   pollMs,
 }) => {
   const [requests, setRequests] = useState<RunPermissionRequest[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  // Busy is per request, not global: two owners can be blocked at once, and
+  // answering one must not disable the other's buttons (CO-722 multi-owner).
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   // A denial can carry a reason the model reads back. Kept per request so two
   // pending calls do not share one box; allow needs none (there is nothing to
   // say to an approval), so only deny reads this.
@@ -105,19 +107,24 @@ export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
 
   const decide = useCallback(
     async (repo: string, toolUseId: string, verdict: 'allow' | 'deny') => {
-      setBusy(toolUseId);
+      const key = `${repo}:${toolUseId}`;
+      setBusy((prev) => new Set(prev).add(key));
       try {
         const send = answer ?? window.electronAPI.answerRunPermission;
         // Only a denial carries a message; the broker supplies its own words
         // when this is blank, so an empty reason is a plain deny, not a bug.
-        const message = verdict === 'deny' ? (denyReasons[toolUseId] ?? '') : '';
+        const message = verdict === 'deny' ? (denyReasons[key] ?? '') : '';
         // The repo names which owner's channel this answer belongs to: two
         // owners can be blocked at once, and this must reach the right one.
         await send(runId, repo, toolUseId, verdict, message);
         await refresh();
         onAnswered?.();
       } finally {
-        setBusy(null);
+        setBusy((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
       }
     },
     [answer, denyReasons, onAnswered, refresh, runId],
@@ -127,43 +134,46 @@ export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
 
   return (
     <ul className="run-inbox__perms">
-      {requests.map((req) => (
-        <li key={`${req.repo}:${req.toolUseId}`} className="run-inbox__perm">
-          <div className="run-inbox__perm-tool">
-            <span className="run-inbox__perm-repo">{req.repo}</span> {req.toolName}
-          </div>
-          <pre className="run-inbox__perm-input">{JSON.stringify(req.input, null, 2)}</pre>
-          <div className="run-inbox__perm-actions">
-            <button
-              type="button"
-              className="run-inbox__allow"
-              disabled={busy !== null}
-              onClick={() => void decide(req.repo, req.toolUseId, 'allow')}
-            >
-              Allow
-            </button>
-            <input
-              type="text"
-              className="run-inbox__deny-reason"
-              aria-label="Reason for denying (optional)"
-              placeholder="Reason (optional)"
-              value={denyReasons[req.toolUseId] ?? ''}
-              disabled={busy !== null}
-              onChange={(e) =>
-                setDenyReasons((prev) => ({ ...prev, [req.toolUseId]: e.target.value }))
-              }
-            />
-            <button
-              type="button"
-              className="run-inbox__deny"
-              disabled={busy !== null}
-              onClick={() => void decide(req.repo, req.toolUseId, 'deny')}
-            >
-              Deny
-            </button>
-          </div>
-        </li>
-      ))}
+      {requests.map((req) => {
+        const key = `${req.repo}:${req.toolUseId}`;
+        return (
+          <li key={key} className="run-inbox__perm">
+            <div className="run-inbox__perm-tool">
+              <span className="run-inbox__perm-repo">{req.repo}</span> {req.toolName}
+            </div>
+            <pre className="run-inbox__perm-input">{JSON.stringify(req.input, null, 2)}</pre>
+            <div className="run-inbox__perm-actions">
+              <button
+                type="button"
+                className="run-inbox__allow"
+                disabled={busy.has(key)}
+                onClick={() => void decide(req.repo, req.toolUseId, 'allow')}
+              >
+                Allow
+              </button>
+              <input
+                type="text"
+                className="run-inbox__deny-reason"
+                aria-label="Reason for denying (optional)"
+                placeholder="Reason (optional)"
+                value={denyReasons[key] ?? ''}
+                disabled={busy.has(key)}
+                onChange={(e) =>
+                  setDenyReasons((prev) => ({ ...prev, [key]: e.target.value }))
+                }
+              />
+              <button
+                type="button"
+                className="run-inbox__deny"
+                disabled={busy.has(key)}
+                onClick={() => void decide(req.repo, req.toolUseId, 'deny')}
+              >
+                Deny
+              </button>
+            </div>
+          </li>
+        );
+      })}
     </ul>
   );
 };

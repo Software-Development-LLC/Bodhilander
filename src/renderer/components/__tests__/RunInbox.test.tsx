@@ -344,4 +344,28 @@ describe('answering a permission request', () => {
     fireEvent.click(allows[1]);
     await waitFor(() => expect(sent).toEqual([['repo-b', 'b1', 'allow']]));
   });
+
+  test('answering one owner leaves the other owner’s buttons usable', async () => {
+    // The busy-lock is per request, not global: while repo-a's answer is in
+    // flight, repo-b can still be acted on.
+    let release: () => void = () => {};
+    const hang = new Promise<boolean>((resolve) => { release = () => resolve(true); });
+    render(
+      <PermissionRequests
+        runId="run-1"
+        loadPermissions={async () => [
+          req({ repo: 'repo-a', toolUseId: 'a1' }),
+          req({ repo: 'repo-b', toolUseId: 'b1' }),
+        ]}
+        answer={async () => hang}
+      />,
+    );
+    await screen.findByText('repo-a');
+    const allows = screen.getAllByRole('button', { name: 'Allow' }) as HTMLButtonElement[];
+    fireEvent.click(allows[0]); // repo-a, which now hangs
+    await waitFor(() => expect(allows[0].disabled).toBe(true));
+    // repo-b's button is NOT disabled by repo-a's in-flight answer.
+    expect(allows[1].disabled).toBe(false);
+    release();
+  });
 });
