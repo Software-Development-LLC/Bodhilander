@@ -35,7 +35,7 @@ import * as path from 'path';
 import log from 'electron-log';
 import * as runsRepo from '../repositories/runs';
 import type { RunRow, RunOwnerRow } from '../repositories/runs';
-import { advance } from './driver';
+import { advance, startOwnerGate } from './driver';
 import { processDeps, runCommand } from './command-runner';
 import { agentsForOwner, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
 import { lookAtGate, type AttentionDeps } from './attention-pass';
@@ -172,6 +172,10 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
       // The loop names the owner; its executor and spawner are that repo's.
       const { target, deps } = await executorFor(config, ghPath, run, owner);
       return advance(run.id, owner.repo, event, target, deps);
+    },
+    startOwner: async (run, owner) => {
+      const { target, deps } = await executorFor(config, ghPath, run, owner);
+      return startOwnerGate(run.id, owner.repo, target, deps);
     },
     approvers: machine.approvers,
     log: (line) => log.info(`[RunLoop] ${line}`),

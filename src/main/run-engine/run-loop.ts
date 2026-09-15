@@ -68,6 +68,12 @@ export interface LoopDeps {
   reconcile(run: RunRow, target: ReconcileTarget): Promise<ReconcileResult>;
   /** The driver, with this owner's real spawner behind it (CO-722 multi-owner). */
   advance(run: RunRow, owner: RunOwnerRow, event: RunEvent): Promise<AdvanceResult>;
+  /**
+   * Bring one owner onto its track after the run has provisioned (CO-722):
+   * set it running and open its gate 2. The first owner rides the provision
+   * `advance`; the rest are started here.
+   */
+  startOwner(run: RunRow, owner: RunOwnerRow): Promise<AdvanceResult>;
   approvers(): readonly string[];
   log(line: string): void;
 }
@@ -108,13 +114,19 @@ export function schedulingState(
   ownerStates: readonly (RunState | null)[],
   fallback: RunState,
 ): RunState {
-  const movable = ownerStates.filter((s): s is RunState => s !== null && isMovable(s));
-  if (movable.length === 0) return fallback;
-  // Seeded with the first movable state (the array is non-empty here), so the
+  // A never-started owner (null) is scheduled like a preparing run: due soon so
+  // the loop can open its gate. A movable owner is scheduled on its own state.
+  const candidates: RunState[] = [];
+  for (const s of ownerStates) {
+    if (s === null) candidates.push('preparing');
+    else if (isMovable(s)) candidates.push(s);
+  }
+  if (candidates.length === 0) return fallback;
+  // Seeded with the first candidate (the array is non-empty here), so the
   // reduce has an initial value rather than leaning on there being one.
-  return movable.reduce(
+  return candidates.reduce(
     (best, s) => ((baseIntervalFor(s) ?? Infinity) < (baseIntervalFor(best) ?? Infinity) ? s : best),
-    movable[0],
+    candidates[0],
   );
 }
 
@@ -259,21 +271,43 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
       report.skipped.push({ runId: run.id, why: 'no owner recorded, so nothing to drive' });
       return false;
     }
+    // A run that has never run its installer: provision ONCE (over the whole
+    // initiative) and start the first owner. The machine couples
+    // provisioned -> running + gate 2 for it; the rest are null-state owners of
+    // a running run, started below on this or the next pass.
+    if (run.state === 'preparing') {
+      const result = await deps.advance(run, owners[0], { kind: 'prepared' });
+      for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
+      report.reconciled.push({ runId: run.id, events: result.applied.map((e) => e.kind) });
+      return result.problems.length === 0;
+    }
     let ok = true;
     let drove = false;
     for (const owner of owners) {
       const state = owner.state;
-      if (state === 'running') {
+      if (state === null) {
+        // Provisioned, but never brought onto its track (a repo the first
+        // owner's provision did not start). Open its gate 2.
+        drove = true;
+        ok = (await startOwner(run, owner, report)) && ok;
+      } else if (state === 'running') {
         drove = true;
         ok = (await lookAtOwner(run, owner, report)) && ok;
-      } else if (state !== null && RECONCILES.has(state)) {
+      } else if (RECONCILES.has(state)) {
         drove = true;
         ok = (await reconcileOwner(run, owner, report)) && ok;
       }
-      // Any other owner state (null, waiting on a person, terminal) is not this
+      // Any other owner state (waiting on a person, terminal) is not this
       // loop's to move -- the inbox has it, or it is done.
     }
     return drove ? ok : true;
+  }
+
+  async function startOwner(run: RunRow, owner: RunOwnerRow, report: TickReport): Promise<boolean> {
+    const result = await deps.startOwner(run, owner);
+    for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
+    if (result.problems.length === 0) deps.log(`${run.id} ${owner.repo}: started at gate 2`);
+    return result.problems.length === 0;
   }
 
   async function tick(): Promise<TickReport> {

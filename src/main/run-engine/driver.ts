@@ -148,6 +148,52 @@ export function advance(
 /** One run's turn, held only while that run is advancing. */
 const inFlight = new Map<string, Promise<void>>();
 
+/**
+ * Bring one owner onto its own track after the run has provisioned (CO-722).
+ *
+ * Provisioning is the run's, and runs ONCE over the whole initiative; the
+ * machine couples `provisioned -> running + spawnGate 2` for the single owner
+ * that rode the provision. Every OTHER owner is started here: its state is set
+ * to `running` and its gate 2 opened, reusing the same row-before-spawn
+ * ordering `advance` uses. This is orchestration, not a new state rule -- the
+ * pure machine is untouched -- so it lives beside the driver rather than in it.
+ *
+ * Serialized on the run's queue like `advance`, so a fan-out and a gate report
+ * cannot interleave their writes.
+ */
+export function startOwnerGate(
+  runId: string,
+  repo: string,
+  target: ExecutorTarget,
+  deps: ExecutorDeps,
+): Promise<AdvanceResult> {
+  const queued = (inFlight.get(runId) ?? Promise.resolve()).then(() =>
+    startOwnerGateOnce(runId, repo, target, deps),
+  );
+  inFlight.set(runId, queued.then(() => undefined, () => undefined));
+  return queued;
+}
+
+async function startOwnerGateOnce(
+  runId: string,
+  repo: string,
+  target: ExecutorTarget,
+  deps: ExecutorDeps,
+): Promise<AdvanceResult> {
+  const result: AdvanceResult = {
+    state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null,
+  };
+  // Already on a track (a resumed run, a double pass): nothing to start.
+  if (runs.ownerState(runId, repo) !== null) return result;
+  runs.recordOwnerTransition(runId, repo, 'running', 'ownerStarted');
+  const decision = { actions: [{ kind: 'spawnGate' as const, gate: 2 as Gate }] };
+  const { actions, opened } = openGates(runId, repo, decision, target, result);
+  const performed = await execute(actions, target, deps);
+  recordLaunches(performed, opened);
+  collect(result, performed);
+  return result;
+}
+
 async function advanceOnce(
   runId: string,
   repo: string,
