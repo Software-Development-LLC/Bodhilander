@@ -41,6 +41,7 @@ const PATH_FIELDS: FieldSpec[] = [
 export const RunEngineSettings: React.FC = () => {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -63,11 +64,14 @@ export const RunEngineSettings: React.FC = () => {
   const save = useCallback(async (key: string) => {
     try {
       await window.electronAPI.setPreference(key, (values[key] ?? '').trim());
+      setFailed((f) => (f === key ? null : f));
       setSaved(key);
       window.setTimeout(() => setSaved((s) => (s === key ? null : s)), 1500);
     } catch {
-      // A failed save is not silent data loss: the field keeps the typed value,
-      // and the next blur retries. Nothing here is lost by not persisting once.
+      // The field keeps the typed value and the next blur retries, but a
+      // failed write is shown rather than left as a comment: a person who
+      // typed a path and moved on should see it did not stick.
+      setFailed(key);
     }
   }, [values]);
 
@@ -76,6 +80,7 @@ export const RunEngineSettings: React.FC = () => {
       <span className="run-engine-settings__label">
         {f.label}
         {saved === f.key && <span className="run-engine-settings__saved"> saved</span>}
+        {failed === f.key && <span className="run-engine-settings__failed" role="alert"> not saved</span>}
       </span>
       <input
         type="text"
@@ -103,6 +108,7 @@ export const RunEngineSettings: React.FC = () => {
         <span className="run-engine-settings__label">
           approvers
           {saved === RUN_ENGINE_PREF_KEYS.approvers && <span className="run-engine-settings__saved"> saved</span>}
+          {failed === RUN_ENGINE_PREF_KEYS.approvers && <span className="run-engine-settings__failed" role="alert"> not saved</span>}
         </span>
         <input
           type="text"

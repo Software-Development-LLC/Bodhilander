@@ -30,6 +30,11 @@
   color: var(--accent-positive, #4a4);
   font-size: 0.75rem;
 }
+.run-engine-settings__failed {
+  font-weight: 400;
+  color: var(--accent-negative, #d66);
+  font-size: 0.75rem;
+}
 .run-engine-settings__field input {
   padding: 0.4rem 0.5rem;
   border-radius: 6px;

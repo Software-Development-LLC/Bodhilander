@@ -124,7 +124,7 @@ export async function prepareInitiative(
   const initiativesRoot = config.initiativesRoot as string;
 
   const initArgv = [
-    `${harnessPath}/scripts/lib/init_task.py`,
+    path.join(harnessPath, 'scripts', 'lib', 'init_task.py'),
     request.issueId,
     request.repo,
     '--dir',
@@ -140,7 +140,9 @@ export async function prepareInitiative(
   }
 
   const initiativeDir = path.join(initiativesRoot, request.issueId);
-  const spawn = await io.run(config.pythonPath, [`${harnessPath}/scripts/lib/spawn.py`, initiativeDir], {
+  const spawn = await io.run(config.pythonPath, [path.join(harnessPath, 'scripts', 'lib', 'spawn.py'), initiativeDir], {
+    // Only BODHI_ROOT is named; runCommand merges it over the parent process
+    // env, so PATH, HOME and the rest still reach spawn.py and its git calls.
     env: { BODHI_ROOT: bodhiRoot },
   });
   if (spawn.code !== 0) {

@@ -86,10 +86,10 @@ describe('preparing an initiative', () => {
     expect(calls).toHaveLength(2);
     expect(calls[0].exe).toBe('python');
     expect(calls[0].argv).toEqual([
-      'C:/harness/scripts/lib/init_task.py', 'BDH-239', 'Bodhilander', '--dir', 'C:/work/initiatives', '--budget', '500',
+      path.join('C:/harness', 'scripts', 'lib', 'init_task.py'), 'BDH-239', 'Bodhilander', '--dir', 'C:/work/initiatives', '--budget', '500',
     ]);
     expect(calls[1].argv).toEqual([
-      'C:/harness/scripts/lib/spawn.py', path.join('C:/work/initiatives', 'BDH-239'),
+      path.join('C:/harness', 'scripts', 'lib', 'spawn.py'), path.join('C:/work/initiatives', 'BDH-239'),
     ]);
     // spawn.py reads the workspace from BODHI_ROOT.
     expect(calls[1].env).toEqual({ BODHI_ROOT: 'C:/work/repos' });

@@ -31,6 +31,12 @@ type Phase =
   | { kind: 'armed'; result: Extract<RunArmResult, { status: 'armed' }> }
   | { kind: 'error'; message: string };
 
+/** The action button's label for a phase; a plain lookup rather than a nested ternary. */
+function startLabel(phase: Phase): string {
+  if (phase.kind !== 'working') return 'Prepare & arm';
+  return phase.step === 'preparing' ? 'Preparing…' : 'Arming…';
+}
+
 export const RunPrepare: React.FC<RunPrepareProps> = ({ listRepos, prepare, arm, onArmed }) => {
   const [repos, setRepos] = useState<string[]>([]);
   const [issueId, setIssueId] = useState('');
@@ -46,11 +52,23 @@ export const RunPrepare: React.FC<RunPrepareProps> = ({ listRepos, prepare, arm,
   const busy = phase.kind === 'working';
 
   const start = useCallback(async () => {
+    // A typed-but-unparseable budget is a mistake to surface, not to drop: an
+    // empty field means "use the harness default", but "50o" means the person
+    // meant a number and got it wrong.
+    const budgetText = budget.trim();
+    let budgetUsd: number | undefined;
+    if (budgetText) {
+      const parsed = Number(budgetText);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setPhase({ kind: 'error', message: `"${budgetText}" is not a valid budget. Leave it blank for the harness default.` });
+        return;
+      }
+      budgetUsd = parsed;
+    }
     setPhase({ kind: 'working', step: 'preparing' });
     try {
       const runPrepare = prepare ?? window.electronAPI.prepareInitiative;
-      const budgetUsd = budget.trim() ? Number(budget.trim()) : undefined;
-      const prepared = await runPrepare(issueId.trim(), repo.trim(), Number.isNaN(budgetUsd as number) ? undefined : budgetUsd);
+      const prepared = await runPrepare(issueId.trim(), repo.trim(), budgetUsd);
       if (prepared.status === 'refused') {
         setPhase({ kind: 'refused', refusals: prepared.refusals, log: prepared.log });
         return;
@@ -103,7 +121,8 @@ export const RunPrepare: React.FC<RunPrepareProps> = ({ listRepos, prepare, arm,
         <label className="run-prepare__field run-prepare__field--budget">
           <span>Budget $ (optional)</span>
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             value={budget}
             placeholder="harness default"
             disabled={busy}
@@ -111,9 +130,7 @@ export const RunPrepare: React.FC<RunPrepareProps> = ({ listRepos, prepare, arm,
           />
         </label>
         <button type="button" className="run-prepare__start" disabled={!canStart} onClick={() => void start()}>
-          {phase.kind === 'working'
-            ? (phase.step === 'preparing' ? 'Preparing…' : 'Arming…')
-            : 'Prepare & arm'}
+          {startLabel(phase)}
         </button>
       </div>
 

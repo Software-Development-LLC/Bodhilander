@@ -84,7 +84,8 @@ export function harnessPath(): string | null {
 }
 
 export function bodhiRoot(): string | null {
-  return pref(K.bodhiRoot) ?? (process.env.BODHI_ROOT?.trim() || null);
+  const fromEnv = process.env.BODHI_ROOT?.trim();
+  return pref(K.bodhiRoot) ?? (fromEnv && fromEnv.length > 0 ? fromEnv : null);
 }
 
 export function initiativesRoot(): string | null {

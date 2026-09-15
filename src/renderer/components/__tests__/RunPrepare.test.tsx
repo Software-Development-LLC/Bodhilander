@@ -84,6 +84,22 @@ describe('preparing and arming a run from the app', () => {
     expect(button.disabled).toBe(false);
   });
 
+  test('a non-numeric budget is flagged, and prepare is never called', async () => {
+    let prepareCalled = false;
+    render(
+      <RunPrepare
+        listRepos={async () => ['Bodhilander']}
+        prepare={async () => { prepareCalled = true; return { status: 'prepared', initiativeDir: 'd', log: '' }; }}
+        arm={async () => ({ status: 'armed', runId: 'r', initiativeKey: 'K', owners: {} })}
+      />,
+    );
+    fill('BDH-1', 'Bodhilander');
+    fireEvent.change(screen.getByPlaceholderText('harness default'), { target: { value: '50o' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare & arm' }));
+    await screen.findByText(/not a valid budget/);
+    expect(prepareCalled).toBe(false);
+  });
+
   test('an IPC throw is shown, not swallowed', async () => {
     render(
       <RunPrepare listRepos={async () => []} prepare={async () => { throw new Error('the store is locked'); }} arm={async () => ({ status: 'armed', runId: 'r', initiativeKey: 'K', owners: {} })} />,
