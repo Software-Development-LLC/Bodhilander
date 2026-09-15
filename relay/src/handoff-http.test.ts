@@ -317,6 +317,28 @@ describe('rate limits', () => {
     for (let i = 0; i < 31; i++) last = (await meta(f, f.newMachine)).status;
     expect(last).toBe(429);
   });
+
+  test('but a restore that read its fill can still acknowledge', async () => {
+    const f = await fixture();
+    await put(f, f.oldMachine, sealHandoff(Buffer.from('a whole machine')).bytes);
+    const id = ((await (await meta(f, f.newMachine)).json()) as { handoff: { id: string } }).handoff.id;
+
+    // Polling for the offer is what spends the read bucket, and a long restore
+    // spends all of it before the bundle is safely down.
+    for (let i = 1; i < 30; i++) await meta(f, f.newMachine);
+    expect((await meta(f, f.newMachine)).status).toBe(429);
+
+    expect((await acknowledge(f, f.newMachine, id)).status).toBe(204);
+  });
+
+  test('acknowledging is bounded on its own', async () => {
+    const f = await fixture();
+    await put(f, f.oldMachine, sealHandoff(Buffer.from('a whole machine')).bytes);
+    const id = ((await (await meta(f, f.newMachine)).json()) as { handoff: { id: string } }).handoff.id;
+    let last = 204;
+    for (let i = 0; i < 11; i++) last = (await acknowledge(f, f.newMachine, id)).status;
+    expect(last).toBe(429);
+  });
 });
 
 /**

@@ -102,6 +102,8 @@ const HANDOFF_UPLOAD_PER_IP = 5;
 const HANDOFF_UPLOAD_PER_MACHINE = 5;
 /** Reading is cheap, but a restore may be retried after a mistyped phrase. */
 const HANDOFF_READ_PER_IP = 30;
+/** One acknowledgement ends a restore; the rest of these are retried replies. */
+const HANDOFF_DELETE_PER_IP = 10;
 
 /**
  * Ceilings on what an invite may ask for. The desktop offers far shorter
@@ -267,7 +269,7 @@ export function createRouter(ctx: RelayContext) {
         }
         if (method === 'DELETE' && !handoff.bundle) {
           return (
-            limited(req, peerIp, 'handoff-read', HANDOFF_READ_PER_IP) ??
+            limited(req, peerIp, 'handoff-delete', HANDOFF_DELETE_PER_IP) ??
             (await handleHandoffDelete(req, handoff.machineId))
           );
         }
