@@ -64,6 +64,10 @@ describe('build stamp', () => {
     expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '   ' }).config.commit).toBeNull();
   });
 
+  test('passes a -dirty suffix through, which is what the deploy docs promise', () => {
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d-dirty' }).config.commit).toBe('7d5cb5d-dirty');
+  });
+
   test('ignores the build arg name, which .env can reach and must not win', () => {
     // --env-file is applied over the image's ENV, so a RELAY_COMMIT left in
     // .env would outrank the baked stamp and date the relay wrongly.
