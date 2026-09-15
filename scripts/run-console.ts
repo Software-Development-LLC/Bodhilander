@@ -50,7 +50,7 @@ import { advance } from '../src/main/run-engine/driver';
 import { launchGate, rolesFromHarness } from '../src/main/run-engine/gate-launcher';
 import { gateBrief } from '../src/main/run-engine/gate-brief';
 import { readReceipt, receiptPathFor } from '../src/main/run-engine/gate-receipt';
-import { attend } from '../src/main/run-engine/gate-attention';
+import { attend, type SessionStatus } from '../src/main/run-engine/gate-attention';
 import { runCommand, processDeps } from '../src/main/run-engine/command-runner';
 import type { Gate, RunEvent } from '../src/main/run-engine/transitions';
 import {
@@ -430,14 +430,14 @@ async function watch(): Promise<void> {
   // is "no receipt yet", which is the normal state of a working gate, not an
   // error to crash on.
   const receipt = readReceipt(readIfPresent(receiptPath));
-  const alive = await sessionAlive(gate.bgSessionId);
+  const status = await sessionStatus(gate.bgSessionId);
   console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt})`);
   console.log(`  receipt ${receipt ? receipt.verdict : 'none'}  ${receiptPath}`);
-  console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  alive: ${alive === null ? 'unknown' : alive}`);
+  console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  status: ${status ?? 'unknown'}`);
 
-  // A row from before sessions were recorded cannot be pronounced dead: with
-  // no receipt and no way to check, the only honest move is to leave it.
-  const { event, note } = attend({ gate: gate.gate, agent: gate.agent, receipt, alive: alive ?? true });
+  const { event, note } = attend({
+    gate: gate.gate, agent: gate.agent, receipt, status, backgroundId: gate.bgSessionId,
+  });
   if (note) console.log(`  note    ${note}`);
   if (!event) {
     console.log('nothing to do; as far as can be seen, the gate is working');
@@ -457,20 +457,29 @@ function readIfPresent(file: string): string | null {
 }
 
 /**
- * Whether a background session is still running, per `claude agents`.
+ * What the daemon says a background session is doing, per `claude agents`.
  *
- * Null when it cannot be known: no id was recorded, or the CLI could not be
- * asked. The caller treats null as alive, because "gone" is a verdict about
- * the gate and must not be reached by failing to look.
+ * Measured vocabulary: `busy` while working, `waiting` when wedged on a
+ * prompt, `idle` once its turn is done; a stopped session is not listed and
+ * reads as `gone`. Null when it cannot be known -- no id recorded, or the CLI
+ * could not be asked -- and null is not gone: that is a verdict about the
+ * gate, and must not be reached by failing to look.
  */
-async function sessionAlive(bgSessionId: string | null): Promise<boolean | null> {
+async function sessionStatus(bgSessionId: string | null): Promise<SessionStatus | null> {
   if (!bgSessionId) return null;
   const result = await runCommand(env('BODHI_CLAUDE', 'claude'), ['agents', '--json'], { timeoutMs: 30_000 });
   if (result.code !== 0) return null;
   try {
     const parsed = JSON.parse(result.stdout) as unknown;
     const rows = Array.isArray(parsed) ? parsed : ((parsed as { agents?: unknown[] }).agents ?? []);
-    return rows.some((row) => (row as { id?: string }).id === bgSessionId);
+    const row = rows.find((r) => (r as { id?: string }).id === bgSessionId) as { status?: string } | undefined;
+    if (!row) return 'gone';
+    const status = row.status;
+    if (status === 'busy' || status === 'waiting' || status === 'idle') return status;
+    // A word the daemon has not shown us before. Not a reason to guess in
+    // either direction.
+    console.log(`  note    the daemon reports status ${JSON.stringify(status)}, which this console does not know`);
+    return null;
   } catch {
     return null;
   }
