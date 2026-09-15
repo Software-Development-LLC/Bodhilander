@@ -432,7 +432,11 @@ async function watch(): Promise<void> {
   // error to crash on.
   const receipt = readReceipt(readIfPresent(receiptPath));
   const seen = await sessionStatus(gate.bgSessionId);
-  const startedAtMs = Date.parse(`${gate.startedAt.replace(' ', 'T')}Z`);
+  // SQLite's CURRENT_TIMESTAMP is UTC without a zone marker. Said so once,
+  // here, and used twice below -- so the two cannot disagree about what
+  // zone the row was written in.
+  const startedAtIso = `${gate.startedAt.replace(' ', 'T')}Z`;
+  const startedAtMs = Date.parse(startedAtIso);
   // Half a clock is not a clock: an unreadable start time means the ceiling
   // cannot apply, and that is said rather than left as a NaN that quietly
   // never trips it.
@@ -454,9 +458,7 @@ async function watch(): Promise<void> {
     receipt,
     status: seen.status,
     backgroundId: gate.bgSessionId,
-    // SQLite's CURRENT_TIMESTAMP is UTC without a zone marker; said so here
-    // rather than parsed as local time and found to be five hours out.
-    startedAt: `${gate.startedAt.replace(' ', 'T')}Z`,
+    startedAt: startedAtIso,
     busyForMs,
     busyCeilingMs: GATE_BUSY_CEILING_MS,
   });

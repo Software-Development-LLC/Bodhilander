@@ -136,13 +136,45 @@ describe('a launched gate, looked at again', () => {
     expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
   });
 
-  test('SQLite’s timestamp and ISO 8601 are compared as instants, not text', () => {
-    // '2026-09-15 02:23:22' sorts AFTER '2026-09-15T00:19:00Z' as text only
-    // by accident of the space; the comparison must not depend on it.
+  test('the two timestamps are compared as instants, across zones and formats', () => {
+    // Review caught the first version of this test: it passed a bare SQLite
+    // timestamp with no zone, whose parse is implementation-defined, so the
+    // test's answer depended on the machine's clock. The console always
+    // stamps the row's time as UTC before calling attend, so that is the
+    // form attend is owed -- and the claim to pin is that two ISO instants
+    // in different zones compare by instant, not by their text.
+    //
+    // 02:23:22Z written as 22:23:22-04:00: text-wise it sorts BEFORE the
+    // receipt's "2026-09-15T00:19:00Z" by first character, instant-wise it
+    // is after it. A text comparison would call this receipt fresh.
+    const stale = attend({
+      ...BASE,
+      receipt: { verdict: 'pass', blocking: [], writtenAt: '2026-09-15T00:19:00Z' },
+      startedAt: '2026-09-14T22:23:22-04:00',
+      status: 'gone',
+    });
+    expect(stale.event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(stale.note).toContain('previous attempt');
+
+    // And the same instant written as UTC gives the same answer.
+    const same = attend({
+      ...BASE,
+      receipt: { verdict: 'pass', blocking: [], writtenAt: '2026-09-15T00:19:00Z' },
+      startedAt: '2026-09-15T02:23:22Z',
+      status: 'gone',
+    });
+    expect(same.event).toEqual(stale.event);
+  });
+
+  test('a start time that does not parse makes nothing stale, and says nothing false', () => {
+    // Half a clock is not a clock. The console guards this before calling
+    // attend, but attend must hold the line on its own: an unreadable start
+    // time must not be read as "the receipt is fine" for the wrong reason,
+    // nor as "the receipt is stale". It is simply not a comparison.
     const { event } = attend({
       ...BASE,
       receipt: { verdict: 'pass', blocking: [], writtenAt: '2026-09-15T02:28:00Z' },
-      startedAt: '2026-09-15 02:23:22',
+      startedAt: 'not a time',
       status: 'gone',
     });
     expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
