@@ -60,7 +60,9 @@ SQLite lives on the `relay-data` named volume at `/data/relay.db`.
 TLS is **not** handled by this stack. Terminate TLS at whatever already fronts
 the host — a cloud load balancer, an existing nginx, Caddy, Cloudflare, etc. —
 and proxy to the container's published port. When behind such a proxy set
-`TRUST_PROXY=true` so `X-Forwarded-*` headers are honored.
+`TRUST_PROXY=true` so `X-Forwarded-*` headers are honored — but only once the
+published port is unreachable except through that proxy, since `TRUST_PROXY`
+makes the rate limiter believe a header any direct caller can set.
 
 ## Production deployment (reference: Caddy + Docker)
 
@@ -101,13 +103,22 @@ deployment](#identifying-a-deployment)). The host directory is an rsync target
 rather than a checkout, so the value has to come from the machine you deploy
 from — nothing on the host can derive it.
 
-Binding to `127.0.0.1` keeps the plain-HTTP relay off the network — only the
-local Caddy reaches it. That is what makes `TRUST_PROXY=true` safe: with it on,
-the rate limiter buckets callers by the **rightmost** `X-Forwarded-For` entry,
-trusting that exactly one proxy — Caddy — sits in front. Publish the port on a
-routable address and anyone reaching it directly writes that entry themselves,
+Bind to `127.0.0.1` rather than a routable address, so only the local Caddy
+reaches the plain-HTTP relay. That is what makes `TRUST_PROXY=true` safe: with
+it on, the rate limiter buckets callers by the **rightmost** `X-Forwarded-For`
+entry, trusting that exactly one proxy — Caddy — sits in front. Publish the port
+somewhere callers can reach directly and they write that entry themselves,
 minting a fresh bucket per request and evading every limit, including the ones
 guarding link codes.
+
+**The live hosts do not currently honour that.** `docker inspect` during the
+last deploy reported the publish as `0.0.0.0:47393`. Whether anything off-host
+can actually reach it is unconfirmed — a direct probe timed out rather than
+being refused, which is what a firewall in front of a wide binding also looks
+like. Issue #313 tracks establishing the real binding and moving it; it needs
+SSH and is a deliberate host change, not something to fold into a deploy. Read
+the paragraph above as the binding this recipe requires, not as a description of
+what is running.
 
 **4. Caddy** — add a site block and reload (`systemctl reload caddy`):
 
