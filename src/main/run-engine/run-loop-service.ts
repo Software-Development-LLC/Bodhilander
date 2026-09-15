@@ -11,13 +11,15 @@
  * this starts a timer at app launch that does the same on its own, for every
  * active run, on the cadences the engine already declares.
  *
- * ## Configuration is the thing this slice actually adds
+ * ## Configuration
  *
- * The console read every setting from a `BODHI_*` variable. Those become
- * fields here, resolved once from the app: where `claude` and `gh` live, where
- * channels and prompt files are written (under `userData`, never the repo),
- * and where the permission broker ships (which differs dev vs packaged). Per
- * run, the harness, python and worktree come from the run's own rows.
+ * The console read every setting from a `BODHI_*` variable. The binaries and
+ * approvers now resolve through `machine-config` (preference -> env ->
+ * default), so Settings is the friendly source and the env still works. What
+ * stays here is app plumbing: where channels and prompt files are written
+ * (under `userData`, never the repo) and where the permission broker ships
+ * (which differs dev vs packaged). Per run, the harness, python and worktree
+ * come from the run's own rows.
  *
  * ## It never spawns or decides
  *
@@ -45,6 +47,9 @@ import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
 import type { PermissionRequest } from './permission-channel';
 import { armInitiative } from './arm-run';
 import { armRun, type IgnitionResult } from './ignition';
+import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
+import type { RunPrepareResult } from '../../shared/types';
+import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
 const TICK_MS = 15_000;
@@ -70,22 +75,10 @@ export function brokerPath(): string {
   return path.join(process.resourcesPath, 'app', 'dist', 'scripts', 'permission-broker.js');
 }
 
-/**
- * An environment override, or the default when it is unset OR empty.
- *
- * `BODHI_CLAUDE=` (set but blank) means "no override", not "the path is the
- * empty string" -- so a bare `??` would be wrong here (it keeps the blank) and
- * a bare `||` reads as a mistake. This says the intent once, in one place.
- */
-function envOr(name: string, fallback: string): string {
-  const value = process.env[name];
-  return value && value.length > 0 ? value : fallback;
-}
-
 /** The app-level spawn settings; per-run values come from the run's rows. */
 export function spawnConfig(userData: string): SpawnConfig {
   return {
-    claudePath: envOr('BODHI_CLAUDE', 'claude'),
+    claudePath: machine.claudePath(),
     promptFileDir: path.join(userData, 'run-engine', 'prompts'),
     permissionsRoot: permissionsRoot(userData),
     brokerPath: brokerPath(),
@@ -99,11 +92,6 @@ export function spawnConfig(userData: string): SpawnConfig {
  */
 export function permissionsRoot(userData: string): string {
   return path.join(userData, 'run-engine', 'permissions');
-}
-
-/** Approvers a review request goes to. Empty until configured; the engine refuses clearly then. */
-function approvers(): readonly string[] {
-  return envOr('BODHI_APPROVERS', '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 /** The real attention dependencies: read the receipt file, ask `claude agents`. */
@@ -158,7 +146,7 @@ function readIfPresent(p: string): string | null {
 async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow) {
   const owners = runsRepo.listOwners(run.id);
   const roles = await agentsForRun(run, owners);
-  const target = targetFor(run, owners, roles.agents, approvers());
+  const target = targetFor(run, owners, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
   const spawnGate = spawnGateFor(run, owners, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
   return { target, deps: { ...commands, spawnGate } };
@@ -186,7 +174,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
       const { target, deps } = await executorFor(config, ghPath, run);
       return advance(run.id, event, target, deps);
     },
-    approvers,
+    approvers: machine.approvers,
     log: (line) => log.info(`[RunLoop] ${line}`),
   };
 }
@@ -206,7 +194,40 @@ export function armInitiativeDir(initiativeDir: string): Promise<IgnitionResult>
     (request) => armRun(request, { run: (exe, argv) => runCommand(exe, argv, { timeoutMs: 60_000 }) }),
     // The same gh the loop is threaded with in startRunLoopService, so arming
     // checks the gh the loop will later drive with, not a different one.
-    { pythonPath: envOr('BODHI_PYTHON', 'python'), ghPath: envOr('BODHI_GH', 'gh') },
+    { pythonPath: machine.pythonPath(), ghPath: machine.ghPath() },
+  );
+}
+
+/** The repos the configured harness offers, for the prepare picker. Empty when unconfigured. */
+export function listHarnessRepos(): string[] {
+  const harness = machine.harnessPath();
+  if (!harness) return [];
+  const text = readIfPresent(path.join(harness, 'registry.yaml'));
+  return text ? reposFromRegistry(text) : [];
+}
+
+/**
+ * Prepare a single-repo initiative from the app: run the harness's bootstrap.
+ *
+ * Resolves the machine config the same way the loop does, runs `init_task.py`
+ * then `spawn.py`, and returns the armable directory or a fixable refusal. The
+ * timeout is the provisioning ceiling: cutting a worktree fetches a repo, which
+ * on a cold clone is minutes, not seconds.
+ */
+export function prepareInitiativeFromApp(
+  issueId: string,
+  repo: string,
+  budgetUsd?: number,
+): Promise<RunPrepareResult> {
+  return prepareInitiative(
+    { issueId, repo, budgetUsd },
+    { run: (exe, argv, opts) => runCommand(exe, argv, { timeoutMs: 15 * 60_000, env: opts.env }) },
+    {
+      pythonPath: machine.pythonPath(),
+      harnessPath: machine.harnessPath(),
+      bodhiRoot: machine.bodhiRoot(),
+      initiativesRoot: machine.initiativesRoot(),
+    },
   );
 }
 
@@ -235,7 +256,7 @@ export async function answerRunPermission(
   if (!wrote) return false;
   const run = runsRepo.getRun(runId);
   if (run && run.state === 'waitingPermission') {
-    const { target, deps } = await executorFor(spawnConfig(userData), envOr('BODHI_GH', 'gh'), run);
+    const { target, deps } = await executorFor(spawnConfig(userData), machine.ghPath(), run);
     await advance(runId, { kind: 'permissionAnswered' }, target, deps);
   }
   return true;
@@ -250,7 +271,7 @@ export function startRunLoopService(): RunLoop {
   const config = spawnConfig(userData);
   fs.mkdirSync(config.promptFileDir, { recursive: true });
   fs.mkdirSync(config.permissionsRoot, { recursive: true });
-  const loop = createRunLoop(loopDeps(config, envOr('BODHI_GH', 'gh')));
+  const loop = createRunLoop(loopDeps(config, machine.ghPath()));
   loop.start(TICK_MS);
   log.info(`[RunLoop] started; ticking every ${TICK_MS / 1000}s`);
   started = loop;

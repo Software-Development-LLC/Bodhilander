@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiServerStatus, ArrivalReport, HANDOFF_MAX_BYTES, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
+import { RunEngineSettings } from './RunEngineSettings';
 import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
 import { HandoffPreparePanel } from './MachineHandoff';
 import { ArrivalReportModal } from './ArrivalReport';
@@ -17,6 +18,7 @@ export type SettingsTab =
   | 'accounts'
   | 'mobile'
   | 'remoteHosting'
+  | 'runEngine'
   | 'updates';
 
 interface SettingsModalProps {
@@ -463,6 +465,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
               Claude Accounts
             </button>
             <button
+              className={navClass('runEngine')}
+              onClick={() => setActiveTab('runEngine')}
+            >
+              Run Engine
+            </button>
+            <button
               className={navClass('updates')}
               onClick={() => setActiveTab('updates')}
             >
@@ -818,6 +826,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
             )}
 
             {activeTab === 'remoteHosting' && <RemoteHostingSettings />}
+
+            {activeTab === 'runEngine' && <RunEngineSettings />}
 
             {activeTab === 'mobile' && (
               <div className="settings-section">

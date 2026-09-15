@@ -19,6 +19,7 @@ import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { RunInbox } from './components/RunInbox';
 import { RunArm } from './components/RunArm';
+import { RunPrepare } from './components/RunPrepare';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
 import { FailoverNotice } from './components/FailoverNotice';
 import { AccountSwitchNotice } from './components/AccountSwitchNotice';
@@ -1751,6 +1752,7 @@ const App: React.FC = () => {
         )}
         {contentView === 'runs' && (
           <>
+            <RunPrepare onArmed={() => setRunsRefresh((n) => n + 1)} />
             <RunArm onArmed={() => setRunsRefresh((n) => n + 1)} />
             <RunInbox key={runsRefresh} />
           </>

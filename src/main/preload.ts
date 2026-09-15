@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult, RunPrepareResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -188,6 +188,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('dialog:pickInitiative'),
   armRun: (initiativeDir: string): Promise<RunArmResult> =>
     ipcRenderer.invoke('db:runs:arm', initiativeDir),
+  listHarnessRepos: (): Promise<string[]> =>
+    ipcRenderer.invoke('db:runs:repos'),
+  prepareInitiative: (issueId: string, repo: string, budgetUsd?: number): Promise<RunPrepareResult> =>
+    ipcRenderer.invoke('db:runs:prepare', issueId, repo, budgetUsd),
 
   // Database - Groups
   getAllGroups: (): Promise<Group[]> =>

@@ -1,0 +1,77 @@
+/* Prepare & arm a run from the app (CO-722). */
+.run-prepare {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border, #333);
+}
+.run-prepare__form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: flex-end;
+}
+.run-prepare__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  opacity: 0.9;
+}
+.run-prepare__field input {
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border, #555);
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+}
+.run-prepare__field--budget input {
+  width: 8rem;
+}
+.run-prepare__start {
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--border, #555);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.run-prepare__start:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.run-prepare__error {
+  color: var(--accent-negative, #d66);
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+.run-prepare__armed,
+.run-prepare__refused {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+.run-prepare__armed ul,
+.run-prepare__refused ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+.run-prepare__refused .run-prepare__what {
+  display: block;
+  font-weight: 600;
+}
+.run-prepare__refused .run-prepare__fix {
+  display: block;
+  opacity: 0.8;
+}
+.run-prepare__log {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem;
+  max-height: 12rem;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -11,7 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
-import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir } from './run-engine/run-loop-service';
+import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp } from './run-engine/run-loop-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -895,6 +895,15 @@ safeHandle(
 // initiative and writing the run's rows -- armRun checks the machine first
 // and refuses with a list rather than writing a half-armed run.
 safeHandle('db:runs:arm', (initiativeDir: string) => armInitiativeDir(initiativeDir));
+
+// Prepare an initiative from the app (CO-722): run the harness's bootstrap
+// (init_task then spawn) so a person never drops to a terminal to start one.
+// The repo list feeds the picker; both refuse clearly when the machine config
+// is not yet set.
+safeHandle('db:runs:repos', () => listHarnessRepos());
+safeHandle('db:runs:prepare', (issueId: string, repo: string, budgetUsd?: number) =>
+  prepareInitiativeFromApp(issueId, repo, budgetUsd),
+);
 
 // The directory picker arming uses. A cancel returns null; the renderer
 // treats that as "changed my mind", not an error.
