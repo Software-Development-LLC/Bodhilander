@@ -107,10 +107,11 @@ export function readReceipt(text: string | null): ReceiptReading | null {
   const raw = typeof receipt.verdict === 'string' ? receipt.verdict.trim().toLowerCase() : '';
   if (!RECEIPT_VERDICTS.has(raw)) {
     if (raw) return inconclusive(`the receipt says "${raw}", which is not one of pass, fail, undriveable or skip`);
+    if (!present) return inconclusive('the receipt carries no verdict');
     return inconclusive(
-      present
-        ? `the receipt's verdict was ${typeof receipt.verdict}, not a word`
-        : 'the receipt carries no verdict',
+      typeof receipt.verdict === 'string'
+        ? 'the receipt carries an empty verdict'
+        : `the receipt's verdict was ${typeof receipt.verdict}, not a word`,
     );
   }
 

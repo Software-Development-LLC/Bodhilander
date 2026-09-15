@@ -425,7 +425,11 @@ async function watch(): Promise<void> {
     throw new Error(`the open row is for gate ${gate.gate}, which this engine does not know`);
   }
   const receiptPath = receiptPathFor(run.initiativeDir ?? '', gate.gate, gate.agent);
-  const receipt = readReceipt(fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : null);
+  // Read once, no existence check first: another process writes this file,
+  // and a check-then-read has a window in which it can vanish. A missing file
+  // is "no receipt yet", which is the normal state of a working gate, not an
+  // error to crash on.
+  const receipt = readReceipt(readIfPresent(receiptPath));
   const alive = await sessionAlive(gate.bgSessionId);
   console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt})`);
   console.log(`  receipt ${receipt ? receipt.verdict : 'none'}  ${receiptPath}`);
@@ -440,6 +444,16 @@ async function watch(): Promise<void> {
     return;
   }
   await driveEvent(runId, event);
+}
+
+/** The file's text, or null when there is no file. Anything else is thrown. */
+function readIfPresent(file: string): string | null {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
 }
 
 /**
