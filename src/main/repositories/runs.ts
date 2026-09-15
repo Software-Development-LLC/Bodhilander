@@ -401,6 +401,24 @@ export function startGate(input: StartGateInput): void {
  * run that was never attempted and one that was attempted and could not be
  * judged, and only the second means somebody should look at the harness.
  */
+/**
+ * Record which session a launched gate became.
+ *
+ * Known only after the spawn, because the launcher names the session and the
+ * row is opened before the launcher runs. Both ids are kept: `bg_session_id`
+ * is what `claude attach` and `claude agents` take, `claude_session_id` is
+ * what the transcript and the hook payload carry. A gate with neither
+ * recorded is a gate nothing can look at again -- which is #287 exactly.
+ */
+export function recordGateSession(
+  id: string,
+  session: { claudeSessionId: string; bgSessionId: string | null },
+): void {
+  getDatabase()
+    .prepare('UPDATE run_gates SET claude_session_id = ?, bg_session_id = ? WHERE id = ?')
+    .run(session.claudeSessionId, session.bgSessionId, id);
+}
+
 export function finishGate(id: string, status: string, verdict?: unknown): void {
   getDatabase()
     .prepare(

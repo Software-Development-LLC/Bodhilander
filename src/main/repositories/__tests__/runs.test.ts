@@ -356,3 +356,30 @@ describe('the inbox', () => {
     ]);
   });
 });
+
+describe('a launched gate remembers its session', () => {
+  test('both ids land on the row, and the row is still the active gate', () => {
+    // Known only after the spawn: the launcher names the session, and the row
+    // is opened before the launcher runs. A gate with neither id recorded is
+    // a gate nothing can look at again.
+    runs.createRun({ ...BASE, pythonPath: null, permissionPosture: 'manual', budgetUsd: null });
+    const runId = BASE.id;
+    runs.startGate({ id: 'g', runId, gate: 2, agent: 'bsa-lead', posture: 'manual' });
+    runs.recordGateSession('g', { claudeSessionId: '4601935b-6a81-4d84-9e0e-ecc0227b3d5f', bgSessionId: '4601935b' });
+    const gate = runs.activeGate(runId);
+    expect(gate).toMatchObject({
+      id: 'g',
+      status: 'running',
+      claudeSessionId: '4601935b-6a81-4d84-9e0e-ecc0227b3d5f',
+      bgSessionId: '4601935b',
+    });
+  });
+
+  test('a print gate has no background id, and null is recorded as null', () => {
+    runs.createRun({ ...BASE, pythonPath: null, permissionPosture: 'manual', budgetUsd: null });
+    const runId = BASE.id;
+    runs.startGate({ id: 'g', runId, gate: 3, agent: 'reviewer', posture: 'manual' });
+    runs.recordGateSession('g', { claudeSessionId: 's-print', bgSessionId: null });
+    expect(runs.activeGate(runId)).toMatchObject({ claudeSessionId: 's-print', bgSessionId: null });
+  });
+});

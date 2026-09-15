@@ -188,6 +188,7 @@ async function advanceOnce(
       // that stops a stale report from regressing the run reads that row.
       const actions = openGates(runId, decision, target, result);
       const performed = await execute(actions, target, deps);
+      recordLaunches(runId, performed);
       collect(result, performed);
       next.push(...performed.events);
     }
@@ -320,6 +321,7 @@ async function continueSequence(
   if (!following) return null;
   runs.finishGate(gate.id, 'done', { verdict: 'pass' });
   const performed = await execute([startStep(runId, event.gate, following, target)], target, deps);
+  recordLaunches(runId, performed);
   collect(result, performed);
   return performed.events;
 }
@@ -368,6 +370,23 @@ function stepAfter(
     return null;
   }
   return sequence[at + 1] ?? null;
+}
+
+/**
+ * Write down which session each launched gate became.
+ *
+ * The row was opened before the spawn and the launcher named the session
+ * during it, so this is the first moment both are known. A gate with no
+ * session recorded is a gate nothing can look at again -- the receipt can
+ * still be found by path, but whether the process is alive cannot.
+ */
+function recordLaunches(runId: string, performed: ExecutorResult): void {
+  for (const launch of performed.launched) {
+    const row = runs.activeGate(runId);
+    if (row && row.gate === launch.gate) {
+      runs.recordGateSession(row.id, { claudeSessionId: launch.sessionId, bgSessionId: launch.backgroundId });
+    }
+  }
 }
 
 function collect(result: AdvanceResult, performed: ExecutorResult): void {

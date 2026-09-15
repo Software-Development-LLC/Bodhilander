@@ -578,3 +578,36 @@ describe('a gate served by several roles in sequence', () => {
     expect(result.problems.some((p) => p.includes('auditor') && p.includes('verifier then scribe'))).toBe(true);
   });
 });
+
+describe('a launched gate is written down', () => {
+  test('the session it became lands on its row', async () => {
+    // `launched` produces no event -- the verdict comes later, by receipt --
+    // so this is the only record that the gate exists as a session at all. A
+    // row with no session is a gate nothing can look at again.
+    const id = seed('provisioning');
+    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+      spawnGate: async () => ({
+        status: 'launched', backgroundId: 'abcd1234', sessionId: 'abcd1234-0000-0000-0000-000000000000', durationMs: 1,
+      }),
+    }));
+    expect(runs.activeGate(id)).toMatchObject({
+      gate: 2,
+      agent: 'bsa-lead',
+      claudeSessionId: 'abcd1234-0000-0000-0000-000000000000',
+      bgSessionId: 'abcd1234',
+    });
+  });
+
+  test('a print gate that completed leaves the session columns alone', async () => {
+    // Nothing to attach to: the verdict already arrived, and the row is
+    // closed by the machine accepting it.
+    const id = seed('provisioning');
+    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+      spawnGate: async () => ({
+        status: 'completed', structuredOutput: { verdict: 'pass', summary: 'ok' }, sessionId: 's', costUsd: null, durationMs: 1,
+      }),
+    }));
+    const rows = runs.listGates(id).filter((g) => g.gate === 2);
+    expect(rows[0]).toMatchObject({ status: 'done', claudeSessionId: null, bgSessionId: null });
+  });
+});

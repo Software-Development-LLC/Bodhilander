@@ -109,8 +109,24 @@ export interface ExecutorTarget {
   pythonPath: string;
 }
 
+/** A gate that started in the background, and the session it became. */
+export interface LaunchedGate {
+  gate: Gate;
+  sessionId: string;
+  backgroundId: string;
+}
+
 export interface ExecutorResult {
   events: RunEvent[];
+  /**
+   * Background gates that launched during these actions.
+   *
+   * `launched` produces no event -- the verdict comes later, by receipt --
+   * but the session it became must be written down, or nothing can look at
+   * the gate again (#287). Reported here rather than recorded here because
+   * this module writes no state; the driver owns the rows.
+   */
+  launched: LaunchedGate[];
   /** Retryable. The run stays put and the next attention pass tries again. */
   problems: string[];
   /** Reasons a person should be told, in the order they were produced. */
@@ -237,6 +253,9 @@ async function performAction(
       const outcome = await deps.spawnGate(action.gate, action.agent);
       const event = gateEvent(action.gate, outcome);
       if (event) result.events.push(event);
+      if (outcome.status === 'launched') {
+        result.launched.push({ gate: action.gate, sessionId: outcome.sessionId, backgroundId: outcome.backgroundId });
+      }
       if (outcome.status !== 'undriveable') return null;
       result.notifications.push(outcome.reason);
       return `gate ${action.gate} could not be driven`;
@@ -281,6 +300,7 @@ export async function execute(
 ): Promise<ExecutorResult> {
   const result: ExecutorResult = {
     events: [],
+    launched: [],
     problems: [],
     notifications: [],
     released: false,
