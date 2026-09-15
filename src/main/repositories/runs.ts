@@ -354,6 +354,12 @@ export interface StartGateInput {
 /**
  * Record a gate as running, and say which attempt this is.
  *
+ * Counted per ROLE, not per gate. Gate 4 is the verifier and then the
+ * scribe, and the scribe following a green verifier is not the gate's second
+ * attempt -- it is the same attempt's second half. Counting per gate would
+ * make every sequence read as a retry loop, which is the one thing the
+ * column exists to make visible.
+ *
  * The attempt number is counted here rather than passed in, because the
  * caller that spawns a gate is not the one that remembers how many times it
  * already has — and a retry recorded as attempt 1 makes a loop look like a
@@ -370,7 +376,7 @@ export function startGate(input: StartGateInput): void {
       `INSERT INTO run_gates (id, run_id, gate, agent, attempt, bg_session_id,
                               claude_session_id, status, posture)
        SELECT ?, ?, ?, ?,
-              (SELECT COUNT(*) + 1 FROM run_gates WHERE run_id = ? AND gate = ?),
+              (SELECT COUNT(*) + 1 FROM run_gates WHERE run_id = ? AND gate = ? AND agent = ?),
               ?, ?, 'running', ?`,
     )
     .run(
@@ -380,6 +386,7 @@ export function startGate(input: StartGateInput): void {
       input.agent,
       input.runId,
       input.gate,
+      input.agent,
       input.bgSessionId ?? null,
       input.claudeSessionId ?? null,
       input.posture,

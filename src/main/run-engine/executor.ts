@@ -50,9 +50,29 @@ export interface ExecutorDeps {
    * process that would have printed it had been killed.
    */
   provision(argv: readonly string[]): Promise<CommandResult>;
-  /** Launch one gate. The launcher owns agent resolution; this owns what it meant. */
-  spawnGate(gate: Gate): Promise<GateOutcome>;
+  /**
+   * Launch one gate as one role. The launcher owns resolving the role to an
+   * agent file; this owns what the outcome meant.
+   *
+   * The role is named by the caller because a gate can be served by several
+   * in sequence -- gate 4 is verifier and then scribe -- and WHICH of them
+   * is running is a fact the driver holds and this module must not guess at.
+   */
+  spawnGate(gate: Gate, agent: string): Promise<GateOutcome>;
 }
+
+/**
+ * A decision's actions, with every spawn resolved to the role that serves it.
+ *
+ * The machine says `spawnGate 4`; it does not know who serves gate 4 and must
+ * not. The driver knows -- it opened the `run_gates` row -- and hands this
+ * module an action that says so, rather than this module reaching into
+ * `target.agents` and picking, which would put the sequencing decision in
+ * two places.
+ */
+export type ResolvedAction =
+  | Exclude<RunAction, { kind: 'spawnGate' }>
+  | { kind: 'spawnGate'; gate: Gate; agent: string };
 
 export interface ExecutorTarget {
   /** `owner/name`, as `gh --repo` takes it. Null before a PR exists. */
@@ -70,8 +90,13 @@ export interface ExecutorTarget {
    * engine must not hold that mapping — and a gate with no role recorded is
    * refused rather than launched under a placeholder, because the column
    * exists precisely so somebody can tell afterwards who ran.
+   *
+   * A LIST, in run order, because a gate can be a sequence: gate 4 is the
+   * verifier and then the scribe, and both run. Most gates are one role, and
+   * a one-element list says so without a second shape for the common case.
+   * The order is the harness's (`gate_order:`), read and never decided here.
    */
-  agents: Partial<Record<Gate, string>>;
+  agents: Partial<Record<Gate, readonly string[]>>;
   /**
    * How this run answers permission prompts.
    *
@@ -191,7 +216,7 @@ async function provision(
  * things, which is what Sonar counted.
  */
 async function performAction(
-  action: RunAction,
+  action: ResolvedAction,
   target: ExecutorTarget,
   deps: ExecutorDeps,
   result: ExecutorResult,
@@ -209,7 +234,7 @@ async function performAction(
       return result.events.length === before ? 'the review was not requested' : null;
     }
     case 'spawnGate': {
-      const outcome = await deps.spawnGate(action.gate);
+      const outcome = await deps.spawnGate(action.gate, action.agent);
       const event = gateEvent(action.gate, outcome);
       if (event) result.events.push(event);
       if (outcome.status !== 'undriveable') return null;
@@ -250,7 +275,7 @@ async function performAction(
  * engine attending to the one run that most needs attending to.
  */
 export async function execute(
-  actions: readonly RunAction[],
+  actions: readonly ResolvedAction[],
   target: ExecutorTarget,
   deps: ExecutorDeps,
 ): Promise<ExecutorResult> {

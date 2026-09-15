@@ -26,7 +26,7 @@ const TARGET: ExecutorTarget = {
   initiativePath: 'C:/work/initiatives/CO-722',
   harnessPath: '/plugins/bodhi',
   pythonPath: 'C:/py/python.exe',
-  agents: { 2: 'bsa-lead', 3: 'reviewer', 4: 'verifier' },
+  agents: { 2: ['bsa-lead'], 3: ['reviewer'], 4: ['verifier', 'scribe'] },
   posture: 'manual',
 };
 
@@ -58,8 +58,8 @@ function fake(options: FakeOptions = {}) {
       calls.push({ kind: 'provision', argv: [...argv] });
       return options.provision ?? OK;
     },
-    spawnGate: async (gate) => {
-      calls.push({ kind: `spawnGate:${gate}` });
+    spawnGate: async (gate, agent) => {
+      calls.push({ kind: `spawnGate:${gate}`, argv: [agent] });
       return (
         options.gate ?? { status: 'launched', backgroundId: '11111111', sessionId: 'x', durationMs: 1 }
       );
@@ -162,7 +162,7 @@ describe('spawning a gate', () => {
     // Its verdict arrives later in a receipt. An event here would be a
     // verdict recorded before the gate did the work.
     const { deps } = fake();
-    const result = await execute([{ kind: 'spawnGate', gate: 2 }], TARGET, deps);
+    const result = await execute([{ kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }], TARGET, deps);
     expect(result.events).toEqual([]);
   });
 
@@ -170,7 +170,7 @@ describe('spawning a gate', () => {
     const { deps } = fake({
       gate: { status: 'undriveable', reason: 'the gate did not finish', detail: null, durationMs: 1 },
     });
-    const result = await execute([{ kind: 'spawnGate', gate: 3 }], TARGET, deps);
+    const result = await execute([{ kind: 'spawnGate', gate: 3, agent: 'reviewer' }], TARGET, deps);
     expect(result.events).toEqual([{ kind: 'gateFinished', gate: 3, verdict: 'inconclusive' }]);
     expect(result.notifications[0]).toContain('did not finish');
   });
@@ -238,13 +238,25 @@ describe('the actions that are not calls', () => {
   });
 });
 
+describe('who a spawn runs as', () => {
+  test('the role on the action is the role that is launched', async () => {
+    // The machine says `spawnGate 4`; the driver says WHICH of gate 4's roles.
+    // This module must pass that through rather than reach into
+    // `target.agents` and pick, or the sequencing decision lives in two
+    // places and the second one wins silently.
+    const { deps, calls } = fake();
+    await execute([{ kind: 'spawnGate', gate: 4, agent: 'scribe' }], TARGET, deps);
+    expect(calls).toEqual([{ kind: 'spawnGate:4', argv: ['scribe'] }]);
+  });
+});
+
 describe('order', () => {
   test('actions run in the order the decision gave them', async () => {
     // A decision that provisions and then spawns means the install happens
     // first. Running them concurrently starts an owner in a worktree with no
     // dependencies — the exact failure verify.sh now reports as undriveable.
     const { deps, calls } = fake();
-    await execute([{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }], TARGET, deps);
+    await execute([{ kind: 'provision' }, { kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }], TARGET, deps);
     expect(calls.map((c) => c.kind)).toEqual(['provision', 'spawnGate:2']);
   });
 
@@ -256,7 +268,7 @@ describe('order', () => {
     // than by a person.
     const { deps, calls } = fake({ provision: { code: 1, stdout: 'yarn install failed', stderr: '' } });
     const result = await execute(
-      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }],
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }],
       TARGET,
       deps,
     );
@@ -267,7 +279,7 @@ describe('order', () => {
 
   test('an undriveable install stops the decision too', async () => {
     const { deps, calls } = fake({ provision: { code: 2, stdout: 'yarn is not on PATH', stderr: '' } });
-    await execute([{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }], TARGET, deps);
+    await execute([{ kind: 'provision' }, { kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }], TARGET, deps);
     expect(calls.map((c) => c.kind)).toEqual(['provision']);
   });
 
@@ -277,7 +289,7 @@ describe('order', () => {
     // bug -- no failure event to notice, and a gate launched regardless.
     const { deps, calls } = fake();
     await execute(
-      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }],
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }],
       { ...TARGET, initiativePath: null },
       deps,
     );
@@ -317,7 +329,7 @@ describe('order', () => {
       throw new Error('gate command is 31000 characters of argv');
     };
     const result = await execute(
-      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }],
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }],
       TARGET,
       deps,
     );
@@ -330,7 +342,7 @@ describe('order', () => {
     // action, which is a quieter failure than the one being fixed.
     const { deps, calls } = fake();
     const result = await execute(
-      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2 }, { kind: 'notify', reason: 'x' }],
+      [{ kind: 'provision' }, { kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }, { kind: 'notify', reason: 'x' }],
       TARGET,
       deps,
     );

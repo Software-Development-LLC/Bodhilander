@@ -29,7 +29,13 @@
  */
 import type { Gate, RunAction, RunEvent, RunState } from './transitions';
 import { transition } from './transitions';
-import { execute, type ExecutorDeps, type ExecutorTarget, type ExecutorResult } from './executor';
+import {
+  execute,
+  type ExecutorDeps,
+  type ExecutorResult,
+  type ExecutorTarget,
+  type ResolvedAction,
+} from './executor';
 import { randomUUID } from 'crypto';
 import * as runs from '../repositories/runs';
 
@@ -163,6 +169,25 @@ async function advanceOnce(
         return result;
       }
       const gate = runs.activeGate(runId);
+
+      // A step passing is not the gate passing. Gate 4 is the verifier and
+      // then the scribe; when the verifier's report arrives the gate is half
+      // done, and telling the machine `gateFinished` here would send the run
+      // to waitingChecks with no PR open. So the driver closes the step,
+      // opens the next, and says nothing to the machine until the LAST role
+      // reports. A failure at any step goes straight through: red is red
+      // whoever found it, and the machine already knows what red means.
+      if (event.kind === 'gateFinished' && event.verdict === 'pass' && gate?.gate === event.gate) {
+        const following = stepAfter(target.agents[event.gate], gate.agent, result, event.gate);
+        if (following) {
+          runs.finishGate(gate.id, 'done', { verdict: 'pass' });
+          const performed = await execute([startStep(runId, event.gate, following, target)], target, deps);
+          collect(result, performed);
+          next.push(...performed.events);
+          continue;
+        }
+      }
+
       const decision = transition(run.state, event, { activeGate: asGate(gate?.gate) });
       result.state = decision.state;
 
@@ -230,26 +255,72 @@ function openGates(
   decision: { actions: readonly RunAction[] },
   target: ExecutorTarget,
   result: AdvanceResult,
-): RunAction[] {
-  const allowed: RunAction[] = [];
+): ResolvedAction[] {
+  const allowed: ResolvedAction[] = [];
   for (const action of decision.actions) {
     if (action.kind !== 'spawnGate') {
       allowed.push(action);
       continue;
     }
-    const agent = target.agents[action.gate];
-    if (!agent) {
+    // The machine names the gate; the run's roles say who serves it, and a
+    // sequence starts at its first role. Later steps are opened by
+    // `stepAfter`, on the previous step's report -- never here.
+    const first = target.agents[action.gate]?.[0];
+    if (!first) {
       result.problems.push(
         `gate ${action.gate} has no role recorded for this run, so it was not started`,
       );
       continue;
     }
-    runs.startGate({
-      id: randomUUID(), runId, gate: action.gate, agent, posture: target.posture,
-    });
-    allowed.push(action);
+    allowed.push(startStep(runId, action.gate, first, target));
   }
   return allowed;
+}
+
+/**
+ * Open the row for one role's turn at a gate, and return the spawn that runs it.
+ *
+ * The row exists before the spawn for the reason `openGates` gives: the
+ * guard that stops a stale report from regressing the run reads this table,
+ * and a role that runs before its row appears has its own report rejected.
+ */
+function startStep(
+  runId: string,
+  gate: Gate,
+  agent: string,
+  target: ExecutorTarget,
+): ResolvedAction {
+  runs.startGate({ id: randomUUID(), runId, gate, agent, posture: target.posture });
+  return { kind: 'spawnGate', gate, agent };
+}
+
+/**
+ * The role that runs next in this gate, or null when the one that just
+ * reported was the last.
+ *
+ * Null ALSO when the reporting role is not in the sequence at all -- a run
+ * armed under one harness and advanced under another, or a row somebody
+ * edited. There is no correct next step from an unknown position, so the
+ * report is handed to the machine as the gate's, which is what every gate
+ * did before sequences existed, and the mismatch is said out loud rather
+ * than absorbed.
+ */
+function stepAfter(
+  sequence: readonly string[] | undefined,
+  reporting: string,
+  result: AdvanceResult,
+  gate: Gate,
+): string | null {
+  if (!sequence) return null;
+  const at = sequence.indexOf(reporting);
+  if (at < 0) {
+    result.problems.push(
+      `gate ${gate} was reported by ${reporting}, which is not in this run's sequence ` +
+        `(${sequence.join(' then ')}); treated as the gate's own report`,
+    );
+    return null;
+  }
+  return sequence[at + 1] ?? null;
 }
 
 function collect(result: AdvanceResult, performed: ExecutorResult): void {
