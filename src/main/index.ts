@@ -11,6 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
+import { startRunLoopService, stopRunLoopService } from './run-engine/run-loop-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -1540,6 +1541,17 @@ function getLocalAddresses(): string[] {
 
 app.whenReady().then(() => {
   createWindow();
+  // The run engine drives itself from here: a timer that advances every
+  // active run on its cadence, so no one has to type step/watch/answer. It
+  // spawns nothing on its own -- only runs that were armed -- and never
+  // answers a permission prompt, which is the inbox's job (CO-722).
+  try {
+    startRunLoopService();
+  } catch (error) {
+    // A loop that fails to start must not take the app down with it: the app
+    // is a session manager first, and the engine ships behind it.
+    log.error('[Main] Failed to start the run loop:', error);
+  }
 }).catch((error) => {
   log.error('[Main] Failed to initialize app:', error);
 });
@@ -1679,6 +1691,7 @@ app.on('before-quit', (event) => {
       } catch (e) {
         log.error('Error stopping relay client on quit:', e);
       }
+      stopRunLoopService();
       closeDatabase();
     },
   });
