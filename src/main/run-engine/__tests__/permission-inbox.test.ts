@@ -37,6 +37,15 @@ describe('which channel a run’s gate uses', () => {
   test('no gate in flight is no channel', () => {
     expect(channelDirForGate(ROOT, 'run-1', null)).toBeNull();
   });
+
+  test('two owners at the same gate get different channels (multi-owner)', () => {
+    // repo-a and repo-b both at gate 4 (verifier); without the repo in the key
+    // they would share one channel and a person's answer could reach the wrong
+    // owner. The dirs must differ.
+    const a = { ...GATE, repo: 'repo-a' };
+    const b = { ...GATE, repo: 'repo-b' };
+    expect(channelDirForGate(ROOT, 'run-1', a)).not.toBe(channelDirForGate(ROOT, 'run-1', b));
+  });
 });
 
 describe('what a run is waiting for permission on', () => {

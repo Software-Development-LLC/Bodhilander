@@ -179,11 +179,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:runs:permissions', runId),
   answerRunPermission: (
     runId: string,
+    repo: string,
     toolUseId: string,
     verdict: 'allow' | 'deny',
     message: string,
   ): Promise<boolean> =>
-    ipcRenderer.invoke('db:runs:permissions:answer', runId, toolUseId, verdict, message),
+    ipcRenderer.invoke('db:runs:permissions:answer', runId, repo, toolUseId, verdict, message),
   pickInitiativeDir: (): Promise<string | null> =>
     ipcRenderer.invoke('dialog:pickInitiative'),
   armRun: (initiativeDir: string): Promise<RunArmResult> =>

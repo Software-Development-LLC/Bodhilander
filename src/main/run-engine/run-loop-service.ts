@@ -44,11 +44,10 @@ import { reconcileOnce } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
 import { pendingRequests, writeDecision, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
-import type { PermissionRequest } from './permission-channel';
 import { armInitiative } from './arm-run';
 import { armRun, type IgnitionResult } from './ignition';
 import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
-import type { RunPrepareResult } from '../../shared/types';
+import type { RunPrepareResult, RunPermissionRequest } from '../../shared/types';
 import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
@@ -231,38 +230,53 @@ export function prepareInitiativeFromApp(
   );
 }
 
-/** The pending permission requests for a run's gate in flight, for the inbox. */
-export function listRunPermissions(userData: string, runId: string): PermissionRequest[] {
-  const gate = runsRepo.activeGate(runId);
-  return pendingRequests(permissionsRoot(userData), runId, gate, channelIo);
+/**
+ * The pending permission requests across every owner of a run, each tagged with
+ * its repo (CO-722 multi-owner).
+ *
+ * A run can have several gates in flight -- one per owner -- and two owners at
+ * gate 4 both run the verifier, so a request has to say WHICH repo it belongs
+ * to or a person answering could unblock the wrong one. Each owner's channel is
+ * read by its own active gate.
+ */
+export function listRunPermissions(userData: string, runId: string): RunPermissionRequest[] {
+  const root = permissionsRoot(userData);
+  const out: RunPermissionRequest[] = [];
+  for (const owner of runsRepo.listOwners(runId)) {
+    const gate = runsRepo.activeGate(runId, owner.repo);
+    for (const req of pendingRequests(root, runId, gate, channelIo)) {
+      out.push({ ...req, repo: owner.repo });
+    }
+  }
+  return out;
 }
 
 /**
- * Carry a person's decision to a request, and return the run to running.
+ * Carry a person's decision to one owner's request, and drive that owner again.
  *
- * Writes the reply the hook is polling for, then -- if the run had been moved
- * to waitingPermission -- applies `permissionAnswered` so the loop drives it
- * again. Returns whether the request was still there to answer.
+ * Writes the reply the hook is polling for into THAT repo's channel, then -- if
+ * that owner had stopped on waitingPermission -- applies `permissionAnswered`
+ * to its track so the loop drives it again. Returns whether the request was
+ * still there to answer. Named by repo, so answering one owner never touches
+ * another's gate.
  */
 export async function answerRunPermission(
   userData: string,
   runId: string,
+  repo: string,
   toolUseId: string,
   verdict: 'allow' | 'deny',
   message: string,
 ): Promise<boolean> {
-  const gate = runsRepo.activeGate(runId);
+  const gate = runsRepo.activeGate(runId, repo);
   const wrote = writeDecision(permissionsRoot(userData), runId, gate, toolUseId, verdict, message, channelIo);
   if (!wrote) return false;
   const run = runsRepo.getRun(runId);
-  if (run && run.state === 'waitingPermission') {
-    // Single-owner still: the run's first owner (the permission channel becomes
-    // per-owner in a later slice, alongside the inbox).
-    const owner = runsRepo.listOwners(runId)[0];
-    if (owner) {
-      const { target, deps } = await executorFor(spawnConfig(userData), machine.ghPath(), run, owner);
-      await advance(runId, owner.repo, { kind: 'permissionAnswered' }, target, deps);
-    }
+  const owner = runsRepo.listOwners(runId).find((o) => o.repo === repo);
+  // The OWNER's state, not the run's rollup: this repo is the one that stopped.
+  if (run && owner && runsRepo.ownerState(runId, repo) === 'waitingPermission') {
+    const { target, deps } = await executorFor(spawnConfig(userData), machine.ghPath(), run, owner);
+    await advance(runId, repo, { kind: 'permissionAnswered' }, target, deps);
   }
   return true;
 }

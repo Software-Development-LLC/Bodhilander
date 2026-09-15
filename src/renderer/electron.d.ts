@@ -57,7 +57,7 @@ interface ElectronAPI {
   // that starts, stops or advances a run.
   getRunInbox: () => Promise<RunInboxRow[]>;
   getRunPermissions: (runId: string) => Promise<RunPermissionRequest[]>;
-  answerRunPermission: (runId: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) => Promise<boolean>;
+  answerRunPermission: (runId: string, repo: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) => Promise<boolean>;
   pickInitiativeDir: () => Promise<string | null>;
   armRun: (initiativeDir: string) => Promise<RunArmResult>;
   listHarnessRepos: () => Promise<string[]>;
