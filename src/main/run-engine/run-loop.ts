@@ -110,7 +110,12 @@ export function schedulingState(
 ): RunState {
   const movable = ownerStates.filter((s): s is RunState => s !== null && isMovable(s));
   if (movable.length === 0) return fallback;
-  return movable.reduce((best, s) => ((baseIntervalFor(s) ?? Infinity) < (baseIntervalFor(best) ?? Infinity) ? s : best));
+  // Seeded with the first movable state (the array is non-empty here), so the
+  // reduce has an initial value rather than leaning on there being one.
+  return movable.reduce(
+    (best, s) => ((baseIntervalFor(s) ?? Infinity) < (baseIntervalFor(best) ?? Infinity) ? s : best),
+    movable[0],
+  );
 }
 
 export interface RunLoop {
@@ -239,6 +244,14 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
    * the run's cadence backs off. A run due because one owner is movable, whose
    * only movable owner turns out to be waiting on a person, is not a failure --
    * so a pass that drove nobody is `true`, not a backoff.
+   *
+   * The run ticks at its FASTEST owner's cadence (`schedulingState`), and every
+   * movable owner is driven on each tick -- so a slow owner (a `waitingReview`
+   * at 5m) is reconciled at the run's faster interval (a gate-2 sibling's 60s).
+   * Accepted, not overlooked: a reconcile is one `gh` read, the over-polling is
+   * bounded by the number of repos in one initiative, and a run stops being due
+   * the moment its fast owners settle. Per-owner throttling (a `lastPassAt` per
+   * track) is a later refinement, not a correctness fix.
    */
   async function passOne(run: RunRow, report: TickReport): Promise<boolean> {
     const owners = deps.listOwners(run.id);

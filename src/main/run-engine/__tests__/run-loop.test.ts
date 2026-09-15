@@ -317,6 +317,31 @@ describe('driving a run with several owners (multi-owner)', () => {
     expect(f.calls.some((c) => c.includes('this slice drives one repo'))).toBe(false);
   });
 
+  test('one owner’s reconcile problem does not stop the other owner reconciling', async () => {
+    // The ok = (await ...) && ok aggregation must not short-circuit: repo-a's
+    // gh failing is repo-a's failure, and repo-b's PR is still reconciled.
+    const seen: string[] = [];
+    const f = fake({
+      runs: [run('r1', 'waitingChecks')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'repo-a', state: 'waitingChecks', prNumber: 1, prUrl: 'https://github.com/o/a/pull/1' }),
+          owner('r1', { repo: 'repo-b', state: 'waitingChecks', prNumber: 2, prUrl: 'https://github.com/o/b/pull/2' }),
+        ],
+      },
+      reconcile: async (_r, t) => {
+        seen.push(t.repo);
+        return t.repo === 'o/a' ? { events: [], problems: ['gh could not read o/a#1'] } : { events: [], problems: [] };
+      },
+    });
+    const loop = createRunLoop(f.deps);
+    const report = await loop.tick();
+    // Both reconciled despite repo-a failing; the run's pass counts a failure.
+    expect(seen).toEqual(expect.arrayContaining(['o/a', 'o/b']));
+    expect(report.problems.some((p) => p.problem.includes('o/a#1'))).toBe(true);
+    expect(loop.schedule().get('r1')?.failures).toBe(1);
+  });
+
   test('a stuck owner does not stop the run being scheduled or the others moving', async () => {
     // THE STARVATION REGRESSION. The rollup is a person-state (inconclusive
     // outranks running), which has a null interval -- so if the loop scheduled
