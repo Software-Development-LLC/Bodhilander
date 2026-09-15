@@ -17,6 +17,8 @@ import {
   MAX_INTERVAL_MS,
   REVIEW_INTERVAL_MS,
   baseIntervalFor,
+  GATE_BUSY_CEILING_MS,
+  GATE_INTERVAL_MS,
   delayUntil,
   dueRuns,
   intervalFor,
@@ -64,11 +66,30 @@ describe('what is deliberately not polled', () => {
     }
   });
 
-  test('a run waiting on a process is not polled', () => {
-    // The process exits and says so. Asking GitHub about it answers nothing.
-    for (const state of ['running', 'preparing', 'provisioning'] as RunState[]) {
+  test('a run preparing or provisioning is not polled', () => {
+    // Those ARE processes that exit and say so: provision.py returns, and the
+    // driver applies what it returned in the same call.
+    for (const state of ['preparing', 'provisioning'] as RunState[]) {
       expect(baseIntervalFor(state)).toBeNull();
     }
+  });
+
+  test('a running gate IS looked at, because a background gate cannot say so', () => {
+    // This test used to assert the opposite -- "the process exits and says
+    // so" -- and that was true of a print gate and wrong of a --bg one. The
+    // first real run said `gate 2 running` for hours after the process was
+    // gone, because nothing ever looked (#287).
+    expect(baseIntervalFor('running')).toBe(GATE_INTERVAL_MS);
+  });
+
+  test('the busy ceiling is sized for a thorough gate, not a quick one', () => {
+    // The reviewer killed at fifteen minutes was mid-mutation-test and right
+    // to be; today's scribe ran thirty-five. A ceiling a thorough gate can
+    // hit is a ceiling that will lie.
+    expect(GATE_BUSY_CEILING_MS).toBeGreaterThanOrEqual(60 * 60 * 1000);
+    // And it is a ceiling on the gate, so it must be far coarser than the
+    // cadence that looks at it.
+    expect(GATE_BUSY_CEILING_MS).toBeGreaterThan(10 * GATE_INTERVAL_MS);
   });
 
   test('a run waiting on nothing external is still not polled', () => {

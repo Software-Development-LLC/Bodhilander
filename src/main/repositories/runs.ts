@@ -339,6 +339,8 @@ export interface RunGateRow {
   status: string;
   verdictJson: string | null;
   posture: PermissionPosture;
+  /** SQLite's CURRENT_TIMESTAMP at open: UTC, `YYYY-MM-DD HH:MM:SS`. */
+  startedAt: string;
 }
 
 export interface StartGateInput {
@@ -440,6 +442,7 @@ function toGateRow(row: {
   status: string;
   verdict_json: string | null;
   posture: string;
+  started_at: string;
 }): RunGateRow {
   return {
     id: row.id,
@@ -452,6 +455,7 @@ function toGateRow(row: {
     status: row.status,
     verdictJson: row.verdict_json,
     posture: row.posture as PermissionPosture,
+    startedAt: row.started_at,
   };
 }
 

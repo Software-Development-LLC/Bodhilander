@@ -48,6 +48,15 @@ export interface ReceiptReading {
   blocking: string[];
   /** Why the verdict is what it is, when it is not simply what the gate said. */
   reason?: string;
+  /**
+   * When the receipt says it was written, ISO 8601, or null if it does not.
+   *
+   * Load-bearing, not decorative: the receipt path is per initiative and per
+   * role, with no run or attempt in it, so a receipt from an earlier attempt
+   * sits exactly where this attempt's would. The caller compares this to
+   * when the gate row was opened -- see `gate-attention.ts`.
+   */
+  writtenAt: string | null;
 }
 
 /** The receipt vocabulary, as the schema spells it. */
@@ -69,8 +78,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function inconclusive(reason: string): ReceiptReading {
-  return { verdict: 'inconclusive', blocking: [], reason };
+function inconclusive(reason: string, writtenAt: string | null = null): ReceiptReading {
+  return { verdict: 'inconclusive', blocking: [], reason, writtenAt };
 }
 
 /** Summaries of the blocking findings, tolerating a list that is not one. */
@@ -103,39 +112,65 @@ export function readReceipt(text: string | null): ReceiptReading | null {
   const receipt = asRecord(parsed);
   if (!receipt) return inconclusive('the gate receipt is not an object');
 
-  const present = 'verdict' in receipt && receipt.verdict !== null && receipt.verdict !== undefined;
-  const raw = typeof receipt.verdict === 'string' ? receipt.verdict.trim().toLowerCase() : '';
-  if (!RECEIPT_VERDICTS.has(raw)) {
-    if (raw) return inconclusive(`the receipt says "${raw}", which is not one of pass, fail, undriveable or skip`);
-    if (!present) return inconclusive('the receipt carries no verdict');
-    return inconclusive(
-      typeof receipt.verdict === 'string'
-        ? 'the receipt carries an empty verdict'
-        : `the receipt's verdict was ${typeof receipt.verdict}, not a word`,
-    );
-  }
+  const word = verdictWord(receipt);
+  if (typeof word !== 'string') return word;
 
   const blocking = blockingSummaries(receipt.blocking_findings);
+  const writtenAt = typeof receipt.written_at === 'string' && receipt.written_at.trim() ? receipt.written_at.trim() : null;
+  return judge(word, blocking, writtenAt);
+}
 
-  if (raw === 'undriveable') {
-    return inconclusive('the gate reported it could not be driven here -- nothing was established');
+/**
+ * The receipt's verdict as one of the four words, or the inconclusive
+ * reading that says why it is not one.
+ *
+ * Three ways it can fail to be a word, told apart because they send a reader
+ * to different places: a word outside the enum is a gate answering wrongly;
+ * an absent key is a gate not answering; an empty string or a non-string is
+ * a gate answering with the wrong kind of thing.
+ */
+function verdictWord(receipt: Record<string, unknown>): string | ReceiptReading {
+  const present = 'verdict' in receipt && receipt.verdict !== null && receipt.verdict !== undefined;
+  const raw = typeof receipt.verdict === 'string' ? receipt.verdict.trim().toLowerCase() : '';
+  if (RECEIPT_VERDICTS.has(raw)) return raw;
+  if (raw) return inconclusive(`the receipt says "${raw}", which is not one of pass, fail, undriveable or skip`);
+  if (!present) return inconclusive('the receipt carries no verdict');
+  return inconclusive(
+    typeof receipt.verdict === 'string'
+      ? 'the receipt carries an empty verdict'
+      : `the receipt's verdict was ${typeof receipt.verdict}, not a word`,
+  );
+}
+
+/**
+ * What a well-formed verdict word means to the machine, given its findings.
+ *
+ * The receipt vocabulary maps onto the machine's here and nowhere else: the
+ * two words that move a run are kept, the two that establish nothing become
+ * inconclusive with a reason naming the word, and the two-answers rules from
+ * `gate-verdict.ts` are applied unchanged.
+ */
+function judge(word: string, blocking: string[], writtenAt: string | null): ReceiptReading {
+  if (word === 'undriveable') {
+    return inconclusive('the gate reported it could not be driven here -- nothing was established', writtenAt);
   }
-  if (raw === 'skip') {
-    return inconclusive('the gate reported nothing was owed -- nothing was established');
+  if (word === 'skip') {
+    return inconclusive('the gate reported nothing was owed -- nothing was established', writtenAt);
   }
-  if (raw === 'pass' && blocking.length > 0) {
+  if (word === 'fail') {
+    return blocking.length > 0
+      ? { verdict: 'fail', blocking, writtenAt }
+      : { verdict: 'fail', blocking, reason: 'the gate failed without listing a blocking finding', writtenAt };
+  }
+  if (blocking.length > 0) {
     return {
       verdict: 'inconclusive',
       blocking,
       reason:
         `the gate passed while reporting ${blocking.length} blocking finding(s), so it ` +
         'gave two answers that disagree',
+      writtenAt,
     };
   }
-  if (raw === 'fail') {
-    return blocking.length > 0
-      ? { verdict: 'fail', blocking }
-      : { verdict: 'fail', blocking, reason: 'the gate failed without listing a blocking finding' };
-  }
-  return { verdict: 'pass', blocking: [] };
+  return { verdict: 'pass', blocking: [], writtenAt };
 }
