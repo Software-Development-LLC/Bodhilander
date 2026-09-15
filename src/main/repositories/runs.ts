@@ -298,6 +298,25 @@ export function upsertOwner(owner: RunOwnerRow): void {
     );
 }
 
+/**
+ * Record which PR an owner's branch became.
+ *
+ * The scribe opens it and nothing tells the engine which; the loop finds it
+ * by branch and writes it here, once. Both halves together, because the
+ * number without the URL cannot name the repository (`gh --repo` wants
+ * `owner/name`, and the registry knows paths), and the URL without the
+ * number is a string nobody queries by.
+ */
+export function recordOwnerPullRequest(
+  runId: string,
+  repo: string,
+  pr: { prNumber: number; prUrl: string },
+): void {
+  getDatabase()
+    .prepare('UPDATE run_owners SET pr_number = ?, pr_url = ? WHERE run_id = ? AND repo = ?')
+    .run(pr.prNumber, pr.prUrl, runId, repo);
+}
+
 export function listOwners(runId: string): RunOwnerRow[] {
   const rows = getDatabase()
     .prepare('SELECT * FROM run_owners WHERE run_id = ? ORDER BY repo')

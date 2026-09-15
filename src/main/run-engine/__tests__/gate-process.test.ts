@@ -14,7 +14,7 @@
  * Run with: bun test src/main/run-engine
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { runGate, backgroundIdFor, GateSpawnError, type GateOutcome } from '../gate-process';
+import { runGate, backgroundIdFor, backgroundIdFromOutput, GateSpawnError, type GateOutcome } from '../gate-process';
 import type { GateCommand } from '../gate-command';
 
 const SESSION = '11111111-2222-3333-4444-555555555555';
@@ -174,18 +174,29 @@ describe('stop_reason is never read', () => {
   });
 });
 
+const LAUNCH_BANNER =
+  'process.stdout.write("warning: --bg manages the session id; claude attach 9e338a7c to view it")';
+
 describe('a background gate', () => {
   test('launching is a launch, not an answer', async () => {
-    const outcome = await run(backgroundGate('process.stdout.write("started")'));
+    const outcome = await run(backgroundGate(LAUNCH_BANNER));
     expect(outcome.status).toBe('launched');
     if (outcome.status !== 'launched') throw new Error('unreachable');
-    expect(outcome.sessionId).toBe(SESSION);
-    expect(outcome.backgroundId).toBe('11111111');
+    // The daemon's id from the banner, NOT the --session-id we passed:
+    // --bg ignores ours, and recording it left every status lookup `gone`.
+    expect(outcome.backgroundId).toBe('9e338a7c');
+    expect(outcome.backgroundId).not.toBe(backgroundIdFor(SESSION));
+    expect(outcome.sessionId).toBe('9e338a7c');
   });
 
-  test('the attach id is the first 8 characters of the session id', () => {
-    expect(backgroundIdFor(SESSION)).toBe('11111111');
-    expect(backgroundIdFor(SESSION).length).toBe(8);
+  test('the background id is read from the banner, after any subcommand the daemon lists', () => {
+    for (const verb of ['attach', 'agents', 'logs', 'stop']) {
+      expect(backgroundIdFromOutput(`  claude ${verb} 0a1b2c3d   x`)).toBe('0a1b2c3d');
+    }
+    // No id in the banner is a launch nothing can attach to.
+    expect(backgroundIdFromOutput('started, but said nothing else')).toBeNull();
+    // Not fooled by a longer hex run that merely begins with eight.
+    expect(backgroundIdFromOutput('  claude attach deadbeefcafe   x')).toBeNull();
   });
 
   test('a non-zero exit is undriveable and keeps stderr', async () => {
@@ -201,17 +212,17 @@ describe('a background gate', () => {
     // Nothing could attach to, reconcile or resume this gate. Recording it as
     // running would create a session the engine can never speak to again —
     // which is worse than not starting it, because a person sees a live row.
-    const outcome = await run(backgroundGate('process.stdout.write("started")', []));
+    const outcome = await run(backgroundGate('process.stdout.write("started, no banner")'));
     expect(outcome.status).toBe('undriveable');
     if (outcome.status !== 'undriveable') throw new Error('unreachable');
-    expect(outcome.reason).toContain('attach');
+    expect(outcome.reason).toContain('no session id to attach to');
   });
 
   test('a background gate is never asked for structured output', async () => {
     // --bg and --print conflict outright, so a background command carries no
     // schema. Applying the print rules to it would make every launch
     // undriveable for lacking a verdict it was never asked for.
-    const outcome = await run(backgroundGate('process.stdout.write("")'));
+    const outcome = await run(backgroundGate(LAUNCH_BANNER));
     expect(outcome.status).toBe('launched');
   });
 });
@@ -344,7 +355,7 @@ describe('what the child inherits', () => {
     // A CLI reading a non-TTY stdin to EOF hangs forever on input that is
     // never coming. Without the close this test times out rather than fails.
     const outcome = await run(
-      backgroundGate('let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(0))'),
+      backgroundGate('process.stdin.on("data",()=>{}).on("end",()=>{process.stdout.write("  claude attach 9e338a7c x");process.exit(0)})'),
       { timeoutMs: 5_000 },
     );
     expect(outcome.status).toBe('launched');

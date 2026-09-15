@@ -383,3 +383,29 @@ describe('a launched gate remembers its session', () => {
     expect(runs.activeGate(runId)).toMatchObject({ claudeSessionId: 's-print', bgSessionId: null });
   });
 });
+
+describe('an owner learns which PR its branch became', () => {
+  test('number and URL land together on the owner row', () => {
+    runs.createRun({ ...BASE, pythonPath: null, permissionPosture: 'manual', budgetUsd: null });
+    runs.upsertOwner({
+      runId: BASE.id, repo: 'Bodhilander', worktree: 'C:/wt', branch: 'feat/x', base: 'origin/development',
+      scratch: null, agent: 'bodhilander-lead', status: 'pending', prNumber: null, prUrl: null,
+    });
+    runs.recordOwnerPullRequest(BASE.id, 'Bodhilander', { prNumber: 299, prUrl: 'https://github.com/o/r/pull/299' });
+    expect(runs.listOwners(BASE.id)[0]).toMatchObject({ prNumber: 299, prUrl: 'https://github.com/o/r/pull/299' });
+  });
+
+  test('another repo’s owner on the same run is untouched', () => {
+    runs.createRun({ ...BASE, pythonPath: null, permissionPosture: 'manual', budgetUsd: null });
+    for (const repo of ['a-repo', 'b-repo']) {
+      runs.upsertOwner({
+        runId: BASE.id, repo, worktree: `C:/wt-${repo}`, branch: 'feat/x', base: 'origin/development',
+        scratch: null, agent: null, status: 'pending', prNumber: null, prUrl: null,
+      });
+    }
+    runs.recordOwnerPullRequest(BASE.id, 'a-repo', { prNumber: 1, prUrl: 'https://github.com/o/a/pull/1' });
+    const owners = runs.listOwners(BASE.id);
+    expect(owners.find((o) => o.repo === 'a-repo')?.prNumber).toBe(1);
+    expect(owners.find((o) => o.repo === 'b-repo')?.prNumber).toBeNull();
+  });
+});
