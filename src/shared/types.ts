@@ -675,6 +675,8 @@ export interface AccountRemovalCost {
  * summary is not a thing to consent to.
  */
 export interface RunPermissionRequest {
+  /** Which owner (repo) is blocked on this call (CO-722 multi-owner). */
+  repo: string;
   toolUseId: string;
   toolName: string;
   input: unknown;

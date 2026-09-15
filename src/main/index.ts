@@ -887,8 +887,8 @@ safeHandle('db:runs:permissions', (runId: string) =>
 );
 safeHandle(
   'db:runs:permissions:answer',
-  (runId: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) =>
-    answerRunPermission(app.getPath('userData'), runId, toolUseId, verdict, message ?? ''),
+  (runId: string, repo: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) =>
+    answerRunPermission(app.getPath('userData'), runId, repo, toolUseId, verdict, message ?? ''),
 );
 
 // Arm a run from a prepared initiative directory (CO-722). Reading the

@@ -235,6 +235,7 @@ describe('what it cannot do', () => {
 
 describe('answering a permission request', () => {
   const req = (over: Partial<RunPermissionRequest> = {}): RunPermissionRequest => ({
+    repo: 'Bodhilander',
     toolUseId: 'toolu_01',
     toolName: 'Bash',
     input: { command: 'rm -rf build', description: 'Clean' },
@@ -260,7 +261,7 @@ describe('answering a permission request', () => {
       <PermissionRequests
         runId="run-1"
         loadPermissions={async () => [req()]}
-        answer={async (_r, id, verdict) => { sent.push([id, verdict]); return true; }}
+        answer={async (_r, _repo, id, verdict) => { sent.push([id, verdict]); return true; }}
         onAnswered={() => { answered += 1; }}
       />,
     );
@@ -275,7 +276,7 @@ describe('answering a permission request', () => {
       <PermissionRequests
         runId="run-1"
         loadPermissions={async () => [req()]}
-        answer={async (_r, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
+        answer={async (_r, _repo, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
       />,
     );
     fireEvent.click(await screen.findByRole('button', { name: 'Deny' }));
@@ -288,7 +289,7 @@ describe('answering a permission request', () => {
       <PermissionRequests
         runId="run-1"
         loadPermissions={async () => [req()]}
-        answer={async (_r, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
+        answer={async (_r, _repo, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
       />,
     );
     fireEvent.change(await screen.findByLabelText('Reason for denying (optional)'), {
@@ -304,7 +305,7 @@ describe('answering a permission request', () => {
       <PermissionRequests
         runId="run-1"
         loadPermissions={async () => [req()]}
-        answer={async (_r, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
+        answer={async (_r, _repo, _id, verdict, message) => { sent.push([verdict, message]); return true; }}
       />,
     );
     fireEvent.change(await screen.findByLabelText('Reason for denying (optional)'), {
@@ -320,5 +321,27 @@ describe('answering a permission request', () => {
     );
     // A row with no requests must add no empty scaffolding to the inbox.
     expect(container.querySelector('.run-inbox__perms')).toBeNull();
+  });
+
+  test('an answer names the repo it belongs to, so two blocked owners do not cross', async () => {
+    // Two owners are blocked at once. Each request shows its repo, and
+    // answering one carries that repo -- so the reply reaches the right gate.
+    const sent: Array<[string, string, string]> = [];
+    render(
+      <PermissionRequests
+        runId="run-1"
+        loadPermissions={async () => [
+          req({ repo: 'repo-a', toolUseId: 'a1' }),
+          req({ repo: 'repo-b', toolUseId: 'b1' }),
+        ]}
+        answer={async (_r, repo, id, verdict) => { sent.push([repo, id, verdict]); return true; }}
+      />,
+    );
+    await screen.findByText('repo-a');
+    expect(screen.getByText('repo-b')).toBeTruthy();
+    // Answer the SECOND request (repo-b's).
+    const allows = screen.getAllByRole('button', { name: 'Allow' });
+    fireEvent.click(allows[1]);
+    await waitFor(() => expect(sent).toEqual([['repo-b', 'b1', 'allow']]));
   });
 });

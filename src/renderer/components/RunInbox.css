@@ -118,6 +118,11 @@
   word-break: break-word;
   opacity: 0.85;
 }
+.run-inbox__perm-repo {
+  font-weight: 600;
+  opacity: 0.9;
+  margin-right: 0.25rem;
+}
 .run-inbox__perm-actions {
   display: flex;
   gap: 0.5rem;
