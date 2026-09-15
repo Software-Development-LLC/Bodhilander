@@ -13,15 +13,28 @@
  *
  * - **the receipt**, read by `gate-receipt.ts`. Present means the gate
  *   concluded something; its verdict is the gate's.
- * - **whether the session is still alive**, from `claude agents`. A gate
- *   that is gone without a receipt established nothing: it crashed, was
- *   killed, or ran out of something, and none of those is a verdict.
+ * - **the session's status**, from `claude agents`. A gate that is gone or
+ *   idle without a receipt established nothing: it crashed, was killed, ran
+ *   out of something, or finished and never signed off -- and none of those
+ *   is a verdict.
  *
- * | receipt | alive | decision                                              |
- * |---------|-------|-------------------------------------------------------|
- * | yes     | any   | `gateFinished` with the receipt's verdict             |
- * | no      | yes   | nothing -- the gate is working                        |
- * | no      | no    | `gateFinished` inconclusive -- gone without a receipt |
+ * | receipt | status    | decision                                                   |
+ * |---------|-----------|------------------------------------------------------------|
+ * | yes     | any       | `gateFinished` with the receipt's verdict                  |
+ * | no      | `busy`    | nothing -- the gate is thinking                            |
+ * | no      | `waiting` | `permissionRequested` -- blocked on a prompt nobody can    |
+ * |         |           | answer; a person's problem, named with the id to attach to |
+ * | no      | `idle`    | `gateFinished` inconclusive -- finished its turn, no receipt |
+ * | no      | `gone`    | `gateFinished` inconclusive -- crashed or killed, no receipt |
+ * | no      | unknown   | nothing -- "gone" must not be reached by failing to look   |
+ *
+ * The status is the daemon's own, from `claude agents --json`, measured:
+ * `waiting` for a session wedged on a permission prompt, `busy` while it
+ * works, `idle` once its turn is done, and not listed at all once stopped.
+ * That is what makes a deadline on ELAPSED time unnecessary for every case
+ * but one -- `busy` that never ends -- and #292's point was exactly that
+ * such a deadline could not tell a thinking gate from a stuck one. Now the
+ * daemon tells us, and the only clock left to run is on silence in `busy`.
  *
  * ## A receipt is taken even while the gate is alive
  *
@@ -34,22 +47,30 @@
  *
  * ## What this does NOT decide yet
  *
- * A gate that is alive and silent -- no receipt, no progress -- is
- * indistinguishable from one that is thinking, by these two facts alone.
- * Telling them apart needs a progress signal and a deadline on SILENCE rather
- * than on elapsed time (#292). That is the next slice; this one ends the
- * case where the answer is already on disk and nobody is reading it.
+ * `busy` with no receipt, forever. A gate genuinely thinking and a gate
+ * looping look the same from outside until something bounds how long `busy`
+ * may last without a word. That ceiling is a policy, belongs beside the
+ * other cadences in `reconcile-loop.ts`, and is not this module's to invent.
  */
 import type { ReceiptReading } from './gate-receipt';
 import type { Gate, RunEvent } from './transitions';
+
+/**
+ * What the daemon says a session is doing. The four words are its, not ours.
+ * `gone` is "not listed". Null means it could not be asked or the session was
+ * never recorded -- and null is NOT gone.
+ */
+export type SessionStatus = 'busy' | 'waiting' | 'idle' | 'gone';
 
 export interface GateFacts {
   gate: Gate;
   agent: string;
   /** What the receipt said, or null when there is no receipt file. */
   receipt: ReceiptReading | null;
-  /** Whether the gate's session is still running. */
-  alive: boolean;
+  /** The session's status, or null when it cannot be known. */
+  status: SessionStatus | null;
+  /** What `claude attach` takes, for the note when a person must step in. */
+  backgroundId: string | null;
 }
 
 export interface Attention {
@@ -66,21 +87,42 @@ export function attend(facts: GateFacts): Attention {
   if (facts.receipt) {
     const { verdict, reason } = facts.receipt;
     const why = reason ? `: ${reason}` : '';
-    const still = facts.alive ? '; the gate was still running when its receipt was read' : '';
+    const still = facts.status === 'busy' ? '; the gate was still working when its receipt was read' : '';
     return {
       event: { kind: 'gateFinished', gate: facts.gate, verdict },
       note: `${who} wrote a receipt with verdict ${verdict}${why}${still}`,
     };
   }
 
-  if (!facts.alive) {
-    // Gone without a receipt. Not a fail -- the branch was never judged --
-    // and not a pass, because nothing said so. The one word that is true.
-    return {
-      event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
-      note: `${who} is no longer running and wrote no receipt, so it established nothing`,
-    };
+  switch (facts.status) {
+    case 'gone':
+      // Not a fail -- the branch was never judged -- and not a pass, because
+      // nothing said so. The one word that is true.
+      return {
+        event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
+        note: `${who} is no longer running and wrote no receipt, so it established nothing`,
+      };
+    case 'idle':
+      // Its turn ended and it never signed off. Distinct from gone in the
+      // note, because the fix is different: a crash is the machine's, a
+      // missing sign-off is the role's.
+      return {
+        event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
+        note: `${who} finished its turn without writing a receipt, so it established nothing`,
+      };
+    case 'waiting': {
+      // Blocked on a prompt nobody is attached to. With the hook channel a
+      // background gate should never show this, so it also means something
+      // bypassed the channel -- worth saying, and worth a person.
+      const attach = facts.backgroundId ? ` -- \`claude attach ${facts.backgroundId}\` to see it` : '';
+      return {
+        event: { kind: 'permissionRequested' },
+        note: `${who} is waiting on a prompt nobody is attached to${attach}`,
+      };
+    }
+    default:
+      // busy, or unknown. Thinking, as far as can be told -- and "gone" must
+      // never be reached by failing to look.
+      return { event: null, note: null };
   }
-
-  return { event: null, note: null };
 }
