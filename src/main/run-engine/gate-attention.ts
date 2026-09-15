@@ -85,10 +85,15 @@ export interface GateFacts {
   /** What `claude attach` takes, for the note when a person must step in. */
   backgroundId: string | null;
   /**
-   * How long the gate has been running, and how long `busy` with no word may
-   * last before a person is asked to look. Both optional and both needed for
+   * How long the gate has been running, and how long that may last with no
+   * word before a person is asked to look. Both optional and both needed for
    * the ceiling to apply: a caller that cannot say how long the gate has run
    * gets no verdict from a clock it did not wind.
+   *
+   * `busyForMs` is time since the row was opened, not time continuously in
+   * `busy` -- the daemon reports a status, not a history. The ceiling is on
+   * a gate that has been running that long and is busy at the moment it is
+   * looked at, and the note says exactly that.
    */
   busyForMs?: number | null;
   busyCeilingMs?: number | null;
@@ -182,8 +187,8 @@ export function attend(facts: GateFacts): Attention {
         return {
           event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
           note:
-            `${who} has been busy for ${Math.round(busyForMs / 60_000)} minutes with no receipt, ` +
-            `past the ${Math.round(busyCeilingMs / 60_000)}-minute ceiling; it is still running, and ` +
+            `${who} has been running for ${Math.round(busyForMs / 60_000)} minutes with no receipt and is busy now, ` +
+            `past the ${Math.round(busyCeilingMs / 60_000)}-minute ceiling; ` +
             `whether that is thought or a loop is a person's call${attach}`,
         };
       }

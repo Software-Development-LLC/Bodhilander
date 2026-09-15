@@ -432,8 +432,16 @@ async function watch(): Promise<void> {
   // error to crash on.
   const receipt = readReceipt(readIfPresent(receiptPath));
   const seen = await sessionStatus(gate.bgSessionId);
-  const busyForMs = Date.now() - Date.parse(`${gate.startedAt.replace(' ', 'T')}Z`);
-  console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt}, running ${Math.round(busyForMs / 60_000)}m)`);
+  const startedAtMs = Date.parse(`${gate.startedAt.replace(' ', 'T')}Z`);
+  // Half a clock is not a clock: an unreadable start time means the ceiling
+  // cannot apply, and that is said rather than left as a NaN that quietly
+  // never trips it.
+  const busyForMs = Number.isNaN(startedAtMs) ? null : Date.now() - startedAtMs;
+  const ran = busyForMs === null ? 'started at an unreadable time' : `running ${Math.round(busyForMs / 60_000)}m`;
+  console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt}, ${ran})`);
+  if (busyForMs === null) {
+    console.log(`  note    started_at is ${JSON.stringify(gate.startedAt)}, which does not parse; the busy ceiling cannot apply`);
+  }
   console.log(`  receipt ${receipt ? receipt.verdict : 'none'}  ${receiptPath}`);
   console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  status: ${seen.status ?? 'unknown'}`);
   // Printed here, under the header it is about, rather than from inside the

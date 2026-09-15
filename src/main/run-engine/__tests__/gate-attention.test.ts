@@ -67,7 +67,8 @@ describe('a launched gate, looked at again', () => {
       ...BASE, receipt: null, status: 'busy', busyForMs: 3 * 60 * 60 * 1000, busyCeilingMs: 2 * 60 * 60 * 1000,
     });
     expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
-    expect(note).toContain('busy for 180 minutes');
+    expect(note).toContain('running for 180 minutes');
+    expect(note).toContain('busy now');
     expect(note).toContain('120-minute ceiling');
     expect(note).toContain('claude attach ea15b328');
   });
