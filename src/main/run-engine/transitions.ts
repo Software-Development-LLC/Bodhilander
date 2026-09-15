@@ -428,3 +428,46 @@ export const IS_WORKING: readonly RunState[] = ['preparing', 'provisioning', 'ru
 export function isTerminal(state: RunState): boolean {
   return state === 'approved' || state === 'done' || state === 'failed';
 }
+
+/**
+ * The run's rollup state from its owners' states (CO-722 multi-owner).
+ *
+ * One run drives each repo's owner on its own track; `runs.state` is a lossy
+ * summary of those, used ONLY as a coarse filter key for the active-runs list
+ * and the inbox. It never drives scheduling or per-owner dispatch -- those read
+ * each owner's own state, or a run with one stuck owner would starve its
+ * healthy ones.
+ *
+ * Precedence, first match wins: any owner needing a person surfaces the whole
+ * run (those states are highest), then the actively-moving states, then
+ * approval. So `done` means every owner is done; `approved` means every owner
+ * has reached approval (with at least one not yet merged); a single
+ * `inconclusive` owner shows the run in the inbox while the rest keep moving.
+ *
+ * A singleton returns its own state unchanged -- `rollup([s]) === s` for every
+ * post-fan-out state -- so a single-repo run behaves exactly as before.
+ * `preparing`/`provisioning`/`failed` are run-level and never owner states, so
+ * they are not in the ladder; an empty list (no owners yet) reads as
+ * `preparing`, the run-level prelude.
+ */
+const ROLLUP_PRECEDENCE: readonly RunState[] = [
+  'inconclusive',
+  'waitingPermission',
+  'waitingHumanGate',
+  'running',
+  'waitingChecks',
+  'reviewNotRequested',
+  'waitingReview',
+  'approved',
+  'done',
+];
+
+export function rollupState(ownerStates: readonly RunState[]): RunState {
+  if (ownerStates.length === 0) return 'preparing';
+  for (const state of ROLLUP_PRECEDENCE) {
+    if (ownerStates.includes(state)) return state;
+  }
+  // An owner state outside the ladder (only a run-level state could be, and it
+  // should never reach here) -- fall back to the first owner rather than invent.
+  return ownerStates[0];
+}

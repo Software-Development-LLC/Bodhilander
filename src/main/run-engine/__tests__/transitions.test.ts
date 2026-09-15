@@ -14,6 +14,7 @@ import {
   IS_WORKING,
   NEEDS_A_PERSON,
   isTerminal,
+  rollupState,
   transition,
   type Gate,
   type RunEvent,
@@ -411,5 +412,49 @@ describe('the state taxonomy the run inbox is built on', () => {
     // waitingChecks and reviewNotRequested are machine-driven checkpoints:
     // neither needs a person, and neither is terminal.
     expect(unclassified.sort()).toEqual(['reviewNotRequested', 'waitingChecks']);
+  });
+});
+
+describe('the run-level rollup of owner states (multi-owner)', () => {
+  test('a single owner rolls up to exactly its own state, for every state', () => {
+    // This is the guarantee that makes single-repo runs byte-for-byte
+    // unchanged: rollup([s]) === s.
+    const postFanOut: RunState[] = [
+      'running', 'waitingPermission', 'waitingHumanGate', 'waitingChecks',
+      'reviewNotRequested', 'waitingReview', 'inconclusive', 'approved', 'done',
+    ];
+    for (const s of postFanOut) {
+      expect(rollupState([s])).toBe(s);
+    }
+  });
+
+  test('done only when every owner is done', () => {
+    expect(rollupState(['done', 'done'])).toBe('done');
+    expect(rollupState(['done', 'approved'])).toBe('approved');
+    expect(rollupState(['done', 'running'])).toBe('running');
+  });
+
+  test('approved when all owners have reached approval but not all merged', () => {
+    expect(rollupState(['approved', 'approved'])).toBe('approved');
+    expect(rollupState(['approved', 'done'])).toBe('approved');
+  });
+
+  test('any owner needing a person surfaces the whole run, over healthy owners', () => {
+    // The starvation-safety intent: a stuck owner is visible while the rest
+    // keep moving (the loop still schedules the healthy owner off its own state).
+    expect(rollupState(['inconclusive', 'running'])).toBe('inconclusive');
+    expect(rollupState(['running', 'waitingPermission'])).toBe('waitingPermission');
+    expect(rollupState(['waitingReview', 'waitingHumanGate'])).toBe('waitingHumanGate');
+    // inconclusive outranks the other person-states.
+    expect(rollupState(['waitingPermission', 'inconclusive'])).toBe('inconclusive');
+  });
+
+  test('active work outranks approval, so the run stays active until all approve', () => {
+    expect(rollupState(['running', 'approved'])).toBe('running');
+    expect(rollupState(['waitingChecks', 'approved', 'done'])).toBe('waitingChecks');
+  });
+
+  test('no owners yet reads as the run-level prelude', () => {
+    expect(rollupState([])).toBe('preparing');
   });
 });

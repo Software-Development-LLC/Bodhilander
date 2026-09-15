@@ -409,3 +409,72 @@ describe('an owner learns which PR its branch became', () => {
     expect(owners.find((o) => o.repo === 'b-repo')?.prNumber).toBeNull();
   });
 });
+
+describe('per-owner gate state (multi-owner)', () => {
+  const owner = (repo: string) => ({
+    runId: BASE.id, repo, worktree: `C:/wt-${repo}`, branch: 'feat/x',
+    base: 'origin/development', scratch: null, agent: `${repo}-lead`,
+    status: 'pending' as const, prNumber: null, prUrl: null,
+  });
+
+  beforeEach(() => {
+    runs.createRun({ ...BASE, pythonPath: null, permissionPosture: 'manual', budgetUsd: null });
+    runs.upsertOwner(owner('repo-a'));
+    runs.upsertOwner(owner('repo-b'));
+  });
+
+  test('a fresh owner has a null state until the run fans out', () => {
+    for (const o of runs.listOwners(BASE.id)) {
+      expect(o.state).toBeNull();
+      expect(o.blockedReason).toBeNull();
+      expect(o.mergeOrder).toBeNull();
+    }
+  });
+
+  test('activeGate(repo) isolates each owner\u2019s gate in flight', () => {
+    runs.startGate({ id: 'ga', runId: BASE.id, gate: 2, repo: 'repo-a', agent: 'repo-a-lead', posture: 'manual' });
+    runs.startGate({ id: 'gb', runId: BASE.id, gate: 4, repo: 'repo-b', agent: 'verifier', posture: 'manual' });
+    // Each repo sees its OWN running gate, not the other's newest.
+    expect(runs.activeGate(BASE.id, 'repo-a')).toMatchObject({ id: 'ga', gate: 2, repo: 'repo-a' });
+    expect(runs.activeGate(BASE.id, 'repo-b')).toMatchObject({ id: 'gb', gate: 4, repo: 'repo-b' });
+    // No repo given: the run's single newest running gate, as before.
+    expect(runs.activeGate(BASE.id)).toMatchObject({ id: 'gb' });
+  });
+
+  test('two owners at gate 4 share the verifier role but keep separate attempts', () => {
+    runs.startGate({ id: 'v-a', runId: BASE.id, gate: 4, repo: 'repo-a', agent: 'verifier', posture: 'manual' });
+    runs.startGate({ id: 'v-b', runId: BASE.id, gate: 4, repo: 'repo-b', agent: 'verifier', posture: 'manual' });
+    // B's first verifier is attempt 1, not A's retry.
+    expect(runs.activeGate(BASE.id, 'repo-a')).toMatchObject({ attempt: 1 });
+    expect(runs.activeGate(BASE.id, 'repo-b')).toMatchObject({ attempt: 1 });
+  });
+
+  test('an owner transition writes that owner and rolls the run up', () => {
+    runs.recordOwnerTransition(BASE.id, 'repo-a', 'running', 'provisioned');
+    runs.recordOwnerTransition(BASE.id, 'repo-b', 'running', 'provisioned');
+    // repo-a stuck, repo-b still working: the run shows the stuck one.
+    runs.recordOwnerTransition(BASE.id, 'repo-a', 'inconclusive', 'gateFinished', {
+      blockedReason: 'gate 2 could not establish a verdict',
+    });
+    expect(runs.getRun(BASE.id)!.state).toBe('inconclusive');
+    expect(runs.getRun(BASE.id)!.blockedReason).toBe('gate 2 could not establish a verdict');
+    const owners = runs.listOwners(BASE.id);
+    expect(owners.find((o) => o.repo === 'repo-a')?.state).toBe('inconclusive');
+    expect(owners.find((o) => o.repo === 'repo-b')?.state).toBe('running');
+  });
+
+  test('the run reaches approved only when every owner has approved', () => {
+    runs.recordOwnerTransition(BASE.id, 'repo-a', 'approved', 'reviewApproved');
+    // One approved, one still running: not approved yet.
+    runs.recordOwnerTransition(BASE.id, 'repo-b', 'running', 'provisioned');
+    expect(runs.getRun(BASE.id)!.state).toBe('running');
+    runs.recordOwnerTransition(BASE.id, 'repo-b', 'approved', 'reviewApproved');
+    expect(runs.getRun(BASE.id)!.state).toBe('approved');
+  });
+
+  test('the owner transition also carries the repo into the event log', () => {
+    runs.recordOwnerTransition(BASE.id, 'repo-a', 'running', 'provisioned');
+    const events = runs.listEvents(BASE.id).filter((e) => e.kind === 'provisioned');
+    expect(events.at(-1)?.repo).toBe('repo-a');
+  });
+});
