@@ -35,7 +35,7 @@ const TARGET: ExecutorTarget = {
   initiativePath: 'C:/work/initiatives/CO-722',
   harnessPath: '/plugins/bodhi',
   pythonPath: 'C:/py/python.exe',
-  agents: { 2: 'bsa-lead', 3: 'reviewer', 4: 'verifier' },
+  agents: { 2: ['bsa-lead'], 3: ['reviewer'], 4: ['verifier'] },
   posture: 'manual',
 };
 
@@ -443,5 +443,138 @@ describe('the executor is reached with the decision’s own actions', () => {
     }));
     expect(performed[0]).toContain('--add-reviewer brannon-bowden');
     expect(typeof execute).toBe('function');
+  });
+});
+
+describe('a gate served by several roles in sequence', () => {
+  // Gate 4 is the verifier and then the scribe. The machine sees ONE gate;
+  // the driver runs the sequence and reports to the machine only when the
+  // last role has.
+  const SEQUENCED: ExecutorTarget = { ...TARGET, agents: { ...TARGET.agents, 4: ['verifier', 'scribe'] } };
+
+  /** A spawner that reports every role as `verdict`, and records who ran. */
+  function reporting(verdict: 'pass' | 'fail' | 'inconclusive', ran: string[]) {
+    return deps({
+      spawnGate: async (_gate, agent) => {
+        ran.push(agent);
+        return {
+          status: 'completed' as const,
+          structuredOutput: { verdict, summary: `${agent} says ${verdict}`, findings: [] },
+          sessionId: 's',
+          costUsd: null,
+          durationMs: 1,
+        };
+      },
+    });
+  }
+
+  test('the first role passing starts the second and does not finish the gate', async () => {
+    // The verifier's green is not the gate's green. Telling the machine
+    // `gateFinished` here would send the run to waitingChecks with no PR
+    // open, because the scribe -- the only role that opens one -- has not
+    // run yet.
+    const id = seed('running');
+    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    const ran: string[] = [];
+    const result = await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, {
+      ...reporting('pass', ran),
+      // Nothing after the sequence should run: the scribe's pass moves the
+      // run to waitingChecks, whose only action is `reconcile`, which the
+      // executor deliberately ignores.
+    });
+    expect(ran).toEqual(['scribe']);
+    expect(result.state).toBe('waitingChecks');
+    const gates = runs.listGates(id);
+    expect(gates.map((g) => [g.agent, g.status])).toEqual([['verifier', 'done'], ['scribe', 'done']]);
+  });
+
+  test('the machine is told about the gate exactly once, when the last role reports', async () => {
+    // Two roles, two reports, ONE gateFinished in the run's own history. The
+    // step boundary is recorded in run_gates, where the rows say who ran.
+    const id = seed('running');
+    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', []));
+    const finished = runs.listEvents(id).filter((e) => e.kind === 'gateFinished');
+    expect(finished).toHaveLength(1);
+  });
+
+  test('a red first role ends the gate; the second never runs', async () => {
+    // Red is red whoever found it. The verifier failing means the branch is
+    // still soft, and the scribe opening a PR on it would be a PR carrying a
+    // verdict nobody reached.
+    const id = seed('running');
+    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    const ran: string[] = [];
+    // The owner reports `launched` so the run pauses there. A fake that kept
+    // everything green would walk owner -> reviewer -> verifier -> scribe in
+    // one call, and the scribe appearing in `ran` would then be correct
+    // rather than the thing this test forbids.
+    const result = await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'fail' }, SEQUENCED, deps({
+      spawnGate: async (_gate, agent) => {
+        ran.push(agent);
+        return { status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 };
+      },
+    }));
+    // backToOwner: the machine spawns gate 2, which is the owner, not the scribe.
+    expect(ran).toEqual(['bsa-lead']);
+    expect(result.state).toBe('running');
+    expect(runs.listGates(id).map((g) => [g.agent, g.status])).toEqual([['verifier', 'done'], ['bsa-lead', 'running']]);
+  });
+
+  test('an inconclusive first role stops the run; the second never runs', async () => {
+    const id = seed('running');
+    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    const ran: string[] = [];
+    const result = await advance(
+      id, { kind: 'gateFinished', gate: 4, verdict: 'inconclusive' }, SEQUENCED, reporting('pass', ran),
+    );
+    expect(ran).toEqual([]);
+    expect(result.state).toBe('inconclusive');
+  });
+
+  test('a fresh spawn of a sequenced gate starts with its first role', async () => {
+    // provisioned -> gate 2 passes -> gate 3 passes -> gate 4: the machine
+    // says `spawnGate 4` and the driver must open the VERIFIER, not the
+    // scribe, and not both.
+    const id = seed('running');
+    runs.startGate({ id: 'r', runId: id, gate: 3, agent: 'reviewer', posture: 'manual' });
+    const ran: string[] = [];
+    // Gate 3's pass spawns gate 4. Make the verifier report `launched` so the
+    // sequence pauses there and we can look at what was opened.
+    const result = await advance(id, { kind: 'gateFinished', gate: 3, verdict: 'pass' }, SEQUENCED, deps({
+      spawnGate: async (_gate, agent) => {
+        ran.push(agent);
+        return { status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 };
+      },
+    }));
+    expect(ran).toEqual(['verifier']);
+    expect(result.state).toBe('running');
+    expect(runs.activeGate(id)).toMatchObject({ gate: 4, agent: 'verifier', attempt: 1 });
+  });
+
+  test('the second role is its own first attempt, not the gate’s second', async () => {
+    // The column exists to make a retry loop visible. A scribe following a
+    // green verifier is the same attempt's second half, and counting it as
+    // attempt 2 would make every sequence read as a gate that had to be
+    // rerun.
+    const id = seed('running');
+    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', []));
+    const scribe = runs.listGates(id).find((g) => g.agent === 'scribe');
+    expect(scribe?.attempt).toBe(1);
+  });
+
+  test('a report from a role outside the sequence is the gate’s own, and said so', async () => {
+    // A run armed under one harness and advanced under another, or a row
+    // somebody edited. There is no correct next step from an unknown
+    // position, so the report goes to the machine as it did before sequences
+    // existed -- and the mismatch is a problem, not a silence.
+    const id = seed('running');
+    runs.startGate({ id: 'x', runId: id, gate: 4, agent: 'auditor', posture: 'manual' });
+    const ran: string[] = [];
+    const result = await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', ran));
+    expect(ran).toEqual([]);
+    expect(result.state).toBe('waitingChecks');
+    expect(result.problems.some((p) => p.includes('auditor') && p.includes('verifier then scribe'))).toBe(true);
   });
 });

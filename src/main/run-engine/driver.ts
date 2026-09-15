@@ -29,7 +29,13 @@
  */
 import type { Gate, RunAction, RunEvent, RunState } from './transitions';
 import { transition } from './transitions';
-import { execute, type ExecutorDeps, type ExecutorTarget, type ExecutorResult } from './executor';
+import {
+  execute,
+  type ExecutorDeps,
+  type ExecutorResult,
+  type ExecutorTarget,
+  type ResolvedAction,
+} from './executor';
 import { randomUUID } from 'crypto';
 import * as runs from '../repositories/runs';
 
@@ -163,29 +169,19 @@ async function advanceOnce(
         return result;
       }
       const gate = runs.activeGate(runId);
+
+      // A step passing is not the gate passing -- see `continueSequence`.
+      // Handled before the machine hears anything, and the machine hears
+      // nothing at all if there was a next role to run.
+      const nextStep = await continueSequence(runId, event, gate, target, deps, result);
+      if (nextStep) {
+        next.push(...nextStep);
+        continue;
+      }
+
       const decision = transition(run.state, event, { activeGate: asGate(gate?.gate) });
       result.state = decision.state;
-
-      // Recorded when something HAPPENED, which is not the same as when the
-      // state changed. A gate-2 pass leaves a run in `running` and spawns
-      // gate 3: no move, and the most important line in the log. An event
-      // that changes nothing AND does nothing is the one worth omitting,
-      // because a log full of rows saying "nothing happened" is a log nobody
-      // reads.
-      if (decision.state !== run.state || decision.actions.length > 0) {
-        const reason = blockedReasonFor(decision.state, event, decision.note);
-        const detail = { ...detailFor(event), blockedReason: reason ?? undefined };
-        writeTransition(runId, decision.state, event.kind, detail);
-        result.applied.push(event);
-        // Closed here, once the machine has ACCEPTED the report — not when it
-        // arrived. Closing first clears activeGate, and the guard then rejects
-        // the very report that was closing it: a gate finishes, its verdict
-        // is discarded, and the run sits in `running` forever. That is not
-        // hypothetical; it is what these tests caught.
-        if (event.kind === 'gateFinished' && gate?.gate === event.gate) {
-          runs.finishGate(gate.id, 'done', { verdict: event.verdict });
-        }
-      }
+      recordDecision(runId, run.state, event, gate, decision, result);
 
       // Recorded BEFORE the gate runs, for the same reason the transition is:
       // a gate that starts and then crashes must leave a row, and the guard
@@ -230,26 +226,148 @@ function openGates(
   decision: { actions: readonly RunAction[] },
   target: ExecutorTarget,
   result: AdvanceResult,
-): RunAction[] {
-  const allowed: RunAction[] = [];
+): ResolvedAction[] {
+  const allowed: ResolvedAction[] = [];
   for (const action of decision.actions) {
     if (action.kind !== 'spawnGate') {
       allowed.push(action);
       continue;
     }
-    const agent = target.agents[action.gate];
-    if (!agent) {
+    // The machine names the gate; the run's roles say who serves it, and a
+    // sequence starts at its first role. Later steps are opened by
+    // `stepAfter`, on the previous step's report -- never here.
+    const first = target.agents[action.gate]?.[0];
+    if (!first) {
       result.problems.push(
         `gate ${action.gate} has no role recorded for this run, so it was not started`,
       );
       continue;
     }
-    runs.startGate({
-      id: randomUUID(), runId, gate: action.gate, agent, posture: target.posture,
-    });
-    allowed.push(action);
+    allowed.push(startStep(runId, action.gate, first, target));
   }
   return allowed;
+}
+
+/**
+ * Write the decision down, when there is something to write.
+ *
+ * Recorded when something HAPPENED, which is not the same as when the state
+ * changed. A gate-2 pass leaves a run in `running` and spawns gate 3: no
+ * move, and the most important line in the log. An event that changes
+ * nothing AND does nothing is the one worth omitting, because a log full of
+ * rows saying "nothing happened" is a log nobody reads.
+ *
+ * The gate row is closed here, once the machine has ACCEPTED the report --
+ * not when it arrived. Closing first clears activeGate, and the guard then
+ * rejects the very report that was closing it: a gate finishes, its verdict
+ * is discarded, and the run sits in `running` forever. That is not
+ * hypothetical; it is what the driver tests caught.
+ */
+function recordDecision(
+  runId: string,
+  before: RunState,
+  event: RunEvent,
+  gate: runs.RunGateRow | null,
+  decision: { state: RunState; actions: readonly RunAction[]; note: string },
+  result: AdvanceResult,
+): void {
+  if (decision.state === before && decision.actions.length === 0) return;
+  const reason = blockedReasonFor(decision.state, event, decision.note);
+  writeTransition(runId, decision.state, event.kind, {
+    ...detailFor(event),
+    blockedReason: reason ?? undefined,
+  });
+  result.applied.push(event);
+  if (event.kind === 'gateFinished' && gate?.gate === event.gate) {
+    runs.finishGate(gate.id, 'done', { verdict: event.verdict });
+  }
+}
+
+/**
+ * Run the next role of a gate whose previous role just passed.
+ *
+ * Gate 4 is the verifier and then the scribe. When the verifier's report
+ * arrives the gate is half done, and telling the machine `gateFinished`
+ * there would send the run to waitingChecks with no PR open -- the scribe,
+ * the only role that opens one, has not run. So this closes the step's row,
+ * opens the next, spawns it, and returns what that spawn produced; the caller
+ * then says NOTHING to the machine, which hears about the gate only when the
+ * last role reports.
+ *
+ * Returns null whenever the machine should hear this event after all: it is
+ * not a passing gate report, it is for some other gate than the one in
+ * flight, or the role that reported was the last in its sequence. A failure
+ * at any step lands here too -- red is red whoever found it, and the machine
+ * already knows what red means.
+ *
+ * Its own function because `advanceOnce` is a loop with several decisions in
+ * it already, and one more nested inside it put the whole thing past the
+ * complexity Sonar allows. That was a fair complaint: the step boundary is a
+ * separate idea from the round loop, and reads as one here.
+ */
+async function continueSequence(
+  runId: string,
+  event: RunEvent,
+  gate: runs.RunGateRow | null,
+  target: ExecutorTarget,
+  deps: ExecutorDeps,
+  result: AdvanceResult,
+): Promise<RunEvent[] | null> {
+  if (!gate || event.kind !== 'gateFinished' || event.verdict !== 'pass' || gate.gate !== event.gate) {
+    return null;
+  }
+  const following = stepAfter(target.agents[event.gate], gate.agent, result, event.gate);
+  if (!following) return null;
+  runs.finishGate(gate.id, 'done', { verdict: 'pass' });
+  const performed = await execute([startStep(runId, event.gate, following, target)], target, deps);
+  collect(result, performed);
+  return performed.events;
+}
+
+/**
+ * Open the row for one role's turn at a gate, and return the spawn that runs it.
+ *
+ * The row exists before the spawn for the reason `openGates` gives: the
+ * guard that stops a stale report from regressing the run reads this table,
+ * and a role that runs before its row appears has its own report rejected.
+ */
+function startStep(
+  runId: string,
+  gate: Gate,
+  agent: string,
+  target: ExecutorTarget,
+): ResolvedAction {
+  runs.startGate({ id: randomUUID(), runId, gate, agent, posture: target.posture });
+  return { kind: 'spawnGate', gate, agent };
+}
+
+/**
+ * The role that runs next in this gate, or null when the one that just
+ * reported was the last.
+ *
+ * Null ALSO when the reporting role is not in the sequence at all -- a run
+ * armed under one harness and advanced under another, or a row somebody
+ * edited. There is no correct next step from an unknown position, so the
+ * report is handed to the machine as the gate's, which is what every gate
+ * did before sequences existed, and the mismatch is said out loud rather
+ * than absorbed.
+ */
+function stepAfter(
+  sequence: readonly string[] | undefined,
+  reporting: string,
+  result: AdvanceResult,
+  gate: Gate,
+): string | null {
+  if (!sequence) return null;
+  const at = sequence.indexOf(reporting);
+  if (at < 0) {
+    result.problems.push(
+      `gate ${gate} was reported by ${reporting}, which is not in this run's sequence ` +
+        `(${sequence.join(' then ')}); treated as the gate's own report`,
+    );
+    return null;
+  }
+  return sequence[at + 1] ?? null;
 }
 
 function collect(result: AdvanceResult, performed: ExecutorResult): void {

@@ -240,17 +240,17 @@ async function step(): Promise<void> {
   // here -- an engine carrying that mapping would have to maintain it
   // against a plugin that changes without it.
   const fromHarness = await rolesFromHarness(run.harnessPath, [3, 4]);
-  const agents: Record<number, string> = { ...fromHarness.roles };
-  if (owners[0]?.agent) agents[2] = owners[0].agent;
+  // A list per gate, in run order. A single role is a one-element list; a
+  // sequence is the harness's `gate_order`, read and not decided here.
+  const agents: Record<number, string[]> = {};
+  for (const [gate, role] of Object.entries(fromHarness.roles)) agents[Number(gate)] = [role];
+  for (const seq of fromHarness.sequences) {
+    agents[seq.gate] = [...seq.agents];
+    console.log(`  gate ${seq.gate}    ${seq.agents.join(' then ')}`);
+  }
+  if (owners[0]?.agent) agents[2] = [owners[0].agent];
   for (const gate of fromHarness.unclaimed) {
     console.log(`  note      no agent in this harness declares gate ${gate}`);
-  }
-  for (const seq of fromHarness.sequences) {
-    // The order is the harness's, read from `gate_order:`. `agents` still
-    // holds one role per gate, so these are reported rather than run -- but
-    // reported in the order they would run, which is the half that was
-    // missing.
-    console.log(`  note      gate ${seq.gate} runs ${seq.agents.join(' then ')}, which this model cannot hold yet`);
   }
   for (const seq of fromHarness.unordered) {
     // Worse than a sequence, and worth saying differently: the harness put
@@ -267,12 +267,27 @@ async function step(): Promise<void> {
   console.log(`stepping ${runId}: ${run.state} + ${kind}\n`);
   const result = await advance(runId, { kind } as RunEvent, target, {
     ...commands,
-    spawnGate: async (gate: Gate) => {
+    spawnGate: async (gate: Gate, agent: string) => {
       const owner = owners[0];
-      console.log(`  launching gate ${gate} as ${agents[gate] ?? '(from harness)'}`);
+      // The row for this role's turn was opened by the driver before this
+      // call, so it is the one thing that knows the attempt number -- and
+      // therefore the channel key `perms` will look up. Its absence is a
+      // broken invariant, and a broken invariant that quietly defaulted to
+      // attempt 1 would hand this role a channel another turn already used:
+      // a stale request read as the new one's, which is exactly what keying
+      // by attempt exists to prevent. So it fails here, where the cause is.
+      const turn = runs.activeGate(runId);
+      if (!turn || turn.gate !== gate || turn.agent !== agent) {
+        const found = turn ? `gate ${turn.gate} (${turn.agent})` : 'missing';
+        throw new Error(
+          `gate ${gate} (${agent}) was asked to launch but the open run_gates row is ${found}; ` +
+            'the driver opens the row before it spawns',
+        );
+      }
+      console.log(`  launching gate ${gate} as ${agent}`);
       return launchGate({
         gate,
-        agentName: agents[gate] ?? 'reviewer',
+        agentName: agent,
         // Gate 2 is background by default so a long owner run does not hold
         // the console open. BODHI_GATE_MODE overrides it, because the
         // permission channel is only consulted in print mode -- `--help` says
@@ -301,7 +316,7 @@ async function step(): Promise<void> {
         permissions: {
           root: permissionRoot(),
           brokerPath: path.join(__dirname, '..', 'scripts', 'permission-broker.js'),
-          channelKey: channelKeyFor(runId, gate, runs.listGates(runId).filter((g) => g.gate === gate).length),
+          channelKey: channelKeyFor(runId, gate, agent, turn.attempt),
         },
         context: {
           harnessPath: run.harnessPath,
@@ -332,21 +347,22 @@ function permissionRoot(): string {
 }
 
 /**
- * Names one attempt's channel.
+ * Names one role's turn at a gate.
  *
- * Run, gate and attempt, because those are what a person reading `status`
- * already has -- and because a retry must not inherit the request its
- * predecessor left behind.
+ * Run, gate, role and attempt, because those are what a person reading
+ * `status` already has -- and because the verifier and the scribe are both
+ * gate 4, so a key without the role would hand the scribe the verifier's
+ * unanswered requests. A retry must not inherit its predecessor's either.
  */
-function channelKeyFor(runId: string, gate: number, attempt: number): string {
-  return `${runId}-g${gate}-a${attempt}`;
+function channelKeyFor(runId: string, gate: number, agent: string, attempt: number): string {
+  return `${runId}-g${gate}-${agent}-a${attempt}`;
 }
 
 /** The channel of the gate currently in flight, or null when none is. */
 function activeChannel(runId: string): string | null {
   const gate = runs.activeGate(runId);
   if (!gate) return null;
-  return channelDirFor(permissionRoot(), channelKeyFor(runId, gate.gate, gate.attempt));
+  return channelDirFor(permissionRoot(), channelKeyFor(runId, gate.gate, gate.agent, gate.attempt));
 }
 
 function readActiveChannel(runId: string) {
