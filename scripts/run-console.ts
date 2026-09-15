@@ -8,6 +8,7 @@
  *   bun run console -- perms  <run-id>
  *   bun run console -- answer <run-id> <tool-use-id> allow|deny [message]
  *   bun run console -- watch  <run-id>
+ *   bun run console -- loop   [seconds]
  *
  * A first run is where assumptions get tested, and the ones this engine makes
  * are about paths, flags and which copy of the harness is on disk -- none of
@@ -47,11 +48,18 @@ import { getDatabase } from '../src/main/database';
 import * as runs from '../src/main/repositories/runs';
 import { armRun } from '../src/main/run-engine/ignition';
 import { advance } from '../src/main/run-engine/driver';
-import { launchGate, rolesFromHarness } from '../src/main/run-engine/gate-launcher';
-import { gateBrief } from '../src/main/run-engine/gate-brief';
-import { readReceipt, receiptPathFor } from '../src/main/run-engine/gate-receipt';
-import { attend, type SessionStatus } from '../src/main/run-engine/gate-attention';
 import { GATE_BUSY_CEILING_MS } from '../src/main/run-engine/reconcile-loop';
+import {
+  agentsForRun,
+  channelKeyFor,
+  spawnGateFor,
+  targetFor as engineTargetFor,
+  type SpawnConfig,
+} from '../src/main/run-engine/gate-spawner';
+import { lookAtGate, type AttentionDeps } from '../src/main/run-engine/attention-pass';
+import { createRunLoop } from '../src/main/run-engine/run-loop';
+import { discoverPrArgv, readDiscoveredPr } from '../src/main/run-engine/pr-discovery';
+import { reconcileOnce } from '../src/main/run-engine/reconcile';
 import { runCommand, processDeps } from '../src/main/run-engine/command-runner';
 import type { Gate, RunEvent } from '../src/main/run-engine/transitions';
 import {
@@ -248,109 +256,61 @@ async function step(): Promise<void> {
  * derives it from a gate's receipt -- so a gate finishing by receipt spawns
  * the next gate exactly as one finishing by structured output does.
  */
-async function driveEvent(runId: string, event: RunEvent): Promise<void> {
+/**
+ * The environment-derived settings the console still allows, and what the
+ * app will read from configuration instead. Every BODHI_* here was once the
+ * only way a gate got launched; now each is a field on `SpawnConfig`.
+ */
+function spawnConfig(): SpawnConfig {
+  return {
+    claudePath: env('BODHI_CLAUDE', 'claude'),
+    promptFileDir: path.join(process.cwd(), '.run-console-prompts'),
+    permissionsRoot: permissionRoot(),
+    brokerPath: path.join(__dirname, '..', 'scripts', 'permission-broker.js'),
+    gateTimeoutMs: Number(env('BODHI_GATE_TIMEOUT', '900000')),
+    modeFor: (gate) => env('BODHI_GATE_MODE', gate === 2 ? 'background' : 'print') as 'background' | 'print',
+    taskFor: (gate, run) => env('BODHI_TASK', `Work gate ${gate} for ${run.initiativeKey}.`),
+  };
+}
+
+function approvers(): string[] {
+  // No default. Baking real logins into a tool makes it request review from
+  // people who did not ask for it, and the engine refuses clearly when
+  // nobody is recorded.
+  return env('BODHI_APPROVERS', '').split(',').filter(Boolean);
+}
+
+/** The dependencies `advance` needs for one run, built the way the app will build them. */
+async function executorFor(runId: string) {
   const run = runs.getRun(runId);
   if (!run) throw new Error(`no run ${runId}`);
   const owners = runs.listOwners(runId);
-  // Gate 2's role is the repo's owner, recorded when the run was armed.
-  // Gates 3 and 4 belong to the harness, so they are READ rather than held
-  // here -- an engine carrying that mapping would have to maintain it
-  // against a plugin that changes without it.
-  const fromHarness = await rolesFromHarness(run.harnessPath, [3, 4]);
-  // A list per gate, in run order. A single role is a one-element list; a
-  // sequence is the harness's `gate_order`, read and not decided here.
-  const agents: Record<number, string[]> = {};
-  for (const [gate, role] of Object.entries(fromHarness.roles)) agents[Number(gate)] = [role];
-  for (const seq of fromHarness.sequences) {
-    agents[seq.gate] = [...seq.agents];
-    console.log(`  gate ${seq.gate}    ${seq.agents.join(' then ')}`);
+  if (owners.length > 1) {
+    throw new Error(
+      `run ${runId} has ${owners.length} owners (${owners.map((o) => o.repo).join(', ')}). ` +
+      'This slice drives one repo: the gate-2 role is held per gate, not per repo.',
+    );
   }
-  if (owners[0]?.agent) agents[2] = [owners[0].agent];
-  for (const gate of fromHarness.unclaimed) {
-    console.log(`  note      no agent in this harness declares gate ${gate}`);
-  }
-  for (const seq of fromHarness.unordered) {
-    // Worse than a sequence, and worth saying differently: the harness put
-    // several agents on this gate and did not say which comes first.
-    console.log(`  note      gate ${seq.gate} has ${seq.agents.length} agents (${seq.agents.join(', ')}) and no declared order`);
-  }
-  const target = { ...targetFor(runId), agents };
+  const roles = await agentsForRun(run, owners);
+  for (const note of roles.notes) console.log(`  note      ${note}`);
+  const target = engineTargetFor(run, owners, roles.agents, approvers());
+  const commands = processDeps({ ghPath: env('BODHI_GH', 'gh'), pythonPath: target.pythonPath });
+  const spawnGate = spawnGateFor(run, owners, spawnConfig(), runs.activeGate, (line) => console.log(`  ${line}`));
+  return { run, owners, target, deps: { ...commands, spawnGate } };
+}
 
-  const commands = processDeps({
-    ghPath: env('BODHI_GH', 'gh'),
-    pythonPath: target.pythonPath,
-  });
-
+/**
+ * Apply one event with the real dependencies, and say what happened.
+ *
+ * Shared by `step`, which takes the event from a person, `watch`, which
+ * derives it from a gate's receipt, and `loop`, which derives it from
+ * nobody -- so a gate finishing by receipt spawns the next gate exactly as
+ * one finishing by structured output does.
+ */
+async function driveEvent(runId: string, event: RunEvent): Promise<void> {
+  const { run, target, deps } = await executorFor(runId);
   console.log(`stepping ${runId}: ${run.state} + ${event.kind}\n`);
-  const result = await advance(runId, event, target, {
-    ...commands,
-    spawnGate: async (gate: Gate, agent: string) => {
-      const owner = owners[0];
-      // The row for this role's turn was opened by the driver before this
-      // call, so it is the one thing that knows the attempt number -- and
-      // therefore the channel key `perms` will look up. Its absence is a
-      // broken invariant, and a broken invariant that quietly defaulted to
-      // attempt 1 would hand this role a channel another turn already used:
-      // a stale request read as the new one's, which is exactly what keying
-      // by attempt exists to prevent. So it fails here, where the cause is.
-      const turn = runs.activeGate(runId);
-      if (!turn || turn.gate !== gate || turn.agent !== agent) {
-        const found = turn ? `gate ${turn.gate} (${turn.agent})` : 'missing';
-        throw new Error(
-          `gate ${gate} (${agent}) was asked to launch but the open run_gates row is ${found}; ` +
-            'the driver opens the row before it spawns',
-        );
-      }
-      console.log(`  launching gate ${gate} as ${agent}`);
-      return launchGate({
-        gate,
-        agentName: agent,
-        // Gate 2 is background by default so a long owner run does not hold
-        // the console open. BODHI_GATE_MODE overrides it. Both modes reach
-        // the permission channel now: print through the MCP tool, background
-        // through a PreToolUse hook (#291), and `perms`/`answer` cannot tell
-        // which.
-        mode: (env('BODHI_GATE_MODE', gate === 2 ? 'background' : 'print') as 'background' | 'print'),
-        // The harness says HOW to work a gate; only the run knows WHAT it is
-        // working on, and none of it is derivable from an agent file. The
-        // first real launch was handed a bare sentence and opened by
-        // guessing at directories that did not exist.
-        prompt: gateBrief(
-          {
-            initiativeKey: run.initiativeKey,
-            initiativePath: run.initiativeDir ?? '(not recorded)',
-            repo: owner?.repo ?? '(not recorded)',
-            worktree: owner?.worktree ?? process.cwd(),
-            harnessPath: run.harnessPath,
-            gate,
-          },
-          env('BODHI_TASK', `Work gate ${gate} for ${run.initiativeKey}.`),
-        ),
-        promptFileDir: path.join(process.cwd(), '.run-console-prompts'),
-        // Without this a `manual` gate blocks on its first gated tool and
-        // nothing can answer it (#288). The key is what `perms` looks up, so
-        // it is built from what a person already has in front of them.
-        permissions: {
-          root: permissionRoot(),
-          brokerPath: path.join(__dirname, '..', 'scripts', 'permission-broker.js'),
-          channelKey: channelKeyFor(runId, gate, agent, turn.attempt),
-        },
-        context: {
-          harnessPath: run.harnessPath,
-          bodhiRoot: run.bodhiRoot,
-          cwd: owner?.worktree ?? process.cwd(),
-          pythonPath: run.pythonPath,
-          posture: run.permissionPosture,
-          sessionId: crypto.randomUUID(),
-        },
-        spawn: {
-          executable: env('BODHI_CLAUDE', 'claude'),
-          timeoutMs: Number(env('BODHI_GATE_TIMEOUT', '900000')),
-        },
-      });
-    },
-  });
-
+  const result = await advance(runId, event, target, deps);
   console.log(`\nstate     ${result.state}`);
   console.log(`applied   ${result.applied.map((e: { kind: string }) => e.kind).join(', ') || '(nothing)'}`);
   for (const problem of result.problems) console.log(`problem   ${problem}`);
@@ -363,17 +323,6 @@ function permissionRoot(): string {
   return path.join(process.cwd(), '.run-console-permissions');
 }
 
-/**
- * Names one role's turn at a gate.
- *
- * Run, gate, role and attempt, because those are what a person reading
- * `status` already has -- and because the verifier and the scribe are both
- * gate 4, so a key without the role would hand the scribe the verifier's
- * unanswered requests. A retry must not inherit its predecessor's either.
- */
-function channelKeyFor(runId: string, gate: number, agent: string, attempt: number): string {
-  return `${runId}-g${gate}-${agent}-a${attempt}`;
-}
 
 /** The channel of the gate currently in flight, or null when none is. */
 function activeChannel(runId: string): string | null {
@@ -422,52 +371,87 @@ async function watch(): Promise<void> {
     console.log('no gate in flight, so there is nothing to look at');
     return;
   }
-  if (gate.gate !== 2 && gate.gate !== 3 && gate.gate !== 4) {
-    throw new Error(`the open row is for gate ${gate.gate}, which this engine does not know`);
-  }
-  const receiptPath = receiptPathFor(run.initiativeDir ?? '', gate.gate, gate.agent);
-  // Read once, no existence check first: another process writes this file,
-  // and a check-then-read has a window in which it can vanish. A missing file
-  // is "no receipt yet", which is the normal state of a working gate, not an
-  // error to crash on.
-  const receipt = readReceipt(readIfPresent(receiptPath));
-  const seen = await sessionStatus(gate.bgSessionId);
-  // SQLite's CURRENT_TIMESTAMP is UTC without a zone marker. Said so once,
-  // here, and used twice below -- so the two cannot disagree about what
-  // zone the row was written in.
-  const startedAtIso = `${gate.startedAt.replace(' ', 'T')}Z`;
-  const startedAtMs = Date.parse(startedAtIso);
-  // Half a clock is not a clock: an unreadable start time means the ceiling
-  // cannot apply, and that is said rather than left as a NaN that quietly
-  // never trips it.
-  const busyForMs = Number.isNaN(startedAtMs) ? null : Date.now() - startedAtMs;
-  const ran = busyForMs === null ? 'started at an unreadable time' : `running ${Math.round(busyForMs / 60_000)}m`;
-  console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt}, ${ran})`);
-  if (busyForMs === null) {
-    console.log(`  note    started_at is ${JSON.stringify(gate.startedAt)}, which does not parse; the busy ceiling cannot apply`);
-  }
-  console.log(`  receipt ${receipt ? receipt.verdict : 'none'}  ${receiptPath}`);
-  console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  status: ${seen.status ?? 'unknown'}`);
-  // Printed here, under the header it is about, rather than from inside the
-  // lookup -- a note above its own gate reads as somebody else's.
-  if (seen.note) console.log(`  note    ${seen.note}`);
-
-  const { event, note } = attend({
-    gate: gate.gate,
-    agent: gate.agent,
-    receipt,
-    status: seen.status,
-    backgroundId: gate.bgSessionId,
-    startedAt: startedAtIso,
-    busyForMs,
-    busyCeilingMs: GATE_BUSY_CEILING_MS,
-  });
-  if (note) console.log(`  note    ${note}`);
-  if (!event) {
+  const look = await lookAtGate(run, gate, attentionDeps());
+  const ran = look.runningForMs === null ? 'started at an unreadable time' : `running ${Math.round(look.runningForMs / 60_000)}m`;
+  console.log(`gate ${look.gate} (${look.agent}, attempt ${look.attempt}, ${ran})`);
+  console.log(`  receipt ${look.receiptVerdict ?? 'none'}  ${look.receiptPath}`);
+  console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  status: ${look.status ?? 'unknown'}`);
+  if (look.statusNote) console.log(`  note    ${look.statusNote}`);
+  if (look.attention.note) console.log(`  note    ${look.attention.note}`);
+  if (!look.attention.event) {
     console.log('nothing to do; as far as can be seen, the gate is working');
     return;
   }
-  await driveEvent(runId, event);
+  await driveEvent(runId, look.attention.event);
+}
+
+/** How the console reads the world for `attend`. The app reads it the same way. */
+function attentionDeps(): AttentionDeps {
+  return {
+    readFile: readIfPresent,
+    run: (executable, argv) => runCommand(executable, argv, { timeoutMs: 30_000 }),
+    claudePath: env('BODHI_CLAUDE', 'claude'),
+    now: () => Date.now(),
+    busyCeilingMs: GATE_BUSY_CEILING_MS,
+  };
+}
+
+/**
+ * Run the engine's loop for a while, with nobody typing.
+ *
+ * This is the demonstration the whole console was built toward: arm a run,
+ * step it once to `prepared`, then `loop`, and watch it go gate to gate --
+ * receipts read, PRs found, checks reconciled -- with a person needed only
+ * for permissions. The app does the same on a timer; this does it on a
+ * timer you can see the end of.
+ */
+async function loop(): Promise<void> {
+  const seconds = Number(process.argv[3] ?? '600');
+  const tickMs = Number(env('BODHI_LOOP_TICK_MS', '15000'));
+  const engine = createRunLoop({
+    now: () => Date.now(),
+    listActiveRuns: () => runs.listActiveRuns(),
+    listOwners: (id) => runs.listOwners(id),
+    activeGate: (id) => runs.activeGate(id),
+    look: (run, gate) => lookAtGate(run, gate, attentionDeps()),
+    discoverPr: async (_run, owner) => {
+      const out = await runCommand(env('BODHI_GH', 'gh'), discoverPrArgv(owner.branch), { timeoutMs: 30_000, cwd: owner.worktree });
+      return out.code === 0 ? readDiscoveredPr(out.stdout) : null;
+    },
+    recordPr: (run, owner, pr) => runs.recordOwnerPullRequest(run.id, owner.repo, { prNumber: pr.number, prUrl: pr.url }),
+    reconcile: async (run, target) => {
+      const commands = processDeps({ ghPath: env('BODHI_GH', 'gh'), pythonPath: run.pythonPath ?? 'python' });
+      return reconcileOnce(target, commands);
+    },
+    advance: async (run, event) => {
+      const { target, deps } = await executorFor(run.id);
+      return advance(run.id, event, target, deps);
+    },
+    approvers,
+    log: (line) => console.log(`  ${new Date().toISOString().slice(11, 19)}  ${line}`),
+  });
+  console.log(`looping for ${seconds}s, a tick every ${tickMs / 1000}s; ctrl-c to stop sooner\n`);
+  const until = Date.now() + seconds * 1000;
+  while (Date.now() < until) {
+    const report = await engine.tick();
+    const stamp = new Date(report.at).toISOString().slice(11, 19);
+    if (report.due.length) {
+      const bits = [
+        ...report.looked.map((l) => `looked g${l.gate} ${l.agent}${l.decided ? ` -> ${l.decided}` : ''}`),
+        ...report.reconciled.map((r) => `reconciled -> ${r.events.join(',') || 'nothing new'}`),
+        ...report.skipped.map((sk) => `skipped: ${sk.why}`),
+      ];
+      console.log(`${stamp}  ${report.due.length} due: ${bits.join(' | ')}`);
+    }
+    for (const p of report.problems) console.log(`${stamp}  problem ${p.runId.slice(0, 8)}: ${p.problem}`);
+    for (const id of report.escalated) console.log(`${stamp}  ESCALATE ${id.slice(0, 8)}: repeated failures; a person should look`);
+    if (!runs.listActiveRuns().some((r) => r.state === 'running' || r.state === 'waitingChecks' || r.state === 'waitingReview' || r.state === 'reviewNotRequested')) {
+      console.log(`${stamp}  nothing left that a loop can move; stopping`);
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, tickMs));
+  }
+  status();
 }
 
 /** The file's text, or null when there is no file. Anything else is thrown. */
@@ -480,36 +464,6 @@ function readIfPresent(file: string): string | null {
   }
 }
 
-/**
- * What the daemon says a background session is doing, per `claude agents`.
- *
- * Measured vocabulary: `busy` while working, `waiting` when wedged on a
- * prompt, `idle` once its turn is done; a stopped session is not listed and
- * reads as `gone`. Null when it cannot be known -- no id recorded, or the CLI
- * could not be asked -- and null is not gone: that is a verdict about the
- * gate, and must not be reached by failing to look.
- */
-async function sessionStatus(
-  bgSessionId: string | null,
-): Promise<{ status: SessionStatus | null; note: string | null }> {
-  if (!bgSessionId) return { status: null, note: null };
-  const result = await runCommand(env('BODHI_CLAUDE', 'claude'), ['agents', '--json'], { timeoutMs: 30_000 });
-  if (result.code !== 0) return { status: null, note: `claude agents exited ${result.code}; status unknown` };
-  try {
-    const parsed = JSON.parse(result.stdout) as unknown;
-    const rows = Array.isArray(parsed) ? parsed : ((parsed as { agents?: unknown[] }).agents ?? []);
-    const row = rows.find((r) => (r as { id?: string }).id === bgSessionId) as { status?: string } | undefined;
-    if (!row) return { status: 'gone', note: null };
-    const status = row.status;
-    if (status === 'busy' || status === 'waiting' || status === 'idle') return { status, note: null };
-    // A word the daemon has not shown us before. Not a reason to guess in
-    // either direction -- returned as a note for the caller to print in
-    // order, not logged from here above the header it belongs under.
-    return { status: null, note: `the daemon reports status ${JSON.stringify(status)}, which this console does not know` };
-  } catch {
-    return { status: null, note: 'claude agents returned something that is not JSON; status unknown' };
-  }
-}
 
 async function perms(): Promise<void> {
   const runId = process.argv[3];
@@ -590,6 +544,7 @@ async function main(): Promise<void> {
   else if (command === 'perms') await perms();
   else if (command === 'answer') await answer();
   else if (command === 'watch') await watch();
+  else if (command === 'loop') await loop();
   else {
     console.log(`unknown command ${command ?? '(none)'}. See the header of this file.`);
     process.exitCode = 64;
