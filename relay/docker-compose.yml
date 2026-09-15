@@ -1,6 +1,9 @@
 # Bodhilander relay — container deployment.
 #
-#   docker compose up --build -d     # relay on http://localhost:${PORT:-8080}
+#   RELAY_COMMIT=$(git rev-parse --short HEAD) docker compose up --build -d
+#
+# Relay on http://localhost:${PORT:-8080}. Omitting RELAY_COMMIT builds an
+# unstamped image whose /health reports a null commit.
 #
 # TLS is intentionally NOT handled here. Terminate TLS at whatever already
 # fronts the host (cloud load balancer, existing nginx/Cloudflare, etc.) and

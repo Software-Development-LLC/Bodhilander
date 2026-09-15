@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { main } from './index';
 
 let running: { stop: () => Promise<void> } | null = null;
-const KEYS = ['NODE_ENV', 'PORT', 'DB_PATH', 'PUBLIC_URL', 'SESSION_SECRET', 'LOG_LEVEL', 'HANDOFF_DIR'] as const;
+const KEYS = ['NODE_ENV', 'PORT', 'DB_PATH', 'PUBLIC_URL', 'SESSION_SECRET', 'LOG_LEVEL', 'HANDOFF_DIR', 'RELAY_BUILD_COMMIT'] as const;
 const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 
 afterEach(async () => {
@@ -62,4 +62,37 @@ test('the entry point serves at the shipped body ceiling', async () => {
   // is the whole claim: this server carries the ceiling a handoff needs.
   expect(res.status).toBe(413);
   expect(await res.json()).toEqual({ error: 'payload_too_large' });
+});
+
+test('the startup log line carries the commit', async () => {
+  // The deploy docs send operators to `docker logs | grep 'relay listening'`
+  // when a container is restart-looping and there is no /health to curl, so
+  // the field is an interface and not just a convenience.
+  const port = 20000 + Math.floor(Math.random() * 10000);
+  Object.assign(process.env, {
+    NODE_ENV: 'test',
+    PORT: String(port),
+    DB_PATH: ':memory:',
+    PUBLIC_URL: `http://127.0.0.1:${port}`,
+    SESSION_SECRET: 'test-only-secret',
+    LOG_LEVEL: 'info',
+    HANDOFF_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'relay-entry-')),
+    RELAY_BUILD_COMMIT: '7d5cb5d',
+  });
+
+  const lines: string[] = [];
+  const realWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array): boolean => {
+    lines.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString());
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    running = main();
+  } finally {
+    process.stdout.write = realWrite;
+  }
+
+  const listening = lines.find((l) => l.includes('"msg":"relay listening"'));
+  expect(listening).toBeDefined();
+  expect(JSON.parse(listening as string).commit).toBe('7d5cb5d');
 });
