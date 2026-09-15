@@ -267,6 +267,24 @@ describe('print mode: the reading gates', () => {
   });
 });
 
+describe('a settings file for the permission hook', () => {
+  test('rides along when the launcher supplies one', () => {
+    // --permission-prompt-tool is not consulted for a --bg gate; a PreToolUse
+    // hook is, and --settings is how a hook reaches a session that inherits
+    // nothing (--setting-sources ""). Measured: --settings loads with setting
+    // sources disabled.
+    const { argv } = buildGateCommand(OWNER, { ...CONTEXT, settingsPath: 'C:/chan/g2.settings.json' }, 'go');
+    const at = argv.indexOf('--settings');
+    expect(at).toBeGreaterThan(-1);
+    expect(argv[at + 1]).toBe('C:/chan/g2.settings.json');
+  });
+
+  test('is absent when none was supplied, rather than pointing at nothing', () => {
+    const { argv } = buildGateCommand(OWNER, CONTEXT, 'go');
+    expect(argv).not.toContain('--settings');
+  });
+});
+
 describe('background mode: the owner', () => {
   test('is attachable, which is what makes a stuck owner recoverable', () => {
     const { argv } = buildGateCommand(OWNER, CONTEXT, 'go');

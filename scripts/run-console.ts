@@ -289,10 +289,10 @@ async function step(): Promise<void> {
         gate,
         agentName: agent,
         // Gate 2 is background by default so a long owner run does not hold
-        // the console open. BODHI_GATE_MODE overrides it, because the
-        // permission channel is only consulted in print mode -- `--help` says
-        // `--permission-prompts` applies "with --print", and a background gate
-        // starts the broker and then never asks it anything.
+        // the console open. BODHI_GATE_MODE overrides it. Both modes reach
+        // the permission channel now: print through the MCP tool, background
+        // through a PreToolUse hook (#291), and `perms`/`answer` cannot tell
+        // which.
         mode: (env('BODHI_GATE_MODE', gate === 2 ? 'background' : 'print') as 'background' | 'print'),
         // The harness says HOW to work a gate; only the run knows WHAT it is
         // working on, and none of it is derivable from an agent file. The

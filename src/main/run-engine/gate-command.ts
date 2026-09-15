@@ -90,9 +90,18 @@ export interface RunSpawnContext {
    * The caller writes the file; this module only names it.
    */
   systemPromptPath?: string | null;
-  /** MCP tool answering permission prompts, for the `manual` posture. */
+  /** MCP tool answering permission prompts, for the `manual` posture in print mode. */
   permissionPromptTool?: string | null;
   mcpConfigPath?: string | null;
+  /**
+   * A settings file carrying the permission hook, for a background gate.
+   *
+   * `--permission-prompt-tool` is not consulted for a `--bg` gate; a
+   * `PreToolUse` hook is. `--settings` loads for the session even with
+   * `--setting-sources ""`, which is what keeps the hook from being a
+   * machine-wide setting a gate might or might not inherit.
+   */
+  settingsPath?: string | null;
 }
 
 export interface GateCommand {
@@ -171,6 +180,7 @@ export function buildGateCommand(
   argv.push('--setting-sources', '');
   argv.push('--strict-mcp-config');
   if (context.mcpConfigPath) argv.push('--mcp-config', context.mcpConfigPath);
+  if (context.settingsPath) argv.push('--settings', context.settingsPath);
   argv.push(...permissionFlags(context));
   if (context.budgetUsd != null) {
     // The plugin documents its budget as "a ceiling, not a target" and nothing
