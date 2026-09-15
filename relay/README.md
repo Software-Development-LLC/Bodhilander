@@ -115,7 +115,7 @@ relay.example.com {
 
 **Updating** — `--env-file` and the image are read at `docker run` time, so
 after changing code or `.env` you must **rebuild and recreate** (a plain
-`docker restart` does NOT pick up `.env` changes):
+`docker restart` does NOT pick up `.env` changes).
 
 Run this from the repo root — `$COMMIT` is read from your checkout, and the
 double quotes around the `ssh` argument are what expand it locally rather than
