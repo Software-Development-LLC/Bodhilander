@@ -72,6 +72,11 @@ function asGate(value: number | null | undefined): Gate | null {
   return value === 2 || value === 3 || value === 4 ? value : null;
 }
 
+/** This owner's state, or null before it has one (the run-level bootstrap). */
+function ownerStateOf(runId: string, repo: string): RunState | null {
+  return runs.ownerState(runId, repo);
+}
+
 /**
  * The detail an event carries into the log.
  *
@@ -111,6 +116,7 @@ function blockedReasonFor(state: RunState, event: RunEvent, note: string): strin
  */
 export function advance(
   runId: string,
+  repo: string,
   first: RunEvent,
   target: ExecutorTarget,
   deps: ExecutorDeps,
@@ -126,7 +132,7 @@ export function advance(
   // whose predecessor never returned, which is a different bug and a louder
   // one. Runs do not block each other -- the chain is per run id.
   const queued = (inFlight.get(runId) ?? Promise.resolve()).then(() =>
-    advanceOnce(runId, first, target, deps),
+    advanceOnce(runId, repo, first, target, deps),
   );
   // Kept even when it rejects, so one failure does not wedge the run's queue.
   inFlight.set(
@@ -144,6 +150,7 @@ const inFlight = new Map<string, Promise<void>>();
 
 async function advanceOnce(
   runId: string,
+  repo: string,
   first: RunEvent,
   target: ExecutorTarget,
   deps: ExecutorDeps,
@@ -168,25 +175,28 @@ async function advanceOnce(
         result.problems.push(`run ${runId} is not in the database`);
         return result;
       }
-      const gate = runs.activeGate(runId);
+      // This owner's active gate and this owner's state, so two repos in
+      // flight do not read each other's (CO-722 multi-owner).
+      const gate = runs.activeGate(runId, repo);
+      const before = ownerStateOf(runId, repo) ?? run.state;
 
       // A step passing is not the gate passing -- see `continueSequence`.
       // Handled before the machine hears anything, and the machine hears
       // nothing at all if there was a next role to run.
-      const nextStep = await continueSequence(runId, event, gate, target, deps, result);
+      const nextStep = await continueSequence(runId, repo, event, gate, target, deps, result);
       if (nextStep) {
         next.push(...nextStep);
         continue;
       }
 
-      const decision = transition(run.state, event, { activeGate: asGate(gate?.gate) });
+      const decision = transition(before, event, { activeGate: asGate(gate?.gate) });
       result.state = decision.state;
-      recordDecision(runId, run.state, event, gate, decision, result);
+      recordDecision(runId, repo, before, event, gate, decision, result);
 
       // Recorded BEFORE the gate runs, for the same reason the transition is:
       // a gate that starts and then crashes must leave a row, and the guard
       // that stops a stale report from regressing the run reads that row.
-      const { actions, opened } = openGates(runId, decision, target, result);
+      const { actions, opened } = openGates(runId, repo, decision, target, result);
       const performed = await execute(actions, target, deps);
       recordLaunches(performed, opened);
       collect(result, performed);
@@ -224,6 +234,7 @@ async function advanceOnce(
  */
 function openGates(
   runId: string,
+  repo: string,
   decision: { actions: readonly RunAction[] },
   target: ExecutorTarget,
   result: AdvanceResult,
@@ -241,11 +252,11 @@ function openGates(
     const first = target.agents[action.gate]?.[0];
     if (!first) {
       result.problems.push(
-        `gate ${action.gate} has no role recorded for this run, so it was not started`,
+        `gate ${action.gate} has no role recorded for ${repo}, so it was not started`,
       );
       continue;
     }
-    const step = startStep(runId, action.gate, first, target);
+    const step = startStep(runId, repo, action.gate, first, target);
     opened.set(action.gate, step.rowId);
     allowed.push(step.action);
   }
@@ -272,6 +283,7 @@ type OpenedRows = Map<Gate, string>;
  */
 function recordDecision(
   runId: string,
+  repo: string,
   before: RunState,
   event: RunEvent,
   gate: runs.RunGateRow | null,
@@ -280,7 +292,7 @@ function recordDecision(
 ): void {
   if (decision.state === before && decision.actions.length === 0) return;
   const reason = blockedReasonFor(decision.state, event, decision.note);
-  writeTransition(runId, decision.state, event.kind, {
+  writeTransition(runId, repo, decision.state, event.kind, {
     ...detailFor(event),
     blockedReason: reason ?? undefined,
   });
@@ -314,6 +326,7 @@ function recordDecision(
  */
 async function continueSequence(
   runId: string,
+  repo: string,
   event: RunEvent,
   gate: runs.RunGateRow | null,
   target: ExecutorTarget,
@@ -326,7 +339,7 @@ async function continueSequence(
   const following = stepAfter(target.agents[event.gate], gate.agent, result, event.gate);
   if (!following) return null;
   runs.finishGate(gate.id, 'done', { verdict: 'pass' });
-  const step = startStep(runId, event.gate, following, target);
+  const step = startStep(runId, repo, event.gate, following, target);
   const performed = await execute([step.action], target, deps);
   recordLaunches(performed, new Map([[event.gate, step.rowId]]));
   collect(result, performed);
@@ -342,12 +355,13 @@ async function continueSequence(
  */
 function startStep(
   runId: string,
+  repo: string,
   gate: Gate,
   agent: string,
   target: ExecutorTarget,
 ): { action: ResolvedAction; rowId: string } {
   const rowId = randomUUID();
-  runs.startGate({ id: rowId, runId, gate, agent, posture: target.posture });
+  runs.startGate({ id: rowId, runId, repo, gate, agent, posture: target.posture });
   return { action: { kind: 'spawnGate', gate, agent }, rowId };
 }
 
@@ -410,22 +424,37 @@ function collect(result: AdvanceResult, performed: ExecutorResult): void {
 }
 
 /**
- * The repository's overloads make `blockedReason` required for the states
- * that block, which is the point of them — this narrows once so the rest of
- * the module does not have to.
+ * Persist a transition on the right plane (CO-722 multi-owner).
+ *
+ * The run-level prelude and terminal failure (`preparing`, `provisioning`,
+ * `failed`) are the whole run's -- provisioning runs once over every worktree,
+ * and a failed install is not one repo's fault -- so they write `runs.state`
+ * directly. Everything else is this owner's track: it writes `run_owners.state`
+ * and rolls the run up. The repository's overloads make `blockedReason`
+ * required for the states that block, which is the point of them; this narrows
+ * once so the rest of the module does not have to.
  */
 function writeTransition(
   runId: string,
+  repo: string,
   state: RunState,
   kind: string,
   detail: runs.EventDetail & { blockedReason?: string },
 ): void {
-  if (state === 'inconclusive' || state === 'failed') {
-    runs.recordTransition(runId, state, kind, {
+  if (state === 'preparing' || state === 'provisioning' || state === 'failed') {
+    if (state === 'failed') {
+      runs.recordTransition(runId, state, kind, { ...detail, blockedReason: detail.blockedReason ?? 'run failed' });
+      return;
+    }
+    runs.recordTransition(runId, state, kind, detail);
+    return;
+  }
+  if (state === 'inconclusive') {
+    runs.recordOwnerTransition(runId, repo, state, kind, {
       ...detail,
-      blockedReason: detail.blockedReason ?? `run ${state}`,
+      blockedReason: detail.blockedReason ?? 'inconclusive',
     });
     return;
   }
-  runs.recordTransition(runId, state, kind, detail);
+  runs.recordOwnerTransition(runId, repo, state, kind, detail);
 }

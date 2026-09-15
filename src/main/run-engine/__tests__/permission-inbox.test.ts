@@ -6,7 +6,7 @@ import { channelDirForGate, pendingRequests, writeDecision, type ChannelIo } fro
 
 const ROOT = 'C:/perm';
 const GATE: RunGateRow = {
-  id: 'g', runId: 'run-1', gate: 2, agent: 'bodhilander-lead', attempt: 1, bgSessionId: 'abc', claudeSessionId: 'abc-0',
+  id: 'g', runId: 'run-1', repo: 'Bodhilander', gate: 2, agent: 'bodhilander-lead', attempt: 1, bgSessionId: 'abc', claudeSessionId: 'abc-0',
   status: 'running', verdictJson: null, posture: 'manual', startedAt: '2026-09-15 02:50:00',
 };
 
@@ -24,7 +24,7 @@ function fakeIo(files: Record<string, string>): { io: ChannelIo; files: Record<s
   return { io, files };
 }
 
-const dir = `${ROOT}/${channelKeyFor('run-1', 2, 'bodhilander-lead', 1)}`;
+const dir = `${ROOT}/${channelKeyFor('run-1', 'Bodhilander', 2, 'bodhilander-lead', 1)}`;
 const ASK = JSON.stringify({
   toolName: 'Bash', input: { command: 'rm -rf build' }, askedAt: '2026-09-15T02:55:00Z',
 });

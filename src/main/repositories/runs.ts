@@ -402,6 +402,20 @@ export function recordOwnerPullRequest(
     .run(pr.prNumber, pr.prUrl, runId, repo);
 }
 
+/**
+ * One owner's gate state, or null before the run fans out (CO-722 multi-owner).
+ *
+ * The driver reads THIS owner's state to advance its track, falling back to the
+ * run's state for the first transition after a run-level bootstrap, before the
+ * owner has a state of its own.
+ */
+export function ownerState(runId: string, repo: string): RunState | null {
+  const row = getDatabase()
+    .prepare('SELECT state FROM run_owners WHERE run_id = ? AND repo = ?')
+    .get(runId, repo) as { state: string | null } | undefined;
+  return (row?.state as RunState | null) ?? null;
+}
+
 export function listOwners(runId: string): RunOwnerRow[] {
   const rows = getDatabase()
     .prepare('SELECT * FROM run_owners WHERE run_id = ? ORDER BY repo')
