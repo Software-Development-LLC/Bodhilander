@@ -76,7 +76,12 @@ export interface TickReport {
 }
 
 /** The states a tick reconciles against GitHub. Everything else is a gate or a person. */
-const RECONCILES: ReadonlySet<RunState> = new Set(['waitingChecks', 'waitingReview', 'reviewNotRequested']);
+export const RECONCILES: ReadonlySet<RunState> = new Set(['waitingChecks', 'waitingReview', 'reviewNotRequested']);
+
+/** A run a loop can still move without a person: a running gate, or a reconcile. */
+export function isMovable(state: RunState): boolean {
+  return state === 'running' || RECONCILES.has(state);
+}
 
 export interface RunLoop {
   /** One pass over every due run. Never rejects; problems are reported. */
@@ -129,11 +134,23 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
   }
 
   async function reconcileRun(run: RunRow, report: TickReport): Promise<boolean> {
-    const owner = deps.listOwners(run.id)[0];
-    if (!owner) {
+    const owners = deps.listOwners(run.id);
+    if (owners.length === 0) {
       report.skipped.push({ runId: run.id, why: 'no owner recorded, so no branch to find a PR for' });
       return false;
     }
+    if (owners.length > 1) {
+      // The gate-2 role is held per gate, not per repo, so a multi-owner run
+      // is out of this slice's scope. Reconciling only the first owner's PR
+      // would look like progress while the others went unwatched, so it is a
+      // skip a person can see rather than a silent single-repo pass.
+      report.skipped.push({
+        runId: run.id,
+        why: `${owners.length} owners (${owners.map((o) => o.repo).join(', ')}); this slice drives one repo`,
+      });
+      return false;
+    }
+    const owner = owners[0];
     if (owner.prNumber === null || !owner.prUrl) {
       // The scribe opened it; nothing told us which. The branch is the one
       // thing the run knows, and gh can find the PR from it.
@@ -172,9 +189,39 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     return result.problems.length === 0;
   }
 
+  /**
+   * One run's pass: look at its gate, reconcile its PR, or nothing.
+   *
+   * `true` means the pass established something (or correctly found nothing
+   * to do); `false` means it could not, and the run's cadence backs off. A
+   * state that is neither a gate nor a reconcile is not due here at all --
+   * `intervalFor` returned null -- so `true` is the honest answer for it.
+   */
+  async function passOne(run: RunRow, report: TickReport): Promise<boolean> {
+    if (run.state === 'running') return lookAt(run, report);
+    if (RECONCILES.has(run.state)) return reconcileRun(run, report);
+    return true;
+  }
+
   async function tick(): Promise<TickReport> {
-    const at = deps.now();
-    const report: TickReport = { at, due: [], looked: [], reconciled: [], skipped: [], problems: [], escalated: [] };
+    // at starts at 0 and is set inside the try, so even deps.now() throwing
+    // is the tick's reported problem rather than a rejection: start() leans
+    // on tick never rejecting, so the guarantee is total, not almost.
+    const report: TickReport = { at: 0, due: [], looked: [], reconciled: [], skipped: [], problems: [], escalated: [] };
+    try {
+      report.at = deps.now();
+      await runTick(report.at, report);
+    } catch (err) {
+      // The scheduling calls -- listActiveRuns, dueRuns -- sit here rather
+      // than inside a per-run try, so a transient store error is the tick's
+      // problem and the loop lives to try again, not an unhandled rejection
+      // that kills unattended operation.
+      report.problems.push({ runId: '(scheduler)', problem: err instanceof Error ? err.message : String(err) });
+    }
+    return report;
+  }
+
+  async function runTick(at: number, report: TickReport): Promise<void> {
     const active = deps.listActiveRuns();
     const seen = new Set<string>();
     for (const run of active) {
@@ -191,7 +238,7 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
       report.due.push(run.id);
       let ok = false;
       try {
-        ok = run.state === 'running' ? await lookAt(run, report) : RECONCILES.has(run.state) ? await reconcileRun(run, report) : true;
+        ok = await passOne(run, report);
       } catch (err) {
         // One run's failure is not another's, and not the loop's. Reported,
         // counted against this run's cadence, and the tick goes on.
@@ -199,7 +246,6 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
       }
       passed(run.id, ok, report);
     }
-    return report;
   }
 
   return {
@@ -214,12 +260,17 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
             for (const p of report.problems) deps.log(`${p.runId} problem: ${p.problem}`);
             for (const id of report.escalated) deps.log(`${id} has failed ${memory.get(id)?.failures ?? '?'} passes in a row; a person should look`);
           })
+          .catch((err: unknown) => {
+            // tick() is written never to reject; this is the belt to that
+            // suspenders, so a bug there is a log line and not a dead loop.
+            deps.log(`the run loop tick threw: ${err instanceof Error ? err.message : String(err)}`);
+          })
           .finally(() => {
             ticking = false;
           });
       }, everyMs);
       // A pending tick must not hold the process open past shutdown.
-      (timer as { unref?: () => void }).unref?.();
+      timer.unref?.();
     },
     stop() {
       if (timer) clearInterval(timer);

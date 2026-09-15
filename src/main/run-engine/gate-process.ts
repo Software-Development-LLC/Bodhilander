@@ -155,15 +155,25 @@ export function backgroundIdFor(sessionId: string): string {
 }
 
 /**
- * The `--session-id` the command names, for deriving the background id.
+ * The background id `claude --bg` actually assigned, read from its stdout.
  *
- * Read back out of the argv rather than passed in for the same reason the
- * mode is: the id the process was actually given is the one a person will
- * have to attach to.
+ * Measured, and it overturns what this module used to do: `--bg` prints
+ * `warning: --bg manages the session id; ignoring --session-id` and hands
+ * the session an id of its OWN, unrelated to the `--session-id` we pass.
+ * That id is what `claude agents`, `attach`, `logs` and `stop` all take, and
+ * it is printed in the launch banner as those very commands:
+ *
+ *     claude attach 9e338a7c    open in this terminal
+ *
+ * Deriving the id from our discarded `--session-id` (as this module did)
+ * recorded an id the daemon had never heard of, so every status lookup for a
+ * live background gate came back `gone`. It only ever went unnoticed because
+ * a receipt, when present, outranks status. Returns the id, or null when the
+ * banner does not contain one — which is a launch that cannot be attached to.
  */
-function sessionIdIn(argv: string[]): string | null {
-  const i = argv.indexOf('--session-id');
-  return i >= 0 && i + 1 < argv.length ? argv[i + 1] : null;
+export function backgroundIdFromOutput(stdout: string): string | null {
+  const match = /claude (?:attach|agents|logs|stop) ([0-9a-f]{8})(?![0-9a-f])/.exec(stdout);
+  return match ? match[1] : null;
 }
 
 /**
@@ -280,20 +290,25 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
           );
           return;
         }
-        const sessionId = sessionIdIn(command.argv);
-        if (!sessionId) {
-          // Not recoverable by guessing. Without the id nothing can attach to
-          // this gate, reconcile it, or resume it — so recording it as running
-          // would create a session the engine could never speak to again.
+        // The daemon's own id, from the launch banner — NOT the --session-id
+        // we passed, which --bg ignores. Without it nothing can attach to
+        // this gate, reconcile it or ask its status, so recording it as
+        // running would create a session the engine could never speak to.
+        const backgroundId = backgroundIdFromOutput(stdout);
+        if (!backgroundId) {
           undriveable(
-            'the background gate launched with no --session-id, so nothing can attach to it',
+            'the background gate launched but printed no session id to attach to',
+            firstText(stdout.trim(), stderrTail),
           );
           return;
         }
         done({
           status: 'launched',
-          backgroundId: backgroundIdFor(sessionId),
-          sessionId,
+          backgroundId,
+          // The banner prints only the short id; the full uuid is not on
+          // stdout. The short id is what every `claude` subcommand takes, so
+          // it is the one worth recording, in both columns.
+          sessionId: backgroundId,
           durationMs,
         });
         return;

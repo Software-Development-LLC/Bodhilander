@@ -217,3 +217,55 @@ describe('the schedule', () => {
     expect((await loop.tick()).due).toEqual(['r1']);
   });
 });
+
+describe('a tick survives what a per-run catch cannot', () => {
+  test('a throw from listActiveRuns is the tick’s reported problem, not a rejection', async () => {
+    // The scheduling calls sit above the per-run try/catch. Unguarded, a
+    // transient store error becomes an unhandled rejection that kills
+    // unattended operation. The tick must resolve with the problem recorded.
+    const f = fake({ listActiveRuns: () => { throw new Error('database is locked'); } });
+    const loop = createRunLoop(f.deps);
+    const report = await loop.tick();
+    expect(report.problems).toEqual([{ runId: '(scheduler)', problem: 'database is locked' }]);
+    expect(report.due).toEqual([]);
+  });
+
+  test('a throw from dueRuns is caught the same way', async () => {
+    // listActiveRuns is fine; the memory the scheduler builds from it is
+    // what throws. Same guarantee.
+    const f = fake({ runs: [run('r1', 'running')], now: undefined });
+    // now() is called by dueRuns via intervalFor; make it throw.
+    f.deps.now = () => { throw new Error('clock unavailable'); };
+    const report = await createRunLoop(f.deps).tick();
+    expect(report.problems.some((p) => p.runId === '(scheduler)' && p.problem.includes('clock'))).toBe(true);
+  });
+});
+
+describe('the timer', () => {
+  test('a slow tick does not start a second before the first finishes', async () => {
+    // The whole reason for the ticking guard. Two overlapping ticks would
+    // drive the same run twice and race its rows.
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    let ticks = 0;
+    let release: (() => void) | null = null;
+    const f = fake({
+      runs: [run('r1', 'running')],
+      look: async () => {
+        ticks += 1;
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        await new Promise<void>((resolve) => { release = resolve; });
+        inFlight -= 1;
+        return look(null);
+      },
+    });
+    const loop = createRunLoop(f.deps);
+    loop.start(1); // fire faster than the tick can finish
+    await new Promise((r) => setTimeout(r, 30)); // several timer fires
+    expect(ticks).toBe(1); // only the first got in; the rest were suppressed
+    expect(maxConcurrent).toBe(1);
+    release?.();
+    loop.stop();
+  });
+});

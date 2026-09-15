@@ -57,7 +57,7 @@ import {
   type SpawnConfig,
 } from '../src/main/run-engine/gate-spawner';
 import { lookAtGate, type AttentionDeps } from '../src/main/run-engine/attention-pass';
-import { createRunLoop } from '../src/main/run-engine/run-loop';
+import { createRunLoop, isMovable } from '../src/main/run-engine/run-loop';
 import { discoverPrArgv, readDiscoveredPr } from '../src/main/run-engine/pr-discovery';
 import { reconcileOnce } from '../src/main/run-engine/reconcile';
 import { runCommand, processDeps } from '../src/main/run-engine/command-runner';
@@ -445,7 +445,7 @@ async function loop(): Promise<void> {
     }
     for (const p of report.problems) console.log(`${stamp}  problem ${p.runId.slice(0, 8)}: ${p.problem}`);
     for (const id of report.escalated) console.log(`${stamp}  ESCALATE ${id.slice(0, 8)}: repeated failures; a person should look`);
-    if (!runs.listActiveRuns().some((r) => r.state === 'running' || r.state === 'waitingChecks' || r.state === 'waitingReview' || r.state === 'reviewNotRequested')) {
+    if (!runs.listActiveRuns().some((r) => isMovable(r.state))) {
       console.log(`${stamp}  nothing left that a loop can move; stopping`);
       break;
     }
