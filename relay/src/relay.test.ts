@@ -18,10 +18,23 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(ConfigError);
   });
 
-  test('accepts a production config with a secret and emits no warnings', () => {
-    const { config, warnings } = loadConfig({ NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(64) });
+  test('accepts a fully configured production config and emits no warnings', () => {
+    const { config, warnings } = loadConfig({
+      NODE_ENV: 'production',
+      SESSION_SECRET: 'x'.repeat(64),
+      RELAY_BUILD_COMMIT: '7d5cb5d',
+    });
     expect(config.isProduction).toBe(true);
     expect(warnings).toHaveLength(0);
+  });
+
+  test('warns when a production image carries no build stamp', () => {
+    // The Dockerfile's ARG/ENV pair is the only thing wiring this up, and an
+    // unstamped image is silent until the day someone needs to identify it.
+    const { warnings } = loadConfig({ NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(64) });
+    expect(warnings.some((w) => w.includes('RELAY_BUILD_COMMIT'))).toBe(true);
+    // Development is unstamped by nature; warning there would be noise.
+    expect(loadConfig({}).warnings.some((w) => w.includes('RELAY_BUILD_COMMIT'))).toBe(false);
   });
 
   test('rejects an out-of-range port', () => {
@@ -91,6 +104,19 @@ describe('http router', () => {
     const body = (await res.json()) as { ok: boolean; version: string };
     expect(body.ok).toBe(true);
     expect(typeof body.version).toBe('string');
+  });
+
+  test('GET /health reports the commit the image was built from', async () => {
+    const stamped = loadConfig({ RELAY_BUILD_COMMIT: 'abc1234' }).config;
+    const res = await createRouter({ config: stamped, logger, repos })(new Request('http://relay.test/health'));
+    expect(((await res.json()) as { commit: string | null }).commit).toBe('abc1234');
+
+    // An unstamped build answers with null rather than omitting the key, so a
+    // relay too old to carry a commit stays distinguishable from one that is
+    // merely unstamped.
+    const plain = (await (await route(new Request('http://relay.test/health'))).json()) as Record<string, unknown>;
+    expect(plain.commit).toBeNull();
+    expect(Object.hasOwn(plain, 'commit')).toBe(true);
   });
 
   test('unknown paths return a JSON 404', async () => {

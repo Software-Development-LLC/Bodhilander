@@ -28,7 +28,7 @@ bun run typecheck         # tsc --noEmit
 Quick check once it's running:
 
 ```bash
-curl -s localhost:8080/health   # {"ok":true,"version":"...","uptime":...}
+curl -s localhost:8080/health   # {"ok":true,"version":"...","commit":null,"uptime":...}
 ```
 
 ## Deploy (Docker)
@@ -36,9 +36,13 @@ curl -s localhost:8080/health   # {"ok":true,"version":"...","uptime":...}
 Docker is the supported deployment path. The image is a single-stage `oven/bun`
 build — no toolchain, no compile step.
 
+Run from `relay/`, where the compose file lives:
+
 ```bash
-docker compose up --build -d          # relay on http://localhost:${PORT:-8080}
-docker compose logs -f relay
+COMMIT=$(git rev-parse --short HEAD)
+if [ -n "$(git status --porcelain .)" ]; then COMMIT="$COMMIT-dirty"; fi
+RELAY_COMMIT=$COMMIT docker compose up --build -d
+docker compose logs -f relay          # relay on http://localhost:${PORT:-8080}
 ```
 
 The container runs with `NODE_ENV=production`, so **`SESSION_SECRET` is
@@ -56,7 +60,9 @@ SQLite lives on the `relay-data` named volume at `/data/relay.db`.
 TLS is **not** handled by this stack. Terminate TLS at whatever already fronts
 the host — a cloud load balancer, an existing nginx, Caddy, Cloudflare, etc. —
 and proxy to the container's published port. When behind such a proxy set
-`TRUST_PROXY=true` so `X-Forwarded-*` headers are honored.
+`TRUST_PROXY=true` so `X-Forwarded-*` headers are honored — but only once the
+published port is unreachable except through that proxy, since `TRUST_PROXY`
+makes the rate limiter believe a header any direct caller can set.
 
 ## Production deployment (reference: Caddy + Docker)
 
@@ -66,8 +72,8 @@ so it's reproducible. Substitute your own host/domain.
 
 **1. DNS** — point the subdomain at the VM (`A` record → VM IP).
 
-**2. Env** — `/root/bodhi-relay/.env` (production; `NODE_ENV=production` is baked
-into the image):
+**2. Env** — `/home/bodhilabs/bodhi-relay/.env` (production; `NODE_ENV=production`
+is baked into the image):
 
 ```ini
 PUBLIC_URL=https://relay.example.com
@@ -84,16 +90,35 @@ The GitHub OAuth app's callback URL must be `${PUBLIC_URL}/auth/github/callback`
 host only has Compose v1, use plain `docker`:
 
 ```bash
-docker build -t bodhi-relay:latest .
+docker build --build-arg RELAY_COMMIT=<sha> -t bodhi-relay:latest .
 docker run -d --name bodhi-relay --restart unless-stopped \
   -p 127.0.0.1:47393:8080 \
   -v bodhi-relay-data:/data \
-  --env-file /root/bodhi-relay/.env \
+  --env-file /home/bodhilabs/bodhi-relay/.env \
   bodhi-relay:latest
 ```
 
-Binding to `127.0.0.1` keeps the plain-HTTP relay off the network — only the
-local Caddy reaches it.
+`RELAY_COMMIT` is what `/health` reports back (see [Identifying a
+deployment](#identifying-a-deployment)). The host directory is an rsync target
+rather than a checkout, so the value has to come from the machine you deploy
+from — nothing on the host can derive it.
+
+Bind to `127.0.0.1` rather than a routable address, so only the local Caddy
+reaches the plain-HTTP relay. That is what makes `TRUST_PROXY=true` safe: with
+it on, the rate limiter buckets callers by the **rightmost** `X-Forwarded-For`
+entry, trusting that exactly one proxy — Caddy — sits in front. Publish the port
+somewhere callers can reach directly and they write that entry themselves,
+minting a fresh bucket per request and evading every limit, including the ones
+guarding link codes.
+
+**The live hosts do not currently honour that.** `docker inspect` during the
+last deploy reported the publish as `0.0.0.0:47393`. Whether anything off-host
+can actually reach it is unconfirmed — a direct probe timed out rather than
+being refused, which is what a firewall in front of a wide binding also looks
+like. Issue #313 tracks establishing the real binding and moving it; it needs
+SSH and is a deliberate host change, not something to fold into a deploy. Read
+the paragraph above as the binding this recipe requires, not as a description of
+what is running.
 
 **4. Caddy** — add a site block and reload (`systemctl reload caddy`):
 
@@ -105,20 +130,57 @@ relay.example.com {
 
 **Updating** — `--env-file` and the image are read at `docker run` time, so
 after changing code or `.env` you must **rebuild and recreate** (a plain
-`docker restart` does NOT pick up `.env` changes):
+`docker restart` does NOT pick up `.env` changes).
+
+Run this from the repo root — `$COMMIT` is read from your checkout, and the
+double quotes around the `ssh` argument are what expand it locally rather than
+on the host. `rsync` ships the working tree rather than the commit, so the
+`-dirty` suffix is what keeps the stamp from naming code that is not the code
+being deployed:
 
 ```bash
+COMMIT=$(git rev-parse --short HEAD)
+if [ -n "$(git status --porcelain relay)" ]; then COMMIT="$COMMIT-dirty"; fi
 rsync -az --delete --exclude node_modules --exclude data --exclude .env \
-  relay/ host:/root/bodhi-relay/
-ssh host 'cd /root/bodhi-relay && docker build -t bodhi-relay:latest . \
+  relay/ host:/home/bodhilabs/bodhi-relay/
+ssh host "cd /home/bodhilabs/bodhi-relay \
+  && docker build --build-arg RELAY_COMMIT=$COMMIT -t bodhi-relay:latest . \
   && docker rm -f bodhi-relay \
   && docker run -d --name bodhi-relay --restart unless-stopped \
        -p 127.0.0.1:47393:8080 -v bodhi-relay-data:/data \
-       --env-file /root/bodhi-relay/.env bodhi-relay:latest'
+       --env-file /home/bodhilabs/bodhi-relay/.env bodhi-relay:latest"
 ```
 
 The SQLite DB lives on the `bodhi-relay-data` volume, so linked machines survive
 rebuilds.
+
+### Identifying a deployment
+
+`/health` reports the build, so confirming what is live is one request:
+
+```bash
+curl -s https://relay.example.com/health
+# {"ok":true,"version":"0.1.0","commit":"7d5cb5d","uptime":628551.3}
+```
+
+`version` is the `package.json` version and moves rarely, so it cannot tell two
+builds apart; `commit` is the answer. It is `null` on an image built without
+`RELAY_COMMIT`, and **absent entirely** on one built before `/health` carried
+it — which is itself a useful thing to see. A `-dirty` suffix means the tree
+that was shipped had uncommitted changes, so the sha names the commit that
+tree was based on rather than what is running.
+
+The same value is on the `relay listening` line at startup, which is where to
+look when the container is restart-looping after startup and there is nothing
+to `curl`. A container failing in `loadConfig` never reaches this line — that
+case reports itself as a `ConfigError` on the first lines of the log instead.
+
+```bash
+docker logs bodhi-relay | grep 'relay listening'
+```
+
+A production image built without `RELAY_COMMIT` says so in a startup warning,
+rather than waiting to answer `null` on the day someone asks.
 
 ## Configuration
 

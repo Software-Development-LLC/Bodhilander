@@ -22,6 +22,13 @@ COPY --chown=bun:bun web ./web
 RUN bun run build:web
 COPY --chown=bun:bun src ./src
 
+# The source commit, surfaced on /health. Last in the file so that stamping a
+# new one reuses every layer above it. The env deliberately does not share the
+# build arg's name: --env-file is applied over the image's ENV at run time, so
+# a stray RELAY_COMMIT in .env would otherwise silently outrank the real one.
+ARG RELAY_COMMIT
+ENV RELAY_BUILD_COMMIT=$RELAY_COMMIT
+
 USER bun
 VOLUME /data
 EXPOSE 8080

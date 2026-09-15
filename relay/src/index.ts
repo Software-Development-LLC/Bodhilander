@@ -119,6 +119,7 @@ export function main() {
     port: server.port,
     publicUrl: config.publicUrl,
     env: config.nodeEnv,
+    commit: config.commit,
   });
 
   let shuttingDown = false;

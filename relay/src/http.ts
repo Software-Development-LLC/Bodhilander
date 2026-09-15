@@ -50,7 +50,7 @@ import {
  * WebSocket upgrades are handled separately in `index.ts`.
  *
  * Routes:
- *   GET  /health                      — liveness (unauthenticated)
+ *   GET  /health                      — liveness + build stamp (unauthenticated)
  *   GET  /auth/github/login           — begin GitHub OAuth
  *   GET  /auth/github/callback        — finish OAuth, set session cookie
  *   POST /auth/logout                 — destroy session
@@ -179,7 +179,7 @@ export function createRouter(ctx: RelayContext) {
       }
 
       if (pathname === '/health' && method === 'GET') {
-        return json({ ok: true, version, uptime: process.uptime() });
+        return json({ ok: true, version, commit: config.commit, uptime: process.uptime() });
       }
 
       if (pathname === '/auth/github/login' && method === 'GET') {

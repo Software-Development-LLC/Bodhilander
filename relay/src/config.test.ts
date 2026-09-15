@@ -50,3 +50,45 @@ describe('handoff storage limits', () => {
     expect(() => loadConfig({ ...BASE, HANDOFF_TTL_SECONDS: '-1' })).toThrow(ConfigError);
   });
 });
+
+describe('build stamp', () => {
+  test('carries the commit the image was built from', () => {
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d' }).config.commit).toBe('7d5cb5d');
+  });
+
+  test('is null, not empty, when the build did not stamp one', () => {
+    // An unset --build-arg reaches the process as "", so the absent case has
+    // to collapse to one value a reader can test against.
+    expect(loadConfig(BASE).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '' }).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '   ' }).config.commit).toBeNull();
+  });
+
+  test('passes a -dirty suffix through, which is what the deploy docs promise', () => {
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d-dirty' }).config.commit).toBe('7d5cb5d-dirty');
+  });
+
+  test('ignores the build arg name, which .env can reach and must not win', () => {
+    // --env-file is applied over the image's ENV, so a RELAY_COMMIT left in
+    // .env would outrank the baked stamp and date the relay wrongly.
+    expect(loadConfig({ ...BASE, RELAY_COMMIT: 'stale99' }).config.commit).toBeNull();
+    expect(
+      loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d', RELAY_COMMIT: 'stale99' }).config.commit,
+    ).toBe('7d5cb5d');
+  });
+
+  test('still warns in production when only the build arg name got through', () => {
+    // The case the deploy docs spend the most words on: the value reached the
+    // container, under the one name the app does not read.
+    const { config, warnings } = loadConfig({
+      NODE_ENV: 'production',
+      SESSION_SECRET: 'x'.repeat(64),
+      RELAY_COMMIT: 'stale99',
+    });
+    expect(config.commit).toBeNull();
+    const stamp = warnings.find((w) => w.includes('RELAY_BUILD_COMMIT'));
+    expect(stamp).toBeDefined();
+    // Naming the build arg too, since that is the half an operator must fix.
+    expect(stamp).toContain('RELAY_COMMIT=');
+  });
+});

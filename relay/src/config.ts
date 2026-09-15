@@ -36,6 +36,8 @@ export interface RelayConfig {
   vapidSubject: string;
   nodeEnv: string;
   isProduction: boolean;
+  /** Source commit baked into the image at build time; null when unstamped. */
+  commit: string | null;
 }
 
 export interface LoadedConfig {
@@ -137,6 +139,19 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     ? parsePositiveInt('HANDOFF_STORE_MAX_BYTES', env.HANDOFF_STORE_MAX_BYTES)
     : 8 * 1024 * 1024 * 1024;
 
+  // Nothing else enforces the ARG/ENV pair in the Dockerfile, and an unstamped
+  // image fails by answering `null` forever — on the day someone needs to know
+  // what is deployed, which is too late to learn it was never wired.
+  // An unset --build-arg arrives as "", so empty and absent mean the same here.
+  const stamp = env.RELAY_BUILD_COMMIT?.trim() ?? '';
+  const commit = stamp === '' ? null : stamp;
+  if (isProduction && !commit) {
+    warnings.push(
+      'RELAY_BUILD_COMMIT is not set — /health cannot identify this deployment. ' +
+        'Build the image with --build-arg RELAY_COMMIT=<sha>.',
+    );
+  }
+
   const dbPath = env.DB_PATH ?? './data/relay.db';
   // Beside the database, which is what the deployment puts on a volume. An
   // in-memory database has no directory to sit beside, so the caller must say
@@ -169,6 +184,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       vapidSubject: env.VAPID_SUBJECT ?? 'mailto:admin@localhost',
       nodeEnv,
       isProduction,
+      commit,
     },
     warnings,
   };
