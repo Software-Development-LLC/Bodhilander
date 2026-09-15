@@ -31,11 +31,14 @@ import type { IgnitionRequest, IgnitionResult } from './ignition';
  */
 export function harnessFromTeamYaml(text: string): string | null {
   for (const line of text.split(/\r?\n/)) {
-    const match = /^harness:\s*(.+?)\s*$/.exec(line);
+    // A single greedy capture with no lazy quantifier and no trailing `\s*`, so
+    // there is nothing to backtrack over on a long line (S5852). Whitespace is
+    // handled by trim() below, not by the pattern.
+    const match = /^harness:(.*)$/.exec(line);
     if (match) {
       // Strip a MATCHED pair of quotes only, so a path that merely contains a
       // quote is left intact rather than losing its first and last characters.
-      const value = match[1].replace(/^(["'])(.*)\1$/, '$2').trim();
+      const value = match[1].trim().replace(/^(["'])(.*)\1$/, '$2').trim();
       return value || null;
     }
   }

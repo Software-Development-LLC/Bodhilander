@@ -23,6 +23,7 @@
 }
 .run-arm__armed,
 .run-arm__refused {
+  display: block; /* .run-arm__armed is an <output>, inline by default */
   margin-top: 0.5rem;
   font-size: 0.85rem;
 }

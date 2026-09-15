@@ -70,10 +70,22 @@ export function brokerPath(): string {
   return path.join(process.resourcesPath, 'app', 'dist', 'scripts', 'permission-broker.js');
 }
 
+/**
+ * An environment override, or the default when it is unset OR empty.
+ *
+ * `BODHI_CLAUDE=` (set but blank) means "no override", not "the path is the
+ * empty string" -- so a bare `??` would be wrong here (it keeps the blank) and
+ * a bare `||` reads as a mistake. This says the intent once, in one place.
+ */
+function envOr(name: string, fallback: string): string {
+  const value = process.env[name];
+  return value && value.length > 0 ? value : fallback;
+}
+
 /** The app-level spawn settings; per-run values come from the run's rows. */
 export function spawnConfig(userData: string): SpawnConfig {
   return {
-    claudePath: process.env.BODHI_CLAUDE || 'claude',
+    claudePath: envOr('BODHI_CLAUDE', 'claude'),
     promptFileDir: path.join(userData, 'run-engine', 'prompts'),
     permissionsRoot: permissionsRoot(userData),
     brokerPath: brokerPath(),
@@ -91,7 +103,7 @@ export function permissionsRoot(userData: string): string {
 
 /** Approvers a review request goes to. Empty until configured; the engine refuses clearly then. */
 function approvers(): readonly string[] {
-  return (process.env.BODHI_APPROVERS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return envOr('BODHI_APPROVERS', '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 /** The real attention dependencies: read the receipt file, ask `claude agents`. */
@@ -192,9 +204,9 @@ export function armInitiativeDir(initiativeDir: string): Promise<IgnitionResult>
     initiativeDir,
     { readFile: readIfPresent },
     (request) => armRun(request, { run: (exe, argv) => runCommand(exe, argv, { timeoutMs: 60_000 }) }),
-    // The same `BODHI_GH || 'gh'` the loop is threaded with in startRunLoopService,
-    // so arming checks the gh the loop will later drive with, not a different one.
-    { pythonPath: process.env.BODHI_PYTHON || 'python', ghPath: process.env.BODHI_GH || 'gh' },
+    // The same gh the loop is threaded with in startRunLoopService, so arming
+    // checks the gh the loop will later drive with, not a different one.
+    { pythonPath: envOr('BODHI_PYTHON', 'python'), ghPath: envOr('BODHI_GH', 'gh') },
   );
 }
 
@@ -223,7 +235,7 @@ export async function answerRunPermission(
   if (!wrote) return false;
   const run = runsRepo.getRun(runId);
   if (run && run.state === 'waitingPermission') {
-    const { target, deps } = await executorFor(spawnConfig(userData), process.env.BODHI_GH || 'gh', run);
+    const { target, deps } = await executorFor(spawnConfig(userData), envOr('BODHI_GH', 'gh'), run);
     await advance(runId, { kind: 'permissionAnswered' }, target, deps);
   }
   return true;
@@ -238,7 +250,7 @@ export function startRunLoopService(): RunLoop {
   const config = spawnConfig(userData);
   fs.mkdirSync(config.promptFileDir, { recursive: true });
   fs.mkdirSync(config.permissionsRoot, { recursive: true });
-  const loop = createRunLoop(loopDeps(config, process.env.BODHI_GH || 'gh'));
+  const loop = createRunLoop(loopDeps(config, envOr('BODHI_GH', 'gh')));
   loop.start(TICK_MS);
   log.info(`[RunLoop] started; ticking every ${TICK_MS / 1000}s`);
   started = loop;

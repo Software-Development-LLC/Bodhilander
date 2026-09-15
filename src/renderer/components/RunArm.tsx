@@ -57,7 +57,9 @@ export const RunArm: React.FC<RunArmProps> = ({ pick, arm, onArmed }) => {
       )}
 
       {result?.status === 'armed' && (
-        <div className="run-arm__armed" role="status">
+        // <output> carries role="status" implicitly and is announced more
+        // reliably by assistive tech than a div with the role tacked on (S6819).
+        <output className="run-arm__armed">
           <p>
             Armed <strong>{result.initiativeKey || result.runId}</strong>. The engine will drive it.
           </p>
@@ -68,15 +70,17 @@ export const RunArm: React.FC<RunArmProps> = ({ pick, arm, onArmed }) => {
               </li>
             ))}
           </ul>
-        </div>
+        </output>
       )}
 
       {result?.status === 'refused' && (
         <div className="run-arm__refused" role="alert">
           <p>Not armed. Nothing was written. Fix these and try again:</p>
           <ul>
-            {result.refusals.map((r, i) => (
-              <li key={i}>
+            {result.refusals.map((r) => (
+              // Keyed by the reason itself: the list is a set of distinct
+              // things to fix, so the text is the identity, not the position.
+              <li key={`${r.what}::${r.fix}`}>
                 <span className="run-arm__what">{r.what}</span>
                 <span className="run-arm__fix">{r.fix}</span>
               </li>
