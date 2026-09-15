@@ -41,14 +41,15 @@ import type { GateLook } from './attention-pass';
 import type { DiscoveredPr } from './pr-discovery';
 import { repoSlugFromUrl } from './pr-discovery';
 import type { ReconcileResult, ReconcileTarget } from './reconcile';
-import { dueRuns, shouldEscalate, type ScheduledRun } from './reconcile-loop';
+import { baseIntervalFor, dueRuns, shouldEscalate, type ScheduledRun } from './reconcile-loop';
 import type { RunEvent, RunState } from './transitions';
 
 export interface LoopDeps {
   now(): number;
   listActiveRuns(): RunRow[];
   listOwners(runId: string): RunOwnerRow[];
-  activeGate(runId: string): RunGateRow | null;
+  /** This owner's gate in flight (CO-722 multi-owner): two repos can each have one. */
+  activeGate(runId: string, repo: string): RunGateRow | null;
   /** The gathering half of #287. */
   look(run: RunRow, gate: RunGateRow): Promise<GateLook>;
   /**
@@ -65,8 +66,8 @@ export interface LoopDeps {
   discoverPr(run: RunRow, owner: RunOwnerRow): Promise<DiscoveredPr | null>;
   recordPr(run: RunRow, owner: RunOwnerRow, pr: DiscoveredPr): void;
   reconcile(run: RunRow, target: ReconcileTarget): Promise<ReconcileResult>;
-  /** The driver, with this run's real spawner behind it. */
-  advance(run: RunRow, event: RunEvent): Promise<AdvanceResult>;
+  /** The driver, with this owner's real spawner behind it (CO-722 multi-owner). */
+  advance(run: RunRow, owner: RunOwnerRow, event: RunEvent): Promise<AdvanceResult>;
   approvers(): readonly string[];
   log(line: string): void;
 }
@@ -93,6 +94,30 @@ export function isMovable(state: RunState): boolean {
   return state === 'running' || RECONCILES.has(state);
 }
 
+/**
+ * The state a run should be SCHEDULED on: its fastest movable owner's, or the
+ * run's own when no owner can move (CO-722 multi-owner).
+ *
+ * The run ticks at the shortest cadence any of its owners needs, so a repo at
+ * gate 2 (60s) is not paced by a sibling waiting on review (5m). When nothing
+ * is movable the fallback -- the run's rollup -- has a null interval, so the
+ * run is simply not due, which is the correct answer for a run waiting entirely
+ * on people.
+ */
+export function schedulingState(
+  ownerStates: readonly (RunState | null)[],
+  fallback: RunState,
+): RunState {
+  const movable = ownerStates.filter((s): s is RunState => s !== null && isMovable(s));
+  if (movable.length === 0) return fallback;
+  // Seeded with the first movable state (the array is non-empty here), so the
+  // reduce has an initial value rather than leaning on there being one.
+  return movable.reduce(
+    (best, s) => ((baseIntervalFor(s) ?? Infinity) < (baseIntervalFor(best) ?? Infinity) ? s : best),
+    movable[0],
+  );
+}
+
 export interface RunLoop {
   /** One pass over every due run. Never rejects; problems are reported. */
   tick(): Promise<TickReport>;
@@ -109,11 +134,16 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
   let ticking = false;
 
   function remember(run: RunRow): ScheduledRun {
+    // The cadence is the FASTEST owner's, not the rollup's (CO-722 multi-owner).
+    // Scheduling off the rollup would let one stuck owner (its person-state
+    // outranks the others) zero out a healthy owner's cadence and starve it.
+    const owners = deps.listOwners(run.id);
+    const state = schedulingState(owners.map((o) => o.state), run.state);
     const known = memory.get(run.id);
     // The state is the database's, always; only the bookkeeping is ours.
     const next: ScheduledRun = known
-      ? { ...known, state: run.state }
-      : { id: run.id, state: run.state, lastPassAt: null, failures: 0 };
+      ? { ...known, state }
+      : { id: run.id, state, lastPassAt: null, failures: 0 };
     memory.set(run.id, next);
     return next;
   }
@@ -126,53 +156,36 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     if (!ok && shouldEscalate(failures)) report.escalated.push(runId);
   }
 
-  async function lookAt(run: RunRow, report: TickReport): Promise<boolean> {
-    const gate = deps.activeGate(run.id);
+  async function lookAtOwner(run: RunRow, owner: RunOwnerRow, report: TickReport): Promise<boolean> {
+    const gate = deps.activeGate(run.id, owner.repo);
     if (!gate) {
-      report.skipped.push({ runId: run.id, why: 'running with no gate row open' });
+      report.skipped.push({ runId: run.id, why: `${owner.repo}: running with no gate row open` });
       return false;
     }
     // A pending permission request means a person is needed, whatever the
     // daemon says the session is doing: the hook holds the tool, so the gate
     // reads busy while it is in fact blocked. This takes precedence over the
-    // attention decision, and moves the run to waitingPermission -- out of
+    // attention decision, and moves the OWNER to waitingPermission -- out of
     // the loop's reach and into the inbox -- until the request is answered.
     if (deps.pending(run, gate) > 0) {
-      const result = await deps.advance(run, { kind: 'permissionRequested' });
+      const result = await deps.advance(run, owner, { kind: 'permissionRequested' });
       for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
       report.looked.push({ runId: run.id, gate: gate.gate, agent: gate.agent, decided: 'permissionRequested' });
-      deps.log(`${run.id} gate ${gate.gate} (${gate.agent}) is waiting on a person for permission`);
+      deps.log(`${run.id} ${owner.repo} gate ${gate.gate} (${gate.agent}) is waiting on a person for permission`);
       return result.problems.length === 0;
     }
     const look = await deps.look(run, gate);
     report.looked.push({ runId: run.id, gate: look.gate, agent: look.agent, decided: look.attention.event?.kind ?? null });
-    if (look.attention.note) deps.log(`${run.id} ${look.attention.note}`);
+    if (look.attention.note) deps.log(`${run.id} ${owner.repo} ${look.attention.note}`);
     if (look.attention.event) {
-      const result = await deps.advance(run, look.attention.event);
+      const result = await deps.advance(run, owner, look.attention.event);
       for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
       return result.problems.length === 0;
     }
     return true;
   }
 
-  async function reconcileRun(run: RunRow, report: TickReport): Promise<boolean> {
-    const owners = deps.listOwners(run.id);
-    if (owners.length === 0) {
-      report.skipped.push({ runId: run.id, why: 'no owner recorded, so no branch to find a PR for' });
-      return false;
-    }
-    if (owners.length > 1) {
-      // The gate-2 role is held per gate, not per repo, so a multi-owner run
-      // is out of this slice's scope. Reconciling only the first owner's PR
-      // would look like progress while the others went unwatched, so it is a
-      // skip a person can see rather than a silent single-repo pass.
-      report.skipped.push({
-        runId: run.id,
-        why: `${owners.length} owners (${owners.map((o) => o.repo).join(', ')}); this slice drives one repo`,
-      });
-      return false;
-    }
-    const owner = owners[0];
+  async function reconcileOwner(run: RunRow, owner: RunOwnerRow, report: TickReport): Promise<boolean> {
     if (owner.prNumber === null || !owner.prUrl) {
       // The scribe opened it; nothing told us which. The branch is the one
       // thing the run knows, and gh can find the PR from it.
@@ -188,7 +201,7 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     }
     const repo = repoSlugFromUrl(owner.prUrl ?? '');
     if (!repo) {
-      report.skipped.push({ runId: run.id, why: `the recorded PR URL ${owner.prUrl} does not name a repository` });
+      report.skipped.push({ runId: run.id, why: `${owner.repo}: the recorded PR URL ${owner.prUrl} does not name a repository` });
       return false;
     }
     // A local, so the type narrows without a cast: owner is mutable (the
@@ -196,14 +209,16 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     // carry the narrowing across that write on its own.
     const prNumber = owner.prNumber;
     if (prNumber === null) {
-      report.skipped.push({ runId: run.id, why: 'a PR number was expected by now but is not recorded' });
+      report.skipped.push({ runId: run.id, why: `${owner.repo}: a PR number was expected by now but is not recorded` });
       return false;
     }
     const result = await deps.reconcile(run, {
       repo,
       registryRepo: owner.repo,
       prNumber,
-      state: run.state,
+      // The OWNER's phase decides how checks and reviews are read, not the
+      // run's rollup: two repos can be at different phases at once.
+      state: owner.state ?? run.state,
       approvers: deps.approvers(),
       harnessPath: run.harnessPath,
       pythonPath: run.pythonPath ?? 'python',
@@ -211,7 +226,7 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
     const applied: string[] = [];
     for (const event of result.events) {
-      const outcome = await deps.advance(run, event);
+      const outcome = await deps.advance(run, owner, event);
       applied.push(event.kind);
       for (const problem of outcome.problems) report.problems.push({ runId: run.id, problem });
     }
@@ -220,17 +235,45 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
   }
 
   /**
-   * One run's pass: look at its gate, reconcile its PR, or nothing.
+   * One run's pass: drive every owner that can move, on its own state
+   * (CO-722 multi-owner).
    *
-   * `true` means the pass established something (or correctly found nothing
-   * to do); `false` means it could not, and the run's cadence backs off. A
-   * state that is neither a gate nor a reconcile is not due here at all --
-   * `intervalFor` returned null -- so `true` is the honest answer for it.
+   * Each owner is a track: one at gate 2, another reconciling its PR, a third
+   * waiting on a person. `true` means every drivable owner established
+   * something (or correctly found nothing); `false` means one could not, and
+   * the run's cadence backs off. A run due because one owner is movable, whose
+   * only movable owner turns out to be waiting on a person, is not a failure --
+   * so a pass that drove nobody is `true`, not a backoff.
+   *
+   * The run ticks at its FASTEST owner's cadence (`schedulingState`), and every
+   * movable owner is driven on each tick -- so a slow owner (a `waitingReview`
+   * at 5m) is reconciled at the run's faster interval (a gate-2 sibling's 60s).
+   * Accepted, not overlooked: a reconcile is one `gh` read, the over-polling is
+   * bounded by the number of repos in one initiative, and a run stops being due
+   * the moment its fast owners settle. Per-owner throttling (a `lastPassAt` per
+   * track) is a later refinement, not a correctness fix.
    */
   async function passOne(run: RunRow, report: TickReport): Promise<boolean> {
-    if (run.state === 'running') return lookAt(run, report);
-    if (RECONCILES.has(run.state)) return reconcileRun(run, report);
-    return true;
+    const owners = deps.listOwners(run.id);
+    if (owners.length === 0) {
+      report.skipped.push({ runId: run.id, why: 'no owner recorded, so nothing to drive' });
+      return false;
+    }
+    let ok = true;
+    let drove = false;
+    for (const owner of owners) {
+      const state = owner.state;
+      if (state === 'running') {
+        drove = true;
+        ok = (await lookAtOwner(run, owner, report)) && ok;
+      } else if (state !== null && RECONCILES.has(state)) {
+        drove = true;
+        ok = (await reconcileOwner(run, owner, report)) && ok;
+      }
+      // Any other owner state (null, waiting on a person, terminal) is not this
+      // loop's to move -- the inbox has it, or it is done.
+    }
+    return drove ? ok : true;
   }
 
   async function tick(): Promise<TickReport> {
