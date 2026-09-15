@@ -178,6 +178,26 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
 
 import { pendingRequests as readPending, writeDecision } from './permission-inbox';
 import type { PermissionRequest } from './permission-channel';
+import { armInitiative } from './arm-run';
+import { armRun } from './ignition';
+import type { IgnitionResult } from './ignition';
+
+/**
+ * Arm the run in a prepared initiative directory, from the app.
+ *
+ * Reads the harness the initiative pins itself to, then hands the rest to
+ * `armRun`, which checks python and gh by running them and writes the run's
+ * rows or refuses with a list. The loop picks the armed run up on its next
+ * tick -- nothing is spawned here.
+ */
+export function armInitiativeDir(initiativeDir: string): Promise<IgnitionResult> {
+  return armInitiative(
+    initiativeDir,
+    { readFile: readIfPresent },
+    (request) => armRun(request, { run: (exe, argv) => runCommand(exe, argv, { timeoutMs: 60_000 }) }),
+    { pythonPath: process.env.BODHI_PYTHON || 'python', ghPath: process.env.BODHI_GH || 'gh' },
+  );
+}
 
 /** The pending permission requests for a run's gate in flight, for the inbox. */
 export function listRunPermissions(userData: string, runId: string): PermissionRequest[] {

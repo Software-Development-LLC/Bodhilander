@@ -11,7 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
-import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission } from './run-engine/run-loop-service';
+import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir } from './run-engine/run-loop-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -890,6 +890,21 @@ safeHandle(
   (runId: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) =>
     answerRunPermission(app.getPath('userData'), runId, toolUseId, verdict, message ?? ''),
 );
+
+// Arm a run from a prepared initiative directory (CO-722). Reading the
+// initiative and writing the run's rows -- armRun checks the machine first
+// and refuses with a list rather than writing a half-armed run.
+safeHandle('db:runs:arm', (initiativeDir: string) => armInitiativeDir(initiativeDir));
+
+// The directory picker arming uses. A cancel returns null; the renderer
+// treats that as "changed my mind", not an error.
+safeHandle('dialog:pickInitiative', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Pick a prepared initiative directory',
+    properties: ['openDirectory'],
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
 
 // Database IPC Handlers - Groups
 safeHandle('db:groups:getAll', () => {

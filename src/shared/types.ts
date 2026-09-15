@@ -683,6 +683,11 @@ export interface AccountRemovalCost {
  * a person approving a Bash call is approving its command line, and a
  * summary is not a thing to consent to.
  */
+/** What arming a run reported: the run, or the list of things to fix (CO-722). */
+export type RunArmResult =
+  | { status: 'armed'; runId: string; initiativeKey: string; owners: Record<string, string> }
+  | { status: 'refused'; refusals: { what: string; fix: string }[] };
+
 export interface RunPermissionRequest {
   toolUseId: string;
   toolName: string;
