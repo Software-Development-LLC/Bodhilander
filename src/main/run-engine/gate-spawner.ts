@@ -67,7 +67,7 @@ export const defaultTaskFor = (gate: Gate, run: RunRow): string => `Work gate ${
  * that changes without it. A sequence is the harness's `gate_order`, read
  * and not decided here.
  */
-export async function agentsForRun(run: RunRow, owners: readonly RunOwnerRow[]): Promise<RunRoles> {
+export async function agentsForOwner(run: RunRow, owner: RunOwnerRow): Promise<RunRoles> {
   const fromHarness = await rolesFromHarness(run.harnessPath, [3, 4]);
   const agents: Record<number, string[]> = {};
   const notes: string[] = [];
@@ -76,7 +76,9 @@ export async function agentsForRun(run: RunRow, owners: readonly RunOwnerRow[]):
     agents[seq.gate] = [...seq.agents];
     notes.push(`gate ${seq.gate} runs ${seq.agents.join(' then ')}`);
   }
-  if (owners[0]?.agent) agents[2] = [owners[0].agent];
+  // Gate 2 is THIS owner's role; gates 3 and 4 are the harness's, shared by
+  // every owner of the run (CO-722 multi-owner).
+  if (owner.agent) agents[2] = [owner.agent];
   for (const gate of fromHarness.unclaimed) notes.push(`no agent in this harness declares gate ${gate}`);
   for (const seq of fromHarness.unordered) {
     // Worse than a sequence, and said differently: the harness put several
@@ -89,12 +91,21 @@ export async function agentsForRun(run: RunRow, owners: readonly RunOwnerRow[]):
 /**
  * Names one role's turn at a gate, and so its permission channel.
  *
- * Run, gate, role and attempt: the verifier and the scribe are both gate 4,
- * so a key without the role would hand the scribe the verifier's unanswered
- * requests, and a retry must not inherit its predecessor's either.
+ * Run, repo, gate, role and attempt: the verifier and the scribe are both gate
+ * 4, so a key without the role would hand the scribe the verifier's unanswered
+ * requests, and a retry must not inherit its predecessor's either. The repo is
+ * there because two owners share the gate-3/4 roles (CO-722 multi-owner), so
+ * without it repo B's verifier and repo A's verifier would collide on one
+ * channel -- and a person's decision would reach the wrong owner.
  */
-export function channelKeyFor(runId: string, gate: number, agent: string, attempt: number): string {
-  return `${runId}-g${gate}-${agent}-a${attempt}`;
+export function channelKeyFor(
+  runId: string,
+  repo: string,
+  gate: number,
+  agent: string,
+  attempt: number,
+): string {
+  return `${runId}-${repo}-g${gate}-${agent}-a${attempt}`;
 }
 
 /**
@@ -107,14 +118,13 @@ export function channelKeyFor(runId: string, gate: number, agent: string, attemp
  */
 export function targetFor(
   run: RunRow,
-  owners: readonly RunOwnerRow[],
+  owner: RunOwnerRow,
   agents: Record<number, string[]>,
   approvers: readonly string[],
 ): ExecutorTarget {
-  const owner = owners[0];
   return {
-    repo: owner?.prUrl ? repoSlugFromUrl(owner.prUrl) : null,
-    prNumber: owner?.prNumber ?? null,
+    repo: owner.prUrl ? repoSlugFromUrl(owner.prUrl) : null,
+    prNumber: owner.prNumber ?? null,
     approvers: [...approvers],
     // NOT NULL in the schema and a non-optional `string` on RunRow, so there
     // is no null to guard: the console's old `?? '(not recorded)'` was dead
@@ -139,24 +149,26 @@ export function targetFor(
  */
 export function spawnGateFor(
   run: RunRow,
-  owners: readonly RunOwnerRow[],
+  owner: RunOwnerRow,
   config: SpawnConfig,
-  activeGate: (runId: string) => RunGateRow | null,
+  activeGate: (runId: string, repo: string) => RunGateRow | null,
   log: (line: string) => void = () => undefined,
 ): ExecutorDeps['spawnGate'] {
   const modeFor = config.modeFor ?? defaultModeFor;
   const taskFor = config.taskFor ?? defaultTaskFor;
   return async (gate, agent) => {
-    const owner = owners[0];
-    const turn = activeGate(run.id);
-    if (!turn || turn.gate !== gate || turn.agent !== agent) {
-      const found = turn ? `gate ${turn.gate} (${turn.agent})` : 'missing';
+    // THIS owner's turn: two owners can each have a gate in flight, so the
+    // row this launch belongs to is found by repo, and the refusal below
+    // compares repo too (CO-722 multi-owner).
+    const turn = activeGate(run.id, owner.repo);
+    if (!turn || turn.gate !== gate || turn.agent !== agent || turn.repo !== owner.repo) {
+      const found = turn ? `gate ${turn.gate} (${turn.agent}) for ${turn.repo ?? '?'}` : 'missing';
       throw new Error(
-        `gate ${gate} (${agent}) was asked to launch but the open run_gates row is ${found}; ` +
+        `gate ${gate} (${agent}) for ${owner.repo} was asked to launch but the open run_gates row is ${found}; ` +
           'the driver opens the row before it spawns',
       );
     }
-    log(`launching gate ${gate} as ${agent}`);
+    log(`launching gate ${gate} as ${agent} for ${owner.repo}`);
     return launchGate({
       gate,
       agentName: agent,
@@ -165,8 +177,8 @@ export function spawnGateFor(
         {
           initiativeKey: run.initiativeKey,
           initiativePath: run.initiativeDir,
-          repo: owner?.repo ?? '(not recorded)',
-          worktree: owner?.worktree ?? process.cwd(),
+          repo: owner.repo,
+          worktree: owner.worktree,
           harnessPath: run.harnessPath,
           gate,
         },
@@ -176,12 +188,12 @@ export function spawnGateFor(
       permissions: {
         root: config.permissionsRoot,
         brokerPath: config.brokerPath,
-        channelKey: channelKeyFor(run.id, gate, agent, turn.attempt),
+        channelKey: channelKeyFor(run.id, owner.repo, gate, agent, turn.attempt),
       },
       context: {
         harnessPath: run.harnessPath,
         bodhiRoot: run.bodhiRoot,
-        cwd: owner?.worktree ?? process.cwd(),
+        cwd: owner.worktree,
         pythonPath: run.pythonPath,
         posture: run.permissionPosture,
         sessionId: randomUUID(),

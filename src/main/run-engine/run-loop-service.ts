@@ -34,10 +34,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 import * as runsRepo from '../repositories/runs';
-import type { RunRow } from '../repositories/runs';
+import type { RunRow, RunOwnerRow } from '../repositories/runs';
 import { advance } from './driver';
 import { processDeps, runCommand } from './command-runner';
-import { agentsForRun, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
+import { agentsForOwner, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
 import { lookAtGate, type AttentionDeps } from './attention-pass';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
 import { reconcileOnce } from './reconcile';
@@ -143,12 +143,11 @@ function readIfPresent(p: string): string | null {
  * one a person launched by hand. Shared by the loop's `advance` and the
  * permission-answer path, so both move a run through the same deps.
  */
-async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow) {
-  const owners = runsRepo.listOwners(run.id);
-  const roles = await agentsForRun(run, owners);
-  const target = targetFor(run, owners, roles.agents, machine.approvers());
+async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, owner: RunOwnerRow) {
+  const roles = await agentsForOwner(run, owner);
+  const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-  const spawnGate = spawnGateFor(run, owners, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
+  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
   return { target, deps: { ...commands, spawnGate } };
 }
 
@@ -171,8 +170,14 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
       runsRepo.recordOwnerPullRequest(run.id, owner.repo, { prNumber: pr.number, prUrl: pr.url }),
     reconcile: async (run, t) => reconcileOnce(t, processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' })),
     advance: async (run, event) => {
-      const { target, deps } = await executorFor(config, ghPath, run);
-      return advance(run.id, event, target, deps);
+      // Single-owner still (the loop fans out over owners in a later slice):
+      // the run's first owner, whose repo the driver advances.
+      const owner = runsRepo.listOwners(run.id)[0];
+      if (!owner) {
+        return { state: run.state, applied: [], problems: [`run ${run.id} has no owner to advance`], notifications: [], released: false, runaway: null };
+      }
+      const { target, deps } = await executorFor(config, ghPath, run, owner);
+      return advance(run.id, owner.repo, event, target, deps);
     },
     approvers: machine.approvers,
     log: (line) => log.info(`[RunLoop] ${line}`),
@@ -256,8 +261,13 @@ export async function answerRunPermission(
   if (!wrote) return false;
   const run = runsRepo.getRun(runId);
   if (run && run.state === 'waitingPermission') {
-    const { target, deps } = await executorFor(spawnConfig(userData), machine.ghPath(), run);
-    await advance(runId, { kind: 'permissionAnswered' }, target, deps);
+    // Single-owner still: the run's first owner (the permission channel becomes
+    // per-owner in a later slice, alongside the inbox).
+    const owner = runsRepo.listOwners(runId)[0];
+    if (owner) {
+      const { target, deps } = await executorFor(spawnConfig(userData), machine.ghPath(), run, owner);
+      await advance(runId, owner.repo, { kind: 'permissionAnswered' }, target, deps);
+    }
   }
   return true;
 }

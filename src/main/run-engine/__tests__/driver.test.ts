@@ -41,6 +41,10 @@ const TARGET: ExecutorTarget = {
 
 const OK = { code: 0, stdout: '', stderr: '' };
 
+// The owner (repo) the driver advances. Its registry name, not the PR slug on
+// TARGET.repo -- run_owners and run_gates are keyed by this (CO-722 multi-owner).
+const REPO = 'Bodhilander';
+
 function deps(over: Partial<ExecutorDeps> = {}): ExecutorDeps {
   return {
     gh: async () => OK,
@@ -66,8 +70,18 @@ function seed(state = 'preparing'): string {
     pythonPath: 'C:/py/python.exe',
     permissionPosture: 'manual',
   });
+  runs.upsertOwner({
+    runId: 'run-1', repo: REPO, worktree: 'C:/work/repos/_wt-co722-Bodhilander',
+    branch: 'feat/co722', base: 'origin/development', scratch: null,
+    agent: 'bsa-lead', status: 'pending', prNumber: null, prUrl: null,
+  });
   if (state !== 'preparing') {
     db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(state, 'run-1');
+    // A run past the prelude drives on its owner's state; seed it to match so
+    // the driver reads the same starting point the run-level state implies.
+    if (state !== 'provisioning' && state !== 'failed') {
+      db.prepare('UPDATE run_owners SET state = ? WHERE run_id = ?').run(state, 'run-1');
+    }
   }
   return 'run-1';
 }
@@ -85,7 +99,7 @@ describe('a state change and its reason land together', () => {
     // stopped at the first transition would leave every run a step behind
     // until something else happened to look at it.
     const id = seed('preparing');
-    const result = await advance(id, { kind: 'prepared' }, TARGET, deps());
+    const result = await advance(id, REPO, { kind: 'prepared' }, TARGET, deps());
     expect(result.applied.map((e) => e.kind)).toEqual(['prepared', 'provisioned']);
     expect(result.state).toBe('running');
     expect(runs.listEvents(id).map((e) => e.kind)).toEqual(['prepared', 'provisioned']);
@@ -97,7 +111,7 @@ describe('a state change and its reason land together', () => {
     // is otherwise a question somebody answers by looking at GitHub.
     const id = seed('provisioning');
     let stateWhenActionRan: string | undefined;
-    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+    await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps({
       spawnGate: async () => {
         stateWhenActionRan = runs.getRun(id)?.state;
         return { status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 };
@@ -113,7 +127,7 @@ describe('a state change and its reason land together', () => {
     // the other way looks identical on every happy path, which is why this
     // asserts the crash.
     const id = seed('provisioning');
-    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+    await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps({
       spawnGate: async () => {
         throw new Error('claude is not on PATH');
       },
@@ -131,6 +145,7 @@ describe('a state change and its reason land together', () => {
     let spawned = false;
     const result = await advance(
       id,
+      REPO,
       { kind: 'provisioned' },
       { ...TARGET, agents: {} },
       deps({ spawnGate: async () => { spawned = true; throw new Error('unreachable'); } }),
@@ -150,6 +165,7 @@ describe('a state change and its reason land together', () => {
     const id = seed('waitingChecks');
     await advance(
       id,
+      REPO,
       { kind: 'checksUndriveable', reason: 'no expected_checks recorded' },
       TARGET,
       deps(),
@@ -167,7 +183,7 @@ describe('what is not written', () => {
     // happened — which is the log becoming unreadable, not complete.
     const id = seed('waitingReview');
     const before = runs.listEvents(id).length;
-    const result = await advance(id, { kind: 'prepared' }, TARGET, deps());
+    const result = await advance(id, REPO, { kind: 'prepared' }, TARGET, deps());
     expect(result.applied).toEqual([]);
     expect(runs.listEvents(id)).toHaveLength(before);
     expect(runs.getRun(id)?.state).toBe('waitingReview');
@@ -177,7 +193,7 @@ describe('what is not written', () => {
     // The executor reports rather than assumes, and this is where that pays:
     // the run stays in reviewNotRequested, which has its own retry cadence.
     const id = seed('waitingChecks');
-    const result = await advance(id, { kind: 'checksGreen' }, TARGET, deps({
+    const result = await advance(id, REPO, { kind: 'checksGreen' }, TARGET, deps({
       gh: async () => ({ code: 1, stdout: '', stderr: 'HTTP 403' }),
     }));
     expect(runs.getRun(id)?.state).toBe('reviewNotRequested');
@@ -192,8 +208,10 @@ describe('the state comes from the database', () => {
     // a caller holding a state it read a minute ago would overwrite the
     // other's work from a stale position.
     const id = seed('waitingChecks');
-    db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('waitingReview', id);
-    const result = await advance(id, { kind: 'reviewApproved' }, TARGET, deps());
+    // The persisted state now lives on the owner's track; the driver reads it,
+    // not a state the caller passes. Move it out from under the caller.
+    db.prepare('UPDATE run_owners SET state = ? WHERE run_id = ?').run('waitingReview', id);
+    const result = await advance(id, REPO, { kind: 'reviewApproved' }, TARGET, deps());
     expect(result.state).toBe('approved');
   });
 
@@ -207,9 +225,10 @@ describe('the state comes from the database', () => {
     // INSIDE comes from run_gates, so a late gate-2 verdict arriving after
     // gate 4 is ignored rather than pulling the run backwards.
     const id = seed('running');
-    runs.startGate({ id: 'g4', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    runs.startGate({ id: 'g4', runId: id, repo: REPO, gate: 4, agent: 'verifier', posture: 'manual' });
     const result = await advance(
       id,
+      REPO,
       { kind: 'gateFinished', gate: 2, verdict: 'pass' },
       TARGET,
       deps(),
@@ -222,9 +241,10 @@ describe('the state comes from the database', () => {
     // CONTROL: a guard that ignored every report would satisfy the case above
     // and freeze every run at its first gate.
     const id = seed('running');
-    runs.startGate({ id: 'g2', runId: id, gate: 2, agent: 'bsa-lead', posture: 'manual' });
+    runs.startGate({ id: 'g2', runId: id, repo: REPO, gate: 2, agent: 'bsa-lead', posture: 'manual' });
     const result = await advance(
       id,
+      REPO,
       { kind: 'gateFinished', gate: 2, verdict: 'pass' },
       TARGET,
       deps(),
@@ -246,7 +266,7 @@ describe('the loop', () => {
     // produces gateFinished, which the same call must apply. Otherwise a run
     // sits in `running` until something else happens to look at it.
     const id = seed('provisioning');
-    const result = await advance(id, { kind: 'provisioned' }, TARGET, deps({
+    const result = await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps({
       spawnGate: async () => ({
         status: 'undriveable',
         reason: 'claude is not on PATH',
@@ -263,8 +283,8 @@ describe('the loop', () => {
     // One that does not settle would spin for as long as the process lives,
     // so the limit is a tripwire rather than a tuning knob.
     const id = seed('running');
-    runs.startGate({ id: 'g3', runId: id, gate: 3, agent: 'reviewer', posture: 'manual' });
-    const result = await advance(id, { kind: 'gateFinished', gate: 3, verdict: 'fail' }, TARGET, {
+    runs.startGate({ id: 'g3', runId: id, repo: REPO, gate: 3, agent: 'reviewer', posture: 'manual' });
+    const result = await advance(id, REPO, { kind: 'gateFinished', gate: 3, verdict: 'fail' }, TARGET, {
       ...deps(),
       // Every spawn reports a failed gate 2, which sends the run back to
       // gate 2, which spawns again.
@@ -272,7 +292,7 @@ describe('the loop', () => {
         const gate = runs.activeGate(id);
         if (gate) runs.finishGate(gate.id, 'done');
         runs.startGate({
-          id: `g${Math.random()}`, runId: id, gate: 2, agent: 'owner', posture: 'manual',
+          id: `g${Math.random()}`, runId: id, repo: REPO, gate: 2, agent: 'owner', posture: 'manual',
         });
         return {
           status: 'completed' as const,
@@ -291,7 +311,7 @@ describe('the loop', () => {
     // CONTROL for the tripwire: if a normal run tripped it, the number would
     // be a tuning knob and every real advance would report a fault.
     const id = seed('preparing');
-    const result = await advance(id, { kind: 'prepared' }, TARGET, deps());
+    const result = await advance(id, REPO, { kind: 'prepared' }, TARGET, deps());
     expect(result.runaway).toBeNull();
     expect(MAX_ROUNDS).toBeGreaterThan(2);
   });
@@ -308,9 +328,9 @@ describe('the round limit', () => {
     // cycles on its own. An earlier version juggled run_gates itself and
     // broke the chain at round one, which is why it passed against the bug.
     const id = seed('running');
-    runs.startGate({ id: 'g2', runId: id, gate: 2, agent: 'bsa-lead', posture: 'manual' });
+    runs.startGate({ id: 'g2', runId: id, repo: REPO, gate: 2, agent: 'bsa-lead', posture: 'manual' });
     let spawns = 0;
-    const result = await advance(id, { kind: 'gateFinished', gate: 2, verdict: 'fail' }, TARGET, {
+    const result = await advance(id, REPO, { kind: 'gateFinished', gate: 2, verdict: 'fail' }, TARGET, {
       ...deps(),
       spawnGate: async () => {
         spawns += 1;
@@ -357,8 +377,8 @@ describe('one run advances at a time', () => {
         },
       });
     await Promise.all([
-      advance(id, { kind: 'provisioned' }, TARGET, label('first')),
-      advance(id, { kind: 'gateFinished', gate: 2, verdict: 'fail' }, TARGET, label('second')),
+      advance(id, REPO, { kind: 'provisioned' }, TARGET, label('first')),
+      advance(id, REPO, { kind: 'gateFinished', gate: 2, verdict: 'fail' }, TARGET, label('second')),
     ]);
     // Interleaved, this reads first:start, second:start, ... Serialised, the
     // first pair closes before the second opens.
@@ -378,15 +398,19 @@ describe('one run advances at a time', () => {
       bodhiRoot: 'C:/work/repos',
       permissionPosture: 'manual',
     });
+    runs.upsertOwner({
+      runId: 'run-2', repo: REPO, worktree: 'C:/wt', branch: 'b', base: 'origin/development',
+      scratch: null, agent: 'bsa-lead', status: 'pending', prNumber: null, prUrl: null,
+    });
     const order: string[] = [];
-    const first = advance('run-1', { kind: 'prepared' }, TARGET, deps({
+    const first = advance('run-1', REPO, { kind: 'prepared' }, TARGET, deps({
       provision: async () => {
         await new Promise((resolve) => { setTimeout(resolve, 20); });
         order.push('run-1');
         return OK;
       },
     }));
-    const second = advance('run-2', { kind: 'prepared' }, TARGET, deps({
+    const second = advance('run-2', REPO, { kind: 'prepared' }, TARGET, deps({
       provision: async () => {
         order.push('run-2');
         return OK;
@@ -398,10 +422,10 @@ describe('one run advances at a time', () => {
 
   test('a failure does not wedge the queue behind it', async () => {
     const id = seed('preparing');
-    await advance(id, { kind: 'prepared' }, TARGET, deps({
+    await advance(id, REPO, { kind: 'prepared' }, TARGET, deps({
       provision: async () => { throw new Error('boom'); },
     }));
-    const after = await advance(id, { kind: 'provisioned' }, TARGET, deps());
+    const after = await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps());
     expect(after.problems.filter((p) => p.includes('boom'))).toEqual([]);
   });
 });
@@ -409,7 +433,7 @@ describe('one run advances at a time', () => {
 describe('what the caller is told', () => {
   test('notifications and problems come back together with the state', async () => {
     const id = seed('provisioning');
-    const result = await advance(id, { kind: 'provisioned' }, TARGET, deps({
+    const result = await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps({
       spawnGate: async () => ({
         status: 'undriveable',
         reason: 'claude is not on PATH',
@@ -423,7 +447,7 @@ describe('what the caller is told', () => {
 
   test('a released run says so', async () => {
     const id = seed('waitingReview');
-    const result = await advance(id, { kind: 'reviewApproved' }, TARGET, deps());
+    const result = await advance(id, REPO, { kind: 'reviewApproved' }, TARGET, deps());
     expect(result.released).toBe(true);
     expect(result.state).toBe('approved');
   });
@@ -435,7 +459,7 @@ describe('the executor is reached with the decision’s own actions', () => {
     // the driver builds by hand would drift from what the machine emits.
     const performed: string[] = [];
     const id = seed('waitingChecks');
-    await advance(id, { kind: 'checksGreen' }, TARGET, deps({
+    await advance(id, REPO, { kind: 'checksGreen' }, TARGET, deps({
       gh: async (argv) => {
         performed.push(argv.join(' '));
         return OK;
@@ -474,9 +498,9 @@ describe('a gate served by several roles in sequence', () => {
     // open, because the scribe -- the only role that opens one -- has not
     // run yet.
     const id = seed('running');
-    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    runs.startGate({ id: 'v', runId: id, repo: REPO, gate: 4, agent: 'verifier', posture: 'manual' });
     const ran: string[] = [];
-    const result = await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, {
+    const result = await advance(id, REPO, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, {
       ...reporting('pass', ran),
       // Nothing after the sequence should run: the scribe's pass moves the
       // run to waitingChecks, whose only action is `reconcile`, which the
@@ -492,8 +516,8 @@ describe('a gate served by several roles in sequence', () => {
     // Two roles, two reports, ONE gateFinished in the run's own history. The
     // step boundary is recorded in run_gates, where the rows say who ran.
     const id = seed('running');
-    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
-    await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', []));
+    runs.startGate({ id: 'v', runId: id, repo: REPO, gate: 4, agent: 'verifier', posture: 'manual' });
+    await advance(id, REPO, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', []));
     const finished = runs.listEvents(id).filter((e) => e.kind === 'gateFinished');
     expect(finished).toHaveLength(1);
   });
@@ -503,13 +527,13 @@ describe('a gate served by several roles in sequence', () => {
     // still soft, and the scribe opening a PR on it would be a PR carrying a
     // verdict nobody reached.
     const id = seed('running');
-    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    runs.startGate({ id: 'v', runId: id, repo: REPO, gate: 4, agent: 'verifier', posture: 'manual' });
     const ran: string[] = [];
     // The owner reports `launched` so the run pauses there. A fake that kept
     // everything green would walk owner -> reviewer -> verifier -> scribe in
     // one call, and the scribe appearing in `ran` would then be correct
     // rather than the thing this test forbids.
-    const result = await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'fail' }, SEQUENCED, deps({
+    const result = await advance(id, REPO, { kind: 'gateFinished', gate: 4, verdict: 'fail' }, SEQUENCED, deps({
       spawnGate: async (_gate, agent) => {
         ran.push(agent);
         return { status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 };
@@ -523,10 +547,10 @@ describe('a gate served by several roles in sequence', () => {
 
   test('an inconclusive first role stops the run; the second never runs', async () => {
     const id = seed('running');
-    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
+    runs.startGate({ id: 'v', runId: id, repo: REPO, gate: 4, agent: 'verifier', posture: 'manual' });
     const ran: string[] = [];
     const result = await advance(
-      id, { kind: 'gateFinished', gate: 4, verdict: 'inconclusive' }, SEQUENCED, reporting('pass', ran),
+      id, REPO, { kind: 'gateFinished', gate: 4, verdict: 'inconclusive' }, SEQUENCED, reporting('pass', ran),
     );
     expect(ran).toEqual([]);
     expect(result.state).toBe('inconclusive');
@@ -537,11 +561,11 @@ describe('a gate served by several roles in sequence', () => {
     // says `spawnGate 4` and the driver must open the VERIFIER, not the
     // scribe, and not both.
     const id = seed('running');
-    runs.startGate({ id: 'r', runId: id, gate: 3, agent: 'reviewer', posture: 'manual' });
+    runs.startGate({ id: 'r', runId: id, repo: REPO, gate: 3, agent: 'reviewer', posture: 'manual' });
     const ran: string[] = [];
     // Gate 3's pass spawns gate 4. Make the verifier report `launched` so the
     // sequence pauses there and we can look at what was opened.
-    const result = await advance(id, { kind: 'gateFinished', gate: 3, verdict: 'pass' }, SEQUENCED, deps({
+    const result = await advance(id, REPO, { kind: 'gateFinished', gate: 3, verdict: 'pass' }, SEQUENCED, deps({
       spawnGate: async (_gate, agent) => {
         ran.push(agent);
         return { status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 };
@@ -558,8 +582,8 @@ describe('a gate served by several roles in sequence', () => {
     // attempt 2 would make every sequence read as a gate that had to be
     // rerun.
     const id = seed('running');
-    runs.startGate({ id: 'v', runId: id, gate: 4, agent: 'verifier', posture: 'manual' });
-    await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', []));
+    runs.startGate({ id: 'v', runId: id, repo: REPO, gate: 4, agent: 'verifier', posture: 'manual' });
+    await advance(id, REPO, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', []));
     const scribe = runs.listGates(id).find((g) => g.agent === 'scribe');
     expect(scribe?.attempt).toBe(1);
   });
@@ -570,9 +594,9 @@ describe('a gate served by several roles in sequence', () => {
     // position, so the report goes to the machine as it did before sequences
     // existed -- and the mismatch is a problem, not a silence.
     const id = seed('running');
-    runs.startGate({ id: 'x', runId: id, gate: 4, agent: 'auditor', posture: 'manual' });
+    runs.startGate({ id: 'x', runId: id, repo: REPO, gate: 4, agent: 'auditor', posture: 'manual' });
     const ran: string[] = [];
-    const result = await advance(id, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', ran));
+    const result = await advance(id, REPO, { kind: 'gateFinished', gate: 4, verdict: 'pass' }, SEQUENCED, reporting('pass', ran));
     expect(ran).toEqual([]);
     expect(result.state).toBe('waitingChecks');
     expect(result.problems.some((p) => p.includes('auditor') && p.includes('verifier then scribe'))).toBe(true);
@@ -585,7 +609,7 @@ describe('a launched gate is written down', () => {
     // so this is the only record that the gate exists as a session at all. A
     // row with no session is a gate nothing can look at again.
     const id = seed('provisioning');
-    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+    await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps({
       spawnGate: async () => ({
         status: 'launched', backgroundId: 'abcd1234', sessionId: 'abcd1234-0000-0000-0000-000000000000', durationMs: 1,
       }),
@@ -602,7 +626,7 @@ describe('a launched gate is written down', () => {
     // Nothing to attach to: the verdict already arrived, and the row is
     // closed by the machine accepting it.
     const id = seed('provisioning');
-    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+    await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps({
       spawnGate: async () => ({
         status: 'completed', structuredOutput: { verdict: 'pass', summary: 'ok' }, sessionId: 's', costUsd: null, durationMs: 1,
       }),
@@ -622,10 +646,10 @@ describe('a launch is recorded on the row opened for it', () => {
     // is the failure this bookkeeping exists to end.
     const id = seed('provisioning');
     let intruder: string | null = null;
-    await advance(id, { kind: 'provisioned' }, TARGET, deps({
+    await advance(id, REPO, { kind: 'provisioned' }, TARGET, deps({
       spawnGate: async () => {
         intruder = 'intruder-' + Math.random().toString(16).slice(2);
-        runs.startGate({ id: intruder, runId: id, gate: 2, agent: 'bsa-lead', posture: 'manual' });
+        runs.startGate({ id: intruder, runId: id, repo: REPO, gate: 2, agent: 'bsa-lead', posture: 'manual' });
         return { status: 'launched', backgroundId: 'abcd1234', sessionId: 'abcd1234-0000-0000-0000-000000000000', durationMs: 1 };
       },
     }));
@@ -634,5 +658,48 @@ describe('a launch is recorded on the row opened for it', () => {
     const stray = rows.find((g) => g.id === intruder);
     expect(opened?.claudeSessionId).toBe('abcd1234-0000-0000-0000-000000000000');
     expect(stray?.claudeSessionId).toBeNull();
+  });
+});
+
+describe('two owners advance on their own tracks (multi-owner)', () => {
+  // One run, two repos. Each has its own gate in flight and its own state; the
+  // driver advances one by naming its repo, and must not touch the other.
+  function seedTwoOwners(gates: Record<string, { gate: number; id: string }>): string {
+    runs.createRun({
+      id: 'run-1', initiativeKey: 'CO-722', initiativeDir: 'C:/i',
+      harnessPath: '/plugins/bodhi', bodhiRoot: 'C:/work/repos',
+      pythonPath: 'C:/py/python.exe', permissionPosture: 'manual',
+    });
+    for (const repo of Object.keys(gates)) {
+      runs.upsertOwner({
+        runId: 'run-1', repo, worktree: `C:/wt-${repo}`, branch: 'b', base: 'origin/development',
+        scratch: null, agent: 'bsa-lead', status: 'pending', prNumber: null, prUrl: null,
+      });
+      db.prepare('UPDATE run_owners SET state = ? WHERE run_id = ? AND repo = ?').run('running', 'run-1', repo);
+      runs.startGate({ id: gates[repo].id, runId: 'run-1', repo, gate: gates[repo].gate, agent: 'bsa-lead', posture: 'manual' });
+    }
+    db.prepare("UPDATE runs SET state = 'running' WHERE id = 'run-1'");
+    return 'run-1';
+  }
+
+  test('advancing one repo\u2019s gate leaves the other repo\u2019s gate untouched', async () => {
+    const id = seedTwoOwners({ 'repo-a': { gate: 2, id: 'a2' }, 'repo-b': { gate: 2, id: 'b2' } });
+    await advance(id, 'repo-a', { kind: 'gateFinished', gate: 2, verdict: 'pass' }, TARGET, deps());
+    // repo-a moved to gate 3; repo-b is still at its gate 2.
+    expect(runs.activeGate(id, 'repo-a')).toMatchObject({ gate: 3 });
+    expect(runs.activeGate(id, 'repo-b')).toMatchObject({ gate: 2, id: 'b2' });
+    // Both owners are still running; the run rolls up to running.
+    expect(runs.getRun(id)?.state).toBe('running');
+  });
+
+  test('a stale gate-2 verdict for a repo at gate 4 is ignored, while another repo advances', async () => {
+    // repo-a is at gate 4; a late gate-2 verdict for it must not pull it back.
+    // repo-b is genuinely at gate 2 and must advance -- proving activeGate is
+    // read per repo, not once for the whole run.
+    const id = seedTwoOwners({ 'repo-a': { gate: 4, id: 'a4' }, 'repo-b': { gate: 2, id: 'b2' } });
+    await advance(id, 'repo-a', { kind: 'gateFinished', gate: 2, verdict: 'pass' }, TARGET, deps());
+    await advance(id, 'repo-b', { kind: 'gateFinished', gate: 2, verdict: 'pass' }, TARGET, deps());
+    expect(runs.activeGate(id, 'repo-a')).toMatchObject({ gate: 4, id: 'a4' });
+    expect(runs.activeGate(id, 'repo-b')).toMatchObject({ gate: 3 });
   });
 });

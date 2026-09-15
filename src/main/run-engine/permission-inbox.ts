@@ -40,13 +40,15 @@ export interface ChannelIo {
 /**
  * The channel directory for a run's gate in flight, or null when none is.
  *
- * Keyed exactly as the launcher keyed it -- run, gate, role, attempt -- so
- * the verifier and the scribe (both gate 4) do not share a channel and a
- * retry does not inherit its predecessor's.
+ * Keyed exactly as the launcher keyed it -- run, repo, gate, role, attempt --
+ * so the verifier and the scribe (both gate 4) do not share a channel, a retry
+ * does not inherit its predecessor's, and two owners at the same gate do not
+ * collide (CO-722 multi-owner). The repo comes from the gate row the driver
+ * opened; the launcher took it from the same owner.
  */
 export function channelDirForGate(root: string, runId: string, gate: RunGateRow | null): string | null {
   if (!gate) return null;
-  return channelDirFor(root, channelKeyFor(runId, gate.gate, gate.agent, gate.attempt));
+  return channelDirFor(root, channelKeyFor(runId, gate.repo ?? '', gate.gate, gate.agent, gate.attempt));
 }
 
 /** What the channel holds for a run's gate: pending requests, in the person's order. */
