@@ -687,6 +687,29 @@ export type RunArmResult =
   | { status: 'refused'; refusals: { what: string; fix: string }[] };
 
 /**
+ * The preference keys the run engine's machine config is stored under (CO-722).
+ *
+ * One place both the Settings form (renderer) and the resolver (main) name
+ * them, so a rename cannot leave the UI writing a key the engine never reads.
+ * Each is resolved preference → `BODHI_*` env → built-in default, so a machine
+ * with the env already set keeps working and Settings is the friendlier way in.
+ */
+export const RUN_ENGINE_PREF_KEYS = {
+  claudePath: 'runEngine.claudePath',
+  ghPath: 'runEngine.ghPath',
+  pythonPath: 'runEngine.pythonPath',
+  approvers: 'runEngine.approvers',
+  harnessPath: 'runEngine.harnessPath',
+  bodhiRoot: 'runEngine.bodhiRoot',
+  initiativesRoot: 'runEngine.initiativesRoot',
+} as const;
+
+/** What preparing an initiative reported: the armable directory, or why not (CO-722). */
+export type RunPrepareResult =
+  | { status: 'prepared'; initiativeDir: string; log: string }
+  | { status: 'refused'; refusals: { what: string; fix: string }[]; log?: string };
+
+/**
  * One line of the run inbox (CO-722).
  *
  * Mirrors `InboxRow` in the run repository. Declared here because the
