@@ -197,6 +197,10 @@ describe('the multi-owner migration backfills an in-flight database', () => {
     owner('r3', 'repo-p');
     owner('r3', 'repo-q');
     gate('g3', 'r3');
+    // A run blocked at migration time: its owner must inherit the state AND the
+    // paired reason, or the inbox shows a blocked run with no reason.
+    d.exec("INSERT INTO runs (id, initiative_key, initiative_dir, harness_path, bodhi_root, state, blocked_reason) VALUES ('r4', 'K', '/i', '/h', '/b', 'inconclusive', 'gate 2 could not establish a verdict')");
+    owner('r4', 'repo-z');
   }
 
   test('adds the columns and backfills the single-owner run', () => {
@@ -211,6 +215,18 @@ describe('the multi-owner migration backfills an in-flight database', () => {
     expect(gate.repo).toBe('repo-x');
     const owner = d.prepare("SELECT state FROM run_owners WHERE run_id = 'r1'").get() as { state: string | null };
     expect(owner.state).toBe('running');
+  });
+
+  test('backfills a blocked run’s state AND its paired reason onto the owner', () => {
+    const d = oldDb();
+    seed(d);
+    initializeRunTables(asDb(d));
+    const owner = d.prepare("SELECT state, blocked_reason FROM run_owners WHERE run_id = 'r4'").get() as {
+      state: string | null;
+      blocked_reason: string | null;
+    };
+    expect(owner.state).toBe('inconclusive');
+    expect(owner.blocked_reason).toBe('gate 2 could not establish a verdict');
   });
 
   test('leaves a preparing run’s owner state NULL (prelude stays run-level)', () => {

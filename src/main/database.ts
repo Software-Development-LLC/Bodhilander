@@ -627,8 +627,11 @@ export function initializeRunTables(database: Database.Database): void {
   //   run_gates.repo: a gate written before the column belongs to the run's
   //     sole owner -- multi-owner runs were skipped, so they have no gate rows.
   //   run_owners.state: seed active owners from the run's current state so the
-  //     rollup equals what it was. Prelude/terminal runs (preparing,
-  //     provisioning, failed) stay run-level, so their owners keep a NULL state.
+  //     rollup equals what it was -- AND its paired blocked_reason, or a run
+  //     blocked at migration time (inconclusive, waitingPermission, ...) would
+  //     keep its state but lose the reason the inbox shows. Prelude/terminal
+  //     runs (preparing, provisioning, failed) stay run-level, so their owners
+  //     keep a NULL state.
   // Idempotent: both only touch NULLs, so re-running the migration is a no-op.
   database.exec(`
     UPDATE run_gates
@@ -637,7 +640,8 @@ export function initializeRunTables(database: Database.Database): void {
        AND (SELECT COUNT(*) FROM run_owners o WHERE o.run_id = run_gates.run_id) = 1;
 
     UPDATE run_owners
-       SET state = (SELECT state FROM runs r WHERE r.id = run_owners.run_id)
+       SET state = (SELECT state FROM runs r WHERE r.id = run_owners.run_id),
+           blocked_reason = (SELECT blocked_reason FROM runs r WHERE r.id = run_owners.run_id)
      WHERE state IS NULL
        AND (SELECT state FROM runs r WHERE r.id = run_owners.run_id)
              NOT IN ('preparing', 'provisioning', 'failed');

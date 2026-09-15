@@ -251,14 +251,18 @@ export function recordTransition(
 export function recordOwnerTransition(
   runId: string,
   repo: string,
-  state: BlockedState,
+  state: 'inconclusive',
   kind: string,
   detail: EventDetail & { blockedReason: string },
 ): void;
 export function recordOwnerTransition(
   runId: string,
   repo: string,
-  state: Exclude<RunState, BlockedState>,
+  // The states an owner's own track can hold: the run-level prelude
+  // (preparing, provisioning) and terminal failure never appear per-owner, so
+  // passing one is a compile error rather than a rollup that silently falls
+  // back. `inconclusive` is the blocked overload above; it requires a reason.
+  state: Exclude<RunState, 'inconclusive' | 'preparing' | 'provisioning' | 'failed'>,
   kind: string,
   detail?: EventDetail,
 ): void;
@@ -283,7 +287,10 @@ export function recordOwnerTransition(
     const states = owners
       .map((o) => o.state)
       .filter((s): s is RunState => s !== null);
-    if (states.length === 0) return; // still run-level; leave runs.state alone
+    // Defensive, not a normal path: the UPDATE above just set this owner's
+    // state, so `states` is empty only when the repo matched no row (a caller
+    // bug -- an unknown repo). Leave runs.state rather than roll up nothing.
+    if (states.length === 0) return;
     const rolled = rollupState(states);
     const reason = owners.find((o) => o.state === rolled)?.blocked_reason ?? null;
     db.prepare(
