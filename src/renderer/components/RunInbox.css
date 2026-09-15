@@ -88,3 +88,60 @@
   font-size: 12px;
   opacity: 0.75;
 }
+
+/* Permission requests inside a waitingPermission row (CO-722, #288). */
+.run-inbox__perms {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.run-inbox__perm {
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 0.5rem;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.run-inbox__perm-tool {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+.run-inbox__perm-input {
+  margin: 0 0 0.5rem;
+  max-height: 8rem;
+  overflow: auto;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.85;
+}
+.run-inbox__perm-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.run-inbox__allow,
+.run-inbox__deny {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.run-inbox__allow {
+  background: var(--accent-positive, #1f6f3f);
+  color: #fff;
+}
+.run-inbox__deny {
+  background: transparent;
+  border-color: var(--border, #555);
+  color: inherit;
+}
+.run-inbox__allow:disabled,
+.run-inbox__deny:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

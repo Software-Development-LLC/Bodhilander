@@ -11,7 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
-import { startRunLoopService, stopRunLoopService } from './run-engine/run-loop-service';
+import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission } from './run-engine/run-loop-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -877,6 +877,19 @@ safeOn('pty:prime', (id: string) => {
 // channel is what lets somebody watch that happen without being able to
 // set it off from a window.
 safeHandle('db:runs:inbox', () => runsRepo.listInbox());
+
+// The permission requests a run's gate is blocked on, and a person's answer
+// to one (CO-722, #288). Writing a reply is the one run-engine action the app
+// exposes -- a decision only a person can make -- so unlike the read-only
+// inbox above, `answer` mutates the channel the gate is polling.
+safeHandle('db:runs:permissions', (runId: string) =>
+  listRunPermissions(app.getPath('userData'), runId),
+);
+safeHandle(
+  'db:runs:permissions:answer',
+  (runId: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) =>
+    answerRunPermission(app.getPath('userData'), runId, toolUseId, verdict, message ?? ''),
+);
 
 // Database IPC Handlers - Groups
 safeHandle('db:groups:getAll', () => {

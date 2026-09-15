@@ -40,6 +40,7 @@ import { lookAtGate, type AttentionDeps } from './attention-pass';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
 import { reconcileOnce } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
+import { pendingRequests, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
@@ -101,6 +102,21 @@ function attentionDeps(config: SpawnConfig): AttentionDeps {
   };
 }
 
+/** The channel's disk access, one place so the loop and the answer IPC agree. */
+export const channelIo: ChannelIo = {
+  list: (dir) => {
+    try {
+      return fs.readdirSync(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+  },
+  read: readIfPresent,
+  write: (p, text) => fs.writeFileSync(p, text),
+  join: (...parts) => path.join(...parts),
+};
+
 /** A file's text, or null when it does not exist. Anything else is thrown. */
 function readIfPresent(p: string): string | null {
   try {
@@ -118,25 +134,29 @@ function readIfPresent(p: string): string | null {
  * makes, which cwd `gh` runs in -- against fakes, without a timer or a real
  * `gh` in the room.
  */
-export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
-  // The executor for one run: its target and its real spawner, built the same
-  // way the console builds them, so a gate the loop launches is identical to
-  // one a person launched by hand.
-  async function executorFor(run: RunRow) {
-    const owners = runsRepo.listOwners(run.id);
-    const roles = await agentsForRun(run, owners);
-    const target = targetFor(run, owners, roles.agents, approvers());
-    const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-    const spawnGate = spawnGateFor(run, owners, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
-    return { target, deps: { ...commands, spawnGate } };
-  }
+/**
+ * The executor for one run: its target and its real spawner, built the same
+ * way the console builds them, so a gate the loop launches is identical to
+ * one a person launched by hand. Shared by the loop's `advance` and the
+ * permission-answer path, so both move a run through the same deps.
+ */
+async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow) {
+  const owners = runsRepo.listOwners(run.id);
+  const roles = await agentsForRun(run, owners);
+  const target = targetFor(run, owners, roles.agents, approvers());
+  const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
+  const spawnGate = spawnGateFor(run, owners, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
+  return { target, deps: { ...commands, spawnGate } };
+}
 
+export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
   return {
     now: () => Date.now(),
     listActiveRuns: () => runsRepo.listActiveRuns(),
     listOwners: (id) => runsRepo.listOwners(id),
     activeGate: (id) => runsRepo.activeGate(id),
     look: (run, gate) => lookAtGate(run, gate, attentionDeps(config)),
+    pending: (run, gate) => pendingRequests(config.permissionsRoot, run.id, gate, channelIo).length,
     discoverPr: async (_run, owner) => {
       // `gh` in the owner's worktree, so it reads that repo's remote and auth
       // without anyone naming the repository.
@@ -148,12 +168,46 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
       runsRepo.recordOwnerPullRequest(run.id, owner.repo, { prNumber: pr.number, prUrl: pr.url }),
     reconcile: async (run, t) => reconcileOnce(t, processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' })),
     advance: async (run, event) => {
-      const { target, deps } = await executorFor(run);
+      const { target, deps } = await executorFor(config, ghPath, run);
       return advance(run.id, event, target, deps);
     },
     approvers,
     log: (line) => log.info(`[RunLoop] ${line}`),
   };
+}
+
+import { pendingRequests as readPending, writeDecision } from './permission-inbox';
+import type { PermissionRequest } from './permission-channel';
+
+/** The pending permission requests for a run's gate in flight, for the inbox. */
+export function listRunPermissions(userData: string, runId: string): PermissionRequest[] {
+  const gate = runsRepo.activeGate(runId);
+  return readPending(permissionsRoot(userData), runId, gate, channelIo);
+}
+
+/**
+ * Carry a person's decision to a request, and return the run to running.
+ *
+ * Writes the reply the hook is polling for, then -- if the run had been moved
+ * to waitingPermission -- applies `permissionAnswered` so the loop drives it
+ * again. Returns whether the request was still there to answer.
+ */
+export async function answerRunPermission(
+  userData: string,
+  runId: string,
+  toolUseId: string,
+  verdict: 'allow' | 'deny',
+  message: string,
+): Promise<boolean> {
+  const gate = runsRepo.activeGate(runId);
+  const wrote = writeDecision(permissionsRoot(userData), runId, gate, toolUseId, verdict, message, channelIo);
+  if (!wrote) return false;
+  const run = runsRepo.getRun(runId);
+  if (run && run.state === 'waitingPermission') {
+    const { target, deps } = await executorFor(spawnConfig(userData), process.env.BODHI_GH || 'gh', run);
+    await advance(runId, { kind: 'permissionAnswered' }, target, deps);
+  }
+  return true;
 }
 
 let started: RunLoop | null = null;

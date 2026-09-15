@@ -676,6 +676,20 @@ export interface AccountRemovalCost {
  * type shared by reference makes every column added in main visible in a
  * window by default.
  */
+/**
+ * One tool call a gate is waiting for permission on (CO-722, #288).
+ *
+ * Mirrors `PermissionRequest` in the run engine. The input is carried whole:
+ * a person approving a Bash call is approving its command line, and a
+ * summary is not a thing to consent to.
+ */
+export interface RunPermissionRequest {
+  toolUseId: string;
+  toolName: string;
+  input: unknown;
+  askedAt: string;
+}
+
 export interface RunInboxRow {
   id: string;
   initiativeKey: string;

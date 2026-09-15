@@ -51,6 +51,7 @@ function fake(over: Partial<LoopDeps> & { runs?: RunRow[]; owners?: Record<strin
     listOwners: (id) => owners[id] ?? [],
     activeGate: () => GATE,
     look: async () => { calls.push('look'); return look(null); },
+    pending: () => 0,
     discoverPr: async () => { calls.push('discover'); return { number: 299, url: 'https://github.com/o/r/pull/299' }; },
     recordPr: (_r, _o, pr) => { calls.push(`record:${pr.number}`); },
     reconcile: async (_r, t) => { calls.push(`reconcile:${t.repo}#${t.prNumber}:${t.state}`); return { events: [], problems: [] }; },
@@ -92,6 +93,27 @@ describe('what a tick does to a running run', () => {
     const report = await loop.tick();
     expect(report.skipped[0]?.why).toContain('no gate row');
     expect(loop.schedule().get('r1')?.failures).toBe(1);
+  });
+});
+
+describe('a running gate with a permission request waiting', () => {
+  test('moves the run to a person, whatever the daemon says the session is doing', async () => {
+    // The hook holds the blocked tool, so the session reads busy; only the
+    // request file says a person is needed. Pending must win over attention.
+    const f = fake({ runs: [run('r1', 'running')], pending: () => 2 });
+    const loop = createRunLoop(f.deps);
+    const report = await loop.tick();
+    expect(f.calls).toContain('advance:permissionRequested');
+    // Attention is not even consulted when a request is pending.
+    expect(f.calls).not.toContain('look');
+    expect(report.looked[0]?.decided).toBe('permissionRequested');
+  });
+
+  test('with nothing pending, the attention pass decides as before', async () => {
+    const f = fake({ runs: [run('r1', 'running')], pending: () => 0 });
+    await createRunLoop(f.deps).tick();
+    expect(f.calls).toContain('look');
+    expect(f.calls).not.toContain('advance:permissionRequested');
   });
 });
 

@@ -10,10 +10,10 @@
  * Run with: bun test src/renderer/components
  */
 import { describe, expect, test } from 'bun:test';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import React from 'react';
-import { RunInbox, reasonFor, waitedFor } from '../RunInbox';
-import type { RunInboxRow } from '../../../shared/types';
+import { RunInbox, PermissionRequests, reasonFor, waitedFor } from '../RunInbox';
+import type { RunInboxRow, RunPermissionRequest } from '../../../shared/types';
 
 const NOW = Date.parse('2026-09-14T12:00:00Z');
 
@@ -230,5 +230,63 @@ describe('what it cannot do', () => {
     await waitFor(() => {
       expect(container.querySelectorAll('button')).toHaveLength(0);
     });
+  });
+});
+
+describe('answering a permission request', () => {
+  const req = (over: Partial<RunPermissionRequest> = {}): RunPermissionRequest => ({
+    toolUseId: 'toolu_01',
+    toolName: 'Bash',
+    input: { command: 'rm -rf build', description: 'Clean' },
+    askedAt: '2026-09-14T11:41:45.000Z',
+    ...over,
+  });
+
+  test('shows the tool and its input whole, and both answers', async () => {
+    render(
+      <PermissionRequests runId="run-1" loadPermissions={async () => [req()]} answer={async () => true} />,
+    );
+    await screen.findByText('Bash');
+    // The command line is shown in full -- a person approves what runs, not a summary.
+    expect(screen.getByText(/rm -rf build/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeTruthy();
+  });
+
+  test('Allow sends allow for that request, then refreshes the inbox', async () => {
+    const sent: Array<[string, string]> = [];
+    let answered = 0;
+    render(
+      <PermissionRequests
+        runId="run-1"
+        loadPermissions={async () => [req()]}
+        answer={async (_r, id, verdict) => { sent.push([id, verdict]); return true; }}
+        onAnswered={() => { answered += 1; }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow' }));
+    await waitFor(() => expect(sent).toEqual([['toolu_01', 'allow']]));
+    await waitFor(() => expect(answered).toBe(1));
+  });
+
+  test('Deny sends deny', async () => {
+    const sent: string[] = [];
+    render(
+      <PermissionRequests
+        runId="run-1"
+        loadPermissions={async () => [req()]}
+        answer={async (_r, _id, verdict) => { sent.push(verdict); return true; }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Deny' }));
+    await waitFor(() => expect(sent).toEqual(['deny']));
+  });
+
+  test('nothing pending renders nothing at all', () => {
+    const { container } = render(
+      <PermissionRequests runId="run-1" loadPermissions={async () => []} answer={async () => true} />,
+    );
+    // A row with no requests must add no empty scaffolding to the inbox.
+    expect(container.querySelector('.run-inbox__perms')).toBeNull();
   });
 });
