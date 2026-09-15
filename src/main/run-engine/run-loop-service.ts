@@ -156,7 +156,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     now: () => Date.now(),
     listActiveRuns: () => runsRepo.listActiveRuns(),
     listOwners: (id) => runsRepo.listOwners(id),
-    activeGate: (id) => runsRepo.activeGate(id),
+    activeGate: (id, repo) => runsRepo.activeGate(id, repo),
     look: (run, gate) => lookAtGate(run, gate, attentionDeps(config)),
     pending: (run, gate) => pendingRequests(config.permissionsRoot, run.id, gate, channelIo).length,
     discoverPr: async (_run, owner) => {
@@ -169,13 +169,8 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     recordPr: (run, owner, pr) =>
       runsRepo.recordOwnerPullRequest(run.id, owner.repo, { prNumber: pr.number, prUrl: pr.url }),
     reconcile: async (run, t) => reconcileOnce(t, processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' })),
-    advance: async (run, event) => {
-      // Single-owner still (the loop fans out over owners in a later slice):
-      // the run's first owner, whose repo the driver advances.
-      const owner = runsRepo.listOwners(run.id)[0];
-      if (!owner) {
-        return { state: run.state, applied: [], problems: [`run ${run.id} has no owner to advance`], notifications: [], released: false, runaway: null };
-      }
+    advance: async (run, owner, event) => {
+      // The loop names the owner; its executor and spawner are that repo's.
       const { target, deps } = await executorFor(config, ghPath, run, owner);
       return advance(run.id, owner.repo, event, target, deps);
     },

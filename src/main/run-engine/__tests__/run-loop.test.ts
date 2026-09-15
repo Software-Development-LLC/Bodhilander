@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { RunGateRow, RunOwnerRow, RunRow } from '../../repositories/runs';
 import type { GateLook } from '../attention-pass';
-import { createRunLoop, type LoopDeps } from '../run-loop';
+import { createRunLoop, schedulingState, type LoopDeps } from '../run-loop';
 import { CHECKS_INTERVAL_MS, ESCALATE_AFTER, GATE_INTERVAL_MS } from '../reconcile-loop';
 import type { RunEvent } from '../transitions';
 
@@ -23,7 +23,7 @@ function owner(runId: string, over: Partial<RunOwnerRow> = {}): RunOwnerRow {
 }
 
 const GATE: RunGateRow = {
-  id: 'g', runId: 'r1', gate: 2, agent: 'bodhilander-lead', attempt: 1, bgSessionId: 'abc', claudeSessionId: 'abc-0',
+  id: 'g', runId: 'r1', repo: 'Bodhilander', gate: 2, agent: 'bodhilander-lead', attempt: 1, bgSessionId: 'abc', claudeSessionId: 'abc-0',
   status: 'running', verdictJson: null, posture: 'manual', startedAt: '2026-09-15 02:50:00',
 };
 
@@ -44,7 +44,12 @@ function fake(over: Partial<LoopDeps> & { runs?: RunRow[]; owners?: Record<strin
   const calls: string[] = [];
   const now = { t: T0 };
   const runs = over.runs ?? [];
-  const owners = over.owners ?? {};
+  // By default one owner per run, whose per-owner state IS the run's state --
+  // the single-owner case, so these tests read as they did before the fan-out.
+  // A multi-owner test passes `owners` explicitly.
+  const owners = over.owners ?? Object.fromEntries(
+    runs.map((r) => [r.id, [owner(r.id, { state: r.state })]]),
+  );
   const deps: LoopDeps = {
     now: () => now.t,
     listActiveRuns: () => runs,
@@ -55,7 +60,7 @@ function fake(over: Partial<LoopDeps> & { runs?: RunRow[]; owners?: Record<strin
     discoverPr: async () => { calls.push('discover'); return { number: 299, url: 'https://github.com/o/r/pull/299' }; },
     recordPr: (_r, _o, pr) => { calls.push(`record:${pr.number}`); },
     reconcile: async (_r, t) => { calls.push(`reconcile:${t.repo}#${t.prNumber}:${t.state}`); return { events: [], problems: [] }; },
-    advance: async (_r, e) => { calls.push(`advance:${e.kind}`); return { state: 'running', applied: [e], problems: [], notifications: [], released: false, runaway: null }; },
+    advance: async (_r, _o, e) => { calls.push(`advance:${e.kind}`); return { state: 'running', applied: [e], problems: [], notifications: [], released: false, runaway: null }; },
     approvers: () => ['brannon-bowden'],
     log: (line) => { calls.push(`log:${line.slice(0, 40)}`); },
     ...over,
@@ -122,7 +127,7 @@ describe('what a tick does to a run waiting on GitHub', () => {
     // The scribe opened the PR and nothing told the engine which. The branch
     // is the one thing the run knows; gh finds the PR from it, and the slug
     // comes from the PR's own URL -- the registry knows paths, not slugs.
-    const f = fake({ runs: [run('r1', 'waitingChecks')], owners: { r1: [owner('r1')] } });
+    const f = fake({ runs: [run('r1', 'waitingChecks')], owners: { r1: [owner('r1', { state: 'waitingChecks' })] } });
     const loop = createRunLoop(f.deps);
     const report = await loop.tick();
     expect(f.calls).toEqual(expect.arrayContaining(['discover', 'record:299', 'reconcile:o/r#299:waitingChecks']));
@@ -132,7 +137,7 @@ describe('what a tick does to a run waiting on GitHub', () => {
   test('a run that already knows its PR is not asked again', async () => {
     const f = fake({
       runs: [run('r1', 'waitingReview')],
-      owners: { r1: [owner('r1', { prNumber: 12, prUrl: 'https://github.com/o/r/pull/12' })] },
+      owners: { r1: [owner('r1', { state: 'waitingReview', prNumber: 12, prUrl: 'https://github.com/o/r/pull/12' })] },
     });
     await createRunLoop(f.deps).tick();
     expect(f.calls).not.toContain('discover');
@@ -142,7 +147,7 @@ describe('what a tick does to a run waiting on GitHub', () => {
   test('no PR yet is a skip and a failure, not a state', async () => {
     // The scribe may not have opened it. Asking again later is right;
     // deciding anything now is not.
-    const f = fake({ runs: [run('r1', 'waitingChecks')], owners: { r1: [owner('r1')] }, discoverPr: async () => null });
+    const f = fake({ runs: [run('r1', 'waitingChecks')], owners: { r1: [owner('r1', { state: 'waitingChecks' })] }, discoverPr: async () => null });
     const loop = createRunLoop(f.deps);
     const report = await loop.tick();
     expect(report.skipped[0]?.why).toContain('no PR found');
@@ -153,7 +158,7 @@ describe('what a tick does to a run waiting on GitHub', () => {
   test('every event reconcile returns is applied, in order', async () => {
     const f = fake({
       runs: [run('r1', 'waitingChecks')],
-      owners: { r1: [owner('r1', { prNumber: 1, prUrl: 'https://github.com/o/r/pull/1' })] },
+      owners: { r1: [owner('r1', { state: 'waitingChecks', prNumber: 1, prUrl: 'https://github.com/o/r/pull/1' })] },
       reconcile: async () => ({ events: [{ kind: 'checksGreen' }, { kind: 'reviewRequested' }], problems: [] }),
     });
     const loop = createRunLoop(f.deps);
@@ -165,7 +170,7 @@ describe('what a tick does to a run waiting on GitHub', () => {
   test('a reconcile problem is reported and counted, and the run stays where it is', async () => {
     const f = fake({
       runs: [run('r1', 'waitingChecks')],
-      owners: { r1: [owner('r1', { prNumber: 1, prUrl: 'https://github.com/o/r/pull/1' })] },
+      owners: { r1: [owner('r1', { state: 'waitingChecks', prNumber: 1, prUrl: 'https://github.com/o/r/pull/1' })] },
       reconcile: async () => ({ events: [], problems: ['gh could not read o/r#1: no network'] }),
     });
     const loop = createRunLoop(f.deps);
@@ -232,7 +237,7 @@ describe('the schedule', () => {
   });
 
   test('the checks cadence is a minute, so a reconciled run is due again in one', async () => {
-    const f = fake({ runs: [run('r1', 'waitingChecks')], owners: { r1: [owner('r1', { prNumber: 1, prUrl: 'https://github.com/o/r/pull/1' })] } });
+    const f = fake({ runs: [run('r1', 'waitingChecks')], owners: { r1: [owner('r1', { state: 'waitingChecks', prNumber: 1, prUrl: 'https://github.com/o/r/pull/1' })] } });
     const loop = createRunLoop(f.deps);
     await loop.tick();
     f.now.t = T0 + CHECKS_INTERVAL_MS;
@@ -289,5 +294,64 @@ describe('the timer', () => {
     expect(maxConcurrent).toBe(1);
     release?.();
     loop.stop();
+  });
+});
+
+describe('driving a run with several owners (multi-owner)', () => {
+  test('drives every movable owner in one pass, each on its own state', async () => {
+    const f = fake({
+      runs: [run('r1', 'running')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'repo-a', state: 'running' }),
+          owner('r1', { repo: 'repo-b', state: 'waitingChecks', prNumber: 7, prUrl: 'https://github.com/o/b/pull/7' }),
+        ],
+      },
+      look: async () => look({ kind: 'gateFinished', gate: 2, verdict: 'pass' }),
+    });
+    const loop = createRunLoop(f.deps);
+    await loop.tick();
+    // repo-a looked at its gate; repo-b reconciled its PR. No >1-owner skip.
+    expect(f.calls).toContain('advance:gateFinished');
+    expect(f.calls.some((c) => c.startsWith('reconcile:o/b#7'))).toBe(true);
+    expect(f.calls.some((c) => c.includes('this slice drives one repo'))).toBe(false);
+  });
+
+  test('a stuck owner does not stop the run being scheduled or the others moving', async () => {
+    // THE STARVATION REGRESSION. The rollup is a person-state (inconclusive
+    // outranks running), which has a null interval -- so if the loop scheduled
+    // off the rollup, this run would never be due again and the healthy owner
+    // would starve. Scheduling reads the fastest movable owner instead.
+    const f = fake({
+      runs: [run('r1', 'inconclusive')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'repo-a', state: 'inconclusive', blockedReason: 'gate 2 could not establish' }),
+          owner('r1', { repo: 'repo-b', state: 'running' }),
+        ],
+      },
+      look: async () => look({ kind: 'gateFinished', gate: 2, verdict: 'pass' }),
+    });
+    const loop = createRunLoop(f.deps);
+    const report = await loop.tick();
+    expect(report.due).toContain('r1');
+    // repo-b moved; repo-a (inconclusive) was left for the inbox.
+    expect(f.calls).toContain('advance:gateFinished');
+  });
+});
+
+describe('scheduling a run off its fastest owner', () => {
+  test('picks the shortest-interval movable owner, ignoring the rollup', () => {
+    expect(schedulingState(['inconclusive', 'running'], 'inconclusive')).toBe('running');
+    // checks (60s) is faster than review (5m).
+    expect(schedulingState(['waitingReview', 'waitingChecks'], 'waitingReview')).toBe('waitingChecks');
+    expect(schedulingState(['approved', 'waitingReview'], 'approved')).toBe('waitingReview');
+  });
+
+  test('falls back to the run state when no owner can move, so the run is not due', () => {
+    // waitingPermission and approved are both non-movable; the fallback's null
+    // interval keeps the run out of dueRuns.
+    expect(schedulingState(['waitingPermission', 'approved'], 'waitingPermission')).toBe('waitingPermission');
+    expect(schedulingState([null, null], 'preparing')).toBe('preparing');
   });
 });
