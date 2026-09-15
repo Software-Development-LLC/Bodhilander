@@ -88,7 +88,7 @@ The GitHub OAuth app's callback URL must be `${PUBLIC_URL}/auth/github/callback`
 host only has Compose v1, use plain `docker`:
 
 ```bash
-docker build --build-arg RELAY_COMMIT=<source commit> -t bodhi-relay:latest .
+docker build --build-arg RELAY_COMMIT=<sha> -t bodhi-relay:latest .
 docker run -d --name bodhi-relay --restart unless-stopped \
   -p 127.0.0.1:47393:8080 \
   -v bodhi-relay-data:/data \
@@ -156,8 +156,8 @@ curl -s https://relay.example.com/health
 builds apart; `commit` is the answer. It is `null` on an image built without
 `RELAY_COMMIT`, and **absent entirely** on one built before `/health` carried
 it — which is itself a useful thing to see. A `-dirty` suffix means the tree
-that was shipped had uncommitted changes, so the sha names its parent rather
-than what is running.
+that was shipped had uncommitted changes, so the sha names the commit that
+tree was based on rather than what is running.
 
 The same value is on the `relay listening` line at startup, which is where to
 look when the container is restart-looping after startup and there is nothing

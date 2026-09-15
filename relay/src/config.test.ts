@@ -76,4 +76,19 @@ describe('build stamp', () => {
       loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d', RELAY_COMMIT: 'stale99' }).config.commit,
     ).toBe('7d5cb5d');
   });
+
+  test('still warns in production when only the build arg name got through', () => {
+    // The case the deploy docs spend the most words on: the value reached the
+    // container, under the one name the app does not read.
+    const { config, warnings } = loadConfig({
+      NODE_ENV: 'production',
+      SESSION_SECRET: 'x'.repeat(64),
+      RELAY_COMMIT: 'stale99',
+    });
+    expect(config.commit).toBeNull();
+    const stamp = warnings.find((w) => w.includes('RELAY_BUILD_COMMIT'));
+    expect(stamp).toBeDefined();
+    // Naming the build arg too, since that is the half an operator must fix.
+    expect(stamp).toContain('RELAY_COMMIT=');
+  });
 });
