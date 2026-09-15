@@ -51,6 +51,16 @@ export interface LoopDeps {
   activeGate(runId: string): RunGateRow | null;
   /** The gathering half of #287. */
   look(run: RunRow, gate: RunGateRow): Promise<GateLook>;
+  /**
+   * Permission requests waiting in this gate's channel (#288).
+   *
+   * A background gate blocked on a tool reads `busy`, not `waiting`, because
+   * its hook is running; the request file is the only evidence a person is
+   * needed. So this is checked before the attention decision, and any
+   * pending request moves the run to waitingPermission where status could
+   * not.
+   */
+  pending(run: RunRow, gate: RunGateRow): number;
   /** `gh pr list --head <branch>` in the owner's worktree. */
   discoverPr(run: RunRow, owner: RunOwnerRow): Promise<DiscoveredPr | null>;
   recordPr(run: RunRow, owner: RunOwnerRow, pr: DiscoveredPr): void;
@@ -121,6 +131,18 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     if (!gate) {
       report.skipped.push({ runId: run.id, why: 'running with no gate row open' });
       return false;
+    }
+    // A pending permission request means a person is needed, whatever the
+    // daemon says the session is doing: the hook holds the tool, so the gate
+    // reads busy while it is in fact blocked. This takes precedence over the
+    // attention decision, and moves the run to waitingPermission -- out of
+    // the loop's reach and into the inbox -- until the request is answered.
+    if (deps.pending(run, gate) > 0) {
+      const result = await deps.advance(run, { kind: 'permissionRequested' });
+      for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
+      report.looked.push({ runId: run.id, gate: gate.gate, agent: gate.agent, decided: 'permissionRequested' });
+      deps.log(`${run.id} gate ${gate.gate} (${gate.agent}) is waiting on a person for permission`);
+      return result.problems.length === 0;
     }
     const look = await deps.look(run, gate);
     report.looked.push({ runId: run.id, gate: look.gate, agent: look.agent, decided: look.attention.event?.kind ?? null });

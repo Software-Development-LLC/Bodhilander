@@ -24,6 +24,10 @@ asarUnpack:
   - node_modules/sodium-native/**/*
   # Native-module loader used by the remaining prebuilt addons (sodium-native).
   - node_modules/node-gyp-build/**/*
+  # The permission broker (CO-722) is spawned by `claude` as a real child
+  # process — an MCP server or a PreToolUse hook — so it must be a file on
+  # disk, not a path inside the asar archive.
+  - dist/scripts/**/*
 
 # Include icon files for tray icon and sound files
 extraResources:

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { RunInboxRow } from '../../shared/types';
+import { RunInboxRow, RunPermissionRequest } from '../../shared/types';
 import './RunInbox.css';
 
 /**
@@ -49,6 +49,120 @@ export function waitedFor(since: string, now: number): string {
 export function reasonFor(row: RunInboxRow): string {
   return row.blockedReason ?? WHY[row.state] ?? row.state;
 }
+
+/**
+ * The tool calls a run is blocked on, and the two answers a person can give.
+ *
+ * This is the one control in the inbox that DOES something: the loop drives
+ * everything else, but it cannot answer a permission prompt (that is the
+ * whole reason a run reaches this state), so the decision is here. Allow and
+ * deny both write into the channel the gate is polling; the loop returns the
+ * run to running on the next tick.
+ *
+ * The tool input is shown WHOLE. A person approving a Bash call is approving
+ * its command line, and a shortened view would be asking them to agree to
+ * something they had not read.
+ */
+interface PermissionRequestsProps {
+  runId: string;
+  /** Injected in tests; the real ones are the IPC channel. */
+  loadPermissions?: (runId: string) => Promise<RunPermissionRequest[]>;
+  answer?: (runId: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) => Promise<boolean>;
+  /** Told to refresh the inbox once a decision may have moved the run. */
+  onAnswered?: () => void;
+  pollMs?: number;
+}
+
+export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
+  runId,
+  loadPermissions,
+  answer,
+  onAnswered,
+  pollMs,
+}) => {
+  const [requests, setRequests] = useState<RunPermissionRequest[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  // A denial can carry a reason the model reads back. Kept per request so two
+  // pending calls do not share one box; allow needs none (there is nothing to
+  // say to an approval), so only deny reads this.
+  const [denyReasons, setDenyReasons] = useState<Record<string, string>>({});
+
+  const refresh = useCallback(async () => {
+    try {
+      const load = loadPermissions ?? window.electronAPI.getRunPermissions;
+      setRequests(await load(runId));
+    } catch {
+      // A failed read here is not the page: the row above still shows the run
+      // is waiting. Leave whatever was last shown rather than blanking it.
+    }
+  }, [loadPermissions, runId]);
+
+  useEffect(() => {
+    void refresh();
+    const timer = setInterval(() => void refresh(), pollMs ?? 5_000);
+    return () => clearInterval(timer);
+  }, [refresh, pollMs]);
+
+  const decide = useCallback(
+    async (toolUseId: string, verdict: 'allow' | 'deny') => {
+      setBusy(toolUseId);
+      try {
+        const send = answer ?? window.electronAPI.answerRunPermission;
+        // Only a denial carries a message; the broker supplies its own words
+        // when this is blank, so an empty reason is a plain deny, not a bug.
+        const message = verdict === 'deny' ? (denyReasons[toolUseId] ?? '') : '';
+        await send(runId, toolUseId, verdict, message);
+        await refresh();
+        onAnswered?.();
+      } finally {
+        setBusy(null);
+      }
+    },
+    [answer, denyReasons, onAnswered, refresh, runId],
+  );
+
+  if (!requests || requests.length === 0) return null;
+
+  return (
+    <ul className="run-inbox__perms">
+      {requests.map((req) => (
+        <li key={req.toolUseId} className="run-inbox__perm">
+          <div className="run-inbox__perm-tool">{req.toolName}</div>
+          <pre className="run-inbox__perm-input">{JSON.stringify(req.input, null, 2)}</pre>
+          <div className="run-inbox__perm-actions">
+            <button
+              type="button"
+              className="run-inbox__allow"
+              disabled={busy !== null}
+              onClick={() => void decide(req.toolUseId, 'allow')}
+            >
+              Allow
+            </button>
+            <input
+              type="text"
+              className="run-inbox__deny-reason"
+              aria-label="Reason for denying (optional)"
+              placeholder="Reason (optional)"
+              value={denyReasons[req.toolUseId] ?? ''}
+              disabled={busy !== null}
+              onChange={(e) =>
+                setDenyReasons((prev) => ({ ...prev, [req.toolUseId]: e.target.value }))
+              }
+            />
+            <button
+              type="button"
+              className="run-inbox__deny"
+              disabled={busy !== null}
+              onClick={() => void decide(req.toolUseId, 'deny')}
+            >
+              Deny
+            </button>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+};
 
 interface RunInboxProps {
   /** Injected in tests; the real one is the read-only IPC channel. */
@@ -147,6 +261,9 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now, pollMs }) => {
             <p className="run-inbox__reason">{reasonFor(row)}</p>
             {row.repos.length > 0 && (
               <p className="run-inbox__repos">{row.repos.join(', ')}</p>
+            )}
+            {row.state === 'waitingPermission' && (
+              <PermissionRequests runId={row.id} onAnswered={() => void fetch()} />
             )}
           </li>
         ))}

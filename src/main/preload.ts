@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -175,6 +175,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // The run inbox (CO-722). Read-only by design -- see the handler.
   getRunInbox: (): Promise<RunInboxRow[]> =>
     ipcRenderer.invoke('db:runs:inbox'),
+  getRunPermissions: (runId: string): Promise<RunPermissionRequest[]> =>
+    ipcRenderer.invoke('db:runs:permissions', runId),
+  answerRunPermission: (
+    runId: string,
+    toolUseId: string,
+    verdict: 'allow' | 'deny',
+    message: string,
+  ): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:permissions:answer', runId, toolUseId, verdict, message),
+  pickInitiativeDir: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:pickInitiative'),
+  armRun: (initiativeDir: string): Promise<RunArmResult> =>
+    ipcRenderer.invoke('db:runs:arm', initiativeDir),
 
   // Database - Groups
   getAllGroups: (): Promise<Group[]> =>

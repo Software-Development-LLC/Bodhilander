@@ -11,6 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
+import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir } from './run-engine/run-loop-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -877,6 +878,34 @@ safeOn('pty:prime', (id: string) => {
 // set it off from a window.
 safeHandle('db:runs:inbox', () => runsRepo.listInbox());
 
+// The permission requests a run's gate is blocked on, and a person's answer
+// to one (CO-722, #288). Writing a reply is the one run-engine action the app
+// exposes -- a decision only a person can make -- so unlike the read-only
+// inbox above, `answer` mutates the channel the gate is polling.
+safeHandle('db:runs:permissions', (runId: string) =>
+  listRunPermissions(app.getPath('userData'), runId),
+);
+safeHandle(
+  'db:runs:permissions:answer',
+  (runId: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) =>
+    answerRunPermission(app.getPath('userData'), runId, toolUseId, verdict, message ?? ''),
+);
+
+// Arm a run from a prepared initiative directory (CO-722). Reading the
+// initiative and writing the run's rows -- armRun checks the machine first
+// and refuses with a list rather than writing a half-armed run.
+safeHandle('db:runs:arm', (initiativeDir: string) => armInitiativeDir(initiativeDir));
+
+// The directory picker arming uses. A cancel returns null; the renderer
+// treats that as "changed my mind", not an error.
+safeHandle('dialog:pickInitiative', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Pick a prepared initiative directory',
+    properties: ['openDirectory'],
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
+});
+
 // Database IPC Handlers - Groups
 safeHandle('db:groups:getAll', () => {
   return groupsRepo.getAllGroups();
@@ -1540,6 +1569,17 @@ function getLocalAddresses(): string[] {
 
 app.whenReady().then(() => {
   createWindow();
+  // The run engine drives itself from here: a timer that advances every
+  // active run on its cadence, so no one has to type step/watch/answer. It
+  // spawns nothing on its own -- only runs that were armed -- and never
+  // answers a permission prompt, which is the inbox's job (CO-722).
+  try {
+    startRunLoopService();
+  } catch (error) {
+    // A loop that fails to start must not take the app down with it: the app
+    // is a session manager first, and the engine ships behind it.
+    log.error('[Main] Failed to start the run loop:', error);
+  }
 }).catch((error) => {
   log.error('[Main] Failed to initialize app:', error);
 });
@@ -1679,6 +1719,7 @@ app.on('before-quit', (event) => {
       } catch (e) {
         log.error('Error stopping relay client on quit:', e);
       }
+      stopRunLoopService();
       closeDatabase();
     },
   });
