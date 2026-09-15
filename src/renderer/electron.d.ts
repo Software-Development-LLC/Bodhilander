@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult, RunPrepareResult } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -60,6 +60,8 @@ interface ElectronAPI {
   answerRunPermission: (runId: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) => Promise<boolean>;
   pickInitiativeDir: () => Promise<string | null>;
   armRun: (initiativeDir: string) => Promise<RunArmResult>;
+  listHarnessRepos: () => Promise<string[]>;
+  prepareInitiative: (issueId: string, repo: string, budgetUsd?: number) => Promise<RunPrepareResult>;
 
   // Database - Groups
   getAllGroups: () => Promise<Group[]>;
