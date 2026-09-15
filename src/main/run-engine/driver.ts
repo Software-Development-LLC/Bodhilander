@@ -173,7 +173,7 @@ async function advanceOnce(
       // A step passing is not the gate passing -- see `continueSequence`.
       // Handled before the machine hears anything, and the machine hears
       // nothing at all if there was a next role to run.
-      const nextStep = gate ? await continueSequence(runId, event, gate, target, deps, result) : null;
+      const nextStep = await continueSequence(runId, event, gate, target, deps, result);
       if (nextStep) {
         next.push(...nextStep);
         continue;
@@ -181,27 +181,7 @@ async function advanceOnce(
 
       const decision = transition(run.state, event, { activeGate: asGate(gate?.gate) });
       result.state = decision.state;
-
-      // Recorded when something HAPPENED, which is not the same as when the
-      // state changed. A gate-2 pass leaves a run in `running` and spawns
-      // gate 3: no move, and the most important line in the log. An event
-      // that changes nothing AND does nothing is the one worth omitting,
-      // because a log full of rows saying "nothing happened" is a log nobody
-      // reads.
-      if (decision.state !== run.state || decision.actions.length > 0) {
-        const reason = blockedReasonFor(decision.state, event, decision.note);
-        const detail = { ...detailFor(event), blockedReason: reason ?? undefined };
-        writeTransition(runId, decision.state, event.kind, detail);
-        result.applied.push(event);
-        // Closed here, once the machine has ACCEPTED the report — not when it
-        // arrived. Closing first clears activeGate, and the guard then rejects
-        // the very report that was closing it: a gate finishes, its verdict
-        // is discarded, and the run sits in `running` forever. That is not
-        // hypothetical; it is what these tests caught.
-        if (event.kind === 'gateFinished' && gate?.gate === event.gate) {
-          runs.finishGate(gate.id, 'done', { verdict: event.verdict });
-        }
-      }
+      recordDecision(runId, run.state, event, gate, decision, result);
 
       // Recorded BEFORE the gate runs, for the same reason the transition is:
       // a gate that starts and then crashes must leave a row, and the guard
@@ -269,6 +249,41 @@ function openGates(
 }
 
 /**
+ * Write the decision down, when there is something to write.
+ *
+ * Recorded when something HAPPENED, which is not the same as when the state
+ * changed. A gate-2 pass leaves a run in `running` and spawns gate 3: no
+ * move, and the most important line in the log. An event that changes
+ * nothing AND does nothing is the one worth omitting, because a log full of
+ * rows saying "nothing happened" is a log nobody reads.
+ *
+ * The gate row is closed here, once the machine has ACCEPTED the report --
+ * not when it arrived. Closing first clears activeGate, and the guard then
+ * rejects the very report that was closing it: a gate finishes, its verdict
+ * is discarded, and the run sits in `running` forever. That is not
+ * hypothetical; it is what the driver tests caught.
+ */
+function recordDecision(
+  runId: string,
+  before: RunState,
+  event: RunEvent,
+  gate: runs.RunGateRow | null,
+  decision: { state: RunState; actions: readonly RunAction[]; note: string },
+  result: AdvanceResult,
+): void {
+  if (decision.state === before && decision.actions.length === 0) return;
+  const reason = blockedReasonFor(decision.state, event, decision.note);
+  writeTransition(runId, decision.state, event.kind, {
+    ...detailFor(event),
+    blockedReason: reason ?? undefined,
+  });
+  result.applied.push(event);
+  if (event.kind === 'gateFinished' && gate?.gate === event.gate) {
+    runs.finishGate(gate.id, 'done', { verdict: event.verdict });
+  }
+}
+
+/**
  * Run the next role of a gate whose previous role just passed.
  *
  * Gate 4 is the verifier and then the scribe. When the verifier's report
@@ -293,12 +308,12 @@ function openGates(
 async function continueSequence(
   runId: string,
   event: RunEvent,
-  gate: runs.RunGateRow,
+  gate: runs.RunGateRow | null,
   target: ExecutorTarget,
   deps: ExecutorDeps,
   result: AdvanceResult,
 ): Promise<RunEvent[] | null> {
-  if (event.kind !== 'gateFinished' || event.verdict !== 'pass' || gate.gate !== event.gate) {
+  if (!gate || event.kind !== 'gateFinished' || event.verdict !== 'pass' || gate.gate !== event.gate) {
     return null;
   }
   const following = stepAfter(target.agents[event.gate], gate.agent, result, event.gate);
