@@ -18,10 +18,23 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(ConfigError);
   });
 
-  test('accepts a production config with a secret and emits no warnings', () => {
-    const { config, warnings } = loadConfig({ NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(64) });
+  test('accepts a fully configured production config and emits no warnings', () => {
+    const { config, warnings } = loadConfig({
+      NODE_ENV: 'production',
+      SESSION_SECRET: 'x'.repeat(64),
+      RELAY_BUILD_COMMIT: '7d5cb5d',
+    });
     expect(config.isProduction).toBe(true);
     expect(warnings).toHaveLength(0);
+  });
+
+  test('warns when a production image carries no build stamp', () => {
+    // The Dockerfile's ARG/ENV pair is the only thing wiring this up, and an
+    // unstamped image is silent until the day someone needs to identify it.
+    const { warnings } = loadConfig({ NODE_ENV: 'production', SESSION_SECRET: 'x'.repeat(64) });
+    expect(warnings.some((w) => w.includes('RELAY_BUILD_COMMIT'))).toBe(true);
+    // Development is unstamped by nature; warning there would be noise.
+    expect(loadConfig({}).warnings.some((w) => w.includes('RELAY_BUILD_COMMIT'))).toBe(false);
   });
 
   test('rejects an out-of-range port', () => {

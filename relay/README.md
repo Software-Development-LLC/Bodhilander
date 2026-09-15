@@ -36,8 +36,11 @@ curl -s localhost:8080/health   # {"ok":true,"version":"...","commit":null,"upti
 Docker is the supported deployment path. The image is a single-stage `oven/bun`
 build — no toolchain, no compile step.
 
+Run from `relay/`, where the compose file lives:
+
 ```bash
-COMMIT=$(git rev-parse --short HEAD)$([ -n "$(git status --porcelain relay)" ] && echo -dirty)
+COMMIT=$(git rev-parse --short HEAD)
+if [ -n "$(git status --porcelain .)" ]; then COMMIT="$COMMIT-dirty"; fi
 RELAY_COMMIT=$COMMIT docker compose up --build -d
 docker compose logs -f relay          # relay on http://localhost:${PORT:-8080}
 ```
@@ -125,7 +128,8 @@ on the host. `rsync` ships the working tree rather than the commit, so the
 being deployed:
 
 ```bash
-COMMIT=$(git rev-parse --short HEAD)$([ -n "$(git status --porcelain relay)" ] && echo -dirty)
+COMMIT=$(git rev-parse --short HEAD)
+if [ -n "$(git status --porcelain relay)" ]; then COMMIT="$COMMIT-dirty"; fi
 rsync -az --delete --exclude node_modules --exclude data --exclude .env \
   relay/ host:/home/bodhilabs/bodhi-relay/
 ssh host "cd /home/bodhilabs/bodhi-relay \
@@ -156,11 +160,16 @@ that was shipped had uncommitted changes, so the sha names its parent rather
 than what is running.
 
 The same value is on the `relay listening` line at startup, which is where to
-look when the container is crash-looping and there is nothing to `curl`:
+look when the container is restart-looping after startup and there is nothing
+to `curl`. A container failing in `loadConfig` never reaches this line — that
+case reports itself as a `ConfigError` on the first lines of the log instead.
 
 ```bash
-docker logs bodhi-relay | head -1
+docker logs bodhi-relay | grep 'relay listening'
 ```
+
+A production image built without `RELAY_COMMIT` says so in a startup warning,
+rather than waiting to answer `null` on the day someone asks.
 
 ## Configuration
 
