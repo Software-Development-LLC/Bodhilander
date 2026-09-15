@@ -13,7 +13,7 @@
  * YAML. Where the two disagree the file wins.
  */
 import { getDatabase } from '../database';
-import { NEEDS_A_PERSON, type RunState } from '../run-engine/transitions';
+import { NEEDS_A_PERSON, rollupState, type RunState } from '../run-engine/transitions';
 
 export type PermissionPosture = 'manual' | 'denyOnPrompt' | 'bypass';
 
@@ -43,6 +43,16 @@ export interface RunOwnerRow {
   /** The role that runs gate 2 here, once a run has resolved it. */
   agent?: string | null;
   status: string;
+  /**
+   * This owner's gate state (CO-722 multi-owner). Null before the run fans out
+   * at `provisioned`; from then it drives this repo's track and `runs.state` is
+   * a rollup of every owner's.
+   */
+  state: RunState | null;
+  /** Why this owner stopped, paired with a blocked `state`. */
+  blockedReason: string | null;
+  /** This repo's index in seams.yaml's merge_order, for display. Null if unknown. */
+  mergeOrder: number | null;
   prNumber: number | null;
   prUrl: string | null;
 }
@@ -225,6 +235,66 @@ export function recordTransition(
   tx();
 }
 
+/**
+ * Move ONE owner (repo) to `state`, and recompute the run's rollup — all in one
+ * transaction (CO-722 multi-owner).
+ *
+ * The per-owner analogue of `recordTransition`: it writes this repo's state and
+ * its event, then rolls every owner's state up into `runs.state` so the
+ * active-runs list and the inbox stay coherent at run granularity. The recompute
+ * shares the transaction so two owners advancing cannot lose each other's write.
+ *
+ * `runs.state` is a lossy summary; the run's `blocked_reason` is set to the
+ * reason of an owner in the winning state, so the inbox has something to show
+ * until the per-owner surface (a later slice) reads each owner directly.
+ */
+export function recordOwnerTransition(
+  runId: string,
+  repo: string,
+  state: BlockedState,
+  kind: string,
+  detail: EventDetail & { blockedReason: string },
+): void;
+export function recordOwnerTransition(
+  runId: string,
+  repo: string,
+  state: Exclude<RunState, BlockedState>,
+  kind: string,
+  detail?: EventDetail,
+): void;
+export function recordOwnerTransition(
+  runId: string,
+  repo: string,
+  state: RunState,
+  kind: string,
+  detail?: EventDetail & { blockedReason?: string | null },
+): void {
+  const db = getDatabase();
+  const tx = db.transaction(() => {
+    db.prepare(
+      'UPDATE run_owners SET state = ?, blocked_reason = ? WHERE run_id = ? AND repo = ?',
+    ).run(state, detail?.blockedReason ?? null, runId, repo);
+    // The event carries the repo, so the audit trail says which owner moved.
+    insertEvent(db, runId, kind, { ...detail, repo });
+
+    const owners = db
+      .prepare('SELECT state, blocked_reason FROM run_owners WHERE run_id = ?')
+      .all(runId) as { state: string | null; blocked_reason: string | null }[];
+    const states = owners
+      .map((o) => o.state)
+      .filter((s): s is RunState => s !== null);
+    if (states.length === 0) return; // still run-level; leave runs.state alone
+    const rolled = rollupState(states);
+    const reason = owners.find((o) => o.state === rolled)?.blocked_reason ?? null;
+    db.prepare(
+      `UPDATE runs
+          SET state = ?, blocked_reason = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?`,
+    ).run(rolled, reason, runId);
+  });
+  tx();
+}
+
 /** An event that is not itself a transition — a note, a stream marker. */
 export function appendEvent(runId: string, kind: string, detail?: EventDetail): void {
   insertEvent(getDatabase(), runId, kind, detail);
@@ -264,8 +334,16 @@ function safeParse(text: string): unknown {
   }
 }
 
+/**
+ * The columns spawn.sh's owners block mirrors — everything on a `run_owners`
+ * row except the engine-managed gate fields (`state`, `blockedReason`,
+ * `mergeOrder`), which `recordOwnerTransition` and the merge_order parse own and
+ * which re-mirroring must never touch.
+ */
+export type OwnerMirror = Omit<RunOwnerRow, 'state' | 'blockedReason' | 'mergeOrder'>;
+
 /** Mirror team.yaml's owners block. Re-runnable: spawn.sh is idempotent too. */
-export function upsertOwner(owner: RunOwnerRow): void {
+export function upsertOwner(owner: OwnerMirror): void {
   getDatabase()
     .prepare(
       `INSERT INTO run_owners (run_id, repo, worktree, branch, base, scratch, agent,
@@ -329,6 +407,9 @@ export function listOwners(runId: string): RunOwnerRow[] {
     scratch: string | null;
     agent: string | null;
     status: string;
+    state: string | null;
+    blocked_reason: string | null;
+    merge_order: number | null;
     pr_number: number | null;
     pr_url: string | null;
   }[];
@@ -341,6 +422,9 @@ export function listOwners(runId: string): RunOwnerRow[] {
     scratch: row.scratch,
     agent: row.agent,
     status: row.status,
+    state: (row.state as RunState | null) ?? null,
+    blockedReason: row.blocked_reason,
+    mergeOrder: row.merge_order,
     prNumber: row.pr_number,
     prUrl: row.pr_url,
   }));
@@ -350,6 +434,8 @@ export interface RunGateRow {
   id: string;
   runId: string;
   gate: number;
+  /** Which owner's track this gate belongs to (CO-722). Null on pre-migration rows. */
+  repo: string | null;
   agent: string;
   attempt: number;
   /** What `claude attach` takes. Null until a background gate reports one. */
@@ -366,6 +452,8 @@ export interface StartGateInput {
   id: string;
   runId: string;
   gate: number;
+  /** The owner (repo) this gate runs for (CO-722). Optional for single-owner callers. */
+  repo?: string | null;
   agent: string;
   posture: PermissionPosture;
   claudeSessionId?: string | null;
@@ -394,20 +482,26 @@ export function startGate(input: StartGateInput): void {
   // quietly undoes.
   getDatabase()
     .prepare(
-      `INSERT INTO run_gates (id, run_id, gate, agent, attempt, bg_session_id,
+      `INSERT INTO run_gates (id, run_id, gate, repo, agent, attempt, bg_session_id,
                               claude_session_id, status, posture)
-       SELECT ?, ?, ?, ?,
-              (SELECT COUNT(*) + 1 FROM run_gates WHERE run_id = ? AND gate = ? AND agent = ?),
+       SELECT ?, ?, ?, ?, ?,
+              -- Counted per OWNER too (CO-722): two repos both at gate 4 share
+              -- the verifier role, and B's first verifier is not A's retry.
+              (SELECT COUNT(*) + 1 FROM run_gates
+                WHERE run_id = ? AND gate = ? AND agent = ?
+                  AND IFNULL(repo, '') = IFNULL(?, '')),
               ?, ?, 'running', ?`,
     )
     .run(
       input.id,
       input.runId,
       input.gate,
+      input.repo ?? null,
       input.agent,
       input.runId,
       input.gate,
       input.agent,
+      input.repo ?? null,
       input.bgSessionId ?? null,
       input.claudeSessionId ?? null,
       input.posture,
@@ -454,6 +548,7 @@ function toGateRow(row: {
   id: string;
   run_id: string;
   gate: number;
+  repo: string | null;
   agent: string;
   attempt: number;
   bg_session_id: string | null;
@@ -467,6 +562,7 @@ function toGateRow(row: {
     id: row.id,
     runId: row.run_id,
     gate: row.gate,
+    repo: row.repo,
     agent: row.agent,
     attempt: row.attempt,
     bgSessionId: row.bg_session_id,
@@ -487,15 +583,29 @@ function toGateRow(row: {
  * one.
  *
  * Newest first, because a gate re-spawned after a retry is the one in flight.
+ *
+ * With a `repo`, the active gate of THAT owner's track (CO-722 multi-owner):
+ * two repos can each have a gate in flight, and answering or advancing one must
+ * name which. Without it -- the single-owner callers -- the run's one running
+ * gate, unchanged.
  */
-export function activeGate(runId: string): RunGateRow | null {
-  const row = getDatabase()
-    .prepare(
-      `SELECT * FROM run_gates
-        WHERE run_id = ? AND status = 'running'
-        ORDER BY rowid DESC LIMIT 1`,
-    )
-    .get(runId);
+export function activeGate(runId: string, repo?: string): RunGateRow | null {
+  const db = getDatabase();
+  const row = repo === undefined
+    ? db
+        .prepare(
+          `SELECT * FROM run_gates
+            WHERE run_id = ? AND status = 'running'
+            ORDER BY rowid DESC LIMIT 1`,
+        )
+        .get(runId)
+    : db
+        .prepare(
+          `SELECT * FROM run_gates
+            WHERE run_id = ? AND status = 'running' AND repo = ?
+            ORDER BY rowid DESC LIMIT 1`,
+        )
+        .get(runId, repo);
   return row ? toGateRow(row as Parameters<typeof toGateRow>[0]) : null;
 }
 

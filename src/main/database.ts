@@ -602,15 +602,46 @@ export function initializeRunTables(database: Database.Database): void {
   // nobody ships.
   database.exec(RUN_TABLES_SQL);
 
-  // Migration: run_owners.agent, for databases created before it existed.
   // CREATE TABLE IF NOT EXISTS leaves an older table alone, so a column added
-  // to the SQL above reaches a fresh install and nobody else.
-  const ownerColumns = database.prepare('PRAGMA table_info(run_owners)').all() as {
-    name: string;
-  }[];
-  if (!ownerColumns.some((col) => col.name === 'agent')) {
-    database.exec('ALTER TABLE run_owners ADD COLUMN agent TEXT DEFAULT NULL');
-  }
+  // to the SQL above reaches a fresh install and nobody else. These guarded
+  // ALTERs reach the existing installs.
+  const addColumn = (table: string, column: string, ddl: string): void => {
+    const cols = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((col) => col.name === column)) {
+      database.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
+  };
+
+  // Migration: run_owners.agent, for databases created before it existed.
+  addColumn('run_owners', 'agent', 'agent TEXT DEFAULT NULL');
+
+  // Migration: per-owner gate state (CO-722 multi-owner). One run drives each
+  // repo's owner track; `runs.state` becomes a rollup of `run_owners.state`.
+  addColumn('run_owners', 'state', 'state TEXT DEFAULT NULL');
+  addColumn('run_owners', 'blocked_reason', 'blocked_reason TEXT DEFAULT NULL');
+  addColumn('run_owners', 'merge_order', 'merge_order INTEGER DEFAULT NULL');
+  addColumn('run_gates', 'repo', 'repo TEXT DEFAULT NULL');
+
+  // Backfill, correctness-critical (unlike the nullable `agent` above): once
+  // the per-owner paths read these, a NULL would strand an in-flight run.
+  //   run_gates.repo: a gate written before the column belongs to the run's
+  //     sole owner -- multi-owner runs were skipped, so they have no gate rows.
+  //   run_owners.state: seed active owners from the run's current state so the
+  //     rollup equals what it was. Prelude/terminal runs (preparing,
+  //     provisioning, failed) stay run-level, so their owners keep a NULL state.
+  // Idempotent: both only touch NULLs, so re-running the migration is a no-op.
+  database.exec(`
+    UPDATE run_gates
+       SET repo = (SELECT repo FROM run_owners o WHERE o.run_id = run_gates.run_id)
+     WHERE repo IS NULL
+       AND (SELECT COUNT(*) FROM run_owners o WHERE o.run_id = run_gates.run_id) = 1;
+
+    UPDATE run_owners
+       SET state = (SELECT state FROM runs r WHERE r.id = run_owners.run_id)
+     WHERE state IS NULL
+       AND (SELECT state FROM runs r WHERE r.id = run_owners.run_id)
+             NOT IN ('preparing', 'provisioning', 'failed');
+  `);
 }
 
 /**

@@ -45,6 +45,15 @@ export const RUN_TABLES_SQL = `
       -- that does not survive the process is one gate 2 has to ask again.
       agent TEXT DEFAULT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
+      -- The gate state machine, per owner (CO-722 multi-owner). One run drives
+      -- each repo's owner then reviewer then verifier on its own track; the
+      -- runs.state column is a rollup of these. NULL until the run fans out at
+      -- provisioned, so a run still preparing reads its state from runs.
+      state TEXT DEFAULT NULL,
+      blocked_reason TEXT DEFAULT NULL,
+      -- The repo's index in seams.yaml's merge_order, for display. The engine
+      -- does not gate on it -- a person merges the approved PRs in this order.
+      merge_order INTEGER DEFAULT NULL,
       pr_number INTEGER DEFAULT NULL,
       pr_url TEXT DEFAULT NULL,
       PRIMARY KEY (run_id, repo)
@@ -54,6 +63,10 @@ export const RUN_TABLES_SQL = `
       id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
       gate INTEGER NOT NULL,
+      -- Which owner's track this gate belongs to (CO-722 multi-owner). NULL on
+      -- rows written before the column existed; the migration backfills them to
+      -- the run's sole owner so activeGate(runId, repo) still finds them.
+      repo TEXT DEFAULT NULL,
       agent TEXT NOT NULL,
       attempt INTEGER NOT NULL DEFAULT 1,
       -- The short id 'claude --bg' prints, which attach/logs/stop take.

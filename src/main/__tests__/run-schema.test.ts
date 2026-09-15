@@ -144,3 +144,97 @@ describe('the structural choices SQLite cannot add later', () => {
     expect(new Set(ids).size).toBe(3);
   });
 });
+
+describe('the multi-owner migration backfills an in-flight database', () => {
+  // A database from BEFORE the per-owner columns existed: run_owners without
+  // state/blocked_reason/merge_order, run_gates without repo. Everything else is
+  // the shipped shape. initializeRunTables must add the columns AND backfill
+  // them, or an in-flight run strands the moment the per-owner paths read them.
+  function oldDb(): Database {
+    const d = new Database(':memory:');
+    d.exec('PRAGMA foreign_keys = ON');
+    d.exec('CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL)');
+    d.exec(`CREATE TABLE runs (
+      id TEXT PRIMARY KEY, initiative_key TEXT NOT NULL, initiative_dir TEXT NOT NULL,
+      harness_path TEXT NOT NULL, bodhi_root TEXT NOT NULL, python_path TEXT,
+      state TEXT NOT NULL DEFAULT 'preparing', permission_posture TEXT NOT NULL DEFAULT 'manual',
+      budget_usd REAL, group_id TEXT, blocked_reason TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
+    // run_owners WITHOUT the new columns, but WITH agent (that migration predates this one).
+    d.exec(`CREATE TABLE run_owners (
+      run_id TEXT NOT NULL, repo TEXT NOT NULL, worktree TEXT NOT NULL, branch TEXT NOT NULL,
+      base TEXT NOT NULL, scratch TEXT, agent TEXT, status TEXT NOT NULL DEFAULT 'pending',
+      pr_number INTEGER, pr_url TEXT, PRIMARY KEY (run_id, repo))`);
+    // run_gates WITHOUT repo.
+    d.exec(`CREATE TABLE run_gates (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL, gate INTEGER NOT NULL, agent TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 1, bg_session_id TEXT, claude_session_id TEXT,
+      account_id TEXT, status TEXT NOT NULL DEFAULT 'running', verdict_json TEXT,
+      receipt_path TEXT, tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL,
+      posture TEXT NOT NULL DEFAULT 'manual', started_at TEXT DEFAULT CURRENT_TIMESTAMP, ended_at TEXT)`);
+    d.exec(`CREATE TABLE run_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, at TEXT DEFAULT CURRENT_TIMESTAMP,
+      kind TEXT NOT NULL, gate INTEGER, repo TEXT, payload_json TEXT)`);
+    return d;
+  }
+
+  function seed(d: Database): void {
+    const run = (id: string, state: string) =>
+      d.exec(`INSERT INTO runs (id, initiative_key, initiative_dir, harness_path, bodhi_root, state) VALUES ('${id}', 'K', '/i', '/h', '/b', '${state}')`);
+    const owner = (run: string, repo: string) =>
+      d.exec(`INSERT INTO run_owners (run_id, repo, worktree, branch, base) VALUES ('${run}', '${repo}', '/w', 'b', 'origin/development')`);
+    const gate = (id: string, run: string) =>
+      d.exec(`INSERT INTO run_gates (id, run_id, gate, agent, status) VALUES ('${id}', '${run}', 2, 'a', 'running')`);
+    // A single-owner run mid-flight: backfill both columns.
+    run('r1', 'running');
+    owner('r1', 'repo-x');
+    gate('g1', 'r1');
+    // A run still preparing (run-level prelude): owner state stays NULL.
+    run('r2', 'preparing');
+    owner('r2', 'repo-y');
+    // A parked two-owner run: its gate cannot be attributed, so repo stays NULL.
+    run('r3', 'running');
+    owner('r3', 'repo-p');
+    owner('r3', 'repo-q');
+    gate('g3', 'r3');
+  }
+
+  test('adds the columns and backfills the single-owner run', () => {
+    const d = oldDb();
+    seed(d);
+    initializeRunTables(asDb(d));
+
+    expect(columns(d, 'run_owners')).toEqual(expect.arrayContaining(['state', 'blocked_reason', 'merge_order']));
+    expect(columns(d, 'run_gates')).toContain('repo');
+
+    const gate = d.prepare("SELECT repo FROM run_gates WHERE id = 'g1'").get() as { repo: string | null };
+    expect(gate.repo).toBe('repo-x');
+    const owner = d.prepare("SELECT state FROM run_owners WHERE run_id = 'r1'").get() as { state: string | null };
+    expect(owner.state).toBe('running');
+  });
+
+  test('leaves a preparing run’s owner state NULL (prelude stays run-level)', () => {
+    const d = oldDb();
+    seed(d);
+    initializeRunTables(asDb(d));
+    const owner = d.prepare("SELECT state FROM run_owners WHERE run_id = 'r2'").get() as { state: string | null };
+    expect(owner.state).toBeNull();
+  });
+
+  test('does not guess a repo for a gate on a multi-owner run', () => {
+    const d = oldDb();
+    seed(d);
+    initializeRunTables(asDb(d));
+    const gate = d.prepare("SELECT repo FROM run_gates WHERE id = 'g3'").get() as { repo: string | null };
+    expect(gate.repo).toBeNull();
+  });
+
+  test('is idempotent: a second run of the migration changes nothing', () => {
+    const d = oldDb();
+    seed(d);
+    initializeRunTables(asDb(d));
+    expect(() => initializeRunTables(asDb(d))).not.toThrow();
+    const gate = d.prepare("SELECT repo FROM run_gates WHERE id = 'g1'").get() as { repo: string | null };
+    expect(gate.repo).toBe('repo-x');
+  });
+});
