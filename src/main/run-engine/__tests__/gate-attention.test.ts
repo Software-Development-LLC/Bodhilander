@@ -5,7 +5,7 @@ const BASE = { gate: 2 as const, agent: 'bodhilander-lead', backgroundId: 'ea15b
 
 describe('a launched gate, looked at again', () => {
   test('a receipt finishes the gate with the receipt’s verdict', () => {
-    const { event, note } = attend({ ...BASE, receipt: { verdict: 'pass', blocking: [] }, status: 'gone' });
+    const { event, note } = attend({ ...BASE, receipt: { verdict: 'pass', blocking: [], writtenAt: null }, status: 'gone' });
     expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
     expect(note).toContain('verdict pass');
   });
@@ -13,7 +13,7 @@ describe('a launched gate, looked at again', () => {
   test('a failing receipt is a fail, and the gate’s own reason travels', () => {
     const { event, note } = attend({
       ...BASE,
-      receipt: { verdict: 'fail', blocking: [], reason: 'the gate failed without listing a blocking finding' },
+      receipt: { verdict: 'fail', blocking: [], reason: 'the gate failed without listing a blocking finding', writtenAt: null },
       status: 'idle',
     });
     expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'fail' });
@@ -25,7 +25,7 @@ describe('a launched gate, looked at again', () => {
     // Holding the run for the process to exit would be the engine deciding
     // the gate had not really meant it. But the log must say the run moved
     // before the process ended, so the sequence is reconstructible.
-    const { event, note } = attend({ ...BASE, receipt: { verdict: 'pass', blocking: [] }, status: 'busy' });
+    const { event, note } = attend({ ...BASE, receipt: { verdict: 'pass', blocking: [], writtenAt: null }, status: 'busy' });
     expect(event?.kind).toBe('gateFinished');
     expect(note).toContain('still working when its receipt was read');
   });
@@ -89,7 +89,69 @@ describe('a launched gate, looked at again', () => {
   test('a receipt outranks the ceiling', () => {
     // A gate that signed off is finished whatever the clock says.
     const { event } = attend({
-      ...BASE, receipt: { verdict: 'pass', blocking: [] }, status: 'busy', busyForMs: 1e12, busyCeilingMs: 1,
+      ...BASE, receipt: { verdict: 'pass', blocking: [], writtenAt: null }, status: 'busy', busyForMs: 1e12, busyCeilingMs: 1,
+    });
+    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
+  });
+
+  test('a receipt written before this attempt started is a previous attempt’s, and is not used', () => {
+    // Measured, not hypothetical: `watch` on a fresh run found this morning's
+    // 3-reviewer.json at the shared path and launched gate 4 on it. The
+    // receipt path is per initiative and per role -- no run, no attempt --
+    // so written_at against the row's started_at is the only thing that
+    // tells a previous attempt's sign-off from this one's.
+    const { event, note } = attend({
+      ...BASE,
+      receipt: { verdict: 'pass', blocking: [], writtenAt: '2026-09-15T00:19:00Z' },
+      startedAt: '2026-09-15T02:23:22Z',
+      status: 'busy',
+    });
+    expect(event).toBeNull();
+    expect(note).toContain('previous attempt');
+    expect(note).toContain('2026-09-15T00:19:00Z');
+  });
+
+  test('a stale receipt still lets the status decide, and both notes are kept', () => {
+    // Stale receipt, gate gone: the gate established nothing, and the log
+    // should say both that a receipt was there and why it did not count.
+    const { event, note } = attend({
+      ...BASE,
+      receipt: { verdict: 'pass', blocking: [], writtenAt: '2026-09-15T00:19:00Z' },
+      startedAt: '2026-09-15T02:23:22Z',
+      status: 'gone',
+    });
+    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(note).toContain('previous attempt');
+    expect(note).toContain('wrote no receipt');
+  });
+
+  test('a receipt written after the attempt started is this attempt’s', () => {
+    const { event } = attend({
+      ...BASE,
+      receipt: { verdict: 'pass', blocking: [], writtenAt: '2026-09-15T02:28:00Z' },
+      startedAt: '2026-09-15T02:23:22Z',
+      status: 'gone',
+    });
+    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
+  });
+
+  test('SQLite’s timestamp and ISO 8601 are compared as instants, not text', () => {
+    // '2026-09-15 02:23:22' sorts AFTER '2026-09-15T00:19:00Z' as text only
+    // by accident of the space; the comparison must not depend on it.
+    const { event } = attend({
+      ...BASE,
+      receipt: { verdict: 'pass', blocking: [], writtenAt: '2026-09-15T02:28:00Z' },
+      startedAt: '2026-09-15 02:23:22',
+      status: 'gone',
+    });
+    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
+  });
+
+  test('without both timestamps nothing is called stale', () => {
+    // A receipt with no written_at is already odd -- the harness always
+    // writes one -- and is something to look at, not something to discard.
+    const { event } = attend({
+      ...BASE, receipt: { verdict: 'pass', blocking: [], writtenAt: null }, startedAt: '2026-09-15T02:23:22Z', status: 'gone',
     });
     expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
   });
@@ -108,7 +170,7 @@ describe('a launched gate, looked at again', () => {
   });
 
   test('the note names the gate and the role, because a run has several of each', () => {
-    const { note } = attend({ gate: 4, agent: 'scribe', backgroundId: null, receipt: { verdict: 'pass', blocking: [] }, status: 'gone' });
+    const { note } = attend({ gate: 4, agent: 'scribe', backgroundId: null, receipt: { verdict: 'pass', blocking: [], writtenAt: null }, status: 'gone' });
     expect(note).toContain('gate 4 (scribe)');
   });
 });

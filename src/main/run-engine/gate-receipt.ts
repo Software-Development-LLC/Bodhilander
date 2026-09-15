@@ -48,6 +48,15 @@ export interface ReceiptReading {
   blocking: string[];
   /** Why the verdict is what it is, when it is not simply what the gate said. */
   reason?: string;
+  /**
+   * When the receipt says it was written, ISO 8601, or null if it does not.
+   *
+   * Load-bearing, not decorative: the receipt path is per initiative and per
+   * role, with no run or attempt in it, so a receipt from an earlier attempt
+   * sits exactly where this attempt's would. The caller compares this to
+   * when the gate row was opened -- see `gate-attention.ts`.
+   */
+  writtenAt: string | null;
 }
 
 /** The receipt vocabulary, as the schema spells it. */
@@ -69,8 +78,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function inconclusive(reason: string): ReceiptReading {
-  return { verdict: 'inconclusive', blocking: [], reason };
+function inconclusive(reason: string, writtenAt: string | null = null): ReceiptReading {
+  return { verdict: 'inconclusive', blocking: [], reason, writtenAt };
 }
 
 /** Summaries of the blocking findings, tolerating a list that is not one. */
@@ -116,12 +125,13 @@ export function readReceipt(text: string | null): ReceiptReading | null {
   }
 
   const blocking = blockingSummaries(receipt.blocking_findings);
+  const writtenAt = typeof receipt.written_at === 'string' && receipt.written_at.trim() ? receipt.written_at.trim() : null;
 
   if (raw === 'undriveable') {
-    return inconclusive('the gate reported it could not be driven here -- nothing was established');
+    return inconclusive('the gate reported it could not be driven here -- nothing was established', writtenAt);
   }
   if (raw === 'skip') {
-    return inconclusive('the gate reported nothing was owed -- nothing was established');
+    return inconclusive('the gate reported nothing was owed -- nothing was established', writtenAt);
   }
   if (raw === 'pass' && blocking.length > 0) {
     return {
@@ -130,12 +140,13 @@ export function readReceipt(text: string | null): ReceiptReading | null {
       reason:
         `the gate passed while reporting ${blocking.length} blocking finding(s), so it ` +
         'gave two answers that disagree',
+      writtenAt,
     };
   }
   if (raw === 'fail') {
     return blocking.length > 0
-      ? { verdict: 'fail', blocking }
-      : { verdict: 'fail', blocking, reason: 'the gate failed without listing a blocking finding' };
+      ? { verdict: 'fail', blocking, writtenAt }
+      : { verdict: 'fail', blocking, reason: 'the gate failed without listing a blocking finding', writtenAt };
   }
-  return { verdict: 'pass', blocking: [] };
+  return { verdict: 'pass', blocking: [], writtenAt };
 }

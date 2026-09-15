@@ -446,6 +446,9 @@ async function watch(): Promise<void> {
     receipt,
     status: seen.status,
     backgroundId: gate.bgSessionId,
+    // SQLite's CURRENT_TIMESTAMP is UTC without a zone marker; said so here
+    // rather than parsed as local time and found to be five hours out.
+    startedAt: `${gate.startedAt.replace(' ', 'T')}Z`,
     busyForMs,
     busyCeilingMs: GATE_BUSY_CEILING_MS,
   });

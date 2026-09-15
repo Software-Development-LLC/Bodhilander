@@ -34,7 +34,7 @@ describe('no receipt is not a bad receipt', () => {
 
   test('a file that exists and cannot be read is a gate that tried to answer and failed', () => {
     expect(readReceipt('not json')).toEqual({
-      verdict: 'inconclusive', blocking: [], reason: 'the gate receipt is not JSON',
+      verdict: 'inconclusive', blocking: [], reason: 'the gate receipt is not JSON', writtenAt: null,
     });
     expect(readReceipt('[]')?.reason).toBe('the gate receipt is not an object');
     expect(readReceipt('null')?.reason).toBe('the gate receipt is not an object');
@@ -43,9 +43,9 @@ describe('no receipt is not a bad receipt', () => {
 
 describe('the receipt vocabulary, mapped and never coerced', () => {
   test('pass and fail are what they say', () => {
-    expect(readReceipt(receipt({ verdict: 'pass' }))).toEqual({ verdict: 'pass', blocking: [] });
+    expect(readReceipt(receipt({ verdict: 'pass' }))).toEqual({ verdict: 'pass', blocking: [], writtenAt: '2026-09-15T00:27:53Z' });
     expect(readReceipt(receipt({ verdict: 'fail', blocking_findings: [{ summary: 'the test is not load-bearing' }] })))
-      .toEqual({ verdict: 'fail', blocking: ['the test is not load-bearing'] });
+      .toEqual({ verdict: 'fail', blocking: ['the test is not load-bearing'], writtenAt: '2026-09-15T00:27:53Z' });
   });
 
   test('undriveable is inconclusive, and the note says the gate could not run', () => {
@@ -107,6 +107,21 @@ describe('two answers that disagree', () => {
     // The schema requires `summary`; a receipt that breaks that elsewhere
     // does not get to turn a pass into two answers with an empty string.
     const read = readReceipt(receipt({ verdict: 'pass', blocking_findings: [{ where: 'x' }, 'text', null] }));
-    expect(read).toEqual({ verdict: 'pass', blocking: [] });
+    expect(read).toEqual({ verdict: 'pass', blocking: [], writtenAt: '2026-09-15T00:27:53Z' });
+  });
+});
+
+describe('when the receipt was written', () => {
+  test('is carried, because the path has no attempt in it', () => {
+    // gates/<gate>-<agent>.json is per initiative and per role. A receipt
+    // from an earlier attempt sits exactly where this attempt's would, and
+    // written_at is the only thing that tells them apart.
+    expect(readReceipt(receipt({ written_at: '2026-09-15T02:28:00Z' }))?.writtenAt).toBe('2026-09-15T02:28:00Z');
+  });
+
+  test('a receipt with no written_at says so with null, and is otherwise read', () => {
+    const read = readReceipt(receipt({ written_at: undefined }));
+    expect(read?.verdict).toBe('pass');
+    expect(read?.writtenAt).toBeNull();
   });
 });

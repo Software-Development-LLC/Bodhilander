@@ -71,6 +71,15 @@ export interface GateFacts {
   agent: string;
   /** What the receipt said, or null when there is no receipt file. */
   receipt: ReceiptReading | null;
+  /**
+   * When this gate's row was opened, ISO 8601, or null if unknown.
+   *
+   * A receipt written before it is a previous attempt's, sitting at the
+   * same path, and is not evidence about this one. Measured: `watch` on a
+   * fresh run found this morning's `3-reviewer.json` and launched gate 4 on
+   * it.
+   */
+  startedAt?: string | null;
   /** The session's status, or null when it cannot be known. */
   status: SessionStatus | null;
   /** What `claude attach` takes, for the note when a person must step in. */
@@ -92,9 +101,39 @@ export interface Attention {
   note: string | null;
 }
 
+/**
+ * A receipt older than the gate it would be evidence for, or null.
+ *
+ * Both timestamps are required: a receipt with no written_at, or a row with
+ * no started_at, cannot be called stale and is taken at face value -- the
+ * harness has always written written_at, so a receipt without one is
+ * already something to look at rather than something to discard. Compared
+ * as instants, not strings: SQLite's `YYYY-MM-DD HH:MM:SS` and the
+ * receipt's ISO 8601 do not sort against each other as text.
+ */
+function staleReceipt(facts: GateFacts): { writtenAt: string; startedAt: string } | null {
+  const writtenAt = facts.receipt?.writtenAt ?? null;
+  const startedAt = facts.startedAt ?? null;
+  if (!writtenAt || !startedAt) return null;
+  const written = Date.parse(writtenAt);
+  const started = Date.parse(startedAt);
+  if (Number.isNaN(written) || Number.isNaN(started)) return null;
+  return written < started ? { writtenAt, startedAt } : null;
+}
+
 /** What to do about a launched gate, given what can be seen of it. */
 export function attend(facts: GateFacts): Attention {
   const who = `gate ${facts.gate} (${facts.agent})`;
+
+  const stale = staleReceipt(facts);
+  if (stale) {
+    // Not this gate's. Decided from the status as though there were no
+    // receipt, and said out loud, because a person looking at the directory
+    // will see a receipt and wonder why the run did not move.
+    const rest = attend({ ...facts, receipt: null });
+    const note = `${who}: a receipt at this path was written ${stale.writtenAt}, before this attempt started ${stale.startedAt}; it is a previous attempt's and was not used`;
+    return { event: rest.event, note: rest.note ? `${note}. ${rest.note}` : note };
+  }
 
   if (facts.receipt) {
     const { verdict, reason } = facts.receipt;
