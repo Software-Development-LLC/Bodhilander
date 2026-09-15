@@ -271,8 +271,19 @@ async function step(): Promise<void> {
       const owner = owners[0];
       // The row for this role's turn was opened by the driver before this
       // call, so it is the one thing that knows the attempt number -- and
-      // therefore the channel key `perms` will look up.
+      // therefore the channel key `perms` will look up. Its absence is a
+      // broken invariant, and a broken invariant that quietly defaulted to
+      // attempt 1 would hand this role a channel another turn already used:
+      // a stale request read as the new one's, which is exactly what keying
+      // by attempt exists to prevent. So it fails here, where the cause is.
       const turn = runs.activeGate(runId);
+      if (!turn || turn.gate !== gate || turn.agent !== agent) {
+        const found = turn ? `gate ${turn.gate} (${turn.agent})` : 'missing';
+        throw new Error(
+          `gate ${gate} (${agent}) was asked to launch but the open run_gates row is ${found}; ` +
+            'the driver opens the row before it spawns',
+        );
+      }
       console.log(`  launching gate ${gate} as ${agent}`);
       return launchGate({
         gate,
@@ -305,7 +316,7 @@ async function step(): Promise<void> {
         permissions: {
           root: permissionRoot(),
           brokerPath: path.join(__dirname, '..', 'scripts', 'permission-broker.js'),
-          channelKey: channelKeyFor(runId, gate, agent, turn?.attempt ?? 1),
+          channelKey: channelKeyFor(runId, gate, agent, turn.attempt),
         },
         context: {
           harnessPath: run.harnessPath,

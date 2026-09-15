@@ -170,22 +170,13 @@ async function advanceOnce(
       }
       const gate = runs.activeGate(runId);
 
-      // A step passing is not the gate passing. Gate 4 is the verifier and
-      // then the scribe; when the verifier's report arrives the gate is half
-      // done, and telling the machine `gateFinished` here would send the run
-      // to waitingChecks with no PR open. So the driver closes the step,
-      // opens the next, and says nothing to the machine until the LAST role
-      // reports. A failure at any step goes straight through: red is red
-      // whoever found it, and the machine already knows what red means.
-      if (event.kind === 'gateFinished' && event.verdict === 'pass' && gate?.gate === event.gate) {
-        const following = stepAfter(target.agents[event.gate], gate.agent, result, event.gate);
-        if (following) {
-          runs.finishGate(gate.id, 'done', { verdict: 'pass' });
-          const performed = await execute([startStep(runId, event.gate, following, target)], target, deps);
-          collect(result, performed);
-          next.push(...performed.events);
-          continue;
-        }
+      // A step passing is not the gate passing -- see `continueSequence`.
+      // Handled before the machine hears anything, and the machine hears
+      // nothing at all if there was a next role to run.
+      const nextStep = gate ? await continueSequence(runId, event, gate, target, deps, result) : null;
+      if (nextStep) {
+        next.push(...nextStep);
+        continue;
       }
 
       const decision = transition(run.state, event, { activeGate: asGate(gate?.gate) });
@@ -275,6 +266,47 @@ function openGates(
     allowed.push(startStep(runId, action.gate, first, target));
   }
   return allowed;
+}
+
+/**
+ * Run the next role of a gate whose previous role just passed.
+ *
+ * Gate 4 is the verifier and then the scribe. When the verifier's report
+ * arrives the gate is half done, and telling the machine `gateFinished`
+ * there would send the run to waitingChecks with no PR open -- the scribe,
+ * the only role that opens one, has not run. So this closes the step's row,
+ * opens the next, spawns it, and returns what that spawn produced; the caller
+ * then says NOTHING to the machine, which hears about the gate only when the
+ * last role reports.
+ *
+ * Returns null whenever the machine should hear this event after all: it is
+ * not a passing gate report, it is for some other gate than the one in
+ * flight, or the role that reported was the last in its sequence. A failure
+ * at any step lands here too -- red is red whoever found it, and the machine
+ * already knows what red means.
+ *
+ * Its own function because `advanceOnce` is a loop with several decisions in
+ * it already, and one more nested inside it put the whole thing past the
+ * complexity Sonar allows. That was a fair complaint: the step boundary is a
+ * separate idea from the round loop, and reads as one here.
+ */
+async function continueSequence(
+  runId: string,
+  event: RunEvent,
+  gate: runs.RunGateRow,
+  target: ExecutorTarget,
+  deps: ExecutorDeps,
+  result: AdvanceResult,
+): Promise<RunEvent[] | null> {
+  if (event.kind !== 'gateFinished' || event.verdict !== 'pass' || gate.gate !== event.gate) {
+    return null;
+  }
+  const following = stepAfter(target.agents[event.gate], gate.agent, result, event.gate);
+  if (!following) return null;
+  runs.finishGate(gate.id, 'done', { verdict: 'pass' });
+  const performed = await execute([startStep(runId, event.gate, following, target)], target, deps);
+  collect(result, performed);
+  return performed.events;
 }
 
 /**
