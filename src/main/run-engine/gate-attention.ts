@@ -45,12 +45,16 @@
  * gate had not really meant it. The note says the gate was still alive, so
  * anyone reading the log knows the run moved before the process ended.
  *
- * ## What this does NOT decide yet
+ * ## The one clock, and what it does
  *
  * `busy` with no receipt, forever. A gate genuinely thinking and a gate
  * looping look the same from outside until something bounds how long `busy`
- * may last without a word. That ceiling is a policy, belongs beside the
- * other cadences in `reconcile-loop.ts`, and is not this module's to invent.
+ * may last without a word. The ceiling itself is a policy and lives beside
+ * the other cadences in `reconcile-loop.ts`; this module only applies what
+ * it is handed, and applies it as a question to a person -- `inconclusive`,
+ * with the id to attach to -- never as a kill. The reviewer that #292 is
+ * named for was killed mid-mutation-test by a clock that could not tell it
+ * was working. This one cannot tell either, and says so.
  */
 import type { ReceiptReading } from './gate-receipt';
 import type { Gate, RunEvent } from './transitions';
@@ -71,6 +75,14 @@ export interface GateFacts {
   status: SessionStatus | null;
   /** What `claude attach` takes, for the note when a person must step in. */
   backgroundId: string | null;
+  /**
+   * How long the gate has been running, and how long `busy` with no word may
+   * last before a person is asked to look. Both optional and both needed for
+   * the ceiling to apply: a caller that cannot say how long the gate has run
+   * gets no verdict from a clock it did not wind.
+   */
+  busyForMs?: number | null;
+  busyCeilingMs?: number | null;
 }
 
 export interface Attention {
@@ -120,9 +132,26 @@ export function attend(facts: GateFacts): Attention {
         note: `${who} is waiting on a prompt nobody is attached to${attach}`,
       };
     }
+    case 'busy': {
+      // Thinking, as far as can be told -- unless it has been thinking with
+      // no word for longer than a thorough gate needs. That is the one clock
+      // left, and it does not kill: the run goes to a person with the id to
+      // attach to, and the gate keeps running for them to judge.
+      const { busyForMs, busyCeilingMs } = facts;
+      if (busyForMs != null && busyCeilingMs != null && busyForMs > busyCeilingMs) {
+        const attach = facts.backgroundId ? ` -- \`claude attach ${facts.backgroundId}\` to see it` : '';
+        return {
+          event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
+          note:
+            `${who} has been busy for ${Math.round(busyForMs / 60_000)} minutes with no receipt, ` +
+            `past the ${Math.round(busyCeilingMs / 60_000)}-minute ceiling; it is still running, and ` +
+            `whether that is thought or a loop is a person's call${attach}`,
+        };
+      }
+      return { event: null, note: null };
+    }
     default:
-      // busy, or unknown. Thinking, as far as can be told -- and "gone" must
-      // never be reached by failing to look.
+      // Unknown. "Gone" must never be reached by failing to look.
       return { event: null, note: null };
   }
 }

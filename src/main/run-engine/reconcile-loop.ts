@@ -33,6 +33,40 @@
  */
 import type { RunState } from './transitions';
 
+/**
+ * How often a running gate is looked at.
+ *
+ * A background gate reports by receipt and cannot be heard any other way, so
+ * a run in `running` must be LOOKED at: is there a receipt, and what does the
+ * daemon say the session is doing (#287). The loop used to leave `running`
+ * alone on the grounds that the process exits and says so -- true of a print
+ * gate, and exactly wrong for a `--bg` one, which is how the first real run
+ * said `gate 2 running` for hours after the process was gone.
+ *
+ * A minute, like checks: the look is cheap (one file, one `claude agents`)
+ * and somebody is waiting on the far side of it.
+ */
+export const GATE_INTERVAL_MS = 60_000;
+
+/**
+ * The one clock this engine still runs on a gate, and what it means.
+ *
+ * #292 began as "the gate deadline killed a working reviewer": a cap on
+ * elapsed time cannot tell a thinking gate from a stuck one. Nearly every
+ * case that deadline was for is now read from the daemon instead -- `idle`
+ * and `gone` without a receipt, `waiting` on a prompt. What remains is
+ * `busy` with no word, indefinitely, and only a person can say whether that
+ * is thought or a loop.
+ *
+ * So this is not a kill. Past it, the run goes to `inconclusive` -- the
+ * inbox -- with the session id to attach to, and the gate is left running
+ * for the person to judge. Two hours, because the reviewer that was killed
+ * at fifteen minutes was mid-mutation-test and right to be, and today's
+ * scribe ran thirty-five. A ceiling a thorough gate can hit is a ceiling
+ * that will lie.
+ */
+export const GATE_BUSY_CEILING_MS = 2 * 60 * 60 * 1000;
+
 /** Checks are a machine's work: minutes, and the run is blocked behind them. */
 export const CHECKS_INTERVAL_MS = 60_000;
 /** A review is a person's work: hours to days, so asking often buys nothing. */
@@ -71,6 +105,7 @@ export const ESCALATE_AFTER = 5;
  * not in five.
  */
 export function baseIntervalFor(state: RunState): number | null {
+  if (state === 'running') return GATE_INTERVAL_MS;
   if (state === 'waitingChecks') return CHECKS_INTERVAL_MS;
   if (state === 'reviewNotRequested') return ACTION_RETRY_INTERVAL_MS;
   if (state === 'waitingReview') return REVIEW_INTERVAL_MS;

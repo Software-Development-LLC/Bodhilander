@@ -51,6 +51,7 @@ import { launchGate, rolesFromHarness } from '../src/main/run-engine/gate-launch
 import { gateBrief } from '../src/main/run-engine/gate-brief';
 import { readReceipt, receiptPathFor } from '../src/main/run-engine/gate-receipt';
 import { attend, type SessionStatus } from '../src/main/run-engine/gate-attention';
+import { GATE_BUSY_CEILING_MS } from '../src/main/run-engine/reconcile-loop';
 import { runCommand, processDeps } from '../src/main/run-engine/command-runner';
 import type { Gate, RunEvent } from '../src/main/run-engine/transitions';
 import {
@@ -430,13 +431,23 @@ async function watch(): Promise<void> {
   // is "no receipt yet", which is the normal state of a working gate, not an
   // error to crash on.
   const receipt = readReceipt(readIfPresent(receiptPath));
-  const status = await sessionStatus(gate.bgSessionId);
-  console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt})`);
+  const seen = await sessionStatus(gate.bgSessionId);
+  const busyForMs = Date.now() - Date.parse(`${gate.startedAt.replace(' ', 'T')}Z`);
+  console.log(`gate ${gate.gate} (${gate.agent}, attempt ${gate.attempt}, running ${Math.round(busyForMs / 60_000)}m)`);
   console.log(`  receipt ${receipt ? receipt.verdict : 'none'}  ${receiptPath}`);
-  console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  status: ${status ?? 'unknown'}`);
+  console.log(`  session ${gate.bgSessionId ?? '(not recorded)'}  status: ${seen.status ?? 'unknown'}`);
+  // Printed here, under the header it is about, rather than from inside the
+  // lookup -- a note above its own gate reads as somebody else's.
+  if (seen.note) console.log(`  note    ${seen.note}`);
 
   const { event, note } = attend({
-    gate: gate.gate, agent: gate.agent, receipt, status, backgroundId: gate.bgSessionId,
+    gate: gate.gate,
+    agent: gate.agent,
+    receipt,
+    status: seen.status,
+    backgroundId: gate.bgSessionId,
+    busyForMs,
+    busyCeilingMs: GATE_BUSY_CEILING_MS,
   });
   if (note) console.log(`  note    ${note}`);
   if (!event) {
@@ -465,23 +476,25 @@ function readIfPresent(file: string): string | null {
  * could not be asked -- and null is not gone: that is a verdict about the
  * gate, and must not be reached by failing to look.
  */
-async function sessionStatus(bgSessionId: string | null): Promise<SessionStatus | null> {
-  if (!bgSessionId) return null;
+async function sessionStatus(
+  bgSessionId: string | null,
+): Promise<{ status: SessionStatus | null; note: string | null }> {
+  if (!bgSessionId) return { status: null, note: null };
   const result = await runCommand(env('BODHI_CLAUDE', 'claude'), ['agents', '--json'], { timeoutMs: 30_000 });
-  if (result.code !== 0) return null;
+  if (result.code !== 0) return { status: null, note: `claude agents exited ${result.code}; status unknown` };
   try {
     const parsed = JSON.parse(result.stdout) as unknown;
     const rows = Array.isArray(parsed) ? parsed : ((parsed as { agents?: unknown[] }).agents ?? []);
     const row = rows.find((r) => (r as { id?: string }).id === bgSessionId) as { status?: string } | undefined;
-    if (!row) return 'gone';
+    if (!row) return { status: 'gone', note: null };
     const status = row.status;
-    if (status === 'busy' || status === 'waiting' || status === 'idle') return status;
+    if (status === 'busy' || status === 'waiting' || status === 'idle') return { status, note: null };
     // A word the daemon has not shown us before. Not a reason to guess in
-    // either direction.
-    console.log(`  note    the daemon reports status ${JSON.stringify(status)}, which this console does not know`);
-    return null;
+    // either direction -- returned as a note for the caller to print in
+    // order, not logged from here above the header it belongs under.
+    return { status: null, note: `the daemon reports status ${JSON.stringify(status)}, which this console does not know` };
   } catch {
-    return null;
+    return { status: null, note: 'claude agents returned something that is not JSON; status unknown' };
   }
 }
 

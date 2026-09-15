@@ -50,12 +50,48 @@ describe('a launched gate, looked at again', () => {
 
   test('a gate waiting on a prompt nobody is attached to is a person’s problem, with the id to attach to', () => {
     // Measured: a session wedged on a permission prompt reads `waiting`. The
-    // run moves to waitingPermission -- into the inbox -- rather than being
-    // called finished or left to sit.
+    // event is `permissionRequested`, which the machine answers by moving the
+    // run to the waitingPermission state -- into the inbox -- rather than the
+    // gate being called finished or left to sit.
     const { event, note } = attend({ ...BASE, receipt: null, status: 'waiting' });
     expect(event).toEqual({ kind: 'permissionRequested' });
     expect(note).toContain('waiting on a prompt nobody is attached to');
     expect(note).toContain('claude attach ea15b328');
+  });
+
+  test('busy past the ceiling is a person’s call, not a kill', () => {
+    // The clock #292 is named for killed a working reviewer. This one does
+    // not touch the gate: the run goes to the inbox with the id to attach to,
+    // and whether it is thought or a loop is decided by someone who can look.
+    const { event, note } = attend({
+      ...BASE, receipt: null, status: 'busy', busyForMs: 3 * 60 * 60 * 1000, busyCeilingMs: 2 * 60 * 60 * 1000,
+    });
+    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(note).toContain('busy for 180 minutes');
+    expect(note).toContain('120-minute ceiling');
+    expect(note).toContain('claude attach ea15b328');
+  });
+
+  test('busy under the ceiling is thinking', () => {
+    expect(attend({
+      ...BASE, receipt: null, status: 'busy', busyForMs: 90 * 60 * 1000, busyCeilingMs: 2 * 60 * 60 * 1000,
+    })).toEqual({ event: null, note: null });
+  });
+
+  test('a clock nobody wound gives no verdict', () => {
+    // A caller that cannot say how long the gate has run -- or has no
+    // ceiling to apply -- gets nothing from the ceiling. Half a clock is not
+    // a clock.
+    expect(attend({ ...BASE, receipt: null, status: 'busy', busyForMs: null, busyCeilingMs: 1 })).toEqual({ event: null, note: null });
+    expect(attend({ ...BASE, receipt: null, status: 'busy', busyForMs: 1e9, busyCeilingMs: null })).toEqual({ event: null, note: null });
+  });
+
+  test('a receipt outranks the ceiling', () => {
+    // A gate that signed off is finished whatever the clock says.
+    const { event } = attend({
+      ...BASE, receipt: { verdict: 'pass', blocking: [] }, status: 'busy', busyForMs: 1e12, busyCeilingMs: 1,
+    });
+    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
   });
 
   test('an unknown status is not gone', () => {
