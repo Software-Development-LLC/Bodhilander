@@ -82,6 +82,9 @@ export async function lookAtGate(run: RunRow, gate: RunGateRow, deps: AttentionD
   if (gate.gate !== 2 && gate.gate !== 3 && gate.gate !== 4) {
     throw new Error(`the open row is for gate ${gate.gate}, which this engine does not know`);
   }
+  // run.initiativeDir is NOT NULL (schema) and a non-optional string (RunRow),
+  // so it needs no fallback here; the console's old `?? ''` guarded a null
+  // that cannot occur.
   const receiptPath = receiptPathFor(run.initiativeDir, gate.gate, gate.agent);
   const receipt = readReceipt(deps.readFile(receiptPath));
   const seen = await sessionStatus(gate.bgSessionId, deps);

@@ -169,10 +169,18 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
       report.skipped.push({ runId: run.id, why: `the recorded PR URL ${owner.prUrl} does not name a repository` });
       return false;
     }
+    // A local, so the type narrows without a cast: owner is mutable (the
+    // discovery branch above sets prNumber on it), so TypeScript will not
+    // carry the narrowing across that write on its own.
+    const prNumber = owner.prNumber;
+    if (prNumber === null) {
+      report.skipped.push({ runId: run.id, why: 'a PR number was expected by now but is not recorded' });
+      return false;
+    }
     const result = await deps.reconcile(run, {
       repo,
       registryRepo: owner.repo,
-      prNumber: owner.prNumber as number,
+      prNumber,
       state: run.state,
       approvers: deps.approvers(),
       harnessPath: run.harnessPath,

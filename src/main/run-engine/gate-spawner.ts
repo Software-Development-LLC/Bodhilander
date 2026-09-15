@@ -116,6 +116,9 @@ export function targetFor(
     repo: owner?.prUrl ? repoSlugFromUrl(owner.prUrl) : null,
     prNumber: owner?.prNumber ?? null,
     approvers: [...approvers],
+    // NOT NULL in the schema and a non-optional `string` on RunRow, so there
+    // is no null to guard: the console's old `?? '(not recorded)'` was dead
+    // defensive code for a value that cannot be absent.
     initiativePath: run.initiativeDir,
     harnessPath: run.harnessPath,
     pythonPath: run.pythonPath ?? 'python',
