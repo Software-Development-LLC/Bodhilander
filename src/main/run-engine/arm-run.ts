@@ -51,6 +51,11 @@ export function harnessFromTeamYaml(text: string): string | null {
  * Handles both the block form init-task writes (`merge_order:` then `- repo`
  * lines) and the flow form (`merge_order: [a, b, c]`). Returns [] when there
  * is no such key -- display only, so an absent order is not an error.
+ *
+ * The item pattern takes a bare token, which is what a repo slug is; it does
+ * not strip surrounding quotes or allow spaces in a name. That is the shape
+ * the harness writes, and since this only orders a display, a manifest that
+ * quoted a repo would show that repo unordered rather than mis-order anything.
  */
 export function mergeOrderFromSeams(text: string): string[] {
   const lines = text.split(/\r?\n/);
