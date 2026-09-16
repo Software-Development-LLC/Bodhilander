@@ -719,6 +719,17 @@ export type RunPrepareResult =
   | { status: 'refused'; refusals: { what: string; fix: string }[]; log?: string };
 
 /**
+ * What preparing a CROSS-REPO run reported (CO-722).
+ *
+ * Cross-repo prepare is loop-driven: it writes one run row and returns its id
+ * rather than an armable directory, because scoping, `arch` and spawn all happen
+ * later on the loop's timer. The run is watched in the Runs view from there.
+ */
+export type RunCrossRepoPrepareResult =
+  | { status: 'prepared'; runId: string }
+  | { status: 'refused'; refusals: { what: string; fix: string }[] };
+
+/**
  * One line of the run inbox (CO-722).
  *
  * Mirrors `InboxRow` in the run repository. Declared here because the

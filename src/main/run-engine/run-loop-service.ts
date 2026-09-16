@@ -30,6 +30,7 @@
  * permission prompts, which is the whole point of the inbox.
  */
 import { app } from 'electron';
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
@@ -47,7 +48,10 @@ import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
 import { armInitiative } from './arm-run';
 import { armRun, type IgnitionResult } from './ignition';
 import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
-import type { RunPrepareResult, RunPermissionRequest } from '../../shared/types';
+import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
+import { planCrossRepoRun } from './cross-repo-prepare';
+import type { ScopeIo } from './scope-initiative';
+import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest } from '../../shared/types';
 import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
@@ -130,6 +134,28 @@ function readIfPresent(p: string): string | null {
 }
 
 /**
+ * The bootstrap sub-driver's side effects, wired to the real app (CO-722).
+ *
+ * The scripts run on the provisioning ceiling (file_scope writes a file; spawn
+ * fetches repos), and the writes go through the run repository. Kept as module
+ * constants so the loop and the manifest-approval IPC share one wiring.
+ */
+const bootstrapIo: ScopeIo = {
+  run: (exe, argv, opts) => runCommand(exe, argv, { timeoutMs: 15 * 60_000, env: opts.env }),
+  readFile: readIfPresent,
+  writeFile: (p, text) => fs.writeFileSync(p, text),
+};
+
+const bootstrapStore: BootstrapStore = {
+  setBootstrapState: (runId, state) => runsRepo.setBootstrapState(runId, state),
+  setRunState: (runId, state, reason) => runsRepo.setRunState(runId, state, reason),
+  recordInconclusive: (runId, reason, gate) =>
+    runsRepo.recordTransition(runId, 'inconclusive', 'bootstrapInconclusive', { gate, blockedReason: reason }),
+  appendEvent: (runId, kind, gate) =>
+    runsRepo.appendEvent(runId, kind, gate === undefined ? undefined : { gate }),
+};
+
+/**
  * Build the loop's dependencies from the real app.
  *
  * Exported so a test can assert the wiring -- which repo call each dependency
@@ -176,6 +202,18 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     startOwner: async (run, owner) => {
       const { target, deps } = await executorFor(config, ghPath, run, owner);
       return startOwnerGate(run.id, owner.repo, target, deps);
+    },
+    driveBootstrap: async (run, report) => {
+      const result = await driveBootstrap(run, {
+        io: bootstrapIo,
+        store: bootstrapStore,
+        log: (line) => log.info(`[RunLoop] ${line}`),
+      });
+      for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
+      // Recorded as a reconcile line so a driven bootstrap pass is visible in
+      // the tick report; the sub-state names which step ran.
+      if (result.drove) report.reconciled.push({ runId: run.id, events: [`bootstrap:${run.bootstrapState}`] });
+      return result.problems.length === 0;
     },
     approvers: machine.approvers,
     log: (line) => log.info(`[RunLoop] ${line}`),
@@ -232,6 +270,36 @@ export function prepareInitiativeFromApp(
       initiativesRoot: machine.initiativesRoot(),
     },
   );
+}
+
+/**
+ * Prepare a CROSS-REPO initiative from the app (CO-722).
+ *
+ * Unlike single-repo prepare, this runs nothing eagerly and does not arm: it
+ * validates the machine config and the tester's repo picks, then writes ONE run
+ * row in `bootstrap_state: 'scoping'` and returns its id. The run shows in the
+ * Runs view at once and the always-on loop scopes it, drives `arch`, parks for
+ * manifest approval and spawns -- durably, so a closed app resumes mid-flight.
+ */
+export function prepareCrossRepoRun(
+  issueId: string,
+  repos: string[],
+  budgetUsd?: number,
+): RunCrossRepoPrepareResult {
+  const plan = planCrossRepoRun(
+    { issueId, repos, budgetUsd },
+    {
+      pythonPath: machine.pythonPath(),
+      harnessPath: machine.harnessPath(),
+      bodhiRoot: machine.bodhiRoot(),
+      initiativesRoot: machine.initiativesRoot(),
+    },
+    randomUUID,
+  );
+  if (plan.status === 'refused') return plan;
+  runsRepo.createRun(plan.input);
+  log.info(`[RunLoop] cross-repo ${plan.input.initiativeKey} (${plan.input.id}) created; the loop will bootstrap it`);
+  return { status: 'prepared', runId: plan.input.id };
 }
 
 /**

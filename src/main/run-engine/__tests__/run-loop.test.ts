@@ -62,6 +62,7 @@ function fake(over: Partial<LoopDeps> & { runs?: RunRow[]; owners?: Record<strin
     reconcile: async (_r, t) => { calls.push(`reconcile:${t.repo}#${t.prNumber}:${t.state}`); return { events: [], problems: [] }; },
     advance: async (_r, _o, e) => { calls.push(`advance:${e.kind}`); return { state: 'running', applied: [e], problems: [], notifications: [], released: false, runaway: null }; },
     startOwner: async (_r, o) => { calls.push(`startOwner:${o.repo}`); return { state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null }; },
+    driveBootstrap: async (r) => { calls.push(`driveBootstrap:${r.bootstrapState}`); return true; },
     approvers: () => ['brannon-bowden'],
     log: (line) => { calls.push(`log:${line.slice(0, 40)}`); },
     ...over,
@@ -99,6 +100,42 @@ describe('what a tick does to a running run', () => {
     const report = await loop.tick();
     expect(report.skipped[0]?.why).toContain('no gate row');
     expect(loop.schedule().get('r1')?.failures).toBe(1);
+  });
+});
+
+describe('a cross-repo run is driven through the bootstrap, not the owner path', () => {
+  function multi(id: string, bootstrapState: RunRow['bootstrapState']): RunRow {
+    return { ...run(id, 'preparing'), kind: 'multi', bootstrapState, scopeRepos: ['a', 'b'] } as RunRow;
+  }
+
+  test('a multi run in scoping goes to driveBootstrap and never provisions', async () => {
+    // The whole point: a run with no owners must not hit the preparing/provision
+    // branch (which would advance `prepared` on a non-existent owner) -- the
+    // bootstrap sub-driver owns it until spawn.
+    const f = fake({ runs: [multi('m1', 'scoping')], owners: { m1: [] } });
+    const loop = createRunLoop(f.deps);
+    const report = await loop.tick();
+    expect(report.due).toEqual(['m1']);
+    expect(f.calls).toContain('driveBootstrap:scoping');
+    expect(f.calls.filter((c) => c.startsWith('advance'))).toEqual([]);
+    expect(f.calls.filter((c) => c.startsWith('startOwner'))).toEqual([]);
+  });
+
+  test('a single run with owners is unaffected: it still provisions', async () => {
+    const f = fake({ runs: [run('s1', 'preparing')] });
+    const loop = createRunLoop(f.deps);
+    await loop.tick();
+    expect(f.calls).toContain('advance:prepared');
+    expect(f.calls.some((c) => c.startsWith('driveBootstrap'))).toBe(false);
+  });
+
+  test('a multi run whose bootstrap is done falls through to the owner path', async () => {
+    // Handoff clears bootstrap_state to null; a defensive `done` must not trap
+    // the run in the bootstrap branch forever.
+    const f = fake({ runs: [multi('m2', 'done')] });
+    const loop = createRunLoop(f.deps);
+    await loop.tick();
+    expect(f.calls.some((c) => c.startsWith('driveBootstrap'))).toBe(false);
   });
 });
 

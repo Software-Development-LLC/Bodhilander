@@ -3,11 +3,65 @@
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border, #333);
 }
+.run-prepare__mode {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin-bottom: 0.6rem;
+}
+.run-prepare__mode-btn {
+  padding: 0.25rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--border, #555);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+.run-prepare__mode-btn--on {
+  background: var(--surface-2, rgba(255, 255, 255, 0.08));
+  opacity: 1;
+  font-weight: 600;
+}
+.run-prepare__mode-btn:disabled {
+  cursor: default;
+}
 .run-prepare__form {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 0.75rem;
   align-items: flex-end;
+}
+.run-prepare__repos {
+  border: 1px solid var(--border, #555);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem 0.5rem;
+  min-width: 12rem;
+}
+.run-prepare__repos legend {
+  font-size: 0.75rem;
+  opacity: 0.9;
+  padding: 0 0.3rem;
+}
+.run-prepare__repo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 9rem;
+  overflow: auto;
+}
+.run-prepare__repo {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  opacity: 0.95;
+}
+.run-prepare__repos-empty {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.7;
 }
 .run-prepare__field {
   display: flex;
