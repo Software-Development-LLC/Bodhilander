@@ -23,6 +23,7 @@ import type { RunRow } from '../repositories/runs';
 import type { RunState } from './transitions';
 import type { BootstrapState } from './bootstrap';
 import { scopeInitiative, type ScopeIo } from './scope-initiative';
+import type { ArchResult } from './bootstrap-arch';
 
 /** The run-level writes the bootstrap makes, injected (real ones are the repo). */
 export interface BootstrapStore {
@@ -36,6 +37,8 @@ export interface BootstrapStore {
 export interface BootstrapDeps {
   io: ScopeIo;
   store: BootstrapStore;
+  /** Drive gate 1 (arch): author + verify the seam manifest, or say why not. */
+  arch(run: RunRow): Promise<ArchResult>;
   log(line: string): void;
 }
 
@@ -57,8 +60,10 @@ export async function driveBootstrap(run: RunRow, deps: BootstrapDeps): Promise<
   switch (run.bootstrapState) {
     case 'scoping':
       return scope(run, deps);
-    // Filled by later slices; until then a multi run simply holds here.
     case 'architecting':
+      return architect(run, deps);
+    // awaitingManifest parks at runs.state 'waitingHumanGate' (a person, not the
+    // loop); spawning + done arrive in a later slice. Until then, a benign hold.
     case 'awaitingManifest':
     case 'spawning':
     case 'done':
@@ -81,5 +86,22 @@ async function scope(run: RunRow, deps: BootstrapDeps): Promise<BootstrapPassRes
   deps.store.appendEvent(run.id, 'scoped', 0);
   deps.store.setBootstrapState(run.id, 'architecting');
   deps.log(`${run.id}: scoped ${(run.scopeRepos ?? []).join(', ')}; arch next`);
+  return { drove: true, problems: [] };
+}
+
+/** Gate 1: drive arch, then either park for approval or park inconclusive. */
+async function architect(run: RunRow, deps: BootstrapDeps): Promise<BootstrapPassResult> {
+  const result = await deps.arch(run);
+  if (result.status === 'inconclusive') {
+    deps.store.recordInconclusive(run.id, result.reason, 1);
+    deps.log(`${run.id}: arch inconclusive -- ${result.reason}`);
+    return { drove: true, problems: [result.reason] };
+  }
+  deps.store.appendEvent(run.id, 'archManifest', 1);
+  deps.store.setBootstrapState(run.id, 'awaitingManifest');
+  // Park for a person. waitingHumanGate is not movable, so the loop stops
+  // polling this run until approval flips it back to preparing (slice 4).
+  deps.store.setRunState(run.id, 'waitingHumanGate');
+  deps.log(`${run.id}: seam manifest ready; awaiting approval`);
   return { drove: true, problems: [] };
 }

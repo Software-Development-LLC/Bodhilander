@@ -16,6 +16,7 @@ import type { BootstrapState } from '../bootstrap';
 import type { RunState } from '../transitions';
 import { driveBootstrap, type BootstrapDeps, type BootstrapStore } from '../bootstrap-driver';
 import type { ScopeIo } from '../scope-initiative';
+import type { ArchResult } from '../bootstrap-arch';
 
 function multiRun(bootstrapState: BootstrapState | null): RunRow {
   return {
@@ -55,8 +56,14 @@ function scopeIo(code: number, stderr = ''): ScopeIo {
   };
 }
 
-function deps(io: ScopeIo, s: BootstrapStore): BootstrapDeps {
-  return { io, store: s, log: () => {} };
+const parked = async (): Promise<ArchResult> => ({ status: 'parked' });
+
+function deps(
+  io: ScopeIo,
+  s: BootstrapStore,
+  arch: (run: RunRow) => Promise<ArchResult> = parked,
+): BootstrapDeps {
+  return { io, store: s, arch, log: () => {} };
 }
 
 describe('scoping', () => {
@@ -82,8 +89,34 @@ describe('scoping', () => {
   });
 });
 
+describe('architecting drives the arch gate', () => {
+  test('a parked manifest advances to awaitingManifest and parks for a person', async () => {
+    const { store: s, rec } = store();
+    const result = await driveBootstrap(multiRun('architecting'), deps(scopeIo(0), s, async () => ({ status: 'parked' })));
+    expect(result).toEqual({ drove: true, problems: [] });
+    expect(rec.events).toEqual([{ kind: 'archManifest', gate: 1 }]);
+    expect(rec.bootstrap).toEqual(['awaitingManifest']);
+    // Parked for approval: waitingHumanGate is not movable, so the loop stops.
+    expect(rec.runState).toEqual([{ state: 'waitingHumanGate', reason: undefined }]);
+    expect(rec.inconclusive).toEqual([]);
+  });
+
+  test('an inconclusive arch parks the run inconclusive and does not advance', async () => {
+    const { store: s, rec } = store();
+    const result = await driveBootstrap(
+      multiRun('architecting'),
+      deps(scopeIo(0), s, async () => ({ status: 'inconclusive', reason: 'arch reported pass but wrote no seams.yaml' })),
+    );
+    expect(result.drove).toBe(true);
+    expect(result.problems).toHaveLength(1);
+    expect(rec.inconclusive).toEqual([{ reason: 'arch reported pass but wrote no seams.yaml', gate: 1 }]);
+    expect(rec.bootstrap).toEqual([]); // never advanced past architecting
+    expect(rec.runState).toEqual([]);
+  });
+});
+
 describe('states this slice does not yet drive are benign holds', () => {
-  for (const state of ['architecting', 'awaitingManifest', 'spawning', 'done'] as BootstrapState[]) {
+  for (const state of ['awaitingManifest', 'spawning', 'done'] as BootstrapState[]) {
     test(`${state} does nothing and reports no problem`, async () => {
       const { store: s, rec } = store();
       const result = await driveBootstrap(multiRun(state), deps(scopeIo(0), s));

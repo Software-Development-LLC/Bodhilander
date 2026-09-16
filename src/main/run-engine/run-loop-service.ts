@@ -49,6 +49,9 @@ import { armInitiative } from './arm-run';
 import { armRun, type IgnitionResult } from './ignition';
 import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
 import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
+import { runArchGate, type ArchDeps } from './bootstrap-arch';
+import { launchGate } from './gate-launcher';
+import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
 import type { ScopeIo } from './scope-initiative';
 import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest } from '../../shared/types';
@@ -156,6 +159,34 @@ const bootstrapStore: BootstrapStore = {
 };
 
 /**
+ * The arch gate's dependencies, wired to the real app (CO-722).
+ *
+ * The same launcher, broker and verdict schema an owner gate uses, plus the run
+ * repository for the gate row and `verify_seams.py` on the provisioning ceiling.
+ * The app-level spawn settings come from `config`; per-run values come off the
+ * run inside `runArchGate`.
+ */
+function archDeps(config: SpawnConfig): ArchDeps {
+  return {
+    startGate: (input) => runsRepo.startGate(input),
+    activeGate: (runId, repo) => runsRepo.activeGate(runId, repo),
+    finishGate: (id, status, verdict) => runsRepo.finishGate(id, status, verdict),
+    launch: (launch) => launchGate(launch),
+    run: (exe, argv, opts) => runCommand(exe, argv, { timeoutMs: 15 * 60_000, env: opts.env }),
+    readFile: readIfPresent,
+    config: {
+      claudePath: config.claudePath,
+      promptFileDir: config.promptFileDir,
+      permissionsRoot: config.permissionsRoot,
+      brokerPath: config.brokerPath,
+      gateTimeoutMs: config.gateTimeoutMs,
+    },
+    newId: randomUUID,
+    log: (line) => log.info(`[RunLoop] ${line}`),
+  };
+}
+
+/**
  * Build the loop's dependencies from the real app.
  *
  * Exported so a test can assert the wiring -- which repo call each dependency
@@ -207,6 +238,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
       const result = await driveBootstrap(run, {
         io: bootstrapIo,
         store: bootstrapStore,
+        arch: (r) => runArchGate(r, archDeps(config)),
         log: (line) => log.info(`[RunLoop] ${line}`),
       });
       for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
@@ -314,6 +346,17 @@ export function prepareCrossRepoRun(
 export function listRunPermissions(userData: string, runId: string): RunPermissionRequest[] {
   const root = permissionsRoot(userData);
   const out: RunPermissionRequest[] = [];
+  // A cross-repo run driving the arch gate has no owners yet: its gate-1 channel
+  // is keyed on the scope sentinel, so its permission prompts are read here or
+  // not at all (CO-722). The print gate blocks its own lane, so this pull-based
+  // read is the only path a person has to it.
+  const run = runsRepo.getRun(runId);
+  if (run?.bootstrapState === 'architecting') {
+    const gate = runsRepo.activeGate(runId, SCOPE_REPO);
+    for (const req of pendingRequests(root, runId, gate, channelIo)) {
+      out.push({ ...req, repo: SCOPE_REPO });
+    }
+  }
   for (const owner of runsRepo.listOwners(runId)) {
     const gate = runsRepo.activeGate(runId, owner.repo);
     for (const req of pendingRequests(root, runId, gate, channelIo)) {
