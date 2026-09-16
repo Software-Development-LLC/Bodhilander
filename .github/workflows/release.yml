@@ -150,9 +150,57 @@ jobs:
 
       - name: Build distributables (Windows)
         if: matrix.platform == 'win'
-        run: bun run dist:win
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Azure Trusted Signing (BDHLNDR — Windows signing). Credentials are
+          # secrets; the non-secret identifiers are repo variables. When the
+          # credentials are absent the build is produced UNSIGNED, exactly as
+          # before — so this step never fails a release for a repo that has not
+          # set signing up yet. See docs/windows-signing.md.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZ_ENDPOINT: ${{ vars.AZURE_CODE_SIGNING_ENDPOINT }}
+          AZ_ACCOUNT: ${{ vars.AZURE_CODE_SIGNING_ACCOUNT }}
+          AZ_PROFILE: ${{ vars.AZURE_CODE_SIGNING_PROFILE }}
+          AZ_PUBLISHER: ${{ vars.AZURE_PUBLISHER_NAME }}
+        run: |
+          # `bun run build` already ran in the "Build application" step, so this
+          # invokes electron-builder directly (as the mac step does).
+          #
+          # The gate checks EVERY value electron-builder's Azure Trusted Signing
+          # needs -- the three credentials AND the three identifiers -- not just
+          # some of them. A partially configured repo (e.g. AZURE_CLIENT_ID set
+          # but AZURE_TENANT_ID unset or mistyped -- GitHub resolves an unknown
+          # secret name to empty, silently) must fall back to UNSIGNED, not take
+          # the signed path and fail authenticating to Azure. publisherName is
+          # optional, so it is not part of the gate.
+          MISSING=()
+          [[ -z "$AZURE_TENANT_ID" ]] && MISSING+=(AZURE_TENANT_ID)
+          [[ -z "$AZURE_CLIENT_ID" ]] && MISSING+=(AZURE_CLIENT_ID)
+          [[ -z "$AZURE_CLIENT_SECRET" ]] && MISSING+=(AZURE_CLIENT_SECRET)
+          [[ -z "$AZ_ENDPOINT" ]] && MISSING+=(AZURE_CODE_SIGNING_ENDPOINT)
+          [[ -z "$AZ_ACCOUNT" ]] && MISSING+=(AZURE_CODE_SIGNING_ACCOUNT)
+          [[ -z "$AZ_PROFILE" ]] && MISSING+=(AZURE_CODE_SIGNING_PROFILE)
+          if [[ ${#MISSING[@]} -eq 0 ]]; then
+            echo "Azure Trusted Signing configured — signing the Windows build."
+            ARGS=( --win
+              -c.win.azureSignOptions.endpoint="$AZ_ENDPOINT"
+              -c.win.azureSignOptions.codeSigningAccountName="$AZ_ACCOUNT"
+              -c.win.azureSignOptions.certificateProfileName="$AZ_PROFILE" )
+            # publisherName is optional; pass it only when set so an empty value
+            # never overrides the cert's own subject.
+            if [[ -n "$AZ_PUBLISHER" ]]; then
+              ARGS+=( -c.win.azureSignOptions.publisherName="$AZ_PUBLISHER" )
+            fi
+            bunx electron-builder "${ARGS[@]}"
+          else
+            # Names the missing value(s) so a partially-configured repo is
+            # diagnosable from the Actions log alone.
+            echo "::warning::Azure signing not fully configured (missing: ${MISSING[*]}) — Windows build is UNSIGNED. Smart App Control / SmartScreen will block installs until signing is set up (docs/windows-signing.md)."
+            bunx electron-builder --win
+          fi
 
       - name: Build distributables (macOS)
         if: startsWith(matrix.platform, 'mac')
