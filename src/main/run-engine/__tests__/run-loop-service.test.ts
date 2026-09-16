@@ -34,6 +34,10 @@ mock.module('../gate-spawner', () => ({
   agentsForOwner: async () => ({ agents: {}, notes: [] }),
   targetFor: () => ({}),
   spawnGateFor: () => async () => ({ status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 }),
+  // Imported (transitively, via bootstrap-arch) by run-loop-service; the export
+  // must resolve even though these permission tests never launch a gate.
+  channelKeyFor: (runId: string, repo: string, gate: number, agent: string, attempt: number) =>
+    `${runId}-${repo}-g${gate}-${agent}-a${attempt}`,
 }));
 mock.module('../permission-inbox', () => ({
   pendingRequests: (_root: string, _runId: string, gate: unknown) => (gate ? pending(gate) : []),
@@ -42,6 +46,7 @@ mock.module('../permission-inbox', () => ({
 
 const runs = await import('../../repositories/runs');
 const { RUN_TABLES_SQL } = await import('../../run-tables-sql');
+const { SCOPE_REPO } = await import('../bootstrap');
 const service = await import('../run-loop-service');
 
 function seedTwoBlockedOwners(): void {
@@ -74,6 +79,36 @@ describe('listing every owner\u2019s pending permission', () => {
   test('tags each request with the repo it belongs to', () => {
     const list = service.listRunPermissions('C:/ud', 'run-1');
     expect(list.map((r) => r.repo).sort()).toEqual(['repo-a', 'repo-b']);
+  });
+});
+
+describe('a cross-repo run driving arch surfaces its gate-1 permission', () => {
+  function seedArchitecting(): void {
+    db = new Database(':memory:');
+    db.exec('CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL);');
+    db.exec(RUN_TABLES_SQL);
+    runs.createRun({
+      id: 'run-2', initiativeKey: 'BWA-1', initiativeDir: 'C:/i',
+      harnessPath: 'C:/h', bodhiRoot: 'C:/r', pythonPath: null, permissionPosture: 'manual',
+      kind: 'multi', bootstrapState: 'architecting', scopeRepos: ['a', 'b'],
+    });
+    // The arch gate row: no owner, keyed on the scope sentinel.
+    runs.startGate({ id: 'g1', runId: 'run-2', repo: SCOPE_REPO, gate: 1, agent: 'arch', posture: 'manual' });
+  }
+
+  test('lists the arch request tagged with the scope sentinel', () => {
+    seedArchitecting();
+    const list = service.listRunPermissions('C:/ud', 'run-2');
+    // No owners yet, so the arch channel is the only source -- and if it were
+    // not read here, a person would have no way to unblock the blocked lane.
+    expect(list.map((r) => r.repo)).toEqual([SCOPE_REPO]);
+  });
+
+  test('answering it writes the reply and advances no owner (arch is not per-owner-driven)', async () => {
+    seedArchitecting();
+    const ok = await service.answerRunPermission('C:/ud', 'run-2', SCOPE_REPO, 't1', 'allow', '');
+    expect(ok).toBe(true);
+    expect(advanceCalls).toEqual([]);
   });
 });
 
