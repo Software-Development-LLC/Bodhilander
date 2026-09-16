@@ -74,6 +74,15 @@ export interface LoopDeps {
    * `advance`; the rest are started here.
    */
   startOwner(run: RunRow, owner: RunOwnerRow): Promise<AdvanceResult>;
+  /**
+   * Drive one bootstrap step for a cross-repo (multi) run that has no owners yet
+   * (CO-722). The sub-driver scopes the initiative, drives the `arch` gate,
+   * parks for manifest approval and spawns the worktrees, advancing
+   * `bootstrap_state` each pass. Returns whether the pass is ok (no problem),
+   * pushing any problem to the report -- a step that is merely holding is ok, so
+   * it does not count against the run's backoff.
+   */
+  driveBootstrap(run: RunRow, report: TickReport): Promise<boolean>;
   approvers(): readonly string[];
   log(line: string): void;
 }
@@ -278,6 +287,14 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
    * track) is a later refinement, not a correctness fix.
    */
   async function passOne(run: RunRow, report: TickReport): Promise<boolean> {
+    // A cross-repo run has no owners until spawn: the bootstrap sub-driver
+    // scopes it, drives arch, parks for approval and spawns, advancing
+    // bootstrap_state each pass (CO-722). Once it clears the column the owners
+    // exist and the per-owner path below takes over -- so this branch comes
+    // before the "no owner recorded" skip and the preparing/provision step.
+    if (run.kind === 'multi' && run.bootstrapState && run.bootstrapState !== 'done') {
+      return deps.driveBootstrap(run, report);
+    }
     const owners = deps.listOwners(run.id);
     if (owners.length === 0) {
       report.skipped.push({ runId: run.id, why: 'no owner recorded, so nothing to drive' });

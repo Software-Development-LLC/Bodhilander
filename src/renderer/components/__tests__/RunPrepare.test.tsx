@@ -32,7 +32,7 @@ describe('preparing and arming a run from the app', () => {
         onArmed={() => { refreshed += 1; }}
       />,
     );
-    await waitFor(() => expect(screen.getByRole('button')).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare & arm' })).toBeTruthy());
     fill('BDH-239', 'Bodhilander');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare & arm' }));
     await screen.findByText(/Prepared and armed/);
@@ -107,5 +107,61 @@ describe('preparing and arming a run from the app', () => {
     fill('BDH-1', 'Bodhilander');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare & arm' }));
     await screen.findByText(/the store is locked/);
+  });
+});
+
+describe('cross-repo mode', () => {
+  test('picks repos, creates a run, and does not arm eagerly', async () => {
+    let armed = false;
+    let seen: { issue: string; repos: string[] } | null = null;
+    render(
+      <RunPrepare
+        listRepos={async () => ['repo-a', 'repo-b', 'repo-c']}
+        arm={async () => { armed = true; return { status: 'armed', runId: 'r', initiativeKey: 'K', owners: {} }; }}
+        prepareCrossRepo={async (issue, repos) => { seen = { issue, repos }; return { status: 'prepared', runId: 'run-9' }; }}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cross-repo' }));
+    await screen.findByText('Repos in scope');
+    fireEvent.change(screen.getByPlaceholderText('BDH-241'), { target: { value: 'BWA-1' } });
+    fireEvent.click(await screen.findByLabelText('repo-a'));
+    fireEvent.click(await screen.findByLabelText('repo-c'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start bootstrap' }));
+
+    await screen.findByText(/bootstrapping it now/);
+    expect(seen).toEqual({ issue: 'BWA-1', repos: ['repo-a', 'repo-c'] });
+    // The whole point of loop-driven bootstrap: nothing is armed here.
+    expect(armed).toBe(false);
+  });
+
+  test('the start button waits for an issue and at least one repo', async () => {
+    render(
+      <RunPrepare
+        listRepos={async () => ['repo-a', 'repo-b']}
+        prepareCrossRepo={async () => ({ status: 'prepared', runId: 'r' })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cross-repo' }));
+    const button = () => screen.getByRole('button', { name: 'Start bootstrap' }) as HTMLButtonElement;
+    await screen.findByText('Repos in scope');
+    expect(button().disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText('BDH-241'), { target: { value: 'BWA-1' } });
+    expect(button().disabled).toBe(true); // issue but no repo
+    fireEvent.click(await screen.findByLabelText('repo-a'));
+    expect(button().disabled).toBe(false);
+  });
+
+  test('a cross-repo refusal is shown in full', async () => {
+    render(
+      <RunPrepare
+        listRepos={async () => ['repo-a']}
+        prepareCrossRepo={async () => ({ status: 'refused', refusals: [{ what: 'no harness is configured', fix: 'Set it in Settings.' }] })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cross-repo' }));
+    fireEvent.change(screen.getByPlaceholderText('BDH-241'), { target: { value: 'BWA-1' } });
+    fireEvent.click(await screen.findByLabelText('repo-a'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start bootstrap' }));
+    await screen.findByText('no harness is configured');
   });
 });

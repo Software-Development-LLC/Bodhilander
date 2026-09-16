@@ -11,7 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
-import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp } from './run-engine/run-loop-service';
+import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun } from './run-engine/run-loop-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -903,6 +903,9 @@ safeHandle('db:runs:arm', (initiativeDir: string) => armInitiativeDir(initiative
 safeHandle('db:runs:repos', () => listHarnessRepos());
 safeHandle('db:runs:prepare', (issueId: string, repo: string, budgetUsd?: number) =>
   prepareInitiativeFromApp(issueId, repo, budgetUsd),
+);
+safeHandle('db:runs:prepareCrossRepo', (issueId: string, repos: string[], budgetUsd?: number) =>
+  prepareCrossRepoRun(issueId, repos, budgetUsd),
 );
 
 // The directory picker arming uses. A cancel returns null; the renderer
