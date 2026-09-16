@@ -140,10 +140,22 @@ export interface RunLoop {
   schedule(): ReadonlyMap<string, ScheduledRun>;
 }
 
+/**
+ * How many runs may be in flight at once (CO-722 concurrent multi-run).
+ *
+ * A run's pass can block for minutes -- a print gate, or provisioning -- so
+ * runs are driven in parallel lanes rather than one after another. The cap
+ * keeps a burst of freshly-armed initiatives from spawning dozens of `claude`
+ * and provision children at once; runs over it wait for the next tick.
+ */
+export const MAX_CONCURRENT_RUNS = 6;
+
 export function createRunLoop(deps: LoopDeps): RunLoop {
   const memory = new Map<string, ScheduledRun>();
   let timer: ReturnType<typeof setInterval> | null = null;
-  let ticking = false;
+  // Runs whose pass is in flight. A run's long gate ties up its own lane, not
+  // the loop: the next tick skips it (it is here) and drives the others.
+  const running = new Set<string>();
 
   function remember(run: RunRow): ScheduledRun {
     // The cadence is the FASTEST owner's, not the rollup's (CO-722 multi-owner).
@@ -339,20 +351,37 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     for (const id of [...memory.keys()]) if (!seen.has(id)) memory.delete(id);
 
     const byId = new Map(active.map((run) => [run.id, run]));
+    // Each due run is driven in its own lane, concurrently. A run already in a
+    // lane (its previous pass still running a long gate) is skipped, not
+    // re-entered -- the driver serializes per run id, but re-entering would
+    // waste a look. The cap bounds how many children are spawned at once; runs
+    // over it are simply due again next tick. This tick awaits only the lanes
+    // IT started, so `tick()` still returns a report for its own pass while a
+    // sibling run's minutes-long gate does not hold it up.
+    const startedThisTick: Promise<void>[] = [];
     for (const due of dueRuns([...memory.values()], at)) {
       const run = byId.get(due.id);
       if (!run) continue;
+      if (running.has(run.id)) continue;
+      if (running.size >= MAX_CONCURRENT_RUNS) break;
       report.due.push(run.id);
-      let ok = false;
-      try {
-        ok = await passOne(run, report);
-      } catch (err) {
-        // One run's failure is not another's, and not the loop's. Reported,
-        // counted against this run's cadence, and the tick goes on.
-        report.problems.push({ runId: run.id, problem: err instanceof Error ? err.message : String(err) });
-      }
-      passed(run.id, ok, report);
+      running.add(run.id);
+      const lane = (async () => {
+        let ok = false;
+        try {
+          ok = await passOne(run, report);
+        } catch (err) {
+          // One run's failure is not another's, and not the loop's. Reported,
+          // counted against this run's cadence, and the other lanes go on.
+          report.problems.push({ runId: run.id, problem: err instanceof Error ? err.message : String(err) });
+        }
+        passed(run.id, ok, report);
+      })().finally(() => {
+        running.delete(run.id);
+      });
+      startedThisTick.push(lane);
     }
+    await Promise.allSettled(startedThisTick);
   }
 
   return {
@@ -360,8 +389,10 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     start(everyMs) {
       if (timer) return;
       timer = setInterval(() => {
-        if (ticking) return; // a slow tick is not two ticks
-        ticking = true;
+        // No global "one tick at a time" guard: a run whose pass is blocked in
+        // a long gate must not swallow the fires that would drive the others.
+        // Overlapping ticks share the `running` set, so a run in a lane is
+        // skipped rather than double-driven (CO-722 concurrent multi-run).
         void tick()
           .then((report) => {
             for (const p of report.problems) deps.log(`${p.runId} problem: ${p.problem}`);
@@ -371,9 +402,6 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
             // tick() is written never to reject; this is the belt to that
             // suspenders, so a bug there is a log line and not a dead loop.
             deps.log(`the run loop tick threw: ${err instanceof Error ? err.message : String(err)}`);
-          })
-          .finally(() => {
-            ticking = false;
           });
       }, everyMs);
       // A pending tick must not hold the process open past shutdown.

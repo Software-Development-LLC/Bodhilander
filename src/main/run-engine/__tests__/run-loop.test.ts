@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { RunGateRow, RunOwnerRow, RunRow } from '../../repositories/runs';
 import type { GateLook } from '../attention-pass';
-import { createRunLoop, schedulingState, type LoopDeps } from '../run-loop';
+import { createRunLoop, schedulingState, MAX_CONCURRENT_RUNS, type LoopDeps } from '../run-loop';
 import { CHECKS_INTERVAL_MS, ESCALATE_AFTER, GATE_INTERVAL_MS } from '../reconcile-loop';
 import type { RunEvent } from '../transitions';
 
@@ -270,9 +270,11 @@ describe('a tick survives what a per-run catch cannot', () => {
 });
 
 describe('the timer', () => {
-  test('a slow tick does not start a second before the first finishes', async () => {
-    // The whole reason for the ticking guard. Two overlapping ticks would
-    // drive the same run twice and race its rows.
+  test('a run whose pass is still running is not driven again by the next tick', async () => {
+    // The per-run guard (the `running` set) replaces the old global tick guard:
+    // overlapping ticks are now allowed (so a blocked run does not freeze the
+    // others), but the SAME run must not be driven twice concurrently and race
+    // its rows.
     let inFlight = 0;
     let maxConcurrent = 0;
     let ticks = 0;
@@ -419,5 +421,68 @@ describe('starting a run that has been armed but never run (CO-722)', () => {
     expect(schedulingState([null, null], 'preparing')).toBe('preparing');
     expect(schedulingState(['approved', null], 'approved')).toBe('preparing');
     expect(schedulingState(['approved', 'done'], 'approved')).toBe('approved');
+  });
+});
+
+describe('one run does not freeze the others (concurrent multi-run, CO-722)', () => {
+  test('a run blocked in its pass does not stop another run from being driven', async () => {
+    // THE REGRESSION. Run A's look never resolves (a print gate / provision
+    // that takes minutes). Run B must still be driven -- in a single tick's
+    // concurrent lanes -- rather than waiting behind A.
+    let releaseA: (() => void) | null = null;
+    const bDrove: string[] = [];
+    const deps: LoopDeps = {
+      now: () => T0,
+      listActiveRuns: () => [run('A', 'running'), run('B', 'running')],
+      listOwners: (id) => [owner(id, { state: 'running' })],
+      activeGate: () => GATE,
+      look: async (r) => {
+        if (r.id === 'A') { await new Promise<void>((res) => { releaseA = res; }); return look(null); }
+        bDrove.push('B'); return look({ kind: 'gateFinished', gate: 2, verdict: 'pass' });
+      },
+      pending: () => 0,
+      discoverPr: async () => null,
+      recordPr: () => {},
+      reconcile: async () => ({ events: [], problems: [] }),
+      advance: async () => ({ state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null }),
+      startOwner: async () => ({ state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null }),
+      approvers: () => [],
+      log: () => {},
+    };
+    const loop = createRunLoop(deps);
+    // Do not await the whole tick (A blocks it); give the concurrent lanes a
+    // moment, then assert B was driven while A is still in flight.
+    void loop.tick();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(bDrove).toEqual(['B']);
+    releaseA?.();
+  });
+
+  test('no more than the cap are started in one tick; the rest are due next tick', async () => {
+    const n = MAX_CONCURRENT_RUNS + 2;
+    const runs = Array.from({ length: n }, (_v, i) => run(`r${i}`, 'running'));
+    let looks = 0;
+    const holds: Array<() => void> = [];
+    const deps: LoopDeps = {
+      now: () => T0,
+      listActiveRuns: () => runs,
+      listOwners: (id) => [owner(id, { state: 'running' })],
+      activeGate: () => GATE,
+      look: async () => { looks += 1; await new Promise<void>((res) => holds.push(res)); return look(null); },
+      pending: () => 0,
+      discoverPr: async () => null,
+      recordPr: () => {},
+      reconcile: async () => ({ events: [], problems: [] }),
+      advance: async () => ({ state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null }),
+      startOwner: async () => ({ state: 'running', applied: [], problems: [], notifications: [], released: false, runaway: null }),
+      approvers: () => [],
+      log: () => {},
+    };
+    const loop = createRunLoop(deps);
+    void loop.tick();
+    await new Promise((r) => setTimeout(r, 20));
+    // Only the cap's worth started; the extra runs wait (their lanes are held).
+    expect(looks).toBe(MAX_CONCURRENT_RUNS);
+    for (const release of holds) release();
   });
 });
