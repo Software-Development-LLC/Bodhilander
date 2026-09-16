@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { RunInboxRow, RunPermissionRequest } from '../../shared/types';
+import { RunInboxRow, RunPermissionRequest, SeamManifest } from '../../shared/types';
 import './RunInbox.css';
 
 /**
@@ -178,6 +178,89 @@ export const PermissionRequests: React.FC<PermissionRequestsProps> = ({
   );
 };
 
+/**
+ * A cross-repo run's seam manifest, awaiting approval before spawn (CO-722).
+ *
+ * The other control the loop cannot make for a person: whether the contracts
+ * `arch` proposed are the ones to build against. Approving cuts the worktrees
+ * ("the cheap place to be wrong" is here, before that); rejecting parks the run.
+ * The manifest is shown WHOLE -- approving it is approving what each repo will
+ * build to, and a summary would ask a person to agree to something they had not
+ * read.
+ */
+interface ManifestApprovalProps {
+  runId: string;
+  /** Injected in tests; the real ones are the IPC channel. */
+  loadManifest?: (runId: string) => Promise<SeamManifest | null>;
+  approve?: (runId: string) => Promise<boolean>;
+  reject?: (runId: string, reason: string) => Promise<boolean>;
+  /** Told once a decision may have moved the run, to refresh the inbox. */
+  onDecided?: () => void;
+}
+
+export const ManifestApproval: React.FC<ManifestApprovalProps> = ({
+  runId,
+  loadManifest,
+  approve,
+  reject,
+  onDecided,
+}) => {
+  const [manifest, setManifest] = useState<SeamManifest | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    const load = loadManifest ?? window.electronAPI.readRunManifest;
+    load(runId).then(setManifest).catch(() => setManifest(null));
+  }, [loadManifest, runId]);
+
+  const decide = useCallback(
+    async (verdict: 'approve' | 'reject') => {
+      setBusy(true);
+      try {
+        if (verdict === 'approve') {
+          await (approve ?? window.electronAPI.approveRunManifest)(runId);
+        } else {
+          await (reject ?? window.electronAPI.rejectRunManifest)(runId, reason);
+        }
+        onDecided?.();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [approve, onDecided, reason, reject, runId],
+  );
+
+  if (manifest === undefined) return <p className="run-inbox__manifest-loading">Reading the manifest…</p>;
+  if (manifest === null) return <p className="run-inbox__manifest-loading">The manifest is not ready yet.</p>;
+
+  return (
+    <div className="run-inbox__manifest">
+      {manifest.mergeOrder.length > 0 && (
+        <p className="run-inbox__merge-order">Merge order: {manifest.mergeOrder.join(' → ')}</p>
+      )}
+      <pre className="run-inbox__manifest-body">{manifest.seamsYaml}</pre>
+      <div className="run-inbox__manifest-actions">
+        <button type="button" className="run-inbox__allow" disabled={busy} onClick={() => void decide('approve')}>
+          Approve &amp; spawn
+        </button>
+        <input
+          type="text"
+          className="run-inbox__deny-reason"
+          aria-label="Reason for rejecting (optional)"
+          placeholder="Reason (optional)"
+          value={reason}
+          disabled={busy}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <button type="button" className="run-inbox__deny" disabled={busy} onClick={() => void decide('reject')}>
+          Reject
+        </button>
+      </div>
+    </div>
+  );
+};
+
 interface RunInboxProps {
   /** Injected in tests; the real one is the read-only IPC channel. */
   load?: () => Promise<RunInboxRow[]>;
@@ -278,6 +361,9 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now, pollMs }) => {
             )}
             {row.state === 'waitingPermission' && (
               <PermissionRequests runId={row.id} onAnswered={() => void fetch()} />
+            )}
+            {row.state === 'waitingHumanGate' && (
+              <ManifestApproval runId={row.id} onDecided={() => void fetch()} />
             )}
           </li>
         ))}

@@ -112,6 +112,50 @@ describe('a cross-repo run driving arch surfaces its gate-1 permission', () => {
   });
 });
 
+describe('approving or rejecting a manifest', () => {
+  function seedAwaiting(): void {
+    db = new Database(':memory:');
+    db.exec('CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL);');
+    db.exec(RUN_TABLES_SQL);
+    runs.createRun({
+      id: 'run-3', initiativeKey: 'BWA-2', initiativeDir: 'C:/i',
+      harnessPath: 'C:/h', bodhiRoot: 'C:/r', pythonPath: null, permissionPosture: 'manual',
+      kind: 'multi', bootstrapState: 'awaitingManifest', scopeRepos: ['a', 'b'],
+    });
+    db.prepare("UPDATE runs SET state = 'waitingHumanGate' WHERE id = 'run-3'").run();
+  }
+
+  test('approve releases the run to spawn: spawning + preparing, event recorded', () => {
+    seedAwaiting();
+    expect(service.approveRunManifest('run-3')).toBe(true);
+    const run = runs.getRun('run-3')!;
+    expect(run.bootstrapState).toBe('spawning');
+    expect(run.state).toBe('preparing');
+    expect(runs.listEvents('run-3').map((e) => e.kind)).toContain('humanApprovedGate');
+  });
+
+  test('approve is guarded: a second approve does nothing', () => {
+    seedAwaiting();
+    expect(service.approveRunManifest('run-3')).toBe(true);
+    // bootstrap_state is now 'spawning', not 'awaitingManifest'.
+    expect(service.approveRunManifest('run-3')).toBe(false);
+  });
+
+  test('reject parks the run inconclusive with the reason', () => {
+    seedAwaiting();
+    expect(service.rejectRunManifest('run-3', 'the nameplate seam has no producer')).toBe(true);
+    const run = runs.getRun('run-3')!;
+    expect(run.state).toBe('inconclusive');
+    expect(run.blockedReason).toBe('the nameplate seam has no producer');
+  });
+
+  test('a blank reject reason still records why', () => {
+    seedAwaiting();
+    service.rejectRunManifest('run-3', '   ');
+    expect(runs.getRun('run-3')!.blockedReason).toBe('the seam manifest was rejected');
+  });
+});
+
 describe('answering one owner\u2019s permission', () => {
   test('advances only that owner\u2019s track, not the other', async () => {
     const ok = await service.answerRunPermission('C:/ud', 'run-1', 'repo-a', 't1', 'allow', '');

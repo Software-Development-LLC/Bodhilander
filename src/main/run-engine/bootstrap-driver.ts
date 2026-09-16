@@ -24,6 +24,7 @@ import type { RunState } from './transitions';
 import type { BootstrapState } from './bootstrap';
 import { scopeInitiative, type ScopeIo } from './scope-initiative';
 import type { ArchResult } from './bootstrap-arch';
+import type { SpawnResult } from './bootstrap-spawn';
 
 /** The run-level writes the bootstrap makes, injected (real ones are the repo). */
 export interface BootstrapStore {
@@ -39,6 +40,8 @@ export interface BootstrapDeps {
   store: BootstrapStore;
   /** Drive gate 1 (arch): author + verify the seam manifest, or say why not. */
   arch(run: RunRow): Promise<ArchResult>;
+  /** Cut the worktrees and write the owner rows, or say why not. */
+  spawn(run: RunRow): Promise<SpawnResult>;
   log(line: string): void;
 }
 
@@ -62,10 +65,12 @@ export async function driveBootstrap(run: RunRow, deps: BootstrapDeps): Promise<
       return scope(run, deps);
     case 'architecting':
       return architect(run, deps);
-    // awaitingManifest parks at runs.state 'waitingHumanGate' (a person, not the
-    // loop); spawning + done arrive in a later slice. Until then, a benign hold.
-    case 'awaitingManifest':
     case 'spawning':
+      return spawnStep(run, deps);
+    // awaitingManifest parks at runs.state 'waitingHumanGate' (a person, not the
+    // loop); approval flips it to spawning. `done` should never reach here (the
+    // handoff clears the column to null). Benign holds either way.
+    case 'awaitingManifest':
     case 'done':
     case null:
     case undefined:
@@ -100,8 +105,27 @@ async function architect(run: RunRow, deps: BootstrapDeps): Promise<BootstrapPas
   deps.store.appendEvent(run.id, 'archManifest', 1);
   deps.store.setBootstrapState(run.id, 'awaitingManifest');
   // Park for a person. waitingHumanGate is not movable, so the loop stops
-  // polling this run until approval flips it back to preparing (slice 4).
+  // polling this run until approval flips it to spawning.
   deps.store.setRunState(run.id, 'waitingHumanGate');
   deps.log(`${run.id}: seam manifest ready; awaiting approval`);
+  return { drove: true, problems: [] };
+}
+
+/**
+ * Gate 2 setup: cut the worktrees, write the owner rows, then hand off. Clearing
+ * `bootstrap_state` and dropping to `preparing` is the handoff -- the next pass
+ * sees owners + preparing and the per-owner machine provisions and drives.
+ */
+async function spawnStep(run: RunRow, deps: BootstrapDeps): Promise<BootstrapPassResult> {
+  const result = await deps.spawn(run);
+  if (result.status === 'refused') {
+    deps.store.recordInconclusive(run.id, result.reason, 2);
+    deps.log(`${run.id}: spawn refused -- ${result.reason}`);
+    return { drove: true, problems: [result.reason] };
+  }
+  deps.store.appendEvent(run.id, 'spawned', 2);
+  deps.store.setBootstrapState(run.id, null);
+  deps.store.setRunState(run.id, 'preparing');
+  deps.log(`${run.id}: handed off to the per-owner machine`);
   return { drove: true, problems: [] };
 }
