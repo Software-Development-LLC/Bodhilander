@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -195,6 +195,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:runs:prepare', issueId, repo, budgetUsd),
   prepareCrossRepoRun: (issueId: string, repos: string[], budgetUsd?: number): Promise<RunCrossRepoPrepareResult> =>
     ipcRenderer.invoke('db:runs:prepareCrossRepo', issueId, repos, budgetUsd),
+  readRunManifest: (runId: string): Promise<SeamManifest | null> =>
+    ipcRenderer.invoke('db:runs:bootstrap:manifest', runId),
+  approveRunManifest: (runId: string): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:bootstrap:approve', runId),
+  rejectRunManifest: (runId: string, reason: string): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:bootstrap:reject', runId, reason),
 
   // Database - Groups
   getAllGroups: (): Promise<Group[]> =>

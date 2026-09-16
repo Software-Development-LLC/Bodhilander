@@ -23,7 +23,7 @@ mock.module('../../database', () => ({ getDatabase: () => db }));
 
 const runs = await import('../../repositories/runs');
 const { RUN_TABLES_SQL } = await import('../../run-tables-sql');
-const { armRun } = await import('../ignition');
+const { armRun, materializeOwners } = await import('../ignition');
 import type { IgnitionDeps, IgnitionRequest } from '../ignition';
 
 const made: string[] = [];
@@ -116,6 +116,54 @@ describe('a run that starts', () => {
     expect(runs.getRun(result.runId)?.state).toBe('preparing');
     expect(runs.listEvents(result.runId)).toEqual([]);
     expect(runs.listGates(result.runId)).toEqual([]);
+  });
+});
+
+describe('materializeOwners writes a bootstrap run\u2019s owners after spawn', () => {
+  test('materializes owners and their merge order onto the existing run', async () => {
+    const harnessPath = await harness({ 'demo-lead': 'demo-repo' });
+    runs.createRun({
+      id: 'run-x', initiativeKey: 'IG-1', initiativeDir: 'C:/work/initiatives/IG-1',
+      harnessPath, bodhiRoot: 'C:/work/repos', pythonPath: 'py', kind: 'multi', bootstrapState: 'spawning',
+    });
+    const result = await materializeOwners(
+      { runId: 'run-x', initiativePath: 'C:/work/initiatives/IG-1', harnessPath, pythonPath: 'py', mergeOrder: ['demo-repo'] },
+      fake(),
+    );
+    expect(result.status).toBe('materialized');
+    if (result.status !== 'materialized') throw new Error('unreachable');
+    expect(result.owners).toEqual({ 'demo-repo': 'demo-lead' });
+    const owners = runs.listOwners('run-x');
+    expect(owners[0]).toMatchObject({ repo: 'demo-repo', agent: 'demo-lead', mergeOrder: 0 });
+  });
+
+  test('a >1-candidate repo is the same refusal arming gives, and writes no owner', async () => {
+    const harnessPath = await harness({ 'lead-a': 'demo-repo', 'lead-b': 'demo-repo' });
+    runs.createRun({
+      id: 'run-y', initiativeKey: 'IG-1', initiativeDir: 'C:/i',
+      harnessPath, bodhiRoot: 'C:/work/repos', pythonPath: 'py', kind: 'multi', bootstrapState: 'spawning',
+    });
+    const result = await materializeOwners(
+      { runId: 'run-y', initiativePath: 'C:/i', harnessPath, pythonPath: 'py' },
+      fake(),
+    );
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') throw new Error('unreachable');
+    expect(result.refusals[0].what).toContain('possible owners');
+    expect(runs.listOwners('run-y')).toHaveLength(0);
+  });
+
+  test('an unreadable initiative is refused, not a throw', async () => {
+    const harnessPath = await harness({ 'demo-lead': 'demo-repo' });
+    runs.createRun({
+      id: 'run-z', initiativeKey: 'IG-1', initiativeDir: 'C:/i',
+      harnessPath, bodhiRoot: 'C:/work/repos', pythonPath: 'py', kind: 'multi', bootstrapState: 'spawning',
+    });
+    const result = await materializeOwners(
+      { runId: 'run-z', initiativePath: 'C:/i', harnessPath, pythonPath: 'py' },
+      fake({ initiative: { code: 1, stdout: '', stderr: 'no team.yaml here' } }),
+    );
+    expect(result.status).toBe('refused');
   });
 });
 

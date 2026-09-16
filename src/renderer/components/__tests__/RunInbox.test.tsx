@@ -12,8 +12,8 @@
 import { describe, expect, test } from 'bun:test';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import React from 'react';
-import { RunInbox, PermissionRequests, reasonFor, waitedFor } from '../RunInbox';
-import type { RunInboxRow, RunPermissionRequest } from '../../../shared/types';
+import { RunInbox, PermissionRequests, ManifestApproval, reasonFor, waitedFor } from '../RunInbox';
+import type { RunInboxRow, RunPermissionRequest, SeamManifest } from '../../../shared/types';
 
 const NOW = Date.parse('2026-09-14T12:00:00Z');
 
@@ -367,5 +367,58 @@ describe('answering a permission request', () => {
     // repo-b's button is NOT disabled by repo-a's in-flight answer.
     expect(allows[1].disabled).toBe(false);
     release();
+  });
+});
+
+describe('the manifest approval panel', () => {
+  const manifest = (): SeamManifest => ({
+    mergeOrder: ['bodhi-service-api', 'bodhi-web-apps'],
+    seamsYaml: 'initiative: BWA-1\nmerge_order: [bodhi-service-api, bodhi-web-apps]\nseams: []\n',
+  });
+
+  test('shows the merge order and the whole manifest', async () => {
+    render(<ManifestApproval runId="run-1" loadManifest={async () => manifest()} approve={async () => true} reject={async () => true} />);
+    await screen.findByText(/Merge order:/);
+    // Shown whole: approving is approving what each repo builds to.
+    expect(screen.getByText(/merge_order: \[bodhi-service-api, bodhi-web-apps\]/)).toBeTruthy();
+  });
+
+  test('approve calls through, and tells the inbox to refresh', async () => {
+    let approved: string | null = null;
+    let refreshed = 0;
+    render(
+      <ManifestApproval
+        runId="run-9"
+        loadManifest={async () => manifest()}
+        approve={async (id) => { approved = id; return true; }}
+        reject={async () => true}
+        onDecided={() => { refreshed += 1; }}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Approve/ }));
+    await waitFor(() => expect(approved).toBe('run-9'));
+    expect(refreshed).toBe(1);
+  });
+
+  test('reject carries the typed reason', async () => {
+    let seen: { id: string; reason: string } | null = null;
+    render(
+      <ManifestApproval
+        runId="run-9"
+        loadManifest={async () => manifest()}
+        approve={async () => true}
+        reject={async (id, reason) => { seen = { id, reason }; return true; }}
+      />,
+    );
+    await screen.findByText(/Merge order:/);
+    fireEvent.change(screen.getByPlaceholderText('Reason (optional)'), { target: { value: 'no producer for the scan seam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    await waitFor(() => expect(seen).toEqual({ id: 'run-9', reason: 'no producer for the scan seam' }));
+  });
+
+  test('a manifest that is not ready yet says so, with no buttons', async () => {
+    render(<ManifestApproval runId="run-1" loadManifest={async () => null} approve={async () => true} reject={async () => true} />);
+    await screen.findByText(/not ready yet/);
+    expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
   });
 });

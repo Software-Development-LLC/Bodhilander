@@ -730,6 +730,20 @@ export type RunCrossRepoPrepareResult =
   | { status: 'refused'; refusals: { what: string; fix: string }[] };
 
 /**
+ * A cross-repo run's proposed seam manifest, for the approval panel (CO-722).
+ *
+ * The raw `seams.yaml` (human-readable as-is) plus its merge order pulled out
+ * for prominence. Shown so a person can approve before the worktrees are cut --
+ * "the cheap place to be wrong".
+ */
+export interface SeamManifest {
+  /** The repos in producer-before-consumer order; empty when none was declared. */
+  mergeOrder: string[];
+  /** The raw seams.yaml, shown verbatim for approval. */
+  seamsYaml: string;
+}
+
+/**
  * One line of the run inbox (CO-722).
  *
  * Mirrors `InboxRow` in the run repository. Declared here because the
