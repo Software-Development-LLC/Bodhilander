@@ -124,9 +124,9 @@ function toRun(row: RawRun): RunRow {
 function parseScopeRepos(text: string | null): string[] | null {
   if (text === null) return null;
   try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed) && parsed.every((r) => typeof r === 'string')) {
-      return parsed as string[];
+    const parsed: unknown = JSON.parse(text);
+    if (Array.isArray(parsed) && parsed.every((r): r is string => typeof r === 'string')) {
+      return parsed;
     }
   } catch {
     // fall through
