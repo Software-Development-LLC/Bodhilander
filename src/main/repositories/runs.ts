@@ -409,6 +409,19 @@ export function recordOwnerPullRequest(
  * run's state for the first transition after a run-level bootstrap, before the
  * owner has a state of its own.
  */
+/**
+ * Record an owner's place in the initiative's merge order (CO-722).
+ *
+ * Display only: the engine does not gate on it. A person merges the approved
+ * PRs in this order, so the inbox can show them in it. Null when the initiative
+ * declared no order (a single-repo run, or a manifest without one).
+ */
+export function recordOwnerMergeOrder(runId: string, repo: string, order: number | null): void {
+  getDatabase()
+    .prepare('UPDATE run_owners SET merge_order = ? WHERE run_id = ? AND repo = ?')
+    .run(order, runId, repo);
+}
+
 export function ownerState(runId: string, repo: string): RunState | null {
   const row = getDatabase()
     .prepare('SELECT state FROM run_owners WHERE run_id = ? AND repo = ?')
@@ -716,9 +729,14 @@ export function listInbox(): InboxRow[] {
     const ids = rows.map((row) => row.id);
     const owners = getDatabase()
       .prepare(
+        // In merge order first (nulls last), then by name -- so a person
+        // reading the inbox merges the repos in the sequence the initiative
+        // declared (CO-722). SQLite sorts NULL before values, so the CASE
+        // pushes unordered repos after the ordered ones.
         `SELECT run_id, repo FROM run_owners
           WHERE run_id IN (${ids.map(() => '?').join(', ')})
-          ORDER BY repo ASC`,
+          ORDER BY run_id ASC,
+                   CASE WHEN merge_order IS NULL THEN 1 ELSE 0 END, merge_order ASC, repo ASC`,
       )
       .all(...ids) as { run_id: string; repo: string }[];
     for (const owner of owners) {

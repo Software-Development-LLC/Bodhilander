@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as path from 'path';
 import type { IgnitionRequest, IgnitionResult } from '../ignition';
-import { armInitiative, harnessFromTeamYaml } from '../arm-run';
+import { armInitiative, harnessFromTeamYaml, mergeOrderFromSeams } from '../arm-run';
 
 describe('the harness a team.yaml pins the run to', () => {
   test('is read from a flat harness: line', () => {
@@ -26,17 +26,35 @@ describe('the harness a team.yaml pins the run to', () => {
   });
 });
 
+describe('the merge order a seams.yaml declares', () => {
+  test('reads the block form init-task writes', () => {
+    const seams = 'initiative: X\nmerge_order:\n  - repo-a\n  - repo-b\n  - repo-c\nseams: []\n';
+    expect(mergeOrderFromSeams(seams)).toEqual(['repo-a', 'repo-b', 'repo-c']);
+  });
+
+  test('reads the flow form', () => {
+    expect(mergeOrderFromSeams('merge_order: [a, b, c]\n')).toEqual(['a', 'b', 'c']);
+  });
+
+  test('stops the block list at the next key, and is empty when there is no merge_order', () => {
+    const seams = 'merge_order:\n  - only-repo\nseams: []\nowners: {}\n';
+    expect(mergeOrderFromSeams(seams)).toEqual(['only-repo']);
+    expect(mergeOrderFromSeams('initiative: X\nseams: []\n')).toEqual([]);
+  });
+});
+
 describe('arming an initiative directory', () => {
   const okArm = async (req: IgnitionRequest): Promise<IgnitionResult> => ({
     status: 'armed', runId: 'r1', initiativeKey: 'BDH-239', owners: { Bodhilander: 'bodhilander-lead' },
+    mergeOrder: [...(req.mergeOrder ?? [])],
   });
 
   test('hands armRun the harness from team.yaml and the repo root beside it', async () => {
     let seen: IgnitionRequest | null = null;
-    let readPath: string | null = null;
+    const readPaths: string[] = [];
     const io = {
       readFile: (p: string) => {
-        readPath = p;
+        readPaths.push(p);
         return 'initiative: BDH-239\nharness: C:/work/repos/claude-team-workflow\n';
       },
     };
@@ -44,8 +62,10 @@ describe('arming an initiative directory', () => {
       pythonPath: 'python',
       ghPath: 'gh',
     });
-    // It reads the initiative's OWN team.yaml, not app settings.
-    expect(readPath).toBe(path.join('C:/init/BDH-239', 'team.yaml'));
+    // It reads the initiative's OWN team.yaml (and its seams.yaml for the merge
+    // order), not app settings.
+    expect(readPaths).toContain(path.join('C:/init/BDH-239', 'team.yaml'));
+    expect(readPaths).toContain(path.join('C:/init/BDH-239', 'seams.yaml'));
     expect(result.status).toBe('armed');
     expect(seen).toMatchObject({
       initiativePath: 'C:/init/BDH-239',
@@ -55,6 +75,20 @@ describe('arming an initiative directory', () => {
       posture: 'manual',
       owners: {},
     });
+  });
+
+  test('carries the merge order from seams.yaml into the arm request', async () => {
+    let seen: IgnitionRequest | null = null;
+    const io = {
+      readFile: (p: string) =>
+        p.endsWith('team.yaml')
+          ? 'initiative: BDH-239\nharness: C:/h\n'
+          : 'merge_order:\n  - repo-a\n  - repo-b\nseams: []\n',
+    };
+    await armInitiative('C:/init', io, async (req) => { seen = req; return okArm(req); }, {
+      pythonPath: 'python', ghPath: 'gh',
+    });
+    expect(seen?.mergeOrder).toEqual(['repo-a', 'repo-b']);
   });
 
   test('a directory with no team.yaml is refused with a fixable reason, not a throw', async () => {

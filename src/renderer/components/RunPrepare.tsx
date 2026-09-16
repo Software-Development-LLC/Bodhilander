@@ -153,6 +153,11 @@ export const RunPrepare: React.FC<RunPrepareProps> = ({ listRepos, prepare, arm,
               </li>
             ))}
           </ul>
+          {phase.result.mergeOrder && phase.result.mergeOrder.length > 1 && (
+            <p className="run-prepare__merge-order">
+              Merge order: {phase.result.mergeOrder.join(' → ')}
+            </p>
+          )}
         </output>
       )}
 

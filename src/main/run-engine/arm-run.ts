@@ -45,6 +45,33 @@ export function harnessFromTeamYaml(text: string): string | null {
   return null;
 }
 
+/**
+ * The repos in a seams.yaml's `merge_order`, in order (CO-722).
+ *
+ * Handles both the block form init-task writes (`merge_order:` then `- repo`
+ * lines) and the flow form (`merge_order: [a, b, c]`). Returns [] when there
+ * is no such key -- display only, so an absent order is not an error.
+ */
+export function mergeOrderFromSeams(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const flow = /^merge_order:\s*\[(.*)\]\s*$/.exec(lines[i]);
+    if (flow) {
+      return flow[1].split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    if (/^merge_order:\s*$/.test(lines[i])) {
+      const repos: string[] = [];
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const item = /^\s*-\s*(\S+)\s*$/.exec(lines[j]);
+        if (item) repos.push(item[1]);
+        else if (lines[j].trim() !== '' && !lines[j].trim().startsWith('#')) break;
+      }
+      return repos;
+    }
+  }
+  return [];
+}
+
 export interface ArmIo {
   /** A file's text, or null when it does not exist. */
   readFile(path: string): string | null;
@@ -88,9 +115,15 @@ export async function armInitiative(
       'The initiative must pin a harness. Re-run init-task.sh, which writes it.',
     );
   }
+  // seams.yaml declares the merge order; read it for display (the engine does
+  // not gate on it). Absent or unreadable is fine -- a single-repo run has a
+  // trivial order and this is only a convenience.
+  const seams = io.readFile(path.join(initiativeDir, 'seams.yaml'));
+  const mergeOrder = seams ? mergeOrderFromSeams(seams) : [];
   return arm({
     initiativePath: initiativeDir,
     harnessPath,
+    mergeOrder,
     // The harness clone sits beside the other repos, so its parent is the
     // root the plugin's scripts read other repos out of (BODHI_ROOT).
     bodhiRoot: path.dirname(harnessPath),
