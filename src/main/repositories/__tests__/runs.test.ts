@@ -266,6 +266,23 @@ describe('the inbox', () => {
     }
   });
 
+  test('lists a run’s repos in merge order, unordered ones last', () => {
+    seed('m', 'inconclusive');
+    const owner = (repo: string, order: number | null) => {
+      runs.upsertOwner({
+        runId: 'm', repo, worktree: `C:/wt-${repo}`, branch: 'b', base: 'origin/development',
+        scratch: null, agent: 'lead', status: 'pending', prNumber: null, prUrl: null,
+      });
+      runs.recordOwnerMergeOrder('m', repo, order);
+    };
+    // Deliberately inserted out of order, with one unordered.
+    owner('repo-b', 1);
+    owner('repo-loose', null);
+    owner('repo-a', 0);
+    const row = runs.listInbox().find((r) => r.id === 'm');
+    expect(row?.repos).toEqual(['repo-a', 'repo-b', 'repo-loose']);
+  });
+
   test('a run waiting on a reviewer is not the operator’s to act on', () => {
     // It needs a person -- but a reviewer working from a queue that already
     // exists, not an operator in this window. An inbox listing things you

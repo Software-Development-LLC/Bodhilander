@@ -685,7 +685,14 @@ export interface RunPermissionRequest {
 
 /** What arming a run reported: the run, or the list of things to fix (CO-722). */
 export type RunArmResult =
-  | { status: 'armed'; runId: string; initiativeKey: string; owners: Record<string, string> }
+  | {
+      status: 'armed';
+      runId: string;
+      initiativeKey: string;
+      owners: Record<string, string>;
+      /** The repos in merge order (display only); empty when none was declared. */
+      mergeOrder?: string[];
+    }
   | { status: 'refused'; refusals: { what: string; fix: string }[] };
 
 /**

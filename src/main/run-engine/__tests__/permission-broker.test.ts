@@ -100,7 +100,11 @@ describe('hook mode', () => {
     const dir = await channel();
     const started = Date.now();
     const { out, code } = await hook(dir, PAYLOAD, 1);
-    expect(Date.now() - started).toBeLessThan(5_000);
+    // The claim is "it answers rather than hanging forever", not a tight
+    // stopwatch: the broker denies after its ~1s wait, but `node <broker>`
+    // spawn overhead on a loaded Windows CI runner has reached 5.1s, so the
+    // bound is generous. A real hang blows the test-runner timeout, not this.
+    expect(Date.now() - started).toBeLessThan(15_000);
     expect(code).toBe(0);
     const decision = JSON.parse(out).hookSpecificOutput;
     expect(decision.permissionDecision).toBe('deny');

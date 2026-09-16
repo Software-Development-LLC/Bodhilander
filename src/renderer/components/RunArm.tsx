@@ -70,6 +70,11 @@ export const RunArm: React.FC<RunArmProps> = ({ pick, arm, onArmed }) => {
               </li>
             ))}
           </ul>
+          {result.mergeOrder && result.mergeOrder.length > 1 && (
+            <p className="run-arm__merge-order">
+              Merge order: {result.mergeOrder.join(' → ')}
+            </p>
+          )}
         </output>
       )}
 

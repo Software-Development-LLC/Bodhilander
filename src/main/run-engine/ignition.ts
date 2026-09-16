@@ -52,6 +52,8 @@ export interface IgnitionRequest {
    * between them is judgment, so the engine asks rather than guesses.
    */
   owners?: Record<string, string>;
+  /** The repos in the initiative's merge order, for display (CO-722). */
+  mergeOrder?: readonly string[];
 }
 
 /** Something missing, and what to do about it. */
@@ -67,6 +69,8 @@ export type IgnitionResult =
       initiativeKey: string;
       /** Repo to the role that will run gate 2 there. */
       owners: Record<string, string>;
+      /** The repos in merge order, for display. Empty when none was declared. */
+      mergeOrder: string[];
     }
   | { status: 'refused'; refusals: Refusal[] };
 
@@ -230,10 +234,15 @@ export async function armRun(
       prNumber: null,
       prUrl: null,
     });
+    // The repo's place in the merge order, for display. Null when the
+    // initiative declared none (a single-repo run has one trivial order).
+    const at = request.mergeOrder?.indexOf(repo) ?? -1;
+    runs.recordOwnerMergeOrder(runId, repo, at >= 0 ? at : null);
   }
 
   // Armed, not started. The rows exist and nothing has been cut, launched or
   // pushed. `preparing` is where createRun leaves it, and it stays there
   // until somebody advances it.
-  return { status: 'armed', runId, initiativeKey, owners: resolved.owners };
+  const mergeOrder = (request.mergeOrder ?? []).filter((r) => repos.includes(r));
+  return { status: 'armed', runId, initiativeKey, owners: resolved.owners, mergeOrder };
 }
