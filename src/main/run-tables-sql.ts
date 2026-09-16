@@ -27,6 +27,17 @@ export const RUN_TABLES_SQL = `
       budget_usd REAL DEFAULT NULL,
       group_id TEXT DEFAULT NULL REFERENCES groups(id) ON DELETE SET NULL,
       blocked_reason TEXT DEFAULT NULL,
+      -- 'single' = the arm-and-drive path; 'multi' = a cross-repo run that is
+      -- bootstrapped in-app (CO-722). A multi run has no owners until spawn.
+      kind TEXT NOT NULL DEFAULT 'single',
+      -- The pre-owner bootstrap sub-state for a multi run (NULL for single):
+      -- scoping -> architecting -> awaitingManifest -> spawning -> done. Driven
+      -- OUTSIDE the pure per-owner machine; runs.state mirrors it only enough
+      -- for the inbox (waitingHumanGate at awaitingManifest).
+      bootstrap_state TEXT DEFAULT NULL,
+      -- The tester's in-scope repo picks, JSON array. Gate 0 (scope) is written
+      -- mechanically from these; there is no scribe LLM call in-app.
+      scope_repos TEXT DEFAULT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );

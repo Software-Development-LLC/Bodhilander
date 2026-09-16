@@ -622,6 +622,15 @@ export function initializeRunTables(database: Database.Database): void {
   addColumn('run_owners', 'merge_order', 'merge_order INTEGER DEFAULT NULL');
   addColumn('run_gates', 'repo', 'repo TEXT DEFAULT NULL');
 
+  // Migration: in-app cross-repo bootstrap (CO-722). A multi run is created with
+  // no owners and driven through bootstrap_state before the per-owner machine
+  // takes over. Every existing run is single -- the NOT NULL DEFAULT 'single'
+  // backfills them, and bootstrap_state/scope_repos stay NULL, so nothing that
+  // reads these columns treats an old run as mid-bootstrap.
+  addColumn('runs', 'kind', "kind TEXT NOT NULL DEFAULT 'single'");
+  addColumn('runs', 'bootstrap_state', 'bootstrap_state TEXT DEFAULT NULL');
+  addColumn('runs', 'scope_repos', 'scope_repos TEXT DEFAULT NULL');
+
   // Backfill, correctness-critical (unlike the nullable `agent` above): once
   // the per-owner paths read these, a NULL would strand an in-flight run.
   //   run_gates.repo: a gate written before the column belongs to the run's

@@ -14,6 +14,7 @@
  */
 import { getDatabase } from '../database';
 import { NEEDS_A_PERSON, rollupState, type RunState } from '../run-engine/transitions';
+import type { BootstrapState, RunKind } from '../run-engine/bootstrap';
 
 export type PermissionPosture = 'manual' | 'denyOnPrompt' | 'bypass';
 
@@ -29,6 +30,12 @@ export interface RunRow {
   budgetUsd: number | null;
   groupId: string | null;
   blockedReason: string | null;
+  /** `'single'` (the arm-and-drive path) or `'multi'` (cross-repo bootstrap). */
+  kind: RunKind;
+  /** The pre-owner bootstrap sub-state; null for a single run or a done multi run. */
+  bootstrapState: BootstrapState | null;
+  /** The tester's in-scope repo picks for a multi run; null for single. */
+  scopeRepos: string[] | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,6 +86,9 @@ interface RawRun {
   budget_usd: number | null;
   group_id: string | null;
   blocked_reason: string | null;
+  kind: string | null;
+  bootstrap_state: string | null;
+  scope_repos: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -96,9 +106,32 @@ function toRun(row: RawRun): RunRow {
     budgetUsd: row.budget_usd,
     groupId: row.group_id,
     blockedReason: row.blocked_reason,
+    // A row written before the column existed reads NULL; treat it as single,
+    // matching the NOT NULL DEFAULT the migration backfills.
+    kind: (row.kind as RunKind | null) ?? 'single',
+    bootstrapState: (row.bootstrap_state as BootstrapState | null) ?? null,
+    scopeRepos: parseScopeRepos(row.scope_repos),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
+}
+
+/**
+ * A malformed scope_repos must not take the run view down: the run is still
+ * driveable from its owners once spawned, and scope_repos is a record of the
+ * picks. Anything but a JSON array of strings reads as "unknown" (null).
+ */
+function parseScopeRepos(text: string | null): string[] | null {
+  if (text === null) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed) && parsed.every((r) => typeof r === 'string')) {
+      return parsed as string[];
+    }
+  } catch {
+    // fall through
+  }
+  return null;
 }
 
 export interface CreateRunInput {
@@ -111,14 +144,21 @@ export interface CreateRunInput {
   permissionPosture?: PermissionPosture;
   budgetUsd?: number | null;
   groupId?: string | null;
+  /** Defaults to `'single'`; a cross-repo bootstrap passes `'multi'`. */
+  kind?: RunKind;
+  /** The bootstrap entry sub-state for a multi run (typically `'scoping'`). */
+  bootstrapState?: BootstrapState | null;
+  /** The tester's in-scope repo picks for a multi run. */
+  scopeRepos?: string[] | null;
 }
 
 export function createRun(input: CreateRunInput): void {
   getDatabase()
     .prepare(
       `INSERT INTO runs (id, initiative_key, initiative_dir, harness_path, bodhi_root,
-                         python_path, permission_posture, budget_usd, group_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                         python_path, permission_posture, budget_usd, group_id,
+                         kind, bootstrap_state, scope_repos)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.id,
@@ -130,7 +170,34 @@ export function createRun(input: CreateRunInput): void {
       input.permissionPosture ?? 'manual',
       input.budgetUsd ?? null,
       input.groupId ?? null,
+      input.kind ?? 'single',
+      input.bootstrapState ?? null,
+      input.scopeRepos ? JSON.stringify(input.scopeRepos) : null,
     );
+}
+
+/**
+ * Advance a multi run's bootstrap sub-state (CO-722). Thin by design: the
+ * bootstrap is driven outside the pure machine, so its writes do not borrow
+ * `recordTransition`'s blocked-state overloads. `null` clears it -- what the
+ * handoff to the per-owner machine does once owners exist.
+ */
+export function setBootstrapState(runId: string, bootstrapState: BootstrapState | null): void {
+  getDatabase()
+    .prepare('UPDATE runs SET bootstrap_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(bootstrapState, runId);
+}
+
+/**
+ * Set a run's top-level `state` (and its blocked reason) directly, used by the
+ * bootstrap driver for the run-level moves that precede any owner -- e.g. into
+ * `waitingHumanGate` at the manifest, or back to `preparing` to hand off. The
+ * per-owner path uses `recordOwnerTransition` instead.
+ */
+export function setRunState(runId: string, state: RunState, blockedReason?: string | null): void {
+  getDatabase()
+    .prepare('UPDATE runs SET state = ?, blocked_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(state, blockedReason ?? null, runId);
 }
 
 export function getRun(id: string): RunRow | null {
