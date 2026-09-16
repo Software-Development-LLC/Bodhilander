@@ -77,6 +77,12 @@ dmg:
       path: /Applications
 
 # Windows configuration
+#
+# Code signing is NOT declared here on purpose: it is injected at release time
+# by release.yml (Azure Trusted Signing, via `-c.win.azureSignOptions.*` CLI
+# overrides) ONLY when the signing secrets/variables are configured. That keeps
+# an unsigned local `bun run pack` / dev build working with no Azure setup, and
+# lets a configured CI produce a signed installer. See docs/windows-signing.md.
 win:
   icon: build/icon.png
   target:
