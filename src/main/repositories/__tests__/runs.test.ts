@@ -140,6 +140,42 @@ describe('the cross-repo bootstrap fields (CO-722)', () => {
   });
 });
 
+describe('the active-runs list (CO-722)', () => {
+  test('a multi run carries its kind and bootstrap phase', () => {
+    runs.createRun({ ...BASE, id: 'm', kind: 'multi', bootstrapState: 'architecting' });
+    const active = runs.listActive();
+    const row = active.find((r) => r.id === 'm')!;
+    expect(row.kind).toBe('multi');
+    expect(row.bootstrapState).toBe('architecting');
+  });
+
+  test('a single run reads as single with no bootstrap phase', () => {
+    runs.createRun({ ...BASE, id: 's' });
+    const row = runs.listActive().find((r) => r.id === 's')!;
+    expect(row.kind).toBe('single');
+    expect(row.bootstrapState).toBeNull();
+  });
+
+  test('finished runs are excluded; in-flight runs are included', () => {
+    runs.createRun({ ...BASE, id: 'flight' });
+    runs.createRun({ ...BASE, id: 'gone' });
+    runs.recordTransition('gone', 'done', 'merged');
+    const ids = runs.listActive().map((r) => r.id);
+    expect(ids).toContain('flight');
+    expect(ids).not.toContain('gone');
+  });
+
+  test('the repos come with it, in merge order', () => {
+    runs.createRun({ ...BASE, id: 'r', kind: 'multi', bootstrapState: 'spawning' });
+    runs.upsertOwner({ runId: 'r', repo: 'web', worktree: '/w', branch: 'b', base: 'origin/development', scratch: null, agent: 'a', status: 'pending', prNumber: null, prUrl: null });
+    runs.upsertOwner({ runId: 'r', repo: 'api', worktree: '/w', branch: 'b', base: 'origin/development', scratch: null, agent: 'a', status: 'pending', prNumber: null, prUrl: null });
+    runs.recordOwnerMergeOrder('r', 'api', 0);
+    runs.recordOwnerMergeOrder('r', 'web', 1);
+    const row = runs.listActive().find((r) => r.id === 'r')!;
+    expect(row.repos).toEqual(['api', 'web']);
+  });
+});
+
 describe('a state change and its reason land together', () => {
   beforeEach(() => runs.createRun(BASE));
 

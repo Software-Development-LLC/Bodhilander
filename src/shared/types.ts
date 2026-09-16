@@ -761,3 +761,26 @@ export interface RunInboxRow {
   since: string;
   repos: string[];
 }
+
+/**
+ * One line of the active-runs list (CO-722).
+ *
+ * The "what is the engine doing" surface, as distinct from the inbox's "what
+ * needs me": every in-flight run, including a cross-repo run scoping or driving
+ * `arch` (state `preparing`, which the inbox excludes). `kind`/`bootstrapState`
+ * are carried so the phase can be named -- "Architecting seams…" rather than a
+ * bare "preparing". Loose strings, like `state`, because the renderer maps them
+ * to labels and must not import the main-side unions.
+ */
+export interface RunActiveRow {
+  id: string;
+  initiativeKey: string;
+  state: string;
+  /** `'single'` or `'multi'`. */
+  kind: string;
+  /** `scoping | architecting | awaitingManifest | spawning | done`, or null. */
+  bootstrapState: string | null;
+  blockedReason: string | null;
+  since: string;
+  repos: string[];
+}

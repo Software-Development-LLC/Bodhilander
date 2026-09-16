@@ -18,6 +18,7 @@ import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { RunInbox } from './components/RunInbox';
+import { RunList } from './components/RunList';
 import { RunArm } from './components/RunArm';
 import { RunPrepare } from './components/RunPrepare';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
@@ -1754,6 +1755,7 @@ const App: React.FC = () => {
           <>
             <RunPrepare onArmed={() => setRunsRefresh((n) => n + 1)} />
             <RunArm onArmed={() => setRunsRefresh((n) => n + 1)} />
+            <RunList key={`active-${runsRefresh}`} />
             <RunInbox key={runsRefresh} />
           </>
         )}

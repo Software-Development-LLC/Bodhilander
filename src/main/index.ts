@@ -877,6 +877,7 @@ safeOn('pty:prime', (id: string) => {
 // channel is what lets somebody watch that happen without being able to
 // set it off from a window.
 safeHandle('db:runs:inbox', () => runsRepo.listInbox());
+safeHandle('db:runs:active', () => runsRepo.listActive());
 
 // The permission requests a run's gate is blocked on, and a person's answer
 // to one (CO-722, #288). Writing a reply is the one run-engine action the app
