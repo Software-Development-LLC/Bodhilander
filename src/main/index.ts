@@ -11,7 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
-import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun } from './run-engine/run-loop-service';
+import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun, readRunManifest, approveRunManifest, rejectRunManifest } from './run-engine/run-loop-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -907,6 +907,9 @@ safeHandle('db:runs:prepare', (issueId: string, repo: string, budgetUsd?: number
 safeHandle('db:runs:prepareCrossRepo', (issueId: string, repos: string[], budgetUsd?: number) =>
   prepareCrossRepoRun(issueId, repos, budgetUsd),
 );
+safeHandle('db:runs:bootstrap:manifest', (runId: string) => readRunManifest(runId));
+safeHandle('db:runs:bootstrap:approve', (runId: string) => approveRunManifest(runId));
+safeHandle('db:runs:bootstrap:reject', (runId: string, reason: string) => rejectRunManifest(runId, reason));
 
 // The directory picker arming uses. A cancel returns null; the renderer
 // treats that as "changed my mind", not an error.

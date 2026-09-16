@@ -116,13 +116,13 @@ async function ghWorks(request: IgnitionRequest, deps: IgnitionDeps): Promise<bo
  */
 async function resolveOwners(
   repos: readonly string[],
-  request: IgnitionRequest,
+  opts: { harnessPath: string; owners?: Record<string, string> },
 ): Promise<{ owners: Record<string, string>; refusals: Refusal[] }> {
   const owners: Record<string, string> = {};
   const refusals: Refusal[] = [];
   for (const repo of repos) {
-    const chosen = request.owners?.[repo];
-    const candidates = await agentsForRepo(request.harnessPath, repo);
+    const chosen = opts.owners?.[repo];
+    const candidates = await agentsForRepo(opts.harnessPath, repo);
     if (chosen) {
       if (!candidates.includes(chosen)) {
         refusals.push({
@@ -245,4 +245,75 @@ export async function armRun(
   // until somebody advances it.
   const mergeOrder = (request.mergeOrder ?? []).filter((r) => repos.includes(r));
   return { status: 'armed', runId, initiativeKey, owners: resolved.owners, mergeOrder };
+}
+
+export interface MaterializeRequest {
+  runId: string;
+  initiativePath: string;
+  harnessPath: string;
+  pythonPath: string;
+  /** From seams.yaml (arch wrote it), for the per-owner display order. */
+  mergeOrder?: readonly string[];
+  /** Owner roles a person picked, per repo; unset for a bootstrap. */
+  owners?: Record<string, string>;
+}
+
+export type MaterializeResult =
+  | { status: 'materialized'; owners: Record<string, string>; mergeOrder: string[] }
+  | { status: 'refused'; refusals: Refusal[] };
+
+/**
+ * Write a cross-repo run's owner rows after spawn.py has cut the worktrees
+ * (CO-722). The post-check body of `armRun`, minus `createRun`: the run already
+ * exists (it was created at prepare time and driven through the bootstrap), so
+ * this reads the now-populated team.yaml via `initiative.py`, resolves each
+ * repo's owner exactly as arming does, and mirrors the owners block.
+ *
+ * A repo the harness gives more than one candidate for is the same refusal
+ * arming gives -- surfaced to the caller, which parks the run inconclusive with
+ * "name one for this run" rather than guessing. Shares `resolveOwners`,
+ * `upsertOwner` and `recordOwnerMergeOrder` with arming so the two paths cannot
+ * drift.
+ */
+export async function materializeOwners(
+  request: MaterializeRequest,
+  deps: IgnitionDeps,
+): Promise<MaterializeResult> {
+  const read = await deps.run(request.pythonPath, [
+    `${request.harnessPath}/scripts/lib/initiative.py`,
+    request.initiativePath,
+  ]);
+  const payload = parse<InitiativePayload>(read.stdout);
+  if (read.code !== 0 || !payload) {
+    return {
+      status: 'refused',
+      refusals: [{
+        what: `the initiative at ${request.initiativePath} could not be read`,
+        fix: firstText(payload?.detail, read.stderr) ?? 'Check the path.',
+      }],
+    };
+  }
+
+  const repos = Object.keys(payload.owners ?? {});
+  const resolved = await resolveOwners(repos, { harnessPath: request.harnessPath, owners: request.owners });
+  if (resolved.refusals.length > 0) return { status: 'refused', refusals: resolved.refusals };
+
+  for (const [repo, owner] of Object.entries(payload.owners ?? {})) {
+    runs.upsertOwner({
+      runId: request.runId,
+      repo,
+      worktree: owner.worktree ?? '',
+      branch: owner.branch ?? '',
+      base: owner.base ?? '',
+      scratch: owner.scratch ?? null,
+      agent: resolved.owners[repo] ?? null,
+      status: 'pending',
+      prNumber: null,
+      prUrl: null,
+    });
+    const at = request.mergeOrder?.indexOf(repo) ?? -1;
+    runs.recordOwnerMergeOrder(request.runId, repo, at >= 0 ? at : null);
+  }
+  const mergeOrder = (request.mergeOrder ?? []).filter((r) => repos.includes(r));
+  return { status: 'materialized', owners: resolved.owners, mergeOrder };
 }

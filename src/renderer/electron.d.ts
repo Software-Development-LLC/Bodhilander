@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -63,6 +63,9 @@ interface ElectronAPI {
   listHarnessRepos: () => Promise<string[]>;
   prepareInitiative: (issueId: string, repo: string, budgetUsd?: number) => Promise<RunPrepareResult>;
   prepareCrossRepoRun: (issueId: string, repos: string[], budgetUsd?: number) => Promise<RunCrossRepoPrepareResult>;
+  readRunManifest: (runId: string) => Promise<SeamManifest | null>;
+  approveRunManifest: (runId: string) => Promise<boolean>;
+  rejectRunManifest: (runId: string, reason: string) => Promise<boolean>;
 
   // Database - Groups
   getAllGroups: () => Promise<Group[]>;

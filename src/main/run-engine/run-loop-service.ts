@@ -45,16 +45,17 @@ import { reconcileOnce } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
 import { pendingRequests, writeDecision, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
-import { armInitiative } from './arm-run';
-import { armRun, type IgnitionResult } from './ignition';
+import { armInitiative, mergeOrderFromSeams } from './arm-run';
+import { armRun, materializeOwners, type IgnitionResult } from './ignition';
 import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
 import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
 import { runArchGate, type ArchDeps } from './bootstrap-arch';
+import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
 import type { ScopeIo } from './scope-initiative';
-import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest } from '../../shared/types';
+import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest, SeamManifest } from '../../shared/types';
 import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
@@ -166,6 +167,19 @@ const bootstrapStore: BootstrapStore = {
  * The app-level spawn settings come from `config`; per-run values come off the
  * run inside `runArchGate`.
  */
+/**
+ * The spawn step's side effects (CO-722): run spawn.py on the provisioning
+ * ceiling (it fetches repos), read seams.yaml for the merge order, and write the
+ * owner rows via the same `materializeOwners` arming uses. No per-run config.
+ */
+const spawnDeps: SpawnDeps = {
+  run: (exe, argv, opts) => runCommand(exe, argv, { timeoutMs: 15 * 60_000, env: opts.env }),
+  readFile: readIfPresent,
+  materialize: (request) =>
+    materializeOwners(request, { run: (exe, argv) => runCommand(exe, argv, { timeoutMs: 60_000 }) }),
+  log: (line) => log.info(`[RunLoop] ${line}`),
+};
+
 function archDeps(config: SpawnConfig): ArchDeps {
   return {
     startGate: (input) => runsRepo.startGate(input),
@@ -239,6 +253,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
         io: bootstrapIo,
         store: bootstrapStore,
         arch: (r) => runArchGate(r, archDeps(config)),
+        spawn: (r) => runSpawn(r, spawnDeps),
         log: (line) => log.info(`[RunLoop] ${line}`),
       });
       for (const problem of result.problems) report.problems.push({ runId: run.id, problem });
@@ -332,6 +347,51 @@ export function prepareCrossRepoRun(
   runsRepo.createRun(plan.input);
   log.info(`[RunLoop] cross-repo ${plan.input.initiativeKey} (${plan.input.id}) created; the loop will bootstrap it`);
   return { status: 'prepared', runId: plan.input.id };
+}
+
+/**
+ * The proposed seam manifest for a cross-repo run awaiting approval (CO-722).
+ *
+ * The raw seams.yaml plus its merge order, read from disk -- the app never
+ * depended on the published-to-issue copy. Null when there is no run or no
+ * manifest yet, which the UI shows as "nothing to approve".
+ */
+export function readRunManifest(runId: string): SeamManifest | null {
+  const run = runsRepo.getRun(runId);
+  if (!run) return null;
+  const seams = readIfPresent(path.join(run.initiativeDir, 'seams.yaml'));
+  if (seams === null) return null;
+  return { mergeOrder: mergeOrderFromSeams(seams), seamsYaml: seams };
+}
+
+/**
+ * Approve a cross-repo run's manifest: release it to spawn (CO-722).
+ *
+ * The bootstrap driver deliberately bypasses `transition()` here -- the pure
+ * machine's `waitingHumanGate` exit spawns gate 2, which has no owner before
+ * spawn. This records the event for the audit trail, then flips the run to
+ * `spawning` + `preparing` so the loop re-picks it and the spawn step runs.
+ * Guarded on `awaitingManifest` so a double-click cannot re-approve.
+ */
+export function approveRunManifest(runId: string): boolean {
+  const run = runsRepo.getRun(runId);
+  if (!run || run.bootstrapState !== 'awaitingManifest') return false;
+  runsRepo.appendEvent(runId, 'humanApprovedGate', { gate: 1 });
+  runsRepo.setBootstrapState(runId, 'spawning');
+  runsRepo.setRunState(runId, 'preparing');
+  log.info(`[RunLoop] ${runId}: manifest approved; spawning next`);
+  return true;
+}
+
+/** Reject a manifest: park the run inconclusive with the reason. */
+export function rejectRunManifest(runId: string, reason: string): boolean {
+  const run = runsRepo.getRun(runId);
+  if (!run || run.bootstrapState !== 'awaitingManifest') return false;
+  runsRepo.recordTransition(runId, 'inconclusive', 'manifestRejected', {
+    gate: 1,
+    blockedReason: reason.trim() || 'the seam manifest was rejected',
+  });
+  return true;
 }
 
 /**

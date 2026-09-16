@@ -17,6 +17,7 @@ import type { RunState } from '../transitions';
 import { driveBootstrap, type BootstrapDeps, type BootstrapStore } from '../bootstrap-driver';
 import type { ScopeIo } from '../scope-initiative';
 import type { ArchResult } from '../bootstrap-arch';
+import type { SpawnResult } from '../bootstrap-spawn';
 
 function multiRun(bootstrapState: BootstrapState | null): RunRow {
   return {
@@ -57,13 +58,15 @@ function scopeIo(code: number, stderr = ''): ScopeIo {
 }
 
 const parked = async (): Promise<ArchResult> => ({ status: 'parked' });
+const spawned = async (): Promise<SpawnResult> => ({ status: 'spawned', owners: { a: 'lead' } });
 
 function deps(
   io: ScopeIo,
   s: BootstrapStore,
   arch: (run: RunRow) => Promise<ArchResult> = parked,
+  spawn: (run: RunRow) => Promise<SpawnResult> = spawned,
 ): BootstrapDeps {
-  return { io, store: s, arch, log: () => {} };
+  return { io, store: s, arch, spawn, log: () => {} };
 }
 
 describe('scoping', () => {
@@ -115,8 +118,36 @@ describe('architecting drives the arch gate', () => {
   });
 });
 
+describe('spawning cuts worktrees and hands off', () => {
+  test('a spawned run clears bootstrap_state and drops to preparing', async () => {
+    const { store: s, rec } = store();
+    const result = await driveBootstrap(
+      multiRun('spawning'),
+      deps(scopeIo(0), s, parked, async () => ({ status: 'spawned', owners: { a: 'lead', b: 'lead2' } })),
+    );
+    expect(result).toEqual({ drove: true, problems: [] });
+    expect(rec.events).toEqual([{ kind: 'spawned', gate: 2 }]);
+    // The handoff: null clears the bootstrap branch, preparing lets the
+    // per-owner machine provision on the next pass.
+    expect(rec.bootstrap).toEqual([null]);
+    expect(rec.runState).toEqual([{ state: 'preparing', reason: undefined }]);
+  });
+
+  test('a spawn refusal parks the run inconclusive and does not hand off', async () => {
+    const { store: s, rec } = store();
+    const result = await driveBootstrap(
+      multiRun('spawning'),
+      deps(scopeIo(0), s, parked, async () => ({ status: 'refused', reason: 'repo-b has 2 possible owners — Name one' })),
+    );
+    expect(result.drove).toBe(true);
+    expect(result.problems).toHaveLength(1);
+    expect(rec.inconclusive).toEqual([{ reason: 'repo-b has 2 possible owners — Name one', gate: 2 }]);
+    expect(rec.bootstrap).toEqual([]); // no handoff
+  });
+});
+
 describe('states this slice does not yet drive are benign holds', () => {
-  for (const state of ['awaitingManifest', 'spawning', 'done'] as BootstrapState[]) {
+  for (const state of ['awaitingManifest', 'done'] as BootstrapState[]) {
     test(`${state} does nothing and reports no problem`, async () => {
       const { store: s, rec } = store();
       const result = await driveBootstrap(multiRun(state), deps(scopeIo(0), s));
