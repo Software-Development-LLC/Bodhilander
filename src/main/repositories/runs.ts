@@ -787,34 +787,92 @@ export function listInbox(): InboxRow[] {
     updated_at: string;
   }[];
 
-  // Two queries, not one per row. The inbox is small today and the shape of
-  // this loop is what decides whether it stays cheap when it is not: a
-  // listOwners() per row is fine at five and silly at fifty, and nobody
-  // notices the moment in between.
-  const byRun = new Map<string, string[]>();
-  if (rows.length > 0) {
-    const ids = rows.map((row) => row.id);
-    const owners = getDatabase()
-      .prepare(
-        // In merge order first (nulls last), then by name -- so a person
-        // reading the inbox merges the repos in the sequence the initiative
-        // declared (CO-722). SQLite sorts NULL before values, so the CASE
-        // pushes unordered repos after the ordered ones.
-        `SELECT run_id, repo FROM run_owners
-          WHERE run_id IN (${ids.map(() => '?').join(', ')})
-          ORDER BY run_id ASC,
-                   CASE WHEN merge_order IS NULL THEN 1 ELSE 0 END, merge_order ASC, repo ASC`,
-      )
-      .all(...ids) as { run_id: string; repo: string }[];
-    for (const owner of owners) {
-      byRun.set(owner.run_id, [...(byRun.get(owner.run_id) ?? []), owner.repo]);
-    }
-  }
+  // One query for the batch, not one per row -- shared with the active list so
+  // the two answer "which repos, in what order" the same way.
+  const byRun = reposByRun(rows.map((row) => row.id));
 
   return rows.map((row) => ({
     id: row.id,
     initiativeKey: row.initiative_key,
     state: row.state as RunState,
+    blockedReason: row.blocked_reason,
+    since: row.updated_at,
+    repos: byRun.get(row.id) ?? [],
+  }));
+}
+
+/**
+ * The repos each run touches, in merge order (nulls last), for a set of runs.
+ *
+ * One query for the batch, not one per row -- the same shape `listInbox` uses,
+ * lifted out so the active list and the inbox cannot answer "which repos" two
+ * different ways.
+ */
+function reposByRun(ids: string[]): Map<string, string[]> {
+  const byRun = new Map<string, string[]>();
+  if (ids.length === 0) return byRun;
+  const owners = getDatabase()
+    .prepare(
+      `SELECT run_id, repo FROM run_owners
+        WHERE run_id IN (${ids.map(() => '?').join(', ')})
+        ORDER BY run_id ASC,
+                 CASE WHEN merge_order IS NULL THEN 1 ELSE 0 END, merge_order ASC, repo ASC`,
+    )
+    .all(...ids) as { run_id: string; repo: string }[];
+  for (const owner of owners) {
+    byRun.set(owner.run_id, [...(byRun.get(owner.run_id) ?? []), owner.repo]);
+  }
+  return byRun;
+}
+
+/** One line of the active-runs list: an in-flight run and the phase it is in. */
+export interface ActiveRow {
+  id: string;
+  initiativeKey: string;
+  state: RunState;
+  /** 'single' or 'multi' (CO-722): a multi run shows its bootstrap phase. */
+  kind: RunKind;
+  /** The pre-owner bootstrap phase for a multi run; null otherwise. */
+  bootstrapState: BootstrapState | null;
+  blockedReason: string | null;
+  since: string;
+  repos: string[];
+}
+
+/**
+ * Every run still in flight, most-recently-active first (CO-722).
+ *
+ * Unlike the inbox -- which shows only what needs THIS person -- this is the
+ * "what is the engine doing" surface: a cross-repo run scoping or driving arch
+ * sits in `state='preparing'`, which the inbox excludes, so without this list it
+ * is invisible for the minutes it spends bootstrapping. Newest-activity-first,
+ * because this list is read to see what just moved, not to find the oldest wait.
+ */
+export function listActive(): ActiveRow[] {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT id, initiative_key, state, kind, bootstrap_state, blocked_reason, updated_at
+         FROM runs
+        WHERE state NOT IN ('approved', 'done', 'failed')
+        ORDER BY updated_at DESC, id ASC`,
+    )
+    .all() as {
+    id: string;
+    initiative_key: string;
+    state: string;
+    kind: string | null;
+    bootstrap_state: string | null;
+    blocked_reason: string | null;
+    updated_at: string;
+  }[];
+
+  const byRun = reposByRun(rows.map((row) => row.id));
+  return rows.map((row) => ({
+    id: row.id,
+    initiativeKey: row.initiative_key,
+    state: row.state as RunState,
+    kind: (row.kind as RunKind | null) ?? 'single',
+    bootstrapState: (row.bootstrap_state as BootstrapState | null) ?? null,
     blockedReason: row.blocked_reason,
     since: row.updated_at,
     repos: byRun.get(row.id) ?? [],
