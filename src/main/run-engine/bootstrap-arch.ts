@@ -21,7 +21,7 @@
  * documented bridge cast is the whole cost of reusing the machinery.
  */
 import * as path from 'path';
-import type { PermissionPosture, RunGateRow, RunRow, StartGateInput } from '../repositories/runs';
+import type { RunGateRow, RunRow, StartGateInput } from '../repositories/runs';
 import type { GateLaunch } from './gate-launcher';
 import type { GateOutcome } from './gate-process';
 import type { CommandOutput } from './prepare-initiative';
@@ -110,7 +110,7 @@ export async function runArchGate(run: RunRow, deps: ArchDeps): Promise<ArchResu
       // workspace root, on their integration branches.
       cwd: run.bodhiRoot,
       pythonPath: run.pythonPath,
-      posture: run.permissionPosture as PermissionPosture,
+      posture: run.permissionPosture,
       sessionId: deps.newId(),
     },
     spawn: { executable: deps.config.claudePath, timeoutMs: deps.config.gateTimeoutMs },
