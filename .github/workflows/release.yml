@@ -168,7 +168,22 @@ jobs:
         run: |
           # `bun run build` already ran in the "Build application" step, so this
           # invokes electron-builder directly (as the mac step does).
-          if [[ -n "$AZURE_CLIENT_ID" && -n "$AZ_ACCOUNT" && -n "$AZ_PROFILE" && -n "$AZ_ENDPOINT" ]]; then
+          #
+          # The gate checks EVERY value electron-builder's Azure Trusted Signing
+          # needs -- the three credentials AND the three identifiers -- not just
+          # some of them. A partially configured repo (e.g. AZURE_CLIENT_ID set
+          # but AZURE_TENANT_ID unset or mistyped -- GitHub resolves an unknown
+          # secret name to empty, silently) must fall back to UNSIGNED, not take
+          # the signed path and fail authenticating to Azure. publisherName is
+          # optional, so it is not part of the gate.
+          MISSING=()
+          [[ -z "$AZURE_TENANT_ID" ]] && MISSING+=(AZURE_TENANT_ID)
+          [[ -z "$AZURE_CLIENT_ID" ]] && MISSING+=(AZURE_CLIENT_ID)
+          [[ -z "$AZURE_CLIENT_SECRET" ]] && MISSING+=(AZURE_CLIENT_SECRET)
+          [[ -z "$AZ_ENDPOINT" ]] && MISSING+=(AZURE_CODE_SIGNING_ENDPOINT)
+          [[ -z "$AZ_ACCOUNT" ]] && MISSING+=(AZURE_CODE_SIGNING_ACCOUNT)
+          [[ -z "$AZ_PROFILE" ]] && MISSING+=(AZURE_CODE_SIGNING_PROFILE)
+          if [[ ${#MISSING[@]} -eq 0 ]]; then
             echo "Azure Trusted Signing configured — signing the Windows build."
             ARGS=( --win
               -c.win.azureSignOptions.endpoint="$AZ_ENDPOINT"
@@ -181,7 +196,9 @@ jobs:
             fi
             bunx electron-builder "${ARGS[@]}"
           else
-            echo "::warning::Azure signing not configured — Windows build is UNSIGNED. Smart App Control / SmartScreen will block installs until signing is set up (docs/windows-signing.md)."
+            # Names the missing value(s) so a partially-configured repo is
+            # diagnosable from the Actions log alone.
+            echo "::warning::Azure signing not fully configured (missing: ${MISSING[*]}) — Windows build is UNSIGNED. Smart App Control / SmartScreen will block installs until signing is set up (docs/windows-signing.md)."
             bunx electron-builder --win
           fi
 
