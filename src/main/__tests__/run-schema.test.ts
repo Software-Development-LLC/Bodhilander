@@ -80,6 +80,23 @@ describe('the schema applies', () => {
     // cannot trust what it produced.
     expect(columns(freshDb(), 'run_gates')).toContain('posture');
   });
+
+  test('carries the cross-repo bootstrap columns (CO-722)', () => {
+    expect(columns(freshDb(), 'runs')).toEqual(
+      expect.arrayContaining(['kind', 'bootstrap_state', 'scope_repos']),
+    );
+  });
+
+  test('a fresh run is single, so the bootstrap paths never claim an ordinary run', () => {
+    const d = freshDb();
+    d.exec("INSERT INTO runs (id, initiative_key, initiative_dir, harness_path, bodhi_root) VALUES ('r', 'K-1', '/i', '/h', '/b')");
+    const row = d.prepare("SELECT kind, bootstrap_state FROM runs WHERE id = 'r'").get() as {
+      kind: string;
+      bootstrap_state: string | null;
+    };
+    expect(row.kind).toBe('single');
+    expect(row.bootstrap_state).toBeNull();
+  });
 });
 
 describe('the structural choices SQLite cannot add later', () => {
@@ -252,5 +269,27 @@ describe('the multi-owner migration backfills an in-flight database', () => {
     expect(() => initializeRunTables(asDb(d))).not.toThrow();
     const gate = d.prepare("SELECT repo FROM run_gates WHERE id = 'g1'").get() as { repo: string | null };
     expect(gate.repo).toBe('repo-x');
+  });
+
+  test('adds the bootstrap columns and backfills every existing run as single', () => {
+    // oldDb's runs table predates kind/bootstrap_state/scope_repos. The
+    // NOT NULL DEFAULT 'single' must backfill in-flight runs, or a reader that
+    // switches on kind would mistake an old run for one with no kind at all.
+    const d = oldDb();
+    seed(d);
+    initializeRunTables(asDb(d));
+
+    expect(columns(d, 'runs')).toEqual(
+      expect.arrayContaining(['kind', 'bootstrap_state', 'scope_repos']),
+    );
+    const rows = d.prepare('SELECT kind, bootstrap_state FROM runs').all() as {
+      kind: string;
+      bootstrap_state: string | null;
+    }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.kind).toBe('single');
+      expect(row.bootstrap_state).toBeNull();
+    }
   });
 });

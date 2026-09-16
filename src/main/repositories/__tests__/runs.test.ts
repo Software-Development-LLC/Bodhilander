@@ -85,6 +85,61 @@ describe('creating and reading a run', () => {
   });
 });
 
+describe('the cross-repo bootstrap fields (CO-722)', () => {
+  test('a run is single by default, with no bootstrap state or scope', () => {
+    // The existing arm-and-drive path passes none of these; it must read back
+    // as an ordinary single run, never as one mid-bootstrap.
+    runs.createRun(BASE);
+    const run = runs.getRun('run-1')!;
+    expect(run.kind).toBe('single');
+    expect(run.bootstrapState).toBeNull();
+    expect(run.scopeRepos).toBeNull();
+  });
+
+  test('a multi run round-trips its kind, entry state and repo picks', () => {
+    runs.createRun({
+      ...BASE,
+      kind: 'multi',
+      bootstrapState: 'scoping',
+      scopeRepos: ['bodhi-service-api', 'bodhi-web-apps'],
+    });
+    const run = runs.getRun('run-1')!;
+    expect(run.kind).toBe('multi');
+    expect(run.bootstrapState).toBe('scoping');
+    expect(run.scopeRepos).toEqual(['bodhi-service-api', 'bodhi-web-apps']);
+  });
+
+  test('setBootstrapState advances the sub-state and can clear it at handoff', () => {
+    runs.createRun({ ...BASE, kind: 'multi', bootstrapState: 'scoping' });
+    runs.setBootstrapState('run-1', 'architecting');
+    expect(runs.getRun('run-1')!.bootstrapState).toBe('architecting');
+    // null is the handoff: owners now exist and the per-owner machine takes over.
+    runs.setBootstrapState('run-1', null);
+    expect(runs.getRun('run-1')!.bootstrapState).toBeNull();
+  });
+
+  test('setRunState sets the run-level state and reason, and clears the reason', () => {
+    runs.createRun({ ...BASE, kind: 'multi', bootstrapState: 'architecting' });
+    runs.setRunState('run-1', 'inconclusive', 'arch could not author seams.yaml');
+    let run = runs.getRun('run-1')!;
+    expect(run.state).toBe('inconclusive');
+    expect(run.blockedReason).toBe('arch could not author seams.yaml');
+    // Moving on (e.g. to the manifest park) drops the reason.
+    runs.setRunState('run-1', 'waitingHumanGate');
+    run = runs.getRun('run-1')!;
+    expect(run.state).toBe('waitingHumanGate');
+    expect(run.blockedReason).toBeNull();
+  });
+
+  test('a malformed scope_repos reads as unknown rather than crashing the run view', () => {
+    // scope_repos is a record of the picks, not something the drive depends on;
+    // garbage in the column must not take getRun down.
+    runs.createRun(BASE);
+    db.prepare("UPDATE runs SET scope_repos = ? WHERE id = 'run-1'").run('{not json');
+    expect(runs.getRun('run-1')!.scopeRepos).toBeNull();
+  });
+});
+
 describe('a state change and its reason land together', () => {
   beforeEach(() => runs.createRun(BASE));
 
