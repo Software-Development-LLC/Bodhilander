@@ -98,7 +98,8 @@ export function parseBoardPage(stdout: string): BoardPage {
   if (!proj) {
     return { status: 'problem', problem: 'project not found or not accessible (check org, number, and the token\'s project scope)' };
   }
-  const rawNodes = Array.isArray(proj.items?.nodes) ? proj.items!.nodes : [];
+  const items = proj.items;
+  const rawNodes = items && Array.isArray(items.nodes) ? items.nodes : [];
   const nodes: RawBoardNode[] = [];
   for (const raw of rawNodes as Record<string, unknown>[]) {
     const content = raw.content as Record<string, unknown> | null;
@@ -126,7 +127,7 @@ export function parseBoardPage(stdout: string): BoardPage {
       parent,
     });
   }
-  const pageInfo = proj.items?.pageInfo as { hasNextPage?: unknown; endCursor?: unknown } | undefined;
+  const pageInfo = items?.pageInfo as { hasNextPage?: unknown; endCursor?: unknown } | undefined;
   const nextCursor = pageInfo?.hasNextPage === true ? str(pageInfo.endCursor) || null : null;
   return { status: 'page', title: str(proj.title), number: typeof proj.number === 'number' ? proj.number : 0, nodes, nextCursor };
 }

@@ -805,7 +805,7 @@ export interface BoardItem {
   repo: string;
   /** GitHub issue state: `OPEN` | `CLOSED`. */
   state: string;
-  /** The project Status value: `Todo | In Progress | Done | Approved | …`, or null. */
+  /** The project Status value (e.g. In Progress, Done, Approved), or null. */
   status: string | null;
   url: string;
   assignees: string[];

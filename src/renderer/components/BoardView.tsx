@@ -30,7 +30,7 @@ interface BoardViewProps {
 export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollMs }) => {
   const [result, setResult] = useState<BoardResult | null>(null);
 
-  const fetch = useCallback(async () => {
+  const refresh = useCallback(async () => {
     try {
       const next = await (load ?? window.electronAPI.getProjectBoard)(projectNumber);
       setResult(next);
@@ -40,12 +40,12 @@ export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollM
   }, [load, projectNumber]);
 
   useEffect(() => {
-    void fetch();
+    void refresh();
     // A board changes on GitHub's timescale, not the app's; a slow poll keeps it
     // fresh without spending the API budget. Read-only, so nothing races.
-    const timer = setInterval(() => void fetch(), pollMs ?? 60_000);
+    const timer = setInterval(() => void refresh(), pollMs ?? 60_000);
     return () => clearInterval(timer);
-  }, [fetch, pollMs]);
+  }, [refresh, pollMs]);
 
   if (result === null) return <div className="board board--loading">Reading the board…</div>;
 
@@ -54,7 +54,7 @@ export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollM
       <div className="board board--problem" role="alert">
         <h2>The board could not be read</h2>
         <p>{result.problem}</p>
-        <button type="button" onClick={() => void fetch()}>Try again</button>
+        <button type="button" onClick={() => void refresh()}>Try again</button>
       </div>
     );
   }

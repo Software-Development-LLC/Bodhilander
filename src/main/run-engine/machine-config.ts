@@ -100,12 +100,14 @@ export function initiativesRoot(): string | null {
  * preference -> env -> default resolution as everything else.
  */
 export function githubOrg(): string | null {
-  return pref(K.githubOrg) ?? (process.env.BODHI_GITHUB_ORG?.trim() || null);
+  const env = process.env.BODHI_GITHUB_ORG?.trim();
+  return pref(K.githubOrg) ?? (env && env.length > 0 ? env : null);
 }
 
 /** The default project number to show, or null when unset. */
 export function projectNumber(): number | null {
-  const raw = pref(K.projectNumber) ?? (process.env.BODHI_PROJECT_NUMBER?.trim() || null);
+  const env = process.env.BODHI_PROJECT_NUMBER?.trim();
+  const raw = pref(K.projectNumber) ?? (env && env.length > 0 ? env : null);
   if (!raw) return null;
   const n = Number.parseInt(raw, 10);
   return Number.isInteger(n) && n > 0 ? n : null;
