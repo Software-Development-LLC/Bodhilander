@@ -80,10 +80,10 @@ export function parseConfig(raw: string): ParseResult {
   for (const [name, entry] of Object.entries(asRecord(root.owners) ?? {})) {
     owners[name] = { context: str(asRecord(entry)?.context) };
   }
-  const projects: Record<string, { context?: string; eligibleStatuses?: string[] }> = {};
+  const projects: Record<string, { context?: string; eligibleApprovalValues?: string[] }> = {};
   for (const [num, entry] of Object.entries(asRecord(root.projects) ?? {})) {
     const e = asRecord(entry);
-    projects[num] = { context: str(e?.context), eligibleStatuses: strList(e?.eligibleStatuses) };
+    projects[num] = { context: str(e?.context), eligibleApprovalValues: strList(e?.eligibleApprovalValues) };
   }
   return { status: 'ok', config: { version: SUPPORTED_VERSION, repos, owners, projects } };
 }

@@ -720,14 +720,17 @@ export const RUN_ENGINE_PREF_KEYS = {
   bodhiRoot: 'runEngine.bodhiRoot',
   initiativesRoot: 'runEngine.initiativesRoot',
   // Board-driven orchestration (Phase 1): the GitHub org whose Projects v2
-  // boards we read, the default project number, and the existing Status values
-  // that mark an initiative eligible to start (comma-separated; a per-project
-  // override can live in the central config). The board is not migrated — an
-  // existing status the board already has is the gate, and the in-app manifest
-  // approval is the real human checkpoint before anything drives.
+  // boards we read, and the default project number.
   githubOrg: 'runEngine.githubOrg',
   projectNumber: 'runEngine.projectNumber',
-  eligibleStatuses: 'runEngine.eligibleStatuses',
+  // Eligibility gates on the "Approved for Development" Issue Field: an
+  // initiative is eligible when that field's value is one of the eligible
+  // values (comma-separated; default "Approved"; a per-project override can
+  // live in the central config). The field name is configurable for boards
+  // that name their approval field differently. No board is migrated — this is
+  // the human-approval column the team already maintains.
+  approvalField: 'runEngine.approvalField',
+  eligibleApprovalValues: 'runEngine.eligibleApprovalValues',
   // The central config repo (owner/repo) + the path to its JSON, fetched at
   // runtime so project/owner policy needs no app release (Phase 2).
   configRepo: 'runEngine.configRepo',
@@ -820,8 +823,12 @@ export interface BoardItem {
   repo: string;
   /** GitHub issue state: `OPEN` | `CLOSED`. */
   state: string;
-  /** The project Status value (e.g. In Progress, Done, Approved), or null. */
+  /** The project Status value (e.g. In Progress, Done, or a backlog value), or null. */
   status: string | null;
+  /** The "Approved for Development" Issue Field value (Approved / Not Approved / Needs Review), or null. */
+  approval: string | null;
+  /** The "Priority" Issue Field value (Urgent / High / Medium / Low), or null — used for ordering. */
+  priority: string | null;
   url: string;
   assignees: string[];
 }
@@ -836,7 +843,7 @@ export interface BoardInitiative {
   children: BoardItem[];
   /** Every repo this initiative touches (the item's repo + the children's). */
   repos: string[];
-  /** The initiative's Status marks it eligible to start (the configured gate value). */
+  /** The initiative's "Approved for Development" value marks it eligible to start. */
   eligible: boolean;
 }
 
@@ -885,10 +892,10 @@ export interface OrchestrationConfig {
   owners?: Record<string, { context?: string }>;
   /**
    * Per-project settings, keyed by the Projects v2 number (as a string).
-   * `eligibleStatuses` overrides the global default for this board — the
-   * existing Status values that mark an initiative eligible to start.
+   * `eligibleApprovalValues` overrides the global default for this board — the
+   * "Approved for Development" values that mark an initiative eligible to start.
    */
-  projects?: Record<string, { context?: string; eligibleStatuses?: string[] }>;
+  projects?: Record<string, { context?: string; eligibleApprovalValues?: string[] }>;
 }
 
 /**

@@ -41,7 +41,8 @@ const PATH_FIELDS: FieldSpec[] = [
 const GITHUB_FIELDS: FieldSpec[] = [
   { key: RUN_ENGINE_PREF_KEYS.githubOrg, label: 'GitHub org', placeholder: 'Software-Development-LLC', hint: 'The org whose Projects v2 boards the Board view reads. The gh login needs the project scope.' },
   { key: RUN_ENGINE_PREF_KEYS.projectNumber, label: 'default project number', placeholder: '17', hint: 'The Projects v2 board to show by default (its number in the project URL).' },
-  { key: RUN_ENGINE_PREF_KEYS.eligibleStatuses, label: 'eligible Status values', placeholder: 'Todo', hint: 'Existing Status values that mark an initiative eligible to start (comma-separated). No board changes needed — a per-project override can live in the central config, and the in-app run approval is the real gate.' },
+  { key: RUN_ENGINE_PREF_KEYS.approvalField, label: 'approval field', placeholder: 'Approved for Development', hint: 'The Issue Field (org-level) whose value gates eligibility — the team\'s approval column.' },
+  { key: RUN_ENGINE_PREF_KEYS.eligibleApprovalValues, label: 'eligible approval values', placeholder: 'Approved', hint: 'Approval-field values that mark an initiative eligible to start (comma-separated). No board changes needed — a per-project override can live in the central config, and the in-app run approval is the final gate.' },
 ];
 
 const CONFIG_FIELDS: FieldSpec[] = [

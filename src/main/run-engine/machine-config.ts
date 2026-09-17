@@ -113,16 +113,20 @@ export function projectNumber(): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+/** The Issue Field whose value gates eligibility; defaults to the team's approval column. */
+export function approvalField(): string {
+  return resolved(K.approvalField, 'BODHI_APPROVAL_FIELD', 'Approved for Development');
+}
+
 /**
- * The existing Status values that mark an initiative eligible to start, as the
+ * The approval-field values that mark an initiative eligible to start, as the
  * global default (a per-project override can live in the central config).
- * Stored comma-separated; defaults to a single ready-to-start status (the
- * board's backlog column) so no board needs migrating.
+ * Stored comma-separated; defaults to just the approved value.
  */
-export function eligibleStatuses(): string[] {
-  const raw = resolved(K.eligibleStatuses, 'BODHI_ELIGIBLE_STATUSES', 'Todo');
+export function eligibleApprovalValues(): string[] {
+  const raw = resolved(K.eligibleApprovalValues, 'BODHI_ELIGIBLE_APPROVAL', 'Approved');
   const list = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
-  return list.length > 0 ? list : ['Todo'];
+  return list.length > 0 ? list : ['Approved'];
 }
 
 /** The central config repo as `owner/repo`, or null when unset. */

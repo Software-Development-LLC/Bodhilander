@@ -66,23 +66,23 @@ describe('parseConfig', () => {
     expect(r.problem).toContain('object');
   });
 
-  test('parses a per-project eligibleStatuses override (dropping non-strings/blanks)', () => {
+  test('parses a per-project eligibleApprovalValues override (dropping non-strings/blanks)', () => {
     const raw = JSON.stringify({
       version: 1,
       repos: { x: {} },
-      projects: { '17': { eligibleStatuses: ['Todo', ' Ready ', '', 5] } },
+      projects: { '17': { eligibleApprovalValues: ['Approved', ' Auto-approved ', '', 5] } },
     });
     const r = parseConfig(raw);
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') throw new Error('unreachable');
-    expect(r.config.projects['17'].eligibleStatuses).toEqual(['Todo', 'Ready']);
+    expect(r.config.projects['17'].eligibleApprovalValues).toEqual(['Approved', 'Auto-approved']);
   });
 
-  test('a project entry without eligibleStatuses leaves it undefined', () => {
+  test('a project entry without eligibleApprovalValues leaves it undefined', () => {
     const r = parseConfig(JSON.stringify({ version: 1, repos: { x: {} }, projects: { '17': { context: 'c' } } }));
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') throw new Error('unreachable');
-    expect(r.config.projects['17'].eligibleStatuses).toBeUndefined();
+    expect(r.config.projects['17'].eligibleApprovalValues).toBeUndefined();
     expect(r.config.projects['17'].context).toBe('c');
   });
 

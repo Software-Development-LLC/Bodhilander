@@ -89,6 +89,33 @@
 .board__status--approved {
   border-color: var(--accent-positive, #3a7);
 }
+.board__priority {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.05rem 0.4rem;
+  border-radius: 5px;
+  border: 1px solid var(--border, #555);
+  white-space: nowrap;
+}
+.board__priority--urgent {
+  background: var(--accent-negative, #b34);
+  color: #fff;
+  border-color: transparent;
+}
+.board__priority--high {
+  border-color: var(--accent-negative, #b34);
+  color: var(--accent-negative, #d56);
+}
+.board__priority--low {
+  opacity: 0.6;
+}
+.board__approval {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 5px;
+  border: 1px solid var(--accent-positive, #3a7);
+  opacity: 0.85;
+}
 .board__repos {
   margin: 0.3rem 0 0;
   font-size: 0.75rem;
