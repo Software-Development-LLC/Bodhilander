@@ -14,6 +14,7 @@
  */
 import { getPreference } from '../repositories/preferences';
 import { RUN_ENGINE_PREF_KEYS as K } from '../../shared/types';
+import type { PermissionPosture } from '../repositories/runs';
 
 /**
  * A preference's trimmed value, or null when it is unset, blank, or the store
@@ -143,6 +144,17 @@ export function eligibleApprovalValues(): string[] {
 export function configRepo(): string | null {
   const env = process.env.BODHI_CONFIG_REPO?.trim();
   return pref(K.configRepo) ?? (env && env.length > 0 ? env : null);
+}
+
+/**
+ * How a run answers gate permission prompts. Defaults to `manual` (a person
+ * answers each) — the safe default; `bypass` auto-approves for trusted
+ * autonomous runs, `denyOnPrompt` fails closed. An unrecognized value falls
+ * back to manual rather than guessing at a looser posture.
+ */
+export function permissionPosture(): PermissionPosture {
+  const value = resolved(K.permissionPosture, 'BODHI_PERMISSION_POSTURE', 'manual');
+  return value === 'bypass' || value === 'denyOnPrompt' ? value : 'manual';
 }
 
 /** The path to the config JSON within the config repo; defaults to orchestration.json. */
