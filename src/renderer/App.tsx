@@ -3,6 +3,7 @@ import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
+import { LinkProjectModal } from './components/LinkProjectModal';
 import { OwnerConfirmModal, type PendingOwner } from './components/OwnerConfirmModal';
 import { ShareSessionModal } from './components/ShareSessionModal';
 import { GuestJoinRequestModal } from './components/GuestJoinRequestModal';
@@ -26,7 +27,7 @@ import { isSwitchPending, type SessionAccountIndicatorProps } from './components
 import { FailoverNotice } from './components/FailoverNotice';
 import { AccountSwitchNotice } from './components/AccountSwitchNotice';
 import { AccountSwitchReport, reportGroupSwitch, reportSessionSwitch } from './accountSwitchReport';
-import { AccountFailoverEvent, ClaudeAccount, Session } from '../shared/types';
+import { AccountFailoverEvent, ClaudeAccount, Group, Session } from '../shared/types';
 import type { ArrivalReport, LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
@@ -104,6 +105,13 @@ export function defaultAccountMenuLabel(accounts: ClaudeAccount[], isCurrent: bo
   return `${isCurrent ? '✓ ' : '   '}Use default account${tail}`;
 }
 
+/** The group context-menu label for the GitHub-project link (CO-722, Phase 2B). */
+export function projectMenuLabel(group: Group | undefined): string {
+  if (group?.githubProjectNumber == null) return 'Link GitHub Project…';
+  const name = group.githubProjectName ? ` (${group.githubProjectName})` : '';
+  return `GitHub Project: #${group.githubProjectNumber}${name}…`;
+}
+
 /**
  * Everything the session header's account indicator needs, resolved (#165).
  *
@@ -177,6 +185,8 @@ const App: React.FC = () => {
   } = useGroups();
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
+  // The group whose GitHub-project link is being edited (CO-722, Phase 2B).
+  const [linkProjectGroupId, setLinkProjectGroupId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
   const [colorPickerGroupId, setColorPickerGroupId] = useState<string | null>(null);
@@ -570,6 +580,35 @@ const App: React.FC = () => {
     setColorPickerGroupId(null);
   };
 
+  // Board-driven orchestration (CO-722, Phase 2B): the clone root the run engine
+  // cuts worktrees from for this group's project. Mirrors the working-dir picker.
+  const handleSetGroupCloneRoot = async (groupId: string) => {
+    const group = groups.find(g => g.id === groupId);
+    const dir = await window.electronAPI.selectDirectory(group?.cloneRoot || undefined);
+    if (dir) {
+      await updateGroup(groupId, { cloneRoot: dir });
+    }
+  };
+
+  // Persist a group's board link. The modal supplies the number (or null to
+  // unlink); we resolve the board's display name so the sidebar can show it
+  // without a round-trip, tolerating a fetch that fails (number kept, name null).
+  const handleLinkGroupProject = async (groupId: string, projectNumber: number | null) => {
+    setLinkProjectGroupId(null);
+    if (projectNumber === null) {
+      await updateGroup(groupId, { githubProjectNumber: null, githubProjectName: null });
+      return;
+    }
+    let name: string | null = null;
+    try {
+      const res = await window.electronAPI.getProjectBoard(projectNumber);
+      if (res.status === 'ok') name = res.project.title;
+    } catch {
+      // A resolution failure is not fatal — keep the number the user chose.
+    }
+    await updateGroup(groupId, { githubProjectNumber: projectNumber, githubProjectName: name });
+  };
+
   /**
    * Of the sessions whose account just changed, the ones with a pty to replace.
    * Stopped sessions are skipped — they have nothing running under the old
@@ -781,6 +820,11 @@ const App: React.FC = () => {
       { label: 'New Session', onClick: () => handleNewSession(groupId) },
       { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
       { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
+      {
+        label: projectMenuLabel(group),
+        onClick: () => setLinkProjectGroupId(groupId),
+      },
+      { label: 'Set Clone Root…', onClick: () => handleSetGroupCloneRoot(groupId) },
       { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
       {
         label: 'Ask Arena About This Folder',
@@ -1917,6 +1961,15 @@ const App: React.FC = () => {
           initialAccountId: null,
           label: 'Claude account (optional, inherits from parent)',
         }}
+      />
+
+      {/* Board-driven orchestration: link a group to a GitHub Projects v2 board */}
+      <LinkProjectModal
+        isOpen={linkProjectGroupId !== null}
+        groupName={groups.find(g => g.id === linkProjectGroupId)?.name ?? ''}
+        initialNumber={groups.find(g => g.id === linkProjectGroupId)?.githubProjectNumber ?? null}
+        onConfirm={(n) => { if (linkProjectGroupId) void handleLinkGroupProject(linkProjectGroupId, n); }}
+        onCancel={() => setLinkProjectGroupId(null)}
       />
 
       {/* Choice menu for + button on groups */}

@@ -91,6 +91,9 @@ export function createGroupsRouter(): Router {
           parentId: parentId || null,
           collapsed: false,
           claudeAccountId: null,
+          githubProjectNumber: null,
+          githubProjectName: null,
+          cloneRoot: null,
         };
 
         groupsRepo.createGroup(group);

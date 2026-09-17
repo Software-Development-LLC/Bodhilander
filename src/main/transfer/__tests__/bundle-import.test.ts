@@ -113,6 +113,20 @@ describe('what comes back', () => {
     const row = destination.prepare('SELECT claude_account_id FROM sessions WHERE id = ?').get('s1') as any;
     expect(row.claude_account_id).toBe('acct-1');
   });
+
+  test('preserves a group\'s board association, remapping the clone root', async () => {
+    await restore(exportBytes(), mappedToDest());
+    const row = destination.prepare(
+      'SELECT github_project_number, github_project_name, clone_root FROM groups WHERE id = ?',
+    ).get('g1') as any;
+    // The board number + name are portable and travel verbatim.
+    expect(row.github_project_number).toBe(17);
+    expect(row.github_project_name).toBe('Bodhi Pulse');
+    // The clone root is a machine-local path, remapped onto this machine like
+    // the working dir (source SOURCE_ROOT → destProjects).
+    expect(row.clone_root).toBe(path.join(destProjects, 'Bodhilander'));
+    expect(row.clone_root).not.toContain('src-machine');
+  });
 });
 
 describe('account config dirs', () => {

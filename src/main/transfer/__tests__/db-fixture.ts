@@ -17,7 +17,10 @@ export const SCHEMA = `
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     parent_id TEXT DEFAULT NULL,
     collapsed INTEGER DEFAULT 0,
-    claude_account_id TEXT DEFAULT NULL
+    claude_account_id TEXT DEFAULT NULL,
+    github_project_number INTEGER DEFAULT NULL,
+    github_project_name TEXT DEFAULT NULL,
+    clone_root TEXT DEFAULT NULL
   );
 
   CREATE TABLE sessions (
@@ -159,9 +162,10 @@ export function seedSourceDb(db: Database, options: SeedOptions = {}): void {
   ).run(configDir);
 
   db.prepare(
-    `INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id)
-     VALUES ('g1', 'Repos', '#98c379', ?, 0, '2026-01-02T00:00:00.000Z', NULL, 0, 'acct-1')`,
-  ).run(dirs[0]);
+    `INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id,
+                         github_project_number, github_project_name, clone_root)
+     VALUES ('g1', 'Repos', '#98c379', ?, 0, '2026-01-02T00:00:00.000Z', NULL, 0, 'acct-1', 17, 'Bodhi Pulse', ?)`,
+  ).run(dirs[0], dirs[0]);
 
   dirs.forEach((dir, i) => {
     db.prepare(

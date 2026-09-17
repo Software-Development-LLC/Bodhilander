@@ -150,6 +150,9 @@ async function exportPortableJson(): Promise<ExportResult> {
         collapsed: g.collapsed,
         order: g.order,
         createdAt: g.createdAt instanceof Date ? g.createdAt.toISOString() : String(g.createdAt),
+        githubProjectNumber: g.githubProjectNumber ?? null,
+        githubProjectName: g.githubProjectName ?? null,
+        cloneRoot: g.cloneRoot ?? null,
       })),
       sessions: sessions.map(s => ({
         id: s.id,
@@ -418,6 +421,9 @@ export async function importGroupsAndSessions(
         order: g.order,
         createdAt: new Date(g.createdAt),
         claudeAccountId: null,
+        githubProjectNumber: g.githubProjectNumber ?? null,
+        githubProjectName: g.githubProjectName ?? null,
+        cloneRoot: g.cloneRoot ?? null,
       });
       groupCount++;
     }
@@ -560,6 +566,9 @@ export async function importFromClaudeLander(): Promise<ImportResult> {
         order: row.order || 0,
         createdAt: new Date(row.created_at || Date.now()),
         claudeAccountId: null,
+        githubProjectNumber: row.github_project_number ?? null,
+        githubProjectName: row.github_project_name ?? null,
+        cloneRoot: row.clone_root ?? null,
       });
       groupCount++;
     }

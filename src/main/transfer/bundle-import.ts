@@ -181,8 +181,8 @@ function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, g
   const exists = options.directoryExists ?? ((dir: string) => fs.existsSync(dir));
   const accounts = knownAccountIds(db, tables);
   const insert = db.prepare(`
-    INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id, github_project_number, github_project_name, clone_root)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let inserted = 0;
@@ -200,6 +200,10 @@ function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, g
     // is something the arrival report has to raise.
     if (workingDir !== '' && !exists(workingDir)) needsRelink.push(group.id);
 
+    // The clone root is a machine-local path like the working dir, so it goes
+    // through the same remap; the board number/name are portable and travel as-is.
+    const cloneRoot = group.cloneRoot ? remapWorkingDir(group.cloneRoot, options.mappings) : null;
+
     const accountId = (group as { claudeAccountId?: string | null }).claudeAccountId;
     insert.run(
       group.id,
@@ -211,6 +215,9 @@ function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, g
       group.parentId ?? null,
       group.collapsed ? 1 : 0,
       accountId && accounts.has(accountId) ? accountId : null,
+      group.githubProjectNumber ?? null,
+      group.githubProjectName ?? null,
+      cloneRoot,
     );
     groupIds.add(group.id);
     inserted++;

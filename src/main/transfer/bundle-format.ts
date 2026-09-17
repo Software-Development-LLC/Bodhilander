@@ -35,6 +35,13 @@ export interface PortableGroup {
   collapsed: boolean;
   order: number;
   createdAt: string; // ISO 8601
+  /**
+   * Board-driven orchestration association (CO-722, Phase 2B). Absent in
+   * bundles exported before this field existed; import treats absent as null.
+   */
+  githubProjectNumber?: number | null;
+  githubProjectName?: string | null;
+  cloneRoot?: string | null;
 }
 
 export interface PortableSession {

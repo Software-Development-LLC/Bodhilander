@@ -102,6 +102,9 @@ function readPortableTables(db: Db): PortableTables {
       collapsed: Boolean(g.collapsed),
       order: g.order ?? 0,
       createdAt: g.created_at,
+      githubProjectNumber: g.github_project_number ?? null,
+      githubProjectName: g.github_project_name ?? null,
+      cloneRoot: g.clone_root ?? null,
     })),
     sessions: sessions.map((s) => ({
       id: s.id,
