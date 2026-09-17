@@ -55,12 +55,11 @@ import { cutWorktrees } from './worktrees';
 import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
 import type { CommandResult } from './reconcile';
-import type { ConfigResult } from '../../shared/types';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
 import type { ScopeIo } from './scope-initiative';
-import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest, SeamManifest } from '../../shared/types';
+import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest, SeamManifest, ConfigResult } from '../../shared/types';
 import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
