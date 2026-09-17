@@ -34,3 +34,35 @@ export function resolveAccountForSession(sessionId: string): ClaudeAccount | nul
   ).get() as any;
   return fallback ? mapAccountRow(fallback) : null;
 }
+
+/**
+ * Resolve the Claude account a run's gates launch under (CO-722 / #327).
+ * Fallback chain: the run's group → the default account → null (ambient
+ * `~/.claude`, the pre-#327 behaviour). Mirrors `resolveAccountForSession` but
+ * keyed on a group rather than a session, because a gate belongs to a run, not
+ * a terminal session.
+ */
+export function resolveAccountForGroup(groupId: string | null): ClaudeAccount | null {
+  try {
+    const db = getDatabase();
+
+    if (groupId) {
+      const row = db.prepare(`
+        SELECT a.*
+        FROM groups g
+        LEFT JOIN claude_accounts a ON a.id = g.claude_account_id
+        WHERE g.id = ?
+      `).get(groupId) as any;
+      if (row?.id) return mapAccountRow(row);
+    }
+
+    const fallback = db.prepare(
+      'SELECT * FROM claude_accounts WHERE is_default = 1 LIMIT 1'
+    ).get() as any;
+    return fallback ? mapAccountRow(fallback) : null;
+  } catch {
+    // A gate spawn must not fail because the DB is unopened or the accounts
+    // table is absent (a partial fixture, an early boot): fall back to ambient.
+    return null;
+  }
+}

@@ -153,6 +153,8 @@ export function spawnGateFor(
   config: SpawnConfig,
   activeGate: (runId: string, repo: string) => RunGateRow | null,
   log: (line: string) => void = () => undefined,
+  /** The run's managed account config dir (#327), resolved by the wiring; null = ambient. */
+  accountConfigDir: string | null = null,
 ): ExecutorDeps['spawnGate'] {
   const modeFor = config.modeFor ?? defaultModeFor;
   const taskFor = config.taskFor ?? defaultTaskFor;
@@ -196,6 +198,9 @@ export function spawnGateFor(
         cwd: owner.worktree,
         pythonPath: run.pythonPath,
         posture: run.permissionPosture,
+        // The gate runs under the run's managed account (#327), not the CLI's
+        // ambient login. Null when no account is configured — then it's ambient.
+        configDir: accountConfigDir,
         sessionId: randomUUID(),
       },
       spawn: { executable: config.claudePath, timeoutMs: config.gateTimeoutMs },

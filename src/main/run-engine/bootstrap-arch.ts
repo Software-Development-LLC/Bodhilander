@@ -53,6 +53,8 @@ export interface ArchDeps {
   readFile(p: string): string | null;
   config: ArchConfig;
   newId(): string;
+  /** The run's managed account config dir (#327), resolved by the wiring; null = ambient. */
+  accountConfigDir?: string | null;
   log(line: string): void;
 }
 
@@ -111,6 +113,8 @@ export async function runArchGate(run: RunRow, deps: ArchDeps): Promise<ArchResu
       cwd: run.bodhiRoot,
       pythonPath: run.pythonPath,
       posture: run.permissionPosture,
+      // The arch gate runs under the run's managed account (#327), not ambient.
+      configDir: deps.accountConfigDir ?? null,
       sessionId: deps.newId(),
     },
     spawn: { executable: deps.config.claudePath, timeoutMs: deps.config.gateTimeoutMs },
