@@ -19,6 +19,7 @@ import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { RunInbox } from './components/RunInbox';
 import { RunList } from './components/RunList';
+import { BoardView } from './components/BoardView';
 import { RunArm } from './components/RunArm';
 import { RunPrepare } from './components/RunPrepare';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
@@ -1759,6 +1760,7 @@ const App: React.FC = () => {
             <RunInbox key={runsRefresh} />
           </>
         )}
+        {contentView === 'board' && <BoardView />}
         {/* The terminal area is HIDDEN, never unmounted, when another view is
             selected. Unmounting would dispose every xterm instance and kill the
             PTYs, so switching tabs would visually reset all live sessions.

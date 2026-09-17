@@ -38,6 +38,12 @@ const PATH_FIELDS: FieldSpec[] = [
   { key: RUN_ENGINE_PREF_KEYS.initiativesRoot, label: 'initiatives folder', placeholder: 'C:\\work\\initiatives', hint: 'Where a prepared initiative is written.' },
 ];
 
+const GITHUB_FIELDS: FieldSpec[] = [
+  { key: RUN_ENGINE_PREF_KEYS.githubOrg, label: 'GitHub org', placeholder: 'Software-Development-LLC', hint: 'The org whose Projects v2 boards the Board view reads. The gh login needs the project scope.' },
+  { key: RUN_ENGINE_PREF_KEYS.projectNumber, label: 'default project number', placeholder: '17', hint: 'The Projects v2 board to show by default (its number in the project URL).' },
+  { key: RUN_ENGINE_PREF_KEYS.approvedStatus, label: 'eligible Status value', placeholder: 'Approved', hint: 'The Status column value that marks an initiative eligible to start.' },
+];
+
 export const RunEngineSettings: React.FC = () => {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
@@ -45,7 +51,7 @@ export const RunEngineSettings: React.FC = () => {
 
   useEffect(() => {
     let live = true;
-    const keys = [...BINARY_FIELDS, ...PATH_FIELDS].map((f) => f.key).concat(RUN_ENGINE_PREF_KEYS.approvers);
+    const keys = [...BINARY_FIELDS, ...PATH_FIELDS, ...GITHUB_FIELDS].map((f) => f.key).concat(RUN_ENGINE_PREF_KEYS.approvers);
     Promise.all(keys.map((k) => window.electronAPI.getPreference(k)))
       .then((loaded) => {
         if (!live) return;
@@ -125,6 +131,9 @@ export const RunEngineSettings: React.FC = () => {
 
       <h3>Preparing a run</h3>
       {PATH_FIELDS.map(field)}
+
+      <h3>GitHub board</h3>
+      {GITHUB_FIELDS.map(field)}
     </div>
   );
 };

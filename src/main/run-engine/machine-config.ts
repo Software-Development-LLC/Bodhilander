@@ -91,3 +91,29 @@ export function bodhiRoot(): string | null {
 export function initiativesRoot(): string | null {
   return pref(K.initiativesRoot);
 }
+
+/**
+ * Board-driven orchestration settings (Phase 1).
+ *
+ * The GitHub org whose Projects v2 boards we read, the default project number to
+ * show, and the Status value that marks an initiative eligible to start. Same
+ * preference -> env -> default resolution as everything else.
+ */
+export function githubOrg(): string | null {
+  const env = process.env.BODHI_GITHUB_ORG?.trim();
+  return pref(K.githubOrg) ?? (env && env.length > 0 ? env : null);
+}
+
+/** The default project number to show, or null when unset. */
+export function projectNumber(): number | null {
+  const env = process.env.BODHI_PROJECT_NUMBER?.trim();
+  const raw = pref(K.projectNumber) ?? (env && env.length > 0 ? env : null);
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** The Status value an initiative must carry to be eligible to start. */
+export function approvedStatus(): string {
+  return resolved(K.approvedStatus, 'BODHI_APPROVED_STATUS', 'Approved');
+}

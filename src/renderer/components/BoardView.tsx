@@ -1,0 +1,130 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { BoardInitiative, BoardResult } from '../../shared/types';
+import './BoardView.css';
+
+/**
+ * The board (board-driven orchestration, Phase 1 — read-only).
+ *
+ * A view onto a GitHub Projects v2 board: the project's initiatives, which repos
+ * each touches (cross-repo children grouped under their initiative), each one's
+ * Status, and which are **eligible** to start (the configured Status gate). No
+ * "initiate" yet — this is the visibility surface the driving phases build on.
+ * Read-only by design, like the run inbox.
+ */
+
+/** Friendly label for a Status value; unknown values pass through. */
+const STATUS_LABEL: Record<string, string> = {
+  Todo: 'Todo',
+  'In Progress': 'In progress',
+  Done: 'Done',
+  Approved: 'Approved',
+};
+
+interface BoardViewProps {
+  /** Injected in tests; the real one is the read-only IPC channel. */
+  load?: (projectNumber?: number) => Promise<BoardResult>;
+  projectNumber?: number;
+  pollMs?: number;
+}
+
+export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollMs }) => {
+  const [result, setResult] = useState<BoardResult | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const next = await (load ?? window.electronAPI.getProjectBoard)(projectNumber);
+      setResult(next);
+    } catch (err) {
+      setResult({ status: 'problem', problem: err instanceof Error ? err.message : String(err) });
+    }
+  }, [load, projectNumber]);
+
+  useEffect(() => {
+    void refresh();
+    // A board changes on GitHub's timescale, not the app's; a slow poll keeps it
+    // fresh without spending the API budget. Read-only, so nothing races.
+    const timer = setInterval(() => void refresh(), pollMs ?? 60_000);
+    return () => clearInterval(timer);
+  }, [refresh, pollMs]);
+
+  if (result === null) return <div className="board board--loading">Reading the board…</div>;
+
+  if (result.status === 'problem') {
+    return (
+      <div className="board board--problem" role="alert">
+        <h2>The board could not be read</h2>
+        <p>{result.problem}</p>
+        <button type="button" onClick={() => void refresh()}>Try again</button>
+      </div>
+    );
+  }
+
+  const { project } = result;
+  const eligible = project.initiatives.filter((i) => i.eligible);
+  const rest = project.initiatives.filter((i) => !i.eligible);
+
+  return (
+    <div className="board">
+      <h2 className="board__title">
+        {project.title} <span className="board__count">· {project.initiatives.length} initiatives</span>
+      </h2>
+
+      {project.initiatives.length === 0 && (
+        <p className="board__empty">No initiatives on this board yet.</p>
+      )}
+
+      {eligible.length > 0 && (
+        <section className="board__section">
+          <h3 className="board__section-head">Ready to start ({eligible.length})</h3>
+          <ul className="board__list">
+            {eligible.map((init) => (
+              <li key={`${init.item.repo}#${init.item.number}`} className="board__init board__init--eligible">
+                <Initiative init={init} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {rest.length > 0 && (
+        <section className="board__section">
+          <h3 className="board__section-head">Other initiatives ({rest.length})</h3>
+          <ul className="board__list">
+            {rest.map((init) => (
+              <li key={`${init.item.repo}#${init.item.number}`} className="board__init">
+                <Initiative init={init} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+};
+
+const Initiative: React.FC<{ init: BoardInitiative }> = ({ init }) => {
+  const { item, children, repos, eligible } = init;
+  return (
+    <>
+      <div className="board__init-head">
+        {eligible && <span className="board__badge">Ready</span>}
+        <a className="board__init-title" href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
+        {item.status && <span className={`board__status board__status--${item.status.replace(/\s+/g, '-').toLowerCase()}`}>{STATUS_LABEL[item.status] ?? item.status}</span>}
+      </div>
+      <p className="board__repos">
+        {repos.length > 1 ? `${repos.length} repos: ` : ''}{repos.join(' · ')}
+      </p>
+      {children.length > 0 && (
+        <ul className="board__children">
+          {children.map((c) => (
+            <li key={`${c.repo}#${c.number}`} className="board__child">
+              <span className="board__child-repo">{c.repo}</span>
+              <a href={c.url} target="_blank" rel="noreferrer">#{c.number}</a>
+              {c.status && <span className="board__child-status">{STATUS_LABEL[c.status] ?? c.status}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+};
