@@ -19,6 +19,7 @@
  * harness clone sits beside the others under it.
  */
 import * as path from 'path';
+import * as machine from './machine-config';
 import type { IgnitionRequest, IgnitionResult } from './ignition';
 
 /**
@@ -134,7 +135,7 @@ export async function armInitiative(
     bodhiRoot: path.dirname(harnessPath),
     pythonPath: config.pythonPath,
     ghPath: config.ghPath,
-    posture: 'manual',
+    posture: machine.permissionPosture(),
     // No pre-chosen owners: where the harness offers several, armRun refuses
     // and names them, and a later arm can carry the choice. One owner per
     // repo -- the common case -- resolves without asking.

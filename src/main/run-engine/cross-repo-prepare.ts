@@ -14,6 +14,7 @@
  */
 import * as path from 'path';
 import type { CreateRunInput } from '../repositories/runs';
+import * as machine from './machine-config';
 
 export interface CrossRepoConfig {
   pythonPath: string;
@@ -93,7 +94,7 @@ export function planCrossRepoRun(
       harnessPath,
       bodhiRoot,
       pythonPath: config.pythonPath,
-      permissionPosture: 'manual',
+      permissionPosture: machine.permissionPosture(),
       budgetUsd: request.budgetUsd ?? null,
       kind: 'multi',
       bootstrapState: 'scoping',

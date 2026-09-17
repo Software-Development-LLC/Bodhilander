@@ -57,7 +57,8 @@ export const RunEngineSettings: React.FC = () => {
 
   useEffect(() => {
     let live = true;
-    const keys = [...BINARY_FIELDS, ...PATH_FIELDS, ...GITHUB_FIELDS, ...CONFIG_FIELDS].map((f) => f.key).concat(RUN_ENGINE_PREF_KEYS.approvers);
+    const keys = [...BINARY_FIELDS, ...PATH_FIELDS, ...GITHUB_FIELDS, ...CONFIG_FIELDS].map((f) => f.key)
+      .concat(RUN_ENGINE_PREF_KEYS.approvers, RUN_ENGINE_PREF_KEYS.permissionPosture);
     Promise.all(keys.map((k) => window.electronAPI.getPreference(k)))
       .then((loaded) => {
         if (!live) return;
@@ -73,9 +74,11 @@ export const RunEngineSettings: React.FC = () => {
     setValues((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  const save = useCallback(async (key: string) => {
+  const save = useCallback(async (key: string, explicit?: string) => {
     try {
-      await window.electronAPI.setPreference(key, (values[key] ?? '').trim());
+      // `explicit` is for controls that persist a new value immediately (a
+      // select), where reading `values[key]` would still see the pre-change state.
+      await window.electronAPI.setPreference(key, (explicit ?? values[key] ?? '').trim());
       setFailed((f) => (f === key ? null : f));
       setSaved(key);
       window.setTimeout(() => setSaved((s) => (s === key ? null : s)), 1500);
@@ -132,6 +135,26 @@ export const RunEngineSettings: React.FC = () => {
         <span className="run-engine-settings__hint">
           Comma-separated GitHub usernames a review request is sent to. The engine refuses a review gate clearly
           when this is empty.
+        </span>
+      </label>
+
+      <h3>Permissions</h3>
+      <label className="run-engine-settings__field">
+        <span className="run-engine-settings__label">
+          permission posture
+          {saved === RUN_ENGINE_PREF_KEYS.permissionPosture && <span className="run-engine-settings__saved"> saved</span>}
+          {failed === RUN_ENGINE_PREF_KEYS.permissionPosture && <span className="run-engine-settings__failed" role="alert"> not saved</span>}
+        </span>
+        <select
+          value={values[RUN_ENGINE_PREF_KEYS.permissionPosture] ?? 'manual'}
+          onChange={(e) => { set(RUN_ENGINE_PREF_KEYS.permissionPosture, e.target.value); void save(RUN_ENGINE_PREF_KEYS.permissionPosture, e.target.value); }}
+        >
+          <option value="manual">manual — a person approves each tool prompt (default)</option>
+          <option value="bypass">bypass — auto-approve (trusted autonomous runs)</option>
+          <option value="denyOnPrompt">denyOnPrompt — fail closed (deny anything that prompts)</option>
+        </select>
+        <span className="run-engine-settings__hint">
+          How a new run answers gate permission prompts. Applies to runs created after you change it.
         </span>
       </label>
 

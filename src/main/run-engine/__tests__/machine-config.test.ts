@@ -66,4 +66,19 @@ describe('machine config resolution', () => {
     expect(machine.harnessPath()).toBe('C:/harness');
     clearEnv();
   });
+
+  test('permission posture defaults to manual, honours a valid value, and rejects an unknown one', () => {
+    clearEnv();
+    delete process.env.BODHI_PERMISSION_POSTURE;
+    expect(machine.permissionPosture()).toBe('manual');
+    store['runEngine.permissionPosture'] = 'bypass';
+    expect(machine.permissionPosture()).toBe('bypass');
+    store['runEngine.permissionPosture'] = 'denyOnPrompt';
+    expect(machine.permissionPosture()).toBe('denyOnPrompt');
+    // An unrecognized value never loosens the posture — it falls back to manual.
+    store['runEngine.permissionPosture'] = 'yolo';
+    expect(machine.permissionPosture()).toBe('manual');
+    clearEnv();
+    delete process.env.BODHI_PERMISSION_POSTURE;
+  });
 });

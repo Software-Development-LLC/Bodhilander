@@ -719,6 +719,10 @@ export const RUN_ENGINE_PREF_KEYS = {
   harnessPath: 'runEngine.harnessPath',
   bodhiRoot: 'runEngine.bodhiRoot',
   initiativesRoot: 'runEngine.initiativesRoot',
+  // How a run answers gate permission prompts: manual (a person answers each,
+  // the safe default), bypass (auto-approve — trusted autonomous runs), or
+  // denyOnPrompt (fail closed).
+  permissionPosture: 'runEngine.permissionPosture',
   // Board-driven orchestration (Phase 1): the GitHub org whose Projects v2
   // boards we read, and the default project number.
   githubOrg: 'runEngine.githubOrg',
