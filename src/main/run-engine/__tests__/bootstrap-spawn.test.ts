@@ -1,18 +1,18 @@
 /**
- * Spawn + handoff for a cross-repo run (CO-722).
+ * Spawn + handoff for a cross-repo run (CO-722, Phase 3 — TS worktrees).
  *
- * The properties that matter: spawn.py is run with BODHI_ROOT set, the merge
- * order is read from seams.yaml and passed to materializeOwners, a spawn failure
- * is a one-line reason (not a throw), and a >1-candidate owner surfaces the same
- * refusal arming gives rather than guessing.
+ * The properties that matter: the repo list is read from seams.yaml's merge
+ * order and cut in TS, the cut owners are threaded to materializeOwners as
+ * `worktrees`, a refused cut (or a >1-candidate owner) is a one-line reason (not
+ * a throw), and no repos to cut is a refusal rather than a silent no-op.
  *
  * Run with: bun test src/main/run-engine/__tests__/bootstrap-spawn.test.ts
  */
 import { describe, expect, test } from 'bun:test';
 import * as path from 'path';
 import type { RunRow } from '../../repositories/runs';
-import type { CommandOutput } from '../prepare-initiative';
 import type { MaterializeRequest, MaterializeResult } from '../ignition';
+import type { WorktreeResult } from '../worktrees';
 import { runSpawn, type SpawnDeps } from '../bootstrap-spawn';
 
 function run(): RunRow {
@@ -26,18 +26,23 @@ function run(): RunRow {
 }
 
 interface Rec {
-  runs: { exe: string; argv: readonly string[]; env?: Record<string, string> }[];
+  cuts: { initiative: string; repos: string[]; bodhiRoot: string }[];
   materializeReqs: MaterializeRequest[];
 }
 
+const OWNERS: Extract<WorktreeResult, { status: 'ok' }>['owners'] = {
+  a: { worktree: 'C:/root/_wt-bwa-4764-a', branch: 'feat/BWA-4764-a', base: 'development', scratch: 'C:/root/_wt-bwa-4764-a-scratch' },
+  b: { worktree: 'C:/root/_wt-bwa-4764-b', branch: 'feat/BWA-4764-b', base: 'main', scratch: 'C:/root/_wt-bwa-4764-b-scratch' },
+};
+
 function harness(opts: {
-  spawnCode?: number; spawnStderr?: string; seams?: string | null; materialize?: MaterializeResult;
+  cut?: WorktreeResult; seams?: string | null; materialize?: MaterializeResult;
 } = {}): { deps: SpawnDeps; rec: Rec } {
-  const rec: Rec = { runs: [], materializeReqs: [] };
+  const rec: Rec = { cuts: [], materializeReqs: [] };
   const deps: SpawnDeps = {
-    run: async (exe, argv, o): Promise<CommandOutput> => {
-      rec.runs.push({ exe, argv, env: o.env });
-      return { code: opts.spawnCode ?? 0, stdout: '', stderr: opts.spawnStderr ?? '' };
+    cut: async (initiative, repos, bodhiRoot): Promise<WorktreeResult> => {
+      rec.cuts.push({ initiative, repos: [...repos], bodhiRoot });
+      return opts.cut ?? { status: 'ok', owners: OWNERS };
     },
     readFile: () => (opts.seams === undefined ? 'merge_order: [a, b]\nseams: []\n' : opts.seams),
     materialize: async (request): Promise<MaterializeResult> => {
@@ -50,27 +55,25 @@ function harness(opts: {
 }
 
 describe('runSpawn', () => {
-  test('runs spawn.py with BODHI_ROOT, then materializes owners with the merge order', async () => {
+  test('cuts the merge-order repos in TS, then materializes owners from the cut worktrees', async () => {
     const { deps, rec } = harness();
     const result = await runSpawn(run(), deps);
     expect(result).toEqual({ status: 'spawned', owners: { a: 'lead', b: 'lead2' } });
 
-    expect(rec.runs).toHaveLength(1);
-    expect(rec.runs[0].exe).toBe('py');
-    expect(rec.runs[0].argv[0]).toBe(path.join('C:/h', 'scripts', 'lib', 'spawn.py'));
-    expect(rec.runs[0].argv[1]).toBe(path.join('C:/root/initiatives', 'BWA-4764'));
-    expect(rec.runs[0].env).toEqual({ BODHI_ROOT: 'C:/root' });
+    expect(rec.cuts).toEqual([{ initiative: 'BWA-4764', repos: ['a', 'b'], bodhiRoot: 'C:/root' }]);
 
-    // The merge order arch wrote is read from seams.yaml and threaded through.
+    // The merge order arch wrote is threaded through, and the cut worktrees are
+    // handed to materialize directly (no team.yaml round-trip).
     expect(rec.materializeReqs).toHaveLength(1);
     expect(rec.materializeReqs[0].mergeOrder).toEqual(['a', 'b']);
     expect(rec.materializeReqs[0].runId).toBe('r1');
+    expect(rec.materializeReqs[0].worktrees).toBe(OWNERS);
   });
 
-  test('a spawn.py failure is a one-line reason, and owners are never materialized', async () => {
-    const { deps, rec } = harness({ spawnCode: 1, spawnStderr: 'spawn: repo bodhi-x is not cloned under BODHI_ROOT\ntrace' });
+  test('a refused cut is a one-line reason, and owners are never materialized', async () => {
+    const { deps, rec } = harness({ cut: { status: 'refused', reason: 'bodhi-x: clone not present in BODHI_ROOT (C:/root/bodhi-x)' } });
     const result = await runSpawn(run(), deps);
-    expect(result).toEqual({ status: 'refused', reason: 'spawn: repo bodhi-x is not cloned under BODHI_ROOT' });
+    expect(result).toEqual({ status: 'refused', reason: 'bodhi-x: clone not present in BODHI_ROOT (C:/root/bodhi-x)' });
     expect(rec.materializeReqs).toHaveLength(0);
   });
 
@@ -84,10 +87,12 @@ describe('runSpawn', () => {
     expect(result.reason).toBe('repo-b has 2 possible owners — Name one for this run: lead, domain');
   });
 
-  test('an absent seams.yaml is a merge order of none, not a crash', async () => {
+  test('no repos to cut (absent seams.yaml) is a refusal, not a silent no-op', async () => {
     const { deps, rec } = harness({ seams: null });
     const result = await runSpawn(run(), deps);
-    expect(result.status).toBe('spawned');
-    expect(rec.materializeReqs[0].mergeOrder).toEqual([]);
+    expect(result.status).toBe('refused');
+    if (result.status !== 'refused') throw new Error('unreachable');
+    expect(result.reason).toContain('no repos');
+    expect(rec.cuts).toHaveLength(0);
   });
 });
