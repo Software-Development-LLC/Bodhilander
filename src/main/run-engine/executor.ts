@@ -48,8 +48,13 @@ export interface ExecutorDeps {
    * sends whoever reads that line to look at Python. The install's own
    * failure -- the thing actually wrong -- was never printed, because the
    * process that would have printed it had been killed.
+   *
+   * As of Phase 3 this runs the config repo's per-repo `provision` command in
+   * each worktree (TS — `provision.ts`), not `provision.py`; the wiring knows
+   * the run's owners, so it takes no argv and reports a `CommandResult`-shaped
+   * summary (`code` mapping through `provisionEvent`, `stdout` the log).
    */
-  provision(argv: readonly string[]): Promise<CommandResult>;
+  provision(): Promise<CommandResult>;
   /**
    * Launch one gate as one role. The launcher owns resolving the role to an
    * agent file; this owns what the outcome meant.
@@ -208,11 +213,7 @@ async function provision(
     result.problems.push('cannot provision without an initiative directory');
     return;
   }
-  const run = await deps.provision([
-    target.pythonPath,
-    `${target.harnessPath}/scripts/lib/provision.py`,
-    target.initiativePath,
-  ]);
+  const run = await deps.provision();
   const event = provisionEvent(run.code);
   result.events.push(event);
   if (event.kind !== 'provisioned') {

@@ -52,7 +52,9 @@ import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
 import { runArchGate, type ArchDeps } from './bootstrap-arch';
 import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { cutWorktrees } from './worktrees';
+import { provisionRun } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
+import type { CommandResult } from './reconcile';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
@@ -255,12 +257,39 @@ function archDeps(config: SpawnConfig): ArchDeps {
  * one a person launched by hand. Shared by the loop's `advance` and the
  * permission-answer path, so both move a run through the same deps.
  */
+/** Run a provision command in a worktree through the platform shell (PATH + compound commands). */
+function runProvisionCommand(command: string, cwd: string): Promise<CommandResult> {
+  const ceilingMs = 15 * 60_000; // an install compiles native modules on a cold worktree.
+  if (process.platform === 'win32') {
+    return runCommand(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], { cwd, timeoutMs: ceilingMs });
+  }
+  return runCommand('/bin/sh', ['-c', command], { cwd, timeoutMs: ceilingMs });
+}
+
+/**
+ * Provision a run in TS (Phase 3): run each owner's config `provision` command in
+ * its worktree. Shaped as a `CommandResult` so `executor.ts` maps `code` through
+ * `provisionEvent` exactly as it did the Python exit. A missing/unreadable config
+ * just means no repo owes a command (all provisioned).
+ */
+async function provisionRunFor(run: RunRow): Promise<CommandResult> {
+  const res = await loadOrchestrationConfig().catch(() => null);
+  const repos = res && res.status === 'ok' ? res.config.repos : {};
+  const summary = await provisionRun({
+    owners: () => runsRepo.listOwners(run.id).map((o) => ({ repo: o.repo, worktree: o.worktree })),
+    commandFor: (repo) => repos[repo]?.provision ?? null,
+    run: runProvisionCommand,
+    log: (line) => log.info(`[RunLoop] provision ${line}`),
+  });
+  return { code: summary.code, stdout: summary.log, stderr: '' };
+}
+
 async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, owner: RunOwnerRow) {
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
   const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
-  return { target, deps: { ...commands, spawnGate } };
+  return { target, deps: { ...commands, spawnGate, provision: () => provisionRunFor(run) } };
 }
 
 export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
