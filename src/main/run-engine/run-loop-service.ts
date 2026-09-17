@@ -41,7 +41,7 @@ import { processDeps, runCommand } from './command-runner';
 import { agentsForOwner, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
 import { lookAtGate, type AttentionDeps } from './attention-pass';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
-import { reconcileOnce } from './reconcile';
+import { reconcileOnce, expectedChecksLookup, type ChecksLookup, type CommandResult } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
 import { pendingRequests, writeDecision, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
@@ -55,7 +55,6 @@ import { cutWorktrees } from './worktrees';
 import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
 import { resolveAccountForGroup } from '../account-resolver';
-import type { CommandResult } from './reconcile';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
@@ -190,6 +189,27 @@ async function baseBranches(repos: readonly string[]): Promise<Record<string, st
   } catch {
     return {};
   }
+}
+
+/**
+ * A repo's expected checks (Phase 3): from the central config, not
+ * `registry_entry.py`. No config repo set → noBar (nothing defines green); a
+ * config that can't be read → retry (transient, re-attempted like a gh failure).
+ */
+async function expectedChecksLookupFor(repo: string): Promise<ChecksLookup> {
+  if (machine.configRepo() === null) {
+    return { kind: 'noBar', reason: `no config repo is set, so nothing defines green for ${repo}` };
+  }
+  let res: ConfigResult | null = null;
+  try {
+    res = await loadOrchestrationConfig();
+  } catch (err) {
+    // Logged, not swallowed silently: a genuine config-load bug should be
+    // distinguishable from a transient fetch failure. Either way it maps to
+    // `retry` (expectedChecksLookup treats a null result that way).
+    log.error(`[RunLoop] expected-checks: config load threw for ${repo}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return expectedChecksLookup(res, repo);
 }
 
 /** Cut a run's worktrees in TS: resolve base branches from config, then `cutWorktrees`. */
@@ -329,7 +349,8 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     },
     recordPr: (run, owner, pr) =>
       runsRepo.recordOwnerPullRequest(run.id, owner.repo, { prNumber: pr.number, prUrl: pr.url }),
-    reconcile: async (run, t) => reconcileOnce(t, processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' })),
+    reconcile: async (run, t) =>
+      reconcileOnce(t, await expectedChecksLookupFor(t.registryRepo), processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' })),
     advance: async (run, owner, event) => {
       // The loop names the owner; its executor and spawner are that repo's.
       const { target, deps } = await executorFor(config, ghPath, run, owner);

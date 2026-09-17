@@ -51,6 +51,8 @@ function toRepoConfig(v: unknown): RepoConfig {
     provision: str(r.provision),
     ownerAgent: str(r.ownerAgent),
     context: str(r.context),
+    expectedChecks: strList(r.expectedChecks),
+    expectedChecksAfterReview: strList(r.expectedChecksAfterReview),
   };
 }
 

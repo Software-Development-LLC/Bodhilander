@@ -30,13 +30,12 @@ import type { RunEvent, RunState } from './transitions';
 import { checksEvent, evaluateChecks, type ChecksPhase } from './checks';
 import { readReviews, reviewEvent, type MarkerReading, type ReviewRow } from './reviews';
 import { readReviewMarkers } from './review-markers';
+import type { ConfigResult } from '../../shared/types';
 import {
-  expectedChecksArgv,
   flattenRollup,
   prSnapshotArgv,
   toExpectedChecks,
   toReviewRows,
-  type RawExpectedChecks,
   type RawReview,
   type RawRollupEntry,
 } from './pr-snapshot';
@@ -125,60 +124,55 @@ function readMarkers(body: string): MarkerReading {
 }
 
 /**
- * What the recorded-check-set lookup established.
+ * What the expected-check-set lookup established (Phase 3 — from the central
+ * config, not `registry_entry.py`).
  *
  * Three answers, and the split is the same one the whole module turns on:
  * whether asking again could change it.
  *
- * - **recorded** — 0, and the payload reads.
- * - **noBar** — 2 or 3. The repo is not registered, or records no set. Both
- *   are configuration, and no number of retries defines a bar.
- * - **retry** — anything else. `registry-entry` answers 0, 2 or 3 and nothing
- *   else today, so another code is a crash, a spawn failure, or a version
- *   that has grown a meaning this engine has not been taught. None of those
- *   is evidence about the repo, and stopping a run for one would be the very
- *   mistake this module documents about `gh`.
- *
- * A 0 with output that will not parse lands in `retry` too. The tool claimed
- * to have answered and then said nothing readable — a contradiction, most
- * plausibly a half-written stream, and nothing about the registry.
+ * - **recorded** — the repo has `expectedChecks` in the config.
+ * - **noBar** — the repo has no check set (not in the config, or records none).
+ *   Configuration, and no number of retries defines a bar.
+ * - **retry** — the config could not be read (fetch failure, malformed). Not
+ *   evidence about the repo, so it's re-attempted rather than parked, exactly
+ *   as a `gh` failure is.
  */
-type ChecksLookup =
+export type ChecksLookup =
   | { kind: 'recorded'; expected: ReturnType<typeof toExpectedChecks> }
   | { kind: 'noBar'; reason: string }
   | { kind: 'retry'; reason: string };
 
-function classifyLookup(result: CommandResult): ChecksLookup {
-  const payload = parseJson<{ expected_checks?: RawExpectedChecks | null; detail?: string }>(
-    result.stdout,
-  );
-  if (result.code === 0) {
-    if (!payload) {
-      return {
-        kind: 'retry',
-        reason: 'registry-entry exited 0 and printed output that is not JSON, so what it '
-          + 'read cannot be known',
-      };
-    }
-    return { kind: 'recorded', expected: toExpectedChecks(payload.expected_checks) };
-  }
-  if (result.code === 2 || result.code === 3) {
+/**
+ * Resolve a repo's expected checks from the loaded central config. Pure, so the
+ * recorded/noBar/retry split is a value a test asserts on. A repo with an
+ * `expectedChecks` list is `recorded` (its `expectedChecksAfterReview` become
+ * the after-review-only checks); one without is `noBar`; an unloadable config is
+ * `retry`.
+ */
+export function expectedChecksLookup(config: ConfigResult | null, repo: string): ChecksLookup {
+  if (!config || config.status !== 'ok') {
     return {
-      kind: 'noBar',
-      reason: payload?.detail
-        ?? 'this repo records no usable expected_checks, so nothing defines green for it',
+      kind: 'retry',
+      reason: config && config.status === 'problem'
+        ? `orchestration config could not be read: ${config.problem}`
+        : 'orchestration config could not be loaded',
     };
   }
-  const why = result.stderr.trim() || `exit ${result.code}`;
+  const entry = config.config.repos[repo];
+  if (!entry?.expectedChecks || entry.expectedChecks.length === 0) {
+    return { kind: 'noBar', reason: `${repo} records no expectedChecks in the config, so nothing defines green for it` };
+  }
   return {
-    kind: 'retry',
-    reason: `registry-entry answered outside its own contract: ${why}`,
+    kind: 'recorded',
+    expected: toExpectedChecks({ ci: entry.expectedChecks, afterReviewRequest: entry.expectedChecksAfterReview ?? [] }),
   };
 }
 
 /** One pass. Never throws for a run that went badly — that is an outcome. */
 export async function reconcileOnce(
   target: ReconcileTarget,
+  /** The repo's expected checks, resolved from the central config by the caller. */
+  checks: ChecksLookup,
   deps: ReconcileDeps,
 ): Promise<ReconcileResult> {
   const events: RunEvent[] = [];
@@ -206,10 +200,7 @@ export async function reconcileOnce(
     return { events, problems };
   }
 
-  const recorded = await deps.plugin(
-    expectedChecksArgv(target.pythonPath, target.harnessPath, target.registryRepo),
-  );
-  const lookup = classifyLookup(recorded);
+  const lookup = checks;
   if (lookup.kind === 'retry') {
     // The same rule as `gh` above, applied to the same kind of failure: the
     // tool did not answer within its own contract, which says nothing about
