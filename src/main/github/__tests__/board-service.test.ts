@@ -10,13 +10,17 @@
  * Run with: bun test src/main/github/__tests__/board-service.test.ts
  */
 import { describe, expect, test } from 'bun:test';
-import { readProjectBoard, pickEligibleStatuses, type BoardDeps } from '../board-service';
+import { readProjectBoard, pickEligibleApprovalValues, type BoardDeps } from '../board-service';
 import type { OrchestrationConfig } from '../../../shared/types';
 import type { CommandResult } from '../../run-engine/reconcile';
 
-const issue = (number: number, repo = 'bodhi-code', status: string | null = 'Approved') => ({
-  content: { __typename: 'Issue', number, title: `#${number}`, state: 'OPEN', url: 'u', repository: { name: repo }, parent: null, assignees: { nodes: [] } },
-  status: status ? { name: status } : null,
+const issue = (number: number, repo = 'bodhi-code', approval: string | null = 'Approved') => ({
+  content: {
+    __typename: 'Issue', number, title: `#${number}`, state: 'OPEN', url: 'u',
+    repository: { name: repo }, parent: null, assignees: { nodes: [] },
+    issueFieldValues: { nodes: approval ? [{ __typename: 'IssueFieldSingleSelectValue', name: approval, field: { name: 'Approved for Development' } }] : [] },
+  },
+  status: { name: 'Todo' },
 });
 
 function page(nodes: unknown[], hasNextPage = false, endCursor = 'C'): string {
@@ -28,7 +32,11 @@ function page(nodes: unknown[], hasNextPage = false, endCursor = 'C'): string {
 const okGh = (stdout: string): BoardDeps['gh'] => async () => ({ code: 0, stdout, stderr: '' });
 
 function deps(gh: BoardDeps['gh'], over: Partial<BoardDeps> = {}): BoardDeps {
-  return { gh, org: 'Software-Development-LLC', defaultProject: 17, eligibleStatuses: ['Approved'], ...over };
+  return {
+    gh, org: 'Software-Development-LLC', defaultProject: 17,
+    gate: { approvalField: 'Approved for Development', eligibleValues: ['Approved'] },
+    ...over,
+  };
 }
 
 describe('readProjectBoard', () => {
@@ -93,33 +101,33 @@ describe('readProjectBoard', () => {
   });
 });
 
-describe('pickEligibleStatuses', () => {
+describe('pickEligibleApprovalValues', () => {
   const config = (projects: OrchestrationConfig['projects']): OrchestrationConfig => ({
     version: 1, repos: {}, owners: {}, projects,
   });
-  const DEFAULT = ['Todo'];
+  const DEFAULT = ['Approved'];
 
   test('uses a per-project override when present', () => {
-    const c = config({ '17': { eligibleStatuses: ['Ready', 'Approved'] } });
-    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(['Ready', 'Approved']);
+    const c = config({ '17': { eligibleApprovalValues: ['Approved', 'Auto-approved'] } });
+    expect(pickEligibleApprovalValues(c, 17, DEFAULT)).toEqual(['Approved', 'Auto-approved']);
   });
 
   test('falls back to the global default when the project has no override', () => {
-    const c = config({ '17': { context: 'no statuses here' } });
-    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(DEFAULT);
+    const c = config({ '17': { context: 'no values here' } });
+    expect(pickEligibleApprovalValues(c, 17, DEFAULT)).toEqual(DEFAULT);
   });
 
   test('falls back to the global default when the project is not in the config', () => {
-    const c = config({ '99': { eligibleStatuses: ['Ready'] } });
-    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(DEFAULT);
+    const c = config({ '99': { eligibleApprovalValues: ['Auto-approved'] } });
+    expect(pickEligibleApprovalValues(c, 17, DEFAULT)).toEqual(DEFAULT);
   });
 
   test('falls back to the global default when there is no config at all', () => {
-    expect(pickEligibleStatuses(null, 17, DEFAULT)).toEqual(DEFAULT);
+    expect(pickEligibleApprovalValues(null, 17, DEFAULT)).toEqual(DEFAULT);
   });
 
   test('an empty override is ignored in favor of the default', () => {
-    const c = config({ '17': { eligibleStatuses: [] } });
-    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(DEFAULT);
+    const c = config({ '17': { eligibleApprovalValues: [] } });
+    expect(pickEligibleApprovalValues(c, 17, DEFAULT)).toEqual(DEFAULT);
   });
 });

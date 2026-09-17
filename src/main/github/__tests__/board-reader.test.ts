@@ -17,6 +17,7 @@ import { boardQueryArgv, buildBoard, parseBoardPage, type RawBoardNode } from '.
 const item = (over: Partial<{
   number: number; title: string; repo: string; state: string; url: string;
   status: string | null; parent: { number: number; repo: string } | null; assignees: string[];
+  approval: string; priority: string;
 }> = {}) => ({
   content: {
     __typename: 'Issue',
@@ -27,6 +28,10 @@ const item = (over: Partial<{
     repository: { name: over.repo ?? 'repo-a' },
     parent: over.parent ? { number: over.parent.number, repository: { name: over.parent.repo } } : null,
     assignees: { nodes: (over.assignees ?? []).map((login) => ({ login })) },
+    issueFieldValues: { nodes: [
+      ...(over.approval ? [{ __typename: 'IssueFieldSingleSelectValue', name: over.approval, field: { name: 'Approved for Development' } }] : []),
+      ...(over.priority ? [{ __typename: 'IssueFieldSingleSelectValue', name: over.priority, field: { name: 'Priority' } }] : []),
+    ] },
   },
   status: over.status === undefined ? { name: 'Todo' } : over.status === null ? null : { name: over.status },
 });
@@ -54,16 +59,19 @@ describe('boardQueryArgv', () => {
 });
 
 describe('parseBoardPage', () => {
-  test('parses issues, skips PR cards, reads status/parent/assignees', () => {
+  test('parses issues, skips PR cards, reads status/parent/assignees/issue-fields', () => {
     const out = parseBoardPage(envelope([
-      item({ number: 130, repo: 'bodhi-code', status: 'Approved', assignees: ['brannon-bowden'] }),
+      item({ number: 130, repo: 'bodhi-code', status: 'Todo', approval: 'Approved', priority: 'High', assignees: ['brannon-bowden'] }),
       item({ number: 2561, repo: 'bodhi-service-api', parent: { number: 130, repo: 'bodhi-code' }, status: 'Todo' }),
       { content: { __typename: 'PullRequest', number: 999 }, status: null },
     ]));
     expect(out.status).toBe('page');
     if (out.status !== 'page') throw new Error('unreachable');
     expect(out.nodes).toHaveLength(2); // PR skipped
-    expect(out.nodes[0]).toMatchObject({ number: 130, repo: 'bodhi-code', status: 'Approved', assignees: ['brannon-bowden'] });
+    expect(out.nodes[0]).toMatchObject({ number: 130, repo: 'bodhi-code', status: 'Todo', assignees: ['brannon-bowden'] });
+    // Issue Fields land in the name→value map, keyed by field name.
+    expect(out.nodes[0].issueFields).toEqual({ 'Approved for Development': 'Approved', 'Priority': 'High' });
+    expect(out.nodes[1].issueFields).toEqual({}); // no issue fields set
     expect(out.nodes[1].parent).toEqual({ repo: 'bodhi-code', number: 130 });
     expect(out.nextCursor).toBeNull(); // hasNextPage false
   });
@@ -94,16 +102,29 @@ describe('parseBoardPage', () => {
 });
 
 describe('buildBoard', () => {
+  const GATE = { approvalField: 'Approved for Development', eligibleValues: ['Approved'] };
+  // A node with its Issue Field values; `approval`/`priority` land in issueFields.
+  const node = (over: Partial<RawBoardNode> & { approval?: string; priority?: string }): RawBoardNode => {
+    const { approval, priority, ...rest } = over;
+    const issueFields: Record<string, string> = { ...(rest.issueFields ?? {}) };
+    if (approval) issueFields['Approved for Development'] = approval;
+    if (priority) issueFields['Priority'] = priority;
+    return {
+      number: 1, title: 'x', repo: 'r', state: 'OPEN', status: 'Todo', url: 'u',
+      assignees: [], parent: null, ...rest, issueFields,
+    };
+  };
+
   const nodes: RawBoardNode[] = [
-    { number: 130, title: '[CO-130][Initiative] X', repo: 'bodhi-code', state: 'OPEN', status: 'Approved', url: 'u', assignees: [], parent: null },
-    { number: 2561, title: '[BSA-2561][Epic] X', repo: 'bodhi-service-api', state: 'OPEN', status: 'Todo', url: 'u', assignees: [], parent: { repo: 'bodhi-code', number: 130 } },
-    { number: 141, title: '[BSI-141][Epic] X', repo: 'bodhi-service-insights', state: 'OPEN', status: 'Todo', url: 'u', assignees: [], parent: { repo: 'bodhi-code', number: 130 } },
-    { number: 900, title: '[CO-900][Initiative] Done one', repo: 'bodhi-code', state: 'CLOSED', status: 'Done', url: 'u', assignees: [], parent: null },
-    { number: 42, title: '[BSI-42] standalone', repo: 'bodhi-service-insights', state: 'OPEN', status: 'Approved', url: 'u', assignees: [], parent: null },
+    node({ number: 130, title: '[CO-130][Initiative] X', repo: 'bodhi-code', approval: 'Approved' }),
+    node({ number: 2561, repo: 'bodhi-service-api', parent: { repo: 'bodhi-code', number: 130 } }),
+    node({ number: 141, repo: 'bodhi-service-insights', parent: { repo: 'bodhi-code', number: 130 } }),
+    node({ number: 900, title: '[CO-900] Done one', repo: 'bodhi-code', state: 'CLOSED', status: 'Done', approval: 'Approved' }),
+    node({ number: 42, title: '[BSI-42] standalone', repo: 'bodhi-service-insights', approval: 'Approved' }),
   ];
 
   test('groups children under their initiative across repos', () => {
-    const b = buildBoard(nodes, { title: 'Bodhi Pulse', number: 17 }, ['Approved']);
+    const b = buildBoard(nodes, { title: 'Bodhi Pulse', number: 17 }, GATE);
     const co130 = b.initiatives.find((i) => i.item.number === 130 && i.item.repo === 'bodhi-code')!;
     expect(co130.children.map((c) => c.repo).sort()).toEqual(['bodhi-service-api', 'bodhi-service-insights']);
     expect(co130.repos.sort()).toEqual(['bodhi-code', 'bodhi-service-api', 'bodhi-service-insights']);
@@ -111,38 +132,44 @@ describe('buildBoard', () => {
     expect(b.initiatives.some((i) => i.item.number === 2561)).toBe(false);
   });
 
-  test('eligibility keys on the initiative Status value, not closed', () => {
-    const b = buildBoard(nodes, { title: 'x', number: 17 }, ['Approved']);
+  test('eligibility keys on the approval value, not closed', () => {
+    const b = buildBoard(nodes, { title: 'x', number: 17 }, GATE);
     expect(b.initiatives.find((i) => i.item.number === 130)!.eligible).toBe(true);   // Approved, OPEN
-    expect(b.initiatives.find((i) => i.item.number === 900)!.eligible).toBe(false);  // Done/CLOSED
+    expect(b.initiatives.find((i) => i.item.number === 900)!.eligible).toBe(false);  // Approved but CLOSED
     expect(b.initiatives.find((i) => i.item.number === 42)!.eligible).toBe(true);    // single-repo, Approved
   });
 
-  test('any of several eligible statuses qualifies; others do not', () => {
-    // The zero-migration model: gate on existing statuses like "Todo"/"Ready".
-    const items: RawBoardNode[] = [
-      { number: 1, title: 'todo one', repo: 'r', state: 'OPEN', status: 'Todo', url: 'u', assignees: [], parent: null },
-      { number: 2, title: 'ready one', repo: 'r', state: 'OPEN', status: 'Ready', url: 'u', assignees: [], parent: null },
-      { number: 3, title: 'in progress', repo: 'r', state: 'OPEN', status: 'In Progress', url: 'u', assignees: [], parent: null },
-      { number: 4, title: 'no status', repo: 'r', state: 'OPEN', status: null, url: 'u', assignees: [], parent: null },
+  test('any of several eligible approval values qualifies; others do not', () => {
+    const items = [
+      node({ number: 1, approval: 'Approved' }),
+      node({ number: 2, approval: 'Auto-approved' }),
+      node({ number: 3, approval: 'Not Approved' }),
+      node({ number: 4 }), // no approval field set
     ];
-    const b = buildBoard(items, { title: 'x', number: 17 }, ['Todo', 'Ready']);
+    const b = buildBoard(items, { title: 'x', number: 17 }, { approvalField: 'Approved for Development', eligibleValues: ['Approved', 'Auto-approved'] });
     expect(b.initiatives.find((i) => i.item.number === 1)!.eligible).toBe(true);
     expect(b.initiatives.find((i) => i.item.number === 2)!.eligible).toBe(true);
     expect(b.initiatives.find((i) => i.item.number === 3)!.eligible).toBe(false);
-    expect(b.initiatives.find((i) => i.item.number === 4)!.eligible).toBe(false); // null status never matches
+    expect(b.initiatives.find((i) => i.item.number === 4)!.eligible).toBe(false); // no value never matches
+  });
+
+  test('surfaces the approval and priority values on the item', () => {
+    const b = buildBoard([node({ number: 5, approval: 'Approved', priority: 'Urgent' })], { title: 'x', number: 17 }, GATE);
+    const it = b.initiatives.find((i) => i.item.number === 5)!.item;
+    expect(it.approval).toBe('Approved');
+    expect(it.priority).toBe('Urgent');
   });
 
   test('a single-repo item is an initiative with no children', () => {
-    const b = buildBoard(nodes, { title: 'x', number: 17 }, ['Approved']);
+    const b = buildBoard(nodes, { title: 'x', number: 17 }, GATE);
     const solo = b.initiatives.find((i) => i.item.number === 42)!;
     expect(solo.children).toEqual([]);
     expect(solo.repos).toEqual(['bodhi-service-insights']);
   });
 
   test('an orphan child (parent not on the board) is treated as top-level', () => {
-    const orphan: RawBoardNode = { number: 77, title: 'orphan', repo: 'repo-x', state: 'OPEN', status: 'Approved', url: 'u', assignees: [], parent: { repo: 'gone', number: 5 } };
-    const b = buildBoard([orphan], { title: 'x', number: 1 }, ['Approved']);
+    const orphan = node({ number: 77, title: 'orphan', repo: 'repo-x', parent: { repo: 'gone', number: 5 } });
+    const b = buildBoard([orphan], { title: 'x', number: 1 }, GATE);
     expect(b.initiatives).toHaveLength(1);
     expect(b.initiatives[0].item.number).toBe(77);
   });

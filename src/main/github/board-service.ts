@@ -14,7 +14,7 @@
 import type { CommandResult } from '../run-engine/reconcile';
 import { processDeps } from '../run-engine/command-runner';
 import * as machine from '../run-engine/machine-config';
-import { boardQueryArgv, parseBoardPage, buildBoard, type RawBoardNode } from './board-reader';
+import { boardQueryArgv, parseBoardPage, buildBoard, type RawBoardNode, type EligibilityGate } from './board-reader';
 import { loadOrchestrationConfig } from './orchestration-config';
 import type { BoardResult, OrchestrationConfig } from '../../shared/types';
 
@@ -25,22 +25,22 @@ export interface BoardDeps {
   gh(argv: readonly string[]): Promise<CommandResult>;
   org: string | null;
   defaultProject: number | null;
-  /** The existing Status values that make an initiative eligible (already resolved). */
-  eligibleStatuses: readonly string[];
+  /** The approval field + eligible values that decide eligibility (already resolved). */
+  gate: EligibilityGate;
 }
 
 /**
- * The eligible statuses for a board: the central config's per-project override
- * when present, else the global default. Pure so the precedence is testable
- * without loading a real config.
+ * The eligible approval values for a board: the central config's per-project
+ * override when present, else the global default. Pure so the precedence is
+ * testable without loading a real config.
  */
-export function pickEligibleStatuses(
+export function pickEligibleApprovalValues(
   config: OrchestrationConfig | null,
   number: number | null,
   globalDefault: readonly string[],
 ): readonly string[] {
   if (config && number !== null) {
-    const override = config.projects?.[String(number)]?.eligibleStatuses;
+    const override = config.projects?.[String(number)]?.eligibleApprovalValues;
     if (override && override.length > 0) return override;
   }
   return globalDefault;
@@ -86,36 +86,38 @@ export async function readProjectBoard(deps: BoardDeps, projectNumber?: number):
     return { status: 'problem', problem: `project ${number} has more than ${MAX_PAGES * 50} items; refine the board or raise the page cap.` };
   }
 
-  return { status: 'ok', project: buildBoard(nodes, { title, number }, deps.eligibleStatuses) };
+  return { status: 'ok', project: buildBoard(nodes, { title, number }, deps.gate) };
 }
 
 /**
- * Resolve the eligible statuses for a board: try the central config for a
- * per-project override, else the global default. A missing/unreadable config
- * (e.g. no config repo set) is not an error here — it just means the default.
+ * Resolve the eligibility gate for a board: the approval field name (global
+ * setting) plus the eligible values, which the central config can override
+ * per-project. A missing/unreadable config (e.g. no config repo set) is not an
+ * error here — it just means the global default.
  */
-async function resolveEligibleStatuses(number: number | null): Promise<readonly string[]> {
-  const globalDefault = machine.eligibleStatuses();
-  if (number === null) return globalDefault;
+async function resolveGate(number: number | null): Promise<EligibilityGate> {
+  const approvalField = machine.approvalField();
+  const globalDefault = machine.eligibleApprovalValues();
+  if (number === null) return { approvalField, eligibleValues: globalDefault };
   try {
     const res = await loadOrchestrationConfig();
     const config = res.status === 'ok' ? res.config : null;
-    return pickEligibleStatuses(config, number, globalDefault);
+    return { approvalField, eligibleValues: pickEligibleApprovalValues(config, number, globalDefault) };
   } catch {
-    return globalDefault;
+    return { approvalField, eligibleValues: globalDefault };
   }
 }
 
 /** Read the configured (or given) project's board with the real gh + settings. */
 export async function fetchProjectBoard(projectNumber?: number): Promise<BoardResult> {
   const number = projectNumber ?? machine.projectNumber();
-  const eligibleStatuses = await resolveEligibleStatuses(number);
+  const gate = await resolveGate(number);
   return readProjectBoard(
     {
       gh: (argv) => processDeps({ ghPath: machine.ghPath(), pythonPath: 'python' }).gh(argv),
       org: machine.githubOrg(),
       defaultProject: machine.projectNumber(),
-      eligibleStatuses,
+      gate,
     },
     projectNumber,
   );

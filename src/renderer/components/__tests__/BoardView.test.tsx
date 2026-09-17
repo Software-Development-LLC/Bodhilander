@@ -13,8 +13,8 @@ import React from 'react';
 import { BoardView } from '../BoardView';
 import type { BoardInitiative, BoardResult } from '../../../shared/types';
 
-const init = (over: Partial<BoardInitiative> & { number: number; title?: string; status?: string | null; eligible?: boolean }): BoardInitiative => ({
-  item: { number: over.number, title: over.title ?? `#${over.number}`, repo: over.item?.repo ?? 'bodhi-code', state: 'OPEN', status: over.status ?? 'Todo', url: 'u', assignees: [] },
+const init = (over: Partial<BoardInitiative> & { number: number; title?: string; status?: string | null; approval?: string | null; priority?: string | null; eligible?: boolean }): BoardInitiative => ({
+  item: { number: over.number, title: over.title ?? `#${over.number}`, repo: over.item?.repo ?? 'bodhi-code', state: 'OPEN', status: over.status ?? 'Todo', approval: over.approval ?? null, priority: over.priority ?? null, url: 'u', assignees: [] },
   children: over.children ?? [],
   repos: over.repos ?? ['bodhi-code'],
   eligible: over.eligible ?? false,
@@ -27,7 +27,7 @@ describe('BoardView', () => {
     render(<BoardView load={async () => ok([
       init({ number: 130, title: '[CO-130] Cross thing', status: 'Approved', eligible: true,
              repos: ['bodhi-code', 'bodhi-service-api'],
-             children: [{ number: 2561, title: 'child', repo: 'bodhi-service-api', state: 'OPEN', status: 'Todo', url: 'u', assignees: [] }] }),
+             children: [{ number: 2561, title: 'child', repo: 'bodhi-service-api', state: 'OPEN', status: 'Todo', approval: null, priority: null, url: 'u', assignees: [] }] }),
       init({ number: 900, title: '[CO-900] Later', status: 'Todo', eligible: false }),
     ])} />);
     await screen.findByText(/Ready to start/);
@@ -36,6 +36,18 @@ describe('BoardView', () => {
     // Cross-repo child renders under its initiative.
     expect(screen.getByText('bodhi-service-api')).toBeTruthy();
     expect(screen.getByText(/2 repos:/)).toBeTruthy();
+  });
+
+  test('eligible initiatives are ordered highest-priority-first and show their priority', async () => {
+    render(<BoardView load={async () => ok([
+      init({ number: 1, title: 'low one', eligible: true, priority: 'Low' }),
+      init({ number: 2, title: 'urgent one', eligible: true, priority: 'Urgent' }),
+      init({ number: 3, title: 'medium one', eligible: true, priority: 'Medium' }),
+    ])} />);
+    await screen.findByText(/Ready to start/);
+    const titles = screen.getAllByText(/one$/).map((el) => el.textContent);
+    expect(titles).toEqual(['urgent one', 'medium one', 'low one']);
+    expect(screen.getByText('Urgent')).toBeTruthy();
   });
 
   test('a read problem is shown loudly, not as an empty board', async () => {

@@ -7,15 +7,14 @@
  * plumbing. Pure argv-builder + pure parser + pure grouping, so the whole thing
  * is testable dry and the caller owns the one side effect (the `gh` spawn).
  *
- * Eligibility gates on the initiative's own **Status** value being one of a
- * configured set of *existing* statuses (the board's ready/backlog column by
- * default; a per-project override lives in the central config) — so no board is
- * migrated. This uses the
- * project-native `Status` field, which reads cleanly, rather than the org-level
- * "Approved for Development" field, whose values don't surface through the
- * project query (it comes back with `options: []`). The real human checkpoint is
- * the in-app run approval, not a board column. See
- * docs/design-board-driven-orchestration.md.
+ * Eligibility gates on the initiative's **"Approved for Development"** value —
+ * the team's human-approval column, already maintained on the board, so nothing
+ * is migrated. That column is a GitHub **Issue Field** (org-level structured
+ * issue metadata), NOT a Projects v2 field: its value is read via
+ * `issueFieldValues` on the Issue, because the Projects v2 field query returns
+ * `options: []` for it. "Priority" is read the same way, for candidate ordering.
+ * The in-app run approval remains the final human checkpoint before anything
+ * drives. See docs/design-board-driven-orchestration.md.
  */
 import type { BoardInitiative, BoardItem, BoardProject } from '../../shared/types';
 
@@ -40,6 +39,15 @@ query($org:String!, $number:Int!, $cursor:String) {
               repository { name }
               parent { number repository { name } }
               assignees(first:10) { nodes { login } }
+              issueFieldValues(first:20) {
+                nodes {
+                  __typename
+                  ... on IssueFieldSingleSelectValue {
+                    name
+                    field { ... on IssueFieldSingleSelect { name } }
+                  }
+                }
+              }
             }
           }
           status: fieldValueByName(name:"Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
@@ -67,6 +75,8 @@ export interface RawBoardNode {
   url: string;
   assignees: string[];
   parent: { repo: string; number: number } | null;
+  /** Issue Field single-select values, keyed by field name (e.g. "Approved for Development", "Priority"). */
+  issueFields: Record<string, string>;
 }
 
 export type BoardPage =
@@ -75,6 +85,24 @@ export type BoardPage =
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
+}
+
+/**
+ * Collect an issue's single-select Issue Field values into a name→value map
+ * (e.g. `{ "Approved for Development": "Approved", "Priority": "High" }`). Issue
+ * Fields are org-level metadata read off the Issue, not Projects v2 fields.
+ */
+function parseIssueFields(content: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = (content.issueFieldValues as { nodes?: unknown } | undefined)?.nodes;
+  if (!Array.isArray(raw)) return out;
+  for (const fv of raw as Record<string, unknown>[]) {
+    if (!fv || fv.__typename !== 'IssueFieldSingleSelectValue') continue;
+    const fieldName = str((fv.field as { name?: unknown } | undefined)?.name);
+    const value = str(fv.name);
+    if (fieldName && value) out[fieldName] = value;
+  }
+  return out;
 }
 
 /**
@@ -130,6 +158,7 @@ export function parseBoardPage(stdout: string): BoardPage {
       url: str(content.url),
       assignees,
       parent,
+      issueFields: parseIssueFields(content),
     });
   }
   const pageInfo = items?.pageInfo as { hasNextPage?: unknown; endCursor?: unknown } | undefined;
@@ -139,9 +168,17 @@ export function parseBoardPage(stdout: string): BoardPage {
 
 const keyOf = (repo: string, number: number): string => `${repo}#${number}`;
 
+/** How eligibility is decided: the approval Issue Field and the values that qualify. */
+export interface EligibilityGate {
+  /** The Issue Field to read (e.g. "Approved for Development"). */
+  approvalField: string;
+  /** The field values that make an initiative eligible (e.g. ["Approved"]). */
+  eligibleValues: readonly string[];
+}
+
 /**
  * Group raw nodes (across all pages) into initiatives + their cross-repo
- * children, and mark eligibility off the initiative's Status.
+ * children, and mark eligibility off the initiative's approval Issue Field.
  *
  * A node with no parent (or whose parent isn't on the board) is a top-level
  * initiative; a node whose parent IS on the board is that initiative's child.
@@ -150,7 +187,7 @@ const keyOf = (repo: string, number: number): string => `${repo}#${number}`;
 export function buildBoard(
   nodes: readonly RawBoardNode[],
   meta: { title: string; number: number },
-  eligibleStatuses: readonly string[],
+  gate: EligibilityGate,
 ): BoardProject {
   const toItem = (n: RawBoardNode): BoardItem => ({
     number: n.number,
@@ -158,6 +195,8 @@ export function buildBoard(
     repo: n.repo,
     state: n.state,
     status: n.status,
+    approval: n.issueFields[gate.approvalField] ?? null,
+    priority: n.issueFields['Priority'] ?? null,
     url: n.url,
     assignees: n.assignees,
   });
@@ -178,11 +217,11 @@ export function buildBoard(
     const item = toItem(n);
     const children = childrenByParent.get(keyOf(n.repo, n.number)) ?? [];
     const repos = [...new Set([item.repo, ...children.map((c) => c.repo)])];
-    // Eligible: the initiative's own Status is one of the gate values (existing
-    // board statuses — no board migration), and it isn't already closed/done.
-    // Children carry their own progress; the gate is on the initiative you
-    // start, and the in-app manifest is the real human checkpoint.
-    const eligible = item.status !== null && eligibleStatuses.includes(item.status) && item.state !== 'CLOSED';
+    // Eligible: the initiative's "Approved for Development" value is one of the
+    // gate values, and it isn't already closed/done. Children carry their own
+    // progress; the gate is on the initiative you start, and the in-app manifest
+    // is the real human checkpoint before anything drives.
+    const eligible = item.approval !== null && gate.eligibleValues.includes(item.approval) && item.state !== 'CLOSED';
     return { item, children, repos, eligible };
   });
 

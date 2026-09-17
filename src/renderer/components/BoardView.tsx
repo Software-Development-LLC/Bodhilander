@@ -7,9 +7,9 @@ import './BoardView.css';
  *
  * A view onto a GitHub Projects v2 board: the project's initiatives, which repos
  * each touches (cross-repo children grouped under their initiative), each one's
- * Status, and which are **eligible** to start (the configured Status gate). No
- * "initiate" yet — this is the visibility surface the driving phases build on.
- * Read-only by design, like the run inbox.
+ * Status + Priority, and which are **eligible** to start (the "Approved for
+ * Development" gate). No "initiate" yet — this is the visibility surface the
+ * driving phases build on. Read-only by design, like the run inbox.
  */
 
 /** Friendly label for a Status value; unknown values pass through. */
@@ -19,6 +19,10 @@ const STATUS_LABEL: Record<string, string> = {
   Done: 'Done',
   Approved: 'Approved',
 };
+
+/** Priority order for sorting the eligible queue (highest first); unknown/absent sort last. */
+const PRIORITY_RANK: Record<string, number> = { Urgent: 0, High: 1, Medium: 2, Low: 3 };
+const priorityRank = (p: string | null): number => (p !== null && p in PRIORITY_RANK ? PRIORITY_RANK[p] : 99);
 
 interface BoardViewProps {
   /** Injected in tests; the real one is the read-only IPC channel. */
@@ -60,7 +64,11 @@ export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollM
   }
 
   const { project } = result;
-  const eligible = project.initiatives.filter((i) => i.eligible);
+  // Eligible initiatives surface highest-priority-first — the order the driving
+  // phases will pull them in.
+  const eligible = project.initiatives
+    .filter((i) => i.eligible)
+    .sort((a, b) => priorityRank(a.item.priority) - priorityRank(b.item.priority));
   const rest = project.initiatives.filter((i) => !i.eligible);
 
   return (
@@ -108,7 +116,9 @@ const Initiative: React.FC<{ init: BoardInitiative }> = ({ init }) => {
     <>
       <div className="board__init-head">
         {eligible && <span className="board__badge">Ready</span>}
+        {item.priority && <span className={`board__priority board__priority--${item.priority.toLowerCase()}`}>{item.priority}</span>}
         <a className="board__init-title" href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
+        {item.approval && <span className="board__approval">{item.approval}</span>}
         {item.status && <span className={`board__status board__status--${item.status.replace(/\s+/g, '-').toLowerCase()}`}>{STATUS_LABEL[item.status] ?? item.status}</span>}
       </div>
       <p className="board__repos">

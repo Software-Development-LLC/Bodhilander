@@ -29,19 +29,26 @@ TypeScript (no Python, no external harness), and keep domain data in a
 ## The model
 
 **Unit of work = a board item.** A project is a Projects v2 board (e.g. #17
-"Bodhi Pulse"). An item is **eligible to start** when its **`Status` is one of a
-configured set of _existing_ statuses** (default `Todo`; a per-project override
-lives in the central config) and it is not `Done`/closed.
+"Bodhi Pulse"). An item is **eligible to start** when its **`Approved for
+Development` value is one of the eligible values** (default `Approved`; a
+per-project override lives in the central config) and it is not `Done`/closed.
 
-> **Eligibility decision (2026-09-17): gate on an existing Status, not a new
-> "Approved" column.** The org-level `Approved for Development` field is
-> **unreadable** through the project query — it comes back with `options: []`
-> and every item's value null — so it can't drive the engine. Rather than make
-> every board add an "Approved" Status option and re-tag every in-flight item
-> (a migration tax), eligibility gates on a status the board **already has**
-> (e.g. `Todo`), configurable per project. Nothing auto-drives on eligibility
-> alone: it only populates the candidate list, and the **in-app run/manifest
-> approval remains the real human checkpoint** before anything executes.
+> **Eligibility decision (2026-09-17, revised): gate on "Approved for
+> Development", read as a GitHub Issue Field.** `Approved for Development` (and
+> `Priority`) are **Issue Fields** — org-level structured issue metadata, a
+> separate system from Projects v2 fields. They do NOT surface through the
+> Projects v2 field query (`options: []`, item value null); they're read via
+> **`issueFieldValues` on the Issue** (works inside the same board query, no
+> extra scope). So the team's real approval column IS readable after all —
+> eligibility gates on it directly, **zero board migration** (the column already
+> exists and is maintained). `Priority` is read the same way and orders the
+> eligible queue. Nothing auto-drives on eligibility: it only populates the
+> candidate list, and the **in-app run/manifest approval is the final human
+> checkpoint** before anything executes.
+>
+> _(Superseded interim decision: gating on an existing `Status` like `Todo`,
+> chosen while `Approved for Development` was believed unreadable. Once the
+> Issue Fields API was found, the real approval column became the better gate.)_
 
 **Cross-repo is the board's own hierarchy.** A tracking **`[Initiative]`** issue
 (e.g. `[CO-130]`, in `bodhi-code`) has **child issues across repos** via GitHub's
