@@ -29,11 +29,11 @@
 import type { RunEvent, RunState } from './transitions';
 import { checksEvent, evaluateChecks, type ChecksPhase } from './checks';
 import { readReviews, reviewEvent, type MarkerReading, type ReviewRow } from './reviews';
+import { readReviewMarkers } from './review-markers';
 import {
   expectedChecksArgv,
   flattenRollup,
   prSnapshotArgv,
-  readReviewArgv,
   toExpectedChecks,
   toReviewRows,
   type RawExpectedChecks,
@@ -112,41 +112,16 @@ function parseJson<T>(text: string): T | null {
 }
 
 /**
- * A review body, read by the plugin's parser.
+ * A review body's arbiter markers, read in TS (Phase 3 — `review-markers.ts`).
  *
- * Only ever called for an approver's own row. `read-review.sh` states that it
- * reads markers, cannot authenticate them, and that where the body came from
- * is the caller's problem — this is the caller, and `readReviews` filters to
- * approvers before anything reaches here.
+ * Only ever called for an approver's own row. The parser reads markers, cannot
+ * authenticate them, and where the body came from is the caller's problem —
+ * this is the caller, and `readReviews` filters to approvers before anything
+ * reaches here. The `read_review.py` exit-code contract (0/1/2/3) is preserved.
  */
-async function readMarkers(
-  body: string,
-  target: ReconcileTarget,
-  deps: ReconcileDeps,
-): Promise<MarkerReading | undefined> {
-  const result = await deps.plugin(readReviewArgv(target.pythonPath, target.harnessPath), body);
-  const payload = parseJson<{ arbiter?: boolean; highest?: MarkerReading['highest'] }>(
-    result.stdout,
-  );
-  if (!payload) return undefined;
-  return {
-    arbiter: payload.arbiter === true,
-    highest: payload.highest ?? null,
-    code: markerCode(result.code),
-  };
-}
-
-/**
- * The parser's exit code, or 2 for one this engine does not know.
- *
- * 2 is the honest answer for an unrecognised code: a parser that answered
- * something outside its own contract has not established a verdict, and
- * `undriveable` is what "nobody knows" is called here. Reading it as 3 would
- * say "not an arbiter review", which is a claim about the body rather than
- * about the tool.
- */
-function markerCode(code: number): MarkerReading['code'] {
-  return code === 0 || code === 1 || code === 3 ? code : 2;
+function readMarkers(body: string): MarkerReading {
+  const { code, payload } = readReviewMarkers(body);
+  return { arbiter: payload.arbiter, highest: payload.highest, code };
 }
 
 /**
@@ -283,7 +258,7 @@ export async function reconcileOnce(
     // after it, so matching back by position reads one person's body as
     // another's -- and a marker in it would be attributed to whoever happened
     // to be next in the list.
-    withMarkers.push({ ...row, marker: await readMarkers(row.body, target, deps) });
+    withMarkers.push({ ...row, marker: readMarkers(row.body) });
   }
 
   const review = reviewEvent(readReviews({ rows: withMarkers, approvers: target.approvers }));
