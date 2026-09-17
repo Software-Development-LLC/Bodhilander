@@ -54,8 +54,8 @@ function fake(options: FakeOptions = {}) {
     // separate dependencies because they are spawned on different clocks, and
     // a test that could not tell which one ran would not notice provisioning
     // being put back on the one-minute deadline that killed a real install.
-    provision: async (argv) => {
-      calls.push({ kind: 'provision', argv: [...argv] });
+    provision: async () => {
+      calls.push({ kind: 'provision', argv: [] });
       return options.provision ?? OK;
     },
     spawnGate: async (gate, agent) => {

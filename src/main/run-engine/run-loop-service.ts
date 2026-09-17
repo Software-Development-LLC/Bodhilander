@@ -52,12 +52,14 @@ import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
 import { runArchGate, type ArchDeps } from './bootstrap-arch';
 import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { cutWorktrees } from './worktrees';
+import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
+import type { CommandResult } from './reconcile';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
 import type { ScopeIo } from './scope-initiative';
-import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest, SeamManifest } from '../../shared/types';
+import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest, SeamManifest, ConfigResult } from '../../shared/types';
 import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
@@ -255,12 +257,52 @@ function archDeps(config: SpawnConfig): ArchDeps {
  * one a person launched by hand. Shared by the loop's `advance` and the
  * permission-answer path, so both move a run through the same deps.
  */
+/** Run a provision command in a worktree through the platform shell (PATH + compound commands). */
+function runProvisionCommand(command: string, cwd: string): Promise<CommandResult> {
+  const ceilingMs = 15 * 60_000; // an install compiles native modules on a cold worktree.
+  if (process.platform === 'win32') {
+    return runCommand(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', command], { cwd, timeoutMs: ceilingMs });
+  }
+  return runCommand('/bin/sh', ['-c', command], { cwd, timeoutMs: ceilingMs });
+}
+
+/**
+ * Provision a run in TS (Phase 3): run each owner's config `provision` command in
+ * its worktree. Shaped as a `CommandResult` so `executor.ts` maps `code` through
+ * `provisionEvent` exactly as it did the Python exit. A config repo that is set
+ * but unreadable is undriveable (code 2), never a silent "provisioned" — only a
+ * genuinely unconfigured config repo means "nothing owed".
+ */
+async function provisionRunFor(run: RunRow): Promise<CommandResult> {
+  const hasConfigRepo = machine.configRepo() !== null;
+  let result: ConfigResult | null = null;
+  if (hasConfigRepo) {
+    try {
+      result = await loadOrchestrationConfig();
+    } catch (err) {
+      log.error(`[RunLoop] provision: config load threw: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const commands = resolveProvisionCommands(hasConfigRepo, result);
+  if ('undriveable' in commands) {
+    log.error(`[RunLoop] provision: ${commands.undriveable}`);
+    return { code: 2, stdout: '', stderr: commands.undriveable };
+  }
+  const summary = await provisionRun({
+    owners: () => runsRepo.listOwners(run.id).map((o) => ({ repo: o.repo, worktree: o.worktree })),
+    commandFor: commands.commandFor,
+    run: runProvisionCommand,
+    log: (line) => log.info(`[RunLoop] provision ${line}`),
+  });
+  return { code: summary.code, stdout: summary.log, stderr: '' };
+}
+
 async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, owner: RunOwnerRow) {
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
   const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
-  return { target, deps: { ...commands, spawnGate } };
+  return { target, deps: { ...commands, spawnGate, provision: () => provisionRunFor(run) } };
 }
 
 export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
