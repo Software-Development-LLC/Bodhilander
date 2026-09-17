@@ -41,7 +41,7 @@ import { processDeps, runCommand } from './command-runner';
 import { agentsForOwner, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
 import { lookAtGate, type AttentionDeps } from './attention-pass';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
-import { reconcileOnce, expectedChecksLookup, type ChecksLookup } from './reconcile';
+import { reconcileOnce, expectedChecksLookup, type ChecksLookup, type CommandResult } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
 import { pendingRequests, writeDecision, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
@@ -55,7 +55,6 @@ import { cutWorktrees } from './worktrees';
 import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
 import { resolveAccountForGroup } from '../account-resolver';
-import type { CommandResult } from './reconcile';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
@@ -204,8 +203,11 @@ async function expectedChecksLookupFor(repo: string): Promise<ChecksLookup> {
   let res: ConfigResult | null = null;
   try {
     res = await loadOrchestrationConfig();
-  } catch {
-    // expectedChecksLookup maps a null result to `retry`.
+  } catch (err) {
+    // Logged, not swallowed silently: a genuine config-load bug should be
+    // distinguishable from a transient fetch failure. Either way it maps to
+    // `retry` (expectedChecksLookup treats a null result that way).
+    log.error(`[RunLoop] expected-checks: config load threw for ${repo}: ${err instanceof Error ? err.message : String(err)}`);
   }
   return expectedChecksLookup(res, repo);
 }

@@ -243,12 +243,12 @@ describe('only an approver’s body reaches the marker parser', () => {
   });
 });
 
-describe('a marker parser answering outside its contract', () => {
-  test('an unknown exit code is undriveable, not "not an arbiter review"', async () => {
+describe('a review body whose markers do not resolve', () => {
+  test('a verdict marker with no findings counts is undriveable, not "not an arbiter review"', async () => {
     // The two readings are miles apart. 2 says nobody knows what this review
-    // decided, and the run stops. 3 says it is a person's review, and the
-    // run acts on its GitHub state -- here, releasing on an approval whose
-    // markers the parser choked on.
+    // decided, and the run stops. 3 says it is a person's review, and the run
+    // acts on its GitHub state -- here, releasing on an approval whose markers
+    // are only half present (a verdict, no counts). Half a review is unreadable.
     const { deps } = fake({
       pr: ok({
         statusCheckRollup: GREEN_ROLLUP,
@@ -262,7 +262,6 @@ describe('a marker parser answering outside its contract', () => {
         ],
         mergedAt: null,
       }),
-      marker: { code: 99, stdout: JSON.stringify({ arbiter: true, highest: null }), stderr: '' },
     });
     const result = await run({ ...TARGET, state: 'waitingReview' }, deps);
     expect(result.events).toContainEqual({
@@ -272,10 +271,10 @@ describe('a marker parser answering outside its contract', () => {
     });
   });
 
-  test('a parser that printed nothing readable leaves the review unmarked', async () => {
-    // No marker at all, which reads as a person's review -- the safe default,
-    // because the mistake it can make costs an owner cycle and the opposite
-    // ignores somebody who said stop.
+  test('a body with no markers leaves the review unmarked, read by its GitHub state', async () => {
+    // No marker at all reads as a person's review -- the safe default, because
+    // the mistake it can make costs an owner cycle and the opposite ignores
+    // somebody who said stop.
     const { deps } = fake({
       pr: ok({
         statusCheckRollup: GREEN_ROLLUP,
@@ -289,7 +288,6 @@ describe('a marker parser answering outside its contract', () => {
         ],
         mergedAt: null,
       }),
-      marker: { code: 2, stdout: 'Traceback (most recent', stderr: '' },
     });
     const result = await run({ ...TARGET, state: 'waitingReview' }, deps);
     expect(result.events).toContainEqual({
