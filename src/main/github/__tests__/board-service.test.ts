@@ -10,7 +10,8 @@
  * Run with: bun test src/main/github/__tests__/board-service.test.ts
  */
 import { describe, expect, test } from 'bun:test';
-import { readProjectBoard, type BoardDeps } from '../board-service';
+import { readProjectBoard, pickEligibleStatuses, type BoardDeps } from '../board-service';
+import type { OrchestrationConfig } from '../../../shared/types';
 import type { CommandResult } from '../../run-engine/reconcile';
 
 const issue = (number: number, repo = 'bodhi-code', status: string | null = 'Approved') => ({
@@ -27,7 +28,7 @@ function page(nodes: unknown[], hasNextPage = false, endCursor = 'C'): string {
 const okGh = (stdout: string): BoardDeps['gh'] => async () => ({ code: 0, stdout, stderr: '' });
 
 function deps(gh: BoardDeps['gh'], over: Partial<BoardDeps> = {}): BoardDeps {
-  return { gh, org: 'Software-Development-LLC', defaultProject: 17, approvedStatus: 'Approved', ...over };
+  return { gh, org: 'Software-Development-LLC', defaultProject: 17, eligibleStatuses: ['Approved'], ...over };
 }
 
 describe('readProjectBoard', () => {
@@ -89,5 +90,36 @@ describe('readProjectBoard', () => {
     expect(r.status).toBe('problem');
     if (r.status !== 'problem') throw new Error('unreachable');
     expect(r.problem).toContain('more than');
+  });
+});
+
+describe('pickEligibleStatuses', () => {
+  const config = (projects: OrchestrationConfig['projects']): OrchestrationConfig => ({
+    version: 1, repos: {}, owners: {}, projects,
+  });
+  const DEFAULT = ['Todo'];
+
+  test('uses a per-project override when present', () => {
+    const c = config({ '17': { eligibleStatuses: ['Ready', 'Approved'] } });
+    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(['Ready', 'Approved']);
+  });
+
+  test('falls back to the global default when the project has no override', () => {
+    const c = config({ '17': { context: 'no statuses here' } });
+    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(DEFAULT);
+  });
+
+  test('falls back to the global default when the project is not in the config', () => {
+    const c = config({ '99': { eligibleStatuses: ['Ready'] } });
+    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(DEFAULT);
+  });
+
+  test('falls back to the global default when there is no config at all', () => {
+    expect(pickEligibleStatuses(null, 17, DEFAULT)).toEqual(DEFAULT);
+  });
+
+  test('an empty override is ignored in favor of the default', () => {
+    const c = config({ '17': { eligibleStatuses: [] } });
+    expect(pickEligibleStatuses(c, 17, DEFAULT)).toEqual(DEFAULT);
   });
 });

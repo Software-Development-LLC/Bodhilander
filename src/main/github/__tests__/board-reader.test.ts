@@ -103,7 +103,7 @@ describe('buildBoard', () => {
   ];
 
   test('groups children under their initiative across repos', () => {
-    const b = buildBoard(nodes, { title: 'Bodhi Pulse', number: 17 }, 'Approved');
+    const b = buildBoard(nodes, { title: 'Bodhi Pulse', number: 17 }, ['Approved']);
     const co130 = b.initiatives.find((i) => i.item.number === 130 && i.item.repo === 'bodhi-code')!;
     expect(co130.children.map((c) => c.repo).sort()).toEqual(['bodhi-service-api', 'bodhi-service-insights']);
     expect(co130.repos.sort()).toEqual(['bodhi-code', 'bodhi-service-api', 'bodhi-service-insights']);
@@ -112,14 +112,29 @@ describe('buildBoard', () => {
   });
 
   test('eligibility keys on the initiative Status value, not closed', () => {
-    const b = buildBoard(nodes, { title: 'x', number: 17 }, 'Approved');
+    const b = buildBoard(nodes, { title: 'x', number: 17 }, ['Approved']);
     expect(b.initiatives.find((i) => i.item.number === 130)!.eligible).toBe(true);   // Approved, OPEN
     expect(b.initiatives.find((i) => i.item.number === 900)!.eligible).toBe(false);  // Done/CLOSED
     expect(b.initiatives.find((i) => i.item.number === 42)!.eligible).toBe(true);    // single-repo, Approved
   });
 
+  test('any of several eligible statuses qualifies; others do not', () => {
+    // The zero-migration model: gate on existing statuses like "Todo"/"Ready".
+    const items: RawBoardNode[] = [
+      { number: 1, title: 'todo one', repo: 'r', state: 'OPEN', status: 'Todo', url: 'u', assignees: [], parent: null },
+      { number: 2, title: 'ready one', repo: 'r', state: 'OPEN', status: 'Ready', url: 'u', assignees: [], parent: null },
+      { number: 3, title: 'in progress', repo: 'r', state: 'OPEN', status: 'In Progress', url: 'u', assignees: [], parent: null },
+      { number: 4, title: 'no status', repo: 'r', state: 'OPEN', status: null, url: 'u', assignees: [], parent: null },
+    ];
+    const b = buildBoard(items, { title: 'x', number: 17 }, ['Todo', 'Ready']);
+    expect(b.initiatives.find((i) => i.item.number === 1)!.eligible).toBe(true);
+    expect(b.initiatives.find((i) => i.item.number === 2)!.eligible).toBe(true);
+    expect(b.initiatives.find((i) => i.item.number === 3)!.eligible).toBe(false);
+    expect(b.initiatives.find((i) => i.item.number === 4)!.eligible).toBe(false); // null status never matches
+  });
+
   test('a single-repo item is an initiative with no children', () => {
-    const b = buildBoard(nodes, { title: 'x', number: 17 }, 'Approved');
+    const b = buildBoard(nodes, { title: 'x', number: 17 }, ['Approved']);
     const solo = b.initiatives.find((i) => i.item.number === 42)!;
     expect(solo.children).toEqual([]);
     expect(solo.repos).toEqual(['bodhi-service-insights']);
@@ -127,7 +142,7 @@ describe('buildBoard', () => {
 
   test('an orphan child (parent not on the board) is treated as top-level', () => {
     const orphan: RawBoardNode = { number: 77, title: 'orphan', repo: 'repo-x', state: 'OPEN', status: 'Approved', url: 'u', assignees: [], parent: { repo: 'gone', number: 5 } };
-    const b = buildBoard([orphan], { title: 'x', number: 1 }, 'Approved');
+    const b = buildBoard([orphan], { title: 'x', number: 1 }, ['Approved']);
     expect(b.initiatives).toHaveLength(1);
     expect(b.initiatives[0].item.number).toBe(77);
   });

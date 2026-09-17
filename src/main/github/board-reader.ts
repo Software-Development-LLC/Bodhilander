@@ -7,10 +7,15 @@
  * plumbing. Pure argv-builder + pure parser + pure grouping, so the whole thing
  * is testable dry and the caller owns the one side effect (the `gh` spawn).
  *
- * The eligibility gate is a **Status value** (e.g. "Approved"), because the
- * project-native `Status` field reads cleanly via the API whereas the org-level
- * "Approved for Development" field does not surface its values through the
- * project query. See docs/design-board-driven-orchestration.md.
+ * Eligibility gates on the initiative's own **Status** value being one of a
+ * configured set of *existing* statuses (the board's ready/backlog column by
+ * default; a per-project override lives in the central config) — so no board is
+ * migrated. This uses the
+ * project-native `Status` field, which reads cleanly, rather than the org-level
+ * "Approved for Development" field, whose values don't surface through the
+ * project query (it comes back with `options: []`). The real human checkpoint is
+ * the in-app run approval, not a board column. See
+ * docs/design-board-driven-orchestration.md.
  */
 import type { BoardInitiative, BoardItem, BoardProject } from '../../shared/types';
 
@@ -145,7 +150,7 @@ const keyOf = (repo: string, number: number): string => `${repo}#${number}`;
 export function buildBoard(
   nodes: readonly RawBoardNode[],
   meta: { title: string; number: number },
-  approvedStatus: string,
+  eligibleStatuses: readonly string[],
 ): BoardProject {
   const toItem = (n: RawBoardNode): BoardItem => ({
     number: n.number,
@@ -173,10 +178,11 @@ export function buildBoard(
     const item = toItem(n);
     const children = childrenByParent.get(keyOf(n.repo, n.number)) ?? [];
     const repos = [...new Set([item.repo, ...children.map((c) => c.repo)])];
-    // Eligible: the initiative's own Status is the gate value, and it isn't
-    // already closed/done. Children carry their own progress; the gate is on
-    // the initiative you start.
-    const eligible = item.status === approvedStatus && item.state !== 'CLOSED';
+    // Eligible: the initiative's own Status is one of the gate values (existing
+    // board statuses — no board migration), and it isn't already closed/done.
+    // Children carry their own progress; the gate is on the initiative you
+    // start, and the in-app manifest is the real human checkpoint.
+    const eligible = item.status !== null && eligibleStatuses.includes(item.status) && item.state !== 'CLOSED';
     return { item, children, repos, eligible };
   });
 

@@ -15,7 +15,8 @@ import type { CommandResult } from '../run-engine/reconcile';
 import { processDeps } from '../run-engine/command-runner';
 import * as machine from '../run-engine/machine-config';
 import { boardQueryArgv, parseBoardPage, buildBoard, type RawBoardNode } from './board-reader';
-import type { BoardResult } from '../../shared/types';
+import { loadOrchestrationConfig } from './orchestration-config';
+import type { BoardResult, OrchestrationConfig } from '../../shared/types';
 
 /** Safety bound: 40 pages × 50 items = 2000 items, well past any real project. */
 const MAX_PAGES = 40;
@@ -24,7 +25,25 @@ export interface BoardDeps {
   gh(argv: readonly string[]): Promise<CommandResult>;
   org: string | null;
   defaultProject: number | null;
-  approvedStatus: string;
+  /** The existing Status values that make an initiative eligible (already resolved). */
+  eligibleStatuses: readonly string[];
+}
+
+/**
+ * The eligible statuses for a board: the central config's per-project override
+ * when present, else the global default. Pure so the precedence is testable
+ * without loading a real config.
+ */
+export function pickEligibleStatuses(
+  config: OrchestrationConfig | null,
+  number: number | null,
+  globalDefault: readonly string[],
+): readonly string[] {
+  if (config && number !== null) {
+    const override = config.projects?.[String(number)]?.eligibleStatuses;
+    if (override && override.length > 0) return override;
+  }
+  return globalDefault;
 }
 
 /**
@@ -67,17 +86,36 @@ export async function readProjectBoard(deps: BoardDeps, projectNumber?: number):
     return { status: 'problem', problem: `project ${number} has more than ${MAX_PAGES * 50} items; refine the board or raise the page cap.` };
   }
 
-  return { status: 'ok', project: buildBoard(nodes, { title, number }, deps.approvedStatus) };
+  return { status: 'ok', project: buildBoard(nodes, { title, number }, deps.eligibleStatuses) };
+}
+
+/**
+ * Resolve the eligible statuses for a board: try the central config for a
+ * per-project override, else the global default. A missing/unreadable config
+ * (e.g. no config repo set) is not an error here — it just means the default.
+ */
+async function resolveEligibleStatuses(number: number | null): Promise<readonly string[]> {
+  const globalDefault = machine.eligibleStatuses();
+  if (number === null) return globalDefault;
+  try {
+    const res = await loadOrchestrationConfig();
+    const config = res.status === 'ok' ? res.config : null;
+    return pickEligibleStatuses(config, number, globalDefault);
+  } catch {
+    return globalDefault;
+  }
 }
 
 /** Read the configured (or given) project's board with the real gh + settings. */
-export function fetchProjectBoard(projectNumber?: number): Promise<BoardResult> {
+export async function fetchProjectBoard(projectNumber?: number): Promise<BoardResult> {
+  const number = projectNumber ?? machine.projectNumber();
+  const eligibleStatuses = await resolveEligibleStatuses(number);
   return readProjectBoard(
     {
       gh: (argv) => processDeps({ ghPath: machine.ghPath(), pythonPath: 'python' }).gh(argv),
       org: machine.githubOrg(),
       defaultProject: machine.projectNumber(),
-      approvedStatus: machine.approvedStatus(),
+      eligibleStatuses,
     },
     projectNumber,
   );

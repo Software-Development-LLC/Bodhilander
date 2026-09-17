@@ -35,6 +35,12 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim().length > 0 ? v : undefined;
 }
+/** A list of non-empty strings, or undefined when absent/not an array of strings. */
+function strList(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const list = v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((s) => s.trim());
+  return list.length > 0 ? list : undefined;
+}
 
 /** Pick the known string fields of a repo entry; unknown keys are ignored (forward-compat). */
 function toRepoConfig(v: unknown): RepoConfig {
@@ -74,9 +80,10 @@ export function parseConfig(raw: string): ParseResult {
   for (const [name, entry] of Object.entries(asRecord(root.owners) ?? {})) {
     owners[name] = { context: str(asRecord(entry)?.context) };
   }
-  const projects: Record<string, { context?: string }> = {};
+  const projects: Record<string, { context?: string; eligibleStatuses?: string[] }> = {};
   for (const [num, entry] of Object.entries(asRecord(root.projects) ?? {})) {
-    projects[num] = { context: str(asRecord(entry)?.context) };
+    const e = asRecord(entry);
+    projects[num] = { context: str(e?.context), eligibleStatuses: strList(e?.eligibleStatuses) };
   }
   return { status: 'ok', config: { version: SUPPORTED_VERSION, repos, owners, projects } };
 }
