@@ -1,0 +1,12 @@
+/*
+ * Board-link modal (CO-722, Phase 2B). Reuses the .name-prompt-modal box look
+ * but on a native <dialog>, so this only resets the dialog UA defaults the box
+ * class doesn't cover (text color) and styles the platform backdrop.
+ */
+.link-project-dialog {
+  color: #d4d4d4;
+}
+
+.link-project-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}

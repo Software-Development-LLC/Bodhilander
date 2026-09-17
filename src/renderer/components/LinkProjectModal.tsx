@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './NamePromptModal.css';
+import './LinkProjectModal.css';
 
 /**
  * Associate a group with a GitHub Projects v2 board (board-driven orchestration,
@@ -7,8 +8,10 @@ import './NamePromptModal.css';
  * segment of its URL); the caller resolves and stores the board's display name.
  * Clearing the number and confirming unlinks the group from any board.
  *
- * Deliberately dumb: it only collects a number (or null). Resolving the board
- * title + persisting is the caller's job, so this stays free of IPC.
+ * Built on the native <dialog> element so Escape, focus trapping and the
+ * backdrop are handled by the platform (and accessibly), not hand-rolled onto
+ * a <div>. Deliberately dumb: it only collects a number (or null) — resolving
+ * the board title + persisting is the caller's job, so this stays free of IPC.
  */
 interface LinkProjectModalProps {
   isOpen: boolean;
@@ -27,13 +30,19 @@ export const LinkProjectModal: React.FC<LinkProjectModalProps> = ({
 }) => {
   const [value, setValue] = useState(initialNumber != null ? String(initialNumber) : '');
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
     if (isOpen) {
       setValue(initialNumber != null ? String(initialNumber) : '');
       setError(null);
-      setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 50);
+      if (!dialog.open) dialog.showModal();
+      setTimeout(() => inputRef.current?.select(), 50);
+    } else if (dialog.open) {
+      dialog.close();
     }
   }, [isOpen, initialNumber]);
 
@@ -41,8 +50,7 @@ export const LinkProjectModal: React.FC<LinkProjectModalProps> = ({
     e.preventDefault();
     const trimmed = value.trim();
     if (trimmed === '') {
-      // Empty = unlink.
-      onConfirm(null);
+      onConfirm(null); // Empty = unlink.
       return;
     }
     const n = Number.parseInt(trimmed, 10);
@@ -53,42 +61,36 @@ export const LinkProjectModal: React.FC<LinkProjectModalProps> = ({
     onConfirm(n);
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="modal-overlay" onClick={onCancel}>
-      <div
-        className="name-prompt-modal"
-        onClick={e => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="link-project-title"
-        onKeyDown={e => { if (e.key === 'Escape') onCancel(); }}
-      >
-        <h3 id="link-project-title">Link GitHub Project — {groupName}</h3>
-        <form onSubmit={handleSubmit}>
-          <input
-            ref={inputRef}
-            type="text"
-            inputMode="numeric"
-            value={value}
-            onChange={e => { setValue(e.target.value); setError(null); }}
-            placeholder="Project number, e.g. 17"
-            autoFocus
-          />
-          <span className="provider-picker-hint">
-            {error ?? 'Leave empty and confirm to unlink this group from any board.'}
-          </span>
-          <div className="modal-buttons">
-            <button type="button" className="cancel-btn" onClick={onCancel}>
-              Cancel
-            </button>
-            <button type="submit" className="confirm-btn">
-              {value.trim() === '' ? 'Unlink' : 'Link'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <dialog
+      ref={dialogRef}
+      className="name-prompt-modal link-project-dialog"
+      aria-labelledby="link-project-title"
+      onCancel={(e) => { e.preventDefault(); onCancel(); }}
+      onClick={(e) => { if (e.target === dialogRef.current) onCancel(); }}
+    >
+      <h3 id="link-project-title">Link GitHub Project — {groupName}</h3>
+      <form onSubmit={handleSubmit}>
+        <input
+          ref={inputRef}
+          type="text"
+          inputMode="numeric"
+          value={value}
+          onChange={e => { setValue(e.target.value); setError(null); }}
+          placeholder="Project number, e.g. 17"
+        />
+        <span className="provider-picker-hint">
+          {error ?? 'Leave empty and confirm to unlink this group from any board.'}
+        </span>
+        <div className="modal-buttons">
+          <button type="button" className="cancel-btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="submit" className="confirm-btn">
+            {value.trim() === '' ? 'Unlink' : 'Link'}
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 };

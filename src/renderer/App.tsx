@@ -584,7 +584,7 @@ const App: React.FC = () => {
   // cuts worktrees from for this group's project. Mirrors the working-dir picker.
   const handleSetGroupCloneRoot = async (groupId: string) => {
     const group = groups.find(g => g.id === groupId);
-    const dir = await window.electronAPI.selectDirectory(group?.cloneRoot || undefined);
+    const dir = await window.electronAPI.selectDirectory(group?.cloneRoot ?? undefined);
     if (dir) {
       await updateGroup(groupId, { cloneRoot: dir });
     }
@@ -824,7 +824,7 @@ const App: React.FC = () => {
         label: projectMenuLabel(group),
         onClick: () => setLinkProjectGroupId(groupId),
       },
-      { label: 'Set Clone Root…', onClick: () => handleSetGroupCloneRoot(groupId) },
+      { label: 'Set Clone Root…', onClick: () => { void handleSetGroupCloneRoot(groupId); } },
       { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
       {
         label: 'Ask Arena About This Folder',
