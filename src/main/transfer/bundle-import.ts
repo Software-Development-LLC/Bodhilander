@@ -202,7 +202,11 @@ function restoreGroups(db: Db, tables: PortableTables, options: ImportOptions, g
 
     // The clone root is a machine-local path like the working dir, so it goes
     // through the same remap; the board number/name are portable and travel as-is.
+    // A mapped clone root that doesn't exist here is a relink signal too, exactly
+    // like the working dir — otherwise the association silently stores a dangling
+    // path with no arrival-report prompt.
     const cloneRoot = group.cloneRoot ? remapWorkingDir(group.cloneRoot, options.mappings) : null;
+    if (cloneRoot && !exists(cloneRoot) && !needsRelink.includes(group.id)) needsRelink.push(group.id);
 
     const accountId = (group as { claudeAccountId?: string | null }).claudeAccountId;
     insert.run(

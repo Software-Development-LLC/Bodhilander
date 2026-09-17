@@ -46,6 +46,17 @@ export const LinkProjectModal: React.FC<LinkProjectModalProps> = ({
     }
   }, [isOpen, initialNumber]);
 
+  // Close on a backdrop click. Attached as a ref listener rather than a JSX
+  // onClick so it isn't read as a click handler on a "non-interactive" element
+  // (Escape is the keyboard equivalent, handled natively via onCancel below).
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const onBackdropClick = (e: MouseEvent) => { if (e.target === dialog) onCancel(); };
+    dialog.addEventListener('click', onBackdropClick);
+    return () => dialog.removeEventListener('click', onBackdropClick);
+  }, [onCancel]);
+
   const handleSubmit = (e: React.SyntheticEvent) => {
     e.preventDefault();
     const trimmed = value.trim();
@@ -67,7 +78,6 @@ export const LinkProjectModal: React.FC<LinkProjectModalProps> = ({
       className="name-prompt-modal link-project-dialog"
       aria-labelledby="link-project-title"
       onCancel={(e) => { e.preventDefault(); onCancel(); }}
-      onClick={(e) => { if (e.target === dialogRef.current) onCancel(); }}
     >
       <h3 id="link-project-title">Link GitHub Project — {groupName}</h3>
       <form onSubmit={handleSubmit}>

@@ -127,6 +127,23 @@ describe('what comes back', () => {
     expect(row.clone_root).toBe(path.join(destProjects, 'Bodhilander'));
     expect(row.clone_root).not.toContain('src-machine');
   });
+
+  test('a group whose mapped clone root is missing is flagged for relink', async () => {
+    // working_dir maps onto an existing folder, but clone_root maps to one this
+    // machine does not have — the clone-root check must flag it even though the
+    // working dir is fine, so the association isn't a silent dangling path.
+    source.prepare(
+      `INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id,
+                           github_project_number, github_project_name, clone_root)
+       VALUES ('g2', 'Board', '#888888', ?, 1, '2026-01-02T00:00:00.000Z', NULL, 0, NULL, 5, 'Ops', ?)`,
+    ).run(SOURCE_DIR, `${SOURCE_ROOT}/GhostClone`);
+
+    const outcome = await restore(exportBytes(), mappedToDest());
+
+    expect(outcome.groupsNeedingRelink).toContain('g2');
+    const row = destination.prepare('SELECT clone_root FROM groups WHERE id = ?').get('g2') as any;
+    expect(row.clone_root).toBe(path.join(destProjects, 'GhostClone'));
+  });
 });
 
 describe('account config dirs', () => {
