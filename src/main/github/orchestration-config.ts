@@ -126,7 +126,8 @@ export async function loadConfig(deps: ConfigDeps, opts: { force?: boolean } = {
     // blanking it, but say it's stale.
     if (cached) return { status: 'ok', config: cached.config, fetchedAt: cached.fetchedAt, stale: true };
     const stderr = out.stderr.trim();
-    return { status: 'problem', problem: `could not fetch config from ${deps.repoSlug}/${deps.path}: ${stderr.length > 0 ? stderr : `exit ${out.code}`}` };
+    const detail = stderr.length > 0 ? stderr : `exit ${out.code}`;
+    return { status: 'problem', problem: `could not fetch config from ${deps.repoSlug}/${deps.path}: ${detail}` };
   }
 
   const parsed = parseConfig(out.stdout);
@@ -145,7 +146,7 @@ function readCache(): CachedConfig | null {
     const raw = getPreference(CACHE_KEY);
     if (!raw) return null;
     const value = JSON.parse(raw) as CachedConfig;
-    return value && value.config ? value : null;
+    return value?.config ? value : null;
   } catch {
     return null;
   }
