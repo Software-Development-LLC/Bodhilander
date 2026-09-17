@@ -44,6 +44,11 @@ const GITHUB_FIELDS: FieldSpec[] = [
   { key: RUN_ENGINE_PREF_KEYS.approvedStatus, label: 'eligible Status value', placeholder: 'Approved', hint: 'The Status column value that marks an initiative eligible to start.' },
 ];
 
+const CONFIG_FIELDS: FieldSpec[] = [
+  { key: RUN_ENGINE_PREF_KEYS.configRepo, label: 'config repo', placeholder: 'Software-Development-LLC/bodhi-orchestration-config', hint: 'owner/repo holding the orchestration config (repos → owner-agent / branch / provision / context). Fetched at runtime.' },
+  { key: RUN_ENGINE_PREF_KEYS.configPath, label: 'config path', placeholder: 'orchestration.json', hint: 'Path to the config JSON within that repo. Defaults to orchestration.json.' },
+];
+
 export const RunEngineSettings: React.FC = () => {
   const [values, setValues] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
@@ -51,7 +56,7 @@ export const RunEngineSettings: React.FC = () => {
 
   useEffect(() => {
     let live = true;
-    const keys = [...BINARY_FIELDS, ...PATH_FIELDS, ...GITHUB_FIELDS].map((f) => f.key).concat(RUN_ENGINE_PREF_KEYS.approvers);
+    const keys = [...BINARY_FIELDS, ...PATH_FIELDS, ...GITHUB_FIELDS, ...CONFIG_FIELDS].map((f) => f.key).concat(RUN_ENGINE_PREF_KEYS.approvers);
     Promise.all(keys.map((k) => window.electronAPI.getPreference(k)))
       .then((loaded) => {
         if (!live) return;
@@ -134,6 +139,14 @@ export const RunEngineSettings: React.FC = () => {
 
       <h3>GitHub board</h3>
       {GITHUB_FIELDS.map(field)}
+
+      <h3>Central config</h3>
+      <p className="run-engine-settings__intro">
+        The orchestration config repo holds the domain policy GitHub doesn't — which agent owns each repo, its
+        integration branch, provision command and context. It's fetched at runtime and cached, so adding or updating a
+        project needs no app release.
+      </p>
+      {CONFIG_FIELDS.map(field)}
     </div>
   );
 };

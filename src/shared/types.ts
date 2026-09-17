@@ -717,6 +717,10 @@ export const RUN_ENGINE_PREF_KEYS = {
   githubOrg: 'runEngine.githubOrg',
   projectNumber: 'runEngine.projectNumber',
   approvedStatus: 'runEngine.approvedStatus',
+  // The central config repo (owner/repo) + the path to its JSON, fetched at
+  // runtime so project/owner policy needs no app release (Phase 2).
+  configRepo: 'runEngine.configRepo',
+  configPath: 'runEngine.configPath',
 } as const;
 
 /** What preparing an initiative reported: the armable directory, or why not (CO-722). */
@@ -839,4 +843,43 @@ export interface BoardProject {
  */
 export type BoardResult =
   | { status: 'ok'; project: BoardProject }
+  | { status: 'problem'; problem: string };
+
+/**
+ * The central orchestration config (board-driven orchestration, Phase 2).
+ *
+ * The domain policy GitHub doesn't hold — which agent owns a repo, its
+ * integration branch / provision command / tracking-key prefix, and per-owner /
+ * per-project context. Lives in a config repo the app fetches at runtime and
+ * caches, so adding or updating a project never needs an app release. Only
+ * `version` + `repos` are required; every repo field is optional.
+ */
+export interface RepoConfig {
+  /** The `KEY-N` prefix used in this repo's issue titles/PRs (e.g. `CO`). */
+  keyPrefix?: string;
+  /** The branch worktrees are cut from; defaults to `development`. */
+  integrationBranch?: string;
+  /** A command run in a fresh worktree before an owner works (per repo/language). */
+  provision?: string;
+  /** The agent that owns gate 2 for this repo. */
+  ownerAgent?: string;
+  /** Free-text context injected into this repo's owner brief. */
+  context?: string;
+}
+
+export interface OrchestrationConfig {
+  version: number;
+  repos: Record<string, RepoConfig>;
+  /** Per-owner context; the generic role logic ships in the app. */
+  owners?: Record<string, { context?: string }>;
+  /** Per-project context, keyed by the Projects v2 number (as a string). */
+  projects?: Record<string, { context?: string }>;
+}
+
+/**
+ * What loading the central config returned. `stale` marks a cached copy served
+ * because a fresh fetch failed — the config is still usable, just not just-read.
+ */
+export type ConfigResult =
+  | { status: 'ok'; config: OrchestrationConfig; fetchedAt: string; stale?: boolean }
   | { status: 'problem'; problem: string };

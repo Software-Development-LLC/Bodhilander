@@ -117,3 +117,14 @@ export function projectNumber(): number | null {
 export function approvedStatus(): string {
   return resolved(K.approvedStatus, 'BODHI_APPROVED_STATUS', 'Approved');
 }
+
+/** The central config repo as `owner/repo`, or null when unset. */
+export function configRepo(): string | null {
+  const env = process.env.BODHI_CONFIG_REPO?.trim();
+  return pref(K.configRepo) ?? (env && env.length > 0 ? env : null);
+}
+
+/** The path to the config JSON within the config repo; defaults to orchestration.json. */
+export function configPath(): string {
+  return resolved(K.configPath, 'BODHI_CONFIG_PATH', 'orchestration.json');
+}
