@@ -720,11 +720,14 @@ export const RUN_ENGINE_PREF_KEYS = {
   bodhiRoot: 'runEngine.bodhiRoot',
   initiativesRoot: 'runEngine.initiativesRoot',
   // Board-driven orchestration (Phase 1): the GitHub org whose Projects v2
-  // boards we read, the default project number, and the Status value that marks
-  // an initiative eligible to start.
+  // boards we read, the default project number, and the existing Status values
+  // that mark an initiative eligible to start (comma-separated; a per-project
+  // override can live in the central config). The board is not migrated — an
+  // existing status like "Todo" is the gate, and the in-app manifest approval
+  // is the real human checkpoint before anything drives.
   githubOrg: 'runEngine.githubOrg',
   projectNumber: 'runEngine.projectNumber',
-  approvedStatus: 'runEngine.approvedStatus',
+  eligibleStatuses: 'runEngine.eligibleStatuses',
   // The central config repo (owner/repo) + the path to its JSON, fetched at
   // runtime so project/owner policy needs no app release (Phase 2).
   configRepo: 'runEngine.configRepo',
@@ -880,8 +883,12 @@ export interface OrchestrationConfig {
   repos: Record<string, RepoConfig>;
   /** Per-owner context; the generic role logic ships in the app. */
   owners?: Record<string, { context?: string }>;
-  /** Per-project context, keyed by the Projects v2 number (as a string). */
-  projects?: Record<string, { context?: string }>;
+  /**
+   * Per-project settings, keyed by the Projects v2 number (as a string).
+   * `eligibleStatuses` overrides the global default for this board — the
+   * existing Status values that mark an initiative eligible to start.
+   */
+  projects?: Record<string, { context?: string; eligibleStatuses?: string[] }>;
 }
 
 /**

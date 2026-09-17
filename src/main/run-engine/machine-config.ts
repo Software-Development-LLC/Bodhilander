@@ -113,9 +113,15 @@ export function projectNumber(): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-/** The Status value an initiative must carry to be eligible to start. */
-export function approvedStatus(): string {
-  return resolved(K.approvedStatus, 'BODHI_APPROVED_STATUS', 'Approved');
+/**
+ * The existing Status values that mark an initiative eligible to start, as the
+ * global default (a per-project override can live in the central config).
+ * Stored comma-separated; defaults to just "Todo" so no board needs migrating.
+ */
+export function eligibleStatuses(): string[] {
+  const raw = resolved(K.eligibleStatuses, 'BODHI_ELIGIBLE_STATUSES', 'Todo');
+  const list = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  return list.length > 0 ? list : ['Todo'];
 }
 
 /** The central config repo as `owner/repo`, or null when unset. */
