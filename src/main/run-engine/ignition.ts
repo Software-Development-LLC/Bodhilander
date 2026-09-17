@@ -256,6 +256,12 @@ export interface MaterializeRequest {
   mergeOrder?: readonly string[];
   /** Owner roles a person picked, per repo; unset for a bootstrap. */
   owners?: Record<string, string>;
+  /**
+   * Worktrees cut in TS (Phase 3), keyed by repo. When present the owner rows
+   * are written from these directly and `initiative.py` is not read — the TS
+   * `cutWorktrees` is the source of truth, replacing the team.yaml round-trip.
+   */
+  worktrees?: Record<string, { worktree: string; branch: string; base: string; scratch: string | null }>;
 }
 
 export type MaterializeResult =
@@ -279,33 +285,49 @@ export async function materializeOwners(
   request: MaterializeRequest,
   deps: IgnitionDeps,
 ): Promise<MaterializeResult> {
-  const read = await deps.run(request.pythonPath, [
-    `${request.harnessPath}/scripts/lib/initiative.py`,
-    request.initiativePath,
-  ]);
-  const payload = parse<InitiativePayload>(read.stdout);
-  if (read.code !== 0 || !payload) {
-    return {
-      status: 'refused',
-      refusals: [{
-        what: `the initiative at ${request.initiativePath} could not be read`,
-        fix: firstText(payload?.detail, read.stderr) ?? 'Check the path.',
-      }],
-    };
+  // Source the worktrees from the TS cut when provided (Phase 3), else read the
+  // team.yaml the harness wrote via initiative.py.
+  let worktrees: Record<string, { worktree: string; branch: string; base: string; scratch: string | null }>;
+  if (request.worktrees) {
+    worktrees = request.worktrees;
+  } else {
+    const read = await deps.run(request.pythonPath, [
+      `${request.harnessPath}/scripts/lib/initiative.py`,
+      request.initiativePath,
+    ]);
+    const payload = parse<InitiativePayload>(read.stdout);
+    if (read.code !== 0 || !payload) {
+      return {
+        status: 'refused',
+        refusals: [{
+          what: `the initiative at ${request.initiativePath} could not be read`,
+          fix: firstText(payload?.detail, read.stderr) ?? 'Check the path.',
+        }],
+      };
+    }
+    worktrees = {};
+    for (const [repo, owner] of Object.entries(payload.owners ?? {})) {
+      worktrees[repo] = {
+        worktree: owner.worktree ?? '',
+        branch: owner.branch ?? '',
+        base: owner.base ?? '',
+        scratch: owner.scratch ?? null,
+      };
+    }
   }
 
-  const repos = Object.keys(payload.owners ?? {});
+  const repos = Object.keys(worktrees);
   const resolved = await resolveOwners(repos, { harnessPath: request.harnessPath, owners: request.owners });
   if (resolved.refusals.length > 0) return { status: 'refused', refusals: resolved.refusals };
 
-  for (const [repo, owner] of Object.entries(payload.owners ?? {})) {
+  for (const [repo, owner] of Object.entries(worktrees)) {
     runs.upsertOwner({
       runId: request.runId,
       repo,
-      worktree: owner.worktree ?? '',
-      branch: owner.branch ?? '',
-      base: owner.base ?? '',
-      scratch: owner.scratch ?? null,
+      worktree: owner.worktree,
+      branch: owner.branch,
+      base: owner.base,
+      scratch: owner.scratch,
       agent: resolved.owners[repo] ?? null,
       status: 'pending',
       prNumber: null,

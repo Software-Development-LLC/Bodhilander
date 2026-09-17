@@ -51,6 +51,8 @@ import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
 import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
 import { runArchGate, type ArchDeps } from './bootstrap-arch';
 import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
+import { cutWorktrees } from './worktrees';
+import { loadOrchestrationConfig } from '../github/orchestration-config';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
@@ -168,12 +170,52 @@ const bootstrapStore: BootstrapStore = {
  * run inside `runArchGate`.
  */
 /**
- * The spawn step's side effects (CO-722): run spawn.py on the provisioning
- * ceiling (it fetches repos), read seams.yaml for the merge order, and write the
- * owner rows via the same `materializeOwners` arming uses. No per-run config.
+ * The base branch to cut each repo's worktree from: the repo's
+ * `integration_branch` in the central config, or `development` when the config
+ * is unset/unreadable (never an error — a missing config just means the default).
+ */
+async function baseBranches(repos: readonly string[]): Promise<Record<string, string>> {
+  try {
+    const res = await loadOrchestrationConfig();
+    if (res.status !== 'ok') return {};
+    const out: Record<string, string> = {};
+    for (const repo of repos) {
+      const branch = res.config.repos[repo]?.integrationBranch;
+      if (branch) out[repo] = branch;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Cut a run's worktrees in TS: resolve base branches from config, then `cutWorktrees`. */
+async function cutRunWorktrees(initiative: string, repos: readonly string[], bodhiRoot: string) {
+  const bases = await baseBranches(repos);
+  const plan = {
+    initiative,
+    repos: repos.map((repo) => ({ repo, integrationBranch: bases[repo] ?? 'development' })),
+  };
+  return cutWorktrees(
+    {
+      // Worktree cutting fetches repos, so it gets the provisioning ceiling.
+      git: (argv) => runCommand(machine.gitPath(), argv, { timeoutMs: 3 * 60_000 }),
+      dirExists: (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } },
+      mkdirp: (p) => { try { fs.mkdirSync(p, { recursive: true }); } catch { /* best effort */ } },
+      bodhiRoot,
+      org: machine.githubOrg(),
+    },
+    plan,
+  );
+}
+
+/**
+ * The spawn step's side effects (CO-722, Phase 3): cut the worktrees in TS (no
+ * Python), read seams.yaml for the merge order, and write the owner rows via the
+ * same `materializeOwners` arming uses. No per-run config.
  */
 const spawnDeps: SpawnDeps = {
-  run: (exe, argv, opts) => runCommand(exe, argv, { timeoutMs: 15 * 60_000, env: opts.env }),
+  cut: (initiative, repos, bodhiRoot) => cutRunWorktrees(initiative, repos, bodhiRoot),
   readFile: readIfPresent,
   materialize: (request) =>
     materializeOwners(request, { run: (exe, argv) => runCommand(exe, argv, { timeoutMs: 60_000 }) }),

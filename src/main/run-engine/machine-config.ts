@@ -60,6 +60,16 @@ export function ghPath(): string {
   return resolved(K.ghPath, 'BODHI_GH', 'gh');
 }
 
+/**
+ * The `git` binary worktree cutting shells out to (Phase 3). No preference —
+ * git is universally on PATH — just an env override and the bare default, which
+ * Node resolves on PATH like `spawn.py`'s bare `git` calls did.
+ */
+export function gitPath(): string {
+  const env = process.env.BODHI_GIT?.trim();
+  return env && env.length > 0 ? env : 'git';
+}
+
 /** The python interpreter the harness scripts run under. */
 export function pythonPath(): string {
   return resolved(K.pythonPath, 'BODHI_PYTHON', 'python');
