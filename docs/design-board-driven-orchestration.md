@@ -67,8 +67,8 @@ Projects, items, the Initiative→child hierarchy, **which repos an item touches
 `Status`, `Approved for Development`, `Assignees`, `Linked pull requests`,
 tracking keys (in titles). Read at runtime via the Projects v2 GraphQL API.
 Adding/updating a project or issue is just using GitHub; the app re-reads it.
-*(Requires the app's token to carry `read:project`, and `project` write only if
-the engine writes Status back — see Open questions.)*
+The engine also **writes `Status` back** (decided — see below), so the app's
+token needs the **`project`** scope (read + write): `gh auth refresh -s project`.
 
 ### 2. A central **config repo** — the policy GitHub doesn't hold, fetched at runtime
 One org repo (e.g. `Software-Development-LLC/bodhi-orchestration-config`) the app
@@ -175,25 +175,34 @@ Reimplement the mechanical bits in TS (no separate runtime):
 
 ---
 
+## Decisions
+
+- **Board write-back — YES.** The engine updates `Status` on the board as it
+  drives (→ *In Progress* when a track starts; → *Done* / awaiting-review as the
+  gates complete), so the board is a live picture without hand-updating.
+  Requires **`project`** (read+write) scope on the app's token
+  (`gh auth refresh -s project`). **Ownership policy:** the engine owns the
+  `Status` transitions it drives; **`Approved for Development` stays
+  human-owned** (it's the eligibility gate), and the engine never sets approval
+  or merges a PR. If a human edits `Status` mid-run, the board is source of truth
+  on the next read.
+
 ## Open questions (decide before/within build)
 
-1. **Board write-back** — does the engine update `Status` (e.g. → In Progress /
-   Done) on the board? That needs **`project` write** scope and a policy for who
-   owns the truth if a human also edits it. (Read-only first is safest.)
-2. **Approval authoring** — `Approved for Development` is set by a person today
+1. **Approval authoring** — `Approved for Development` is set by a person today
    (assignee is mostly `brannon-bowden`). Keep it human-gated, or let automation
    propose it? The engine only *reads* it either way.
-3. **Assignee vs owner-agent** — board assignees are people (`brannon-bowden` /
+2. **Assignee vs owner-agent** — board assignees are people (`brannon-bowden` /
    `William-Long-II`); the working **agent** comes from the config repo
    (`repo → owner_agent`). Confirm assignee is informational, not the owner.
-4. **Cross-repo contracts** — the board gives repo *membership* but not the
+3. **Cross-repo contracts** — the board gives repo *membership* but not the
    producer/consumer **seams** `arch` authored. Do we still need an `arch` step
    (now a TS/in-app agent) for cross-repo contracts, or is per-repo child-issue
    scope enough?
-5. **Gate auth** — pair with [#327](https://github.com/Software-Development-LLC/Bodhilander/issues/327):
+4. **Gate auth** — pair with [#327](https://github.com/Software-Development-LLC/Bodhilander/issues/327):
    inject a managed Bodhilander account into gate spawns (vs ambient `claude`),
    which this rebuild is a natural moment to fix.
-6. **Config-repo schema ownership** — versioned schema + a validator so a bad
+5. **Config-repo schema ownership** — versioned schema + a validator so a bad
    edit (human or machine) fails loudly, not mid-run.
 
 ---
