@@ -10,8 +10,9 @@
  * Run with: bun test src/main/run-engine/__tests__/provision.test.ts
  */
 import { describe, expect, test } from 'bun:test';
-import { provisionRun, type ProvisionDeps, type ProvisionOwner } from '../provision';
+import { provisionRun, resolveProvisionCommands, type ProvisionDeps, type ProvisionOwner } from '../provision';
 import type { CommandResult } from '../reconcile';
+import type { ConfigResult } from '../../../shared/types';
 
 const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' });
 
@@ -83,5 +84,50 @@ describe('provisionRun', () => {
     const r = await provisionRun(d);
     expect(r.code).toBe(0);
     expect(ran).toEqual([]);
+  });
+
+  test('a failure log keeps the earlier owners that already succeeded', async () => {
+    let calls = 0;
+    const { deps: d } = deps({
+      owners: [{ repo: 'bodhi-code', worktree: 'C:/wt-a' }, { repo: 'bodhi-service-ml', worktree: 'C:/wt-b' }],
+      commands: { 'bodhi-code': 'bun install', 'bodhi-service-ml': 'poetry install' },
+      run: async () => { calls += 1; return calls === 2 ? { code: 1, stdout: '', stderr: 'boom' } : ok(); },
+    });
+    const r = await provisionRun(d);
+    expect(r.code).toBe(1);
+    expect(r.log).toContain('bodhi-code: bun install ok'); // the earlier success is retained
+    expect(r.log).toContain('bodhi-service-ml: poetry install failed');
+  });
+});
+
+describe('resolveProvisionCommands', () => {
+  const okConfig = (repos: Record<string, { provision?: string }>): ConfigResult =>
+    ({ status: 'ok', config: { version: 1, repos, owners: {}, projects: {} }, fetchedAt: 'now' });
+
+  test('no config repo configured means nothing is owed (not a fault)', () => {
+    const c = resolveProvisionCommands(false, null);
+    expect('commandFor' in c).toBe(true);
+    if (!('commandFor' in c)) throw new Error('unreachable');
+    expect(c.commandFor('bodhi-code')).toBeNull();
+  });
+
+  test('a config repo set but unreadable is undriveable, never silent success', () => {
+    const c = resolveProvisionCommands(true, { status: 'problem', problem: 'config is not valid JSON' });
+    expect('undriveable' in c).toBe(true);
+    if (!('undriveable' in c)) throw new Error('unreachable');
+    expect(c.undriveable).toContain('not valid JSON');
+  });
+
+  test('a config repo set but the load threw (null result) is undriveable', () => {
+    const c = resolveProvisionCommands(true, null);
+    expect('undriveable' in c).toBe(true);
+  });
+
+  test('a good config yields the per-repo provision command', () => {
+    const c = resolveProvisionCommands(true, okConfig({ 'bodhi-code': { provision: 'bun install' }, 'bodhi-x': {} }));
+    if (!('commandFor' in c)) throw new Error('unreachable');
+    expect(c.commandFor('bodhi-code')).toBe('bun install');
+    expect(c.commandFor('bodhi-x')).toBeNull();     // in config, no command
+    expect(c.commandFor('unknown')).toBeNull();     // not in config
   });
 });

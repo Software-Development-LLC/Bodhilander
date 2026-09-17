@@ -52,9 +52,10 @@ import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
 import { runArchGate, type ArchDeps } from './bootstrap-arch';
 import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { cutWorktrees } from './worktrees';
-import { provisionRun } from './provision';
+import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
 import type { CommandResult } from './reconcile';
+import type { ConfigResult } from '../../shared/types';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
@@ -261,7 +262,7 @@ function archDeps(config: SpawnConfig): ArchDeps {
 function runProvisionCommand(command: string, cwd: string): Promise<CommandResult> {
   const ceilingMs = 15 * 60_000; // an install compiles native modules on a cold worktree.
   if (process.platform === 'win32') {
-    return runCommand(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], { cwd, timeoutMs: ceilingMs });
+    return runCommand(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', command], { cwd, timeoutMs: ceilingMs });
   }
   return runCommand('/bin/sh', ['-c', command], { cwd, timeoutMs: ceilingMs });
 }
@@ -269,15 +270,28 @@ function runProvisionCommand(command: string, cwd: string): Promise<CommandResul
 /**
  * Provision a run in TS (Phase 3): run each owner's config `provision` command in
  * its worktree. Shaped as a `CommandResult` so `executor.ts` maps `code` through
- * `provisionEvent` exactly as it did the Python exit. A missing/unreadable config
- * just means no repo owes a command (all provisioned).
+ * `provisionEvent` exactly as it did the Python exit. A config repo that is set
+ * but unreadable is undriveable (code 2), never a silent "provisioned" — only a
+ * genuinely unconfigured config repo means "nothing owed".
  */
 async function provisionRunFor(run: RunRow): Promise<CommandResult> {
-  const res = await loadOrchestrationConfig().catch(() => null);
-  const repos = res && res.status === 'ok' ? res.config.repos : {};
+  const hasConfigRepo = machine.configRepo() !== null;
+  let result: ConfigResult | null = null;
+  if (hasConfigRepo) {
+    try {
+      result = await loadOrchestrationConfig();
+    } catch (err) {
+      log.error(`[RunLoop] provision: config load threw: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const commands = resolveProvisionCommands(hasConfigRepo, result);
+  if ('undriveable' in commands) {
+    log.error(`[RunLoop] provision: ${commands.undriveable}`);
+    return { code: 2, stdout: '', stderr: commands.undriveable };
+  }
   const summary = await provisionRun({
     owners: () => runsRepo.listOwners(run.id).map((o) => ({ repo: o.repo, worktree: o.worktree })),
-    commandFor: (repo) => repos[repo]?.provision ?? null,
+    commandFor: commands.commandFor,
     run: runProvisionCommand,
     log: (line) => log.info(`[RunLoop] provision ${line}`),
   });

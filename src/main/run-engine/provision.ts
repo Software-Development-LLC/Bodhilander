@@ -14,10 +14,35 @@
  * install reveals — the same discipline as `provision.py`'s `plan()`.
  */
 import type { CommandResult } from './reconcile';
+import type { ConfigResult } from '../../shared/types';
 
 export interface ProvisionOwner {
   repo: string;
   worktree: string;
+}
+
+/** The per-repo command lookup, or an undriveable reason when the config is broken. */
+export type ProvisionCommands =
+  | { commandFor: (repo: string) => string | null }
+  | { undriveable: string };
+
+/**
+ * Decide where provision commands come from, keeping a *broken config* distinct
+ * from *nothing owed*.
+ *
+ * - No config repo configured: no repo carries a command, so nothing is owed —
+ *   the graceful default (matches a repo that recorded neither pkg nor lang).
+ * - A config repo IS set but its config could not be read (parse error, fetch
+ *   failure): we should have commands and don't, so provisioning is undriveable.
+ *   Never a silent "provisioned" over a broken config.
+ */
+export function resolveProvisionCommands(hasConfigRepo: boolean, result: ConfigResult | null): ProvisionCommands {
+  if (!hasConfigRepo) return { commandFor: () => null };
+  if (!result || result.status !== 'ok') {
+    return { undriveable: result && result.status === 'problem' ? result.problem : 'orchestration config could not be loaded' };
+  }
+  const repos = result.config.repos;
+  return { commandFor: (repo) => repos[repo]?.provision ?? null };
 }
 
 export interface ProvisionDeps {
@@ -60,15 +85,17 @@ export async function provisionRun(deps: ProvisionDeps): Promise<ProvisionSummar
       continue;
     }
     if (!worktree) {
-      const line = `${repo}: no worktree to provision in`;
-      deps.log(line);
-      return { code: 2, log: line };
+      lines.push(`${repo}: no worktree to provision in`);
+      deps.log(`${repo}: no worktree to provision in`);
+      return { code: 2, log: lines.join('\n') };
     }
     deps.log(`${repo}: ${command}`);
     const res = await deps.run(command, worktree);
     if (res.code !== 0) {
       const why = firstLine(res.stderr, res.stdout) ?? `exit ${res.code}`;
-      return { code: 1, log: `${repo}: ${command} failed: ${why}` };
+      // Keep the earlier owners' lines so a failure shows what was already done.
+      lines.push(`${repo}: ${command} failed: ${why}`);
+      return { code: 1, log: lines.join('\n') };
     }
     lines.push(`${repo}: ${command} ok`);
   }
