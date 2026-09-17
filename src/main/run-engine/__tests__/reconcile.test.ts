@@ -252,47 +252,43 @@ describe('only an approver’s body reaches the marker parser', () => {
     expect(calls.some((c) => c.argv.some((a) => a.includes('read_review')))).toBe(false);
   });
 
-  test('an approver’s body is read, and arrives on stdin', async () => {
-    const { deps, calls } = fake({
+  const ARBITER_MARKER = '<!-- arbiter:verdict=approve --> <!-- arbiter:findings={"blocking":0,"major":0,"minor":0,"nit":0} -->';
+  const isBotChanges = (e: { kind: string; verdict?: { actor?: string } }) =>
+    e.kind === 'reviewChangesRequested' && e.verdict?.actor === 'bot';
+
+  test('an approver’s own body is parsed: its arbiter markers make the verdict a bot’s', async () => {
+    // Proves the marker parser reads THIS body — with no markers the same
+    // changes-requested review would be attributed to a human, not a bot.
+    const { deps } = fake({
       pr: ok({
         statusCheckRollup: GREEN_ROLLUP,
         reviews: [
-          {
-            author: { login: 'brannon-bowden' },
-            state: 'APPROVED',
-            submittedAt: '2026-09-13T18:00:00Z',
-            body: 'Approving.',
-          },
+          { author: { login: 'brannon-bowden' }, state: 'CHANGES_REQUESTED', submittedAt: '1', body: ARBITER_MARKER },
         ],
         mergedAt: null,
       }),
     });
-    await reconcileOnce({ ...TARGET, state: 'waitingReview' }, deps);
-    const read = calls.find((c) => c.argv.some((a) => a.includes('read_review')));
-    expect(read?.stdin).toBe('Approving.');
+    const result = await reconcileOnce({ ...TARGET, state: 'waitingReview' }, deps);
+    expect((result.events as { kind: string; verdict?: { actor?: string } }[]).some(isBotChanges)).toBe(true);
   });
 
   test('the right body goes with the right author when a row was dropped', async () => {
     // The misattribution this guards: a dropped row shifts every index after
     // it, so a body matched back by position is a different person's review.
-    const { deps, calls } = fake({
+    // Only brannon (an approver) carries the arbiter marker; the deleted-account
+    // row does not — so a bot verdict proves brannon's own body was parsed.
+    const { deps } = fake({
       pr: ok({
         statusCheckRollup: GREEN_ROLLUP,
         reviews: [
-          { author: null, state: 'APPROVED', submittedAt: '1', body: 'from a deleted account' },
-          {
-            author: { login: 'brannon-bowden' },
-            state: 'APPROVED',
-            submittedAt: '2',
-            body: "brannon's review",
-          },
+          { author: null, state: 'CHANGES_REQUESTED', submittedAt: '1', body: 'from a deleted account' },
+          { author: { login: 'brannon-bowden' }, state: 'CHANGES_REQUESTED', submittedAt: '2', body: ARBITER_MARKER },
         ],
         mergedAt: null,
       }),
     });
-    await reconcileOnce({ ...TARGET, state: 'waitingReview' }, deps);
-    const read = calls.find((c) => c.argv.some((a) => a.includes('read_review')));
-    expect(read?.stdin).toBe("brannon's review");
+    const result = await reconcileOnce({ ...TARGET, state: 'waitingReview' }, deps);
+    expect((result.events as { kind: string; verdict?: { actor?: string } }[]).some(isBotChanges)).toBe(true);
   });
 });
 
