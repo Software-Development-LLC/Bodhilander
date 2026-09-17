@@ -723,8 +723,8 @@ export const RUN_ENGINE_PREF_KEYS = {
   // boards we read, the default project number, and the existing Status values
   // that mark an initiative eligible to start (comma-separated; a per-project
   // override can live in the central config). The board is not migrated — an
-  // existing status like "Todo" is the gate, and the in-app manifest approval
-  // is the real human checkpoint before anything drives.
+  // existing status the board already has is the gate, and the in-app manifest
+  // approval is the real human checkpoint before anything drives.
   githubOrg: 'runEngine.githubOrg',
   projectNumber: 'runEngine.projectNumber',
   eligibleStatuses: 'runEngine.eligibleStatuses',

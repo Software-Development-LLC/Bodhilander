@@ -116,7 +116,8 @@ export function projectNumber(): number | null {
 /**
  * The existing Status values that mark an initiative eligible to start, as the
  * global default (a per-project override can live in the central config).
- * Stored comma-separated; defaults to just "Todo" so no board needs migrating.
+ * Stored comma-separated; defaults to a single ready-to-start status (the
+ * board's backlog column) so no board needs migrating.
  */
 export function eligibleStatuses(): string[] {
   const raw = resolved(K.eligibleStatuses, 'BODHI_ELIGIBLE_STATUSES', 'Todo');

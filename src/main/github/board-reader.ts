@@ -8,8 +8,9 @@
  * is testable dry and the caller owns the one side effect (the `gh` spawn).
  *
  * Eligibility gates on the initiative's own **Status** value being one of a
- * configured set of *existing* statuses (default "Todo"; a per-project override
- * lives in the central config) — so no board is migrated. This uses the
+ * configured set of *existing* statuses (the board's ready/backlog column by
+ * default; a per-project override lives in the central config) — so no board is
+ * migrated. This uses the
  * project-native `Status` field, which reads cleanly, rather than the org-level
  * "Approved for Development" field, whose values don't surface through the
  * project query (it comes back with `options: []`). The real human checkpoint is
@@ -178,9 +179,9 @@ export function buildBoard(
     const children = childrenByParent.get(keyOf(n.repo, n.number)) ?? [];
     const repos = [...new Set([item.repo, ...children.map((c) => c.repo)])];
     // Eligible: the initiative's own Status is one of the gate values (existing
-    // statuses like "Todo" — no board migration), and it isn't already
-    // closed/done. Children carry their own progress; the gate is on the
-    // initiative you start, and the in-app manifest is the real human checkpoint.
+    // board statuses — no board migration), and it isn't already closed/done.
+    // Children carry their own progress; the gate is on the initiative you
+    // start, and the in-app manifest is the real human checkpoint.
     const eligible = item.status !== null && eligibleStatuses.includes(item.status) && item.state !== 'CLOSED';
     return { item, children, repos, eligible };
   });
