@@ -340,6 +340,17 @@ describe('the child environment', () => {
     expect('BODHI_PYTHON' in env).toBe(false);
   });
 
+  test('injects the managed account as CLAUDE_CONFIG_DIR (#327)', () => {
+    const { env } = buildGateCommand(REVIEWER, { ...CONTEXT, configDir: '/userData/claude-accounts/acct-1/.claude' }, 'go');
+    expect(env.CLAUDE_CONFIG_DIR).toBe('/userData/claude-accounts/acct-1/.claude');
+  });
+
+  test('omits CLAUDE_CONFIG_DIR when no account is configured, falling back to ambient', () => {
+    // The pre-#327 behaviour: no account means the CLI's own login, not an
+    // empty config dir that would resolve to nothing.
+    expect('CLAUDE_CONFIG_DIR' in buildGateCommand(REVIEWER, CONTEXT, 'go').env).toBe(false);
+  });
+
   test('always names the workspace root', () => {
     expect(buildGateCommand(REVIEWER, CONTEXT, 'go').env.BODHI_ROOT).toBe('/root');
   });

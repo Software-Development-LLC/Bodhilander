@@ -54,6 +54,7 @@ import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { cutWorktrees } from './worktrees';
 import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
+import { resolveAccountForGroup } from '../account-resolver';
 import type { CommandResult } from './reconcile';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
@@ -224,8 +225,14 @@ const spawnDeps: SpawnDeps = {
   log: (line) => log.info(`[RunLoop] ${line}`),
 };
 
-function archDeps(config: SpawnConfig): ArchDeps {
+/** The managed account a run's gates launch under (#327), or null for ambient. */
+function accountConfigDirFor(run: RunRow): string | null {
+  return resolveAccountForGroup(run.groupId)?.configDir ?? null;
+}
+
+function archDeps(config: SpawnConfig, run: RunRow): ArchDeps {
   return {
+    accountConfigDir: accountConfigDirFor(run),
     startGate: (input) => runsRepo.startGate(input),
     activeGate: (runId, repo) => runsRepo.activeGate(runId, repo),
     finishGate: (id, status, verdict) => runsRepo.finishGate(id, status, verdict),
@@ -301,7 +308,7 @@ async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, own
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`));
+  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run));
   return { target, deps: { ...commands, spawnGate, provision: () => provisionRunFor(run) } };
 }
 
@@ -336,7 +343,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
       const result = await driveBootstrap(run, {
         io: bootstrapIo,
         store: bootstrapStore,
-        arch: (r) => runArchGate(r, archDeps(config)),
+        arch: (r) => runArchGate(r, archDeps(config, r)),
         spawn: (r) => runSpawn(r, spawnDeps),
         log: (line) => log.info(`[RunLoop] ${line}`),
       });

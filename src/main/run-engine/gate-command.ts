@@ -50,6 +50,13 @@ import type { Gate } from './transitions';
 import type { AgentDefinition } from './agent-definition';
 import type { PermissionPosture } from '../repositories/runs';
 
+/**
+ * The env var the Claude CLI reads its account config dir from — the same one
+ * the terminal path sets (`providers/claude.ts`). Duplicated as a literal rather
+ * than imported, because that module reaches electron and this one is pure.
+ */
+const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
+
 export class GateCommandError extends Error {}
 
 /** How a gate is invoked. The two are mutually exclusive — see the header. */
@@ -77,6 +84,13 @@ export interface RunSpawnContext {
   pythonPath?: string | null;
   posture: PermissionPosture;
   budgetUsd?: number | null;
+  /**
+   * The managed Claude account's config dir, injected as `CLAUDE_CONFIG_DIR`
+   * so a gate runs under a Bodhilander-managed OAuth account rather than the
+   * CLI's ambient login (#327). Null/undefined falls back to ambient, which is
+   * the pre-#327 behaviour and the only option when no account is configured.
+   */
+  configDir?: string | null;
   /** Named up front so the conversation can be resumed after it exits. */
   sessionId: string;
   /** Where the gate writes its receipt. Load-bearing for `--bg`. */
@@ -157,6 +171,9 @@ function gateEnv(context: RunSpawnContext): Record<string, string> {
   };
   if (context.pythonPath) env.BODHI_PYTHON = context.pythonPath;
   if (context.receiptPath) env.BODHI_GATE_RECEIPT = context.receiptPath;
+  // The gate's Claude account, the same way the terminal path injects it
+  // (providers/claude.ts). Absent = the CLI's ambient login (pre-#327).
+  if (context.configDir) env[CLAUDE_CONFIG_DIR_ENV] = context.configDir;
   return env;
 }
 
