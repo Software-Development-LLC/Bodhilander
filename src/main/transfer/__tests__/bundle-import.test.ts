@@ -113,6 +113,37 @@ describe('what comes back', () => {
     const row = destination.prepare('SELECT claude_account_id FROM sessions WHERE id = ?').get('s1') as any;
     expect(row.claude_account_id).toBe('acct-1');
   });
+
+  test('preserves a group\'s board association, remapping the clone root', async () => {
+    await restore(exportBytes(), mappedToDest());
+    const row = destination.prepare(
+      'SELECT github_project_number, github_project_name, clone_root FROM groups WHERE id = ?',
+    ).get('g1') as any;
+    // The board number + name are portable and travel verbatim.
+    expect(row.github_project_number).toBe(17);
+    expect(row.github_project_name).toBe('Bodhi Pulse');
+    // The clone root is a machine-local path, remapped onto this machine like
+    // the working dir (source SOURCE_ROOT → destProjects).
+    expect(row.clone_root).toBe(path.join(destProjects, 'Bodhilander'));
+    expect(row.clone_root).not.toContain('src-machine');
+  });
+
+  test('a group whose mapped clone root is missing is flagged for relink', async () => {
+    // working_dir maps onto an existing folder, but clone_root maps to one this
+    // machine does not have — the clone-root check must flag it even though the
+    // working dir is fine, so the association isn't a silent dangling path.
+    source.prepare(
+      `INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id,
+                           github_project_number, github_project_name, clone_root)
+       VALUES ('g2', 'Board', '#888888', ?, 1, '2026-01-02T00:00:00.000Z', NULL, 0, NULL, 5, 'Ops', ?)`,
+    ).run(SOURCE_DIR, `${SOURCE_ROOT}/GhostClone`);
+
+    const outcome = await restore(exportBytes(), mappedToDest());
+
+    expect(outcome.groupsNeedingRelink).toContain('g2');
+    const row = destination.prepare('SELECT clone_root FROM groups WHERE id = ?').get('g2') as any;
+    expect(row.clone_root).toBe(path.join(destProjects, 'GhostClone'));
+  });
 });
 
 describe('account config dirs', () => {

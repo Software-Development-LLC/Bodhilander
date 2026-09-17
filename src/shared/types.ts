@@ -281,6 +281,14 @@ export interface Group {
    * inherit this unless they set their own claudeAccountId.
    */
   claudeAccountId: string | null;
+  /**
+   * Board-driven orchestration (CO-722, Phase 2B). Optionally associates this
+   * group with a GitHub Projects v2 board and the local clone root the run
+   * engine cuts worktrees from. All null = no board association.
+   */
+  githubProjectNumber: number | null;
+  githubProjectName: string | null;
+  cloneRoot: string | null;
 }
 
 /**

@@ -19,10 +19,11 @@ import { describe, expect, test } from 'bun:test';
 import {
   accountMenuLabel,
   defaultAccountMenuLabel,
+  projectMenuLabel,
   resolveAccountIndicator,
   respawnable,
 } from '../App';
-import type { ClaudeAccount, LiveAccountBinding, Session } from '../../shared/types';
+import type { ClaudeAccount, Group, LiveAccountBinding, Session } from '../../shared/types';
 
 const work = {
   id: 'a-work', label: 'Work', email: 'will@acme.test', color: '#61afef',
@@ -203,6 +204,31 @@ describe('accountMenuLabel', () => {
   test('the label stays quoted, so an account named after a verb still reads', () => {
     const odd = { ...work, label: 'Use' } as ClaudeAccount;
     expect(accountMenuLabel(odd, false)).toContain('Use "Use"');
+  });
+});
+
+describe('projectMenuLabel', () => {
+  const group = (over: Partial<Group> = {}) => ({
+    id: 'g1', name: 'Repos', githubProjectNumber: null, githubProjectName: null, cloneRoot: null,
+    ...over,
+  } as Group);
+
+  test('an unlinked group offers to link', () => {
+    expect(projectMenuLabel(group())).toBe('Link GitHub Project…');
+  });
+
+  test('a group with no group at all (undefined) offers to link', () => {
+    expect(projectMenuLabel(undefined)).toBe('Link GitHub Project…');
+  });
+
+  test('a linked group shows its number and resolved name', () => {
+    expect(projectMenuLabel(group({ githubProjectNumber: 17, githubProjectName: 'Bodhi Pulse' })))
+      .toBe('GitHub Project: #17 (Bodhi Pulse)…');
+  });
+
+  test('a linked group whose name did not resolve shows just the number', () => {
+    expect(projectMenuLabel(group({ githubProjectNumber: 42, githubProjectName: null })))
+      .toBe('GitHub Project: #42…');
   });
 });
 

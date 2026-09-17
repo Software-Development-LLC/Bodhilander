@@ -58,6 +58,10 @@ export function useGroups() {
           parentId: parentId || null,
           collapsed: false,
           claudeAccountId: parentGroup?.claudeAccountId ?? null,
+          // Board association is set explicitly via the picker, never inherited.
+          githubProjectNumber: null,
+          githubProjectName: null,
+          cloneRoot: null,
         };
 
         window.electronAPI.createGroup(group)

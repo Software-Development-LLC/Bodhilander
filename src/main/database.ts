@@ -431,6 +431,20 @@ function initializeTables(database: Database.Database): void {
     database.exec("ALTER TABLE sessions ADD COLUMN claude_account_id TEXT DEFAULT NULL");
   }
 
+  // Migration: board-driven orchestration (CO-722, Phase 2B). A group may
+  // optionally map to a GitHub Projects v2 board (number + display name) and a
+  // local clone root the run engine cuts worktrees from. All NULL = no board
+  // association, which is the default and the only state pre-migration groups have.
+  if (!columns.some(col => col.name === 'github_project_number')) {
+    database.exec("ALTER TABLE groups ADD COLUMN github_project_number INTEGER DEFAULT NULL");
+  }
+  if (!columns.some(col => col.name === 'github_project_name')) {
+    database.exec("ALTER TABLE groups ADD COLUMN github_project_name TEXT DEFAULT NULL");
+  }
+  if (!columns.some(col => col.name === 'clone_root')) {
+    database.exec("ALTER TABLE groups ADD COLUMN clone_root TEXT DEFAULT NULL");
+  }
+
   // Migration: automatic failover between Claude accounts.
   //
   // Three facts the pre-failover schema had nowhere to put:

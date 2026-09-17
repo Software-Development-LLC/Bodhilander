@@ -47,6 +47,9 @@ export function createRemoteGroup(opts: CreateGroupOptions): Group {
     parentId: opts.parentId ?? null,
     collapsed: false,
     claudeAccountId: null,
+    githubProjectNumber: null,
+    githubProjectName: null,
+    cloneRoot: null,
   };
   groupsRepo.createGroup(group);
   log.info('[Relay] remote group created', { id: group.id, name: group.name, parentId: group.parentId });
