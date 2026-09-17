@@ -711,6 +711,12 @@ export const RUN_ENGINE_PREF_KEYS = {
   harnessPath: 'runEngine.harnessPath',
   bodhiRoot: 'runEngine.bodhiRoot',
   initiativesRoot: 'runEngine.initiativesRoot',
+  // Board-driven orchestration (Phase 1): the GitHub org whose Projects v2
+  // boards we read, the default project number, and the Status value that marks
+  // an initiative eligible to start.
+  githubOrg: 'runEngine.githubOrg',
+  projectNumber: 'runEngine.projectNumber',
+  approvedStatus: 'runEngine.approvedStatus',
 } as const;
 
 /** What preparing an initiative reported: the armable directory, or why not (CO-722). */
@@ -784,3 +790,53 @@ export interface RunActiveRow {
   since: string;
   repos: string[];
 }
+
+/**
+ * Board-driven orchestration DTOs (Phase 1, read-only).
+ *
+ * The renderer-facing shape of a GitHub Projects v2 board. Loose strings
+ * (like `RunActiveRow.state`) so the renderer maps them to labels and never
+ * imports a main-side union. See docs/design-board-driven-orchestration.md.
+ */
+export interface BoardItem {
+  /** The issue number, in its own repo (child numbers are per-repo). */
+  number: number;
+  title: string;
+  repo: string;
+  /** GitHub issue state: `OPEN` | `CLOSED`. */
+  state: string;
+  /** The project Status value: `Todo | In Progress | Done | Approved | …`, or null. */
+  status: string | null;
+  url: string;
+  assignees: string[];
+}
+
+/**
+ * A top-level board initiative (an issue with no parent) and its cross-repo
+ * children. A single-repo item is just an initiative with no children.
+ */
+export interface BoardInitiative {
+  item: BoardItem;
+  /** Child issues across repos (via GitHub sub-issue links); empty for single-repo. */
+  children: BoardItem[];
+  /** Every repo this initiative touches (the item's repo + the children's). */
+  repos: string[];
+  /** The initiative's Status marks it eligible to start (the configured gate value). */
+  eligible: boolean;
+}
+
+export interface BoardProject {
+  title: string;
+  number: number;
+  initiatives: BoardInitiative[];
+}
+
+/**
+ * What reading a board returned: the project, or a fixable reason (no org set,
+ * project not accessible, gh/GraphQL error). Mirrors the run engine's
+ * "problem, not a silent empty" discipline so the Board view never shows an
+ * empty board when the truth is "couldn't read it."
+ */
+export type BoardResult =
+  | { status: 'ok'; project: BoardProject }
+  | { status: 'problem'; problem: string };

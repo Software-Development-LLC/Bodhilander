@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -57,6 +57,7 @@ interface ElectronAPI {
   // that starts, stops or advances a run.
   getRunInbox: () => Promise<RunInboxRow[]>;
   getActiveRuns: () => Promise<RunActiveRow[]>;
+  getProjectBoard: (projectNumber?: number) => Promise<BoardResult>;
   getRunPermissions: (runId: string) => Promise<RunPermissionRequest[]>;
   answerRunPermission: (runId: string, repo: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) => Promise<boolean>;
   pickInitiativeDir: () => Promise<string | null>;

@@ -12,6 +12,7 @@ import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
 import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun, readRunManifest, approveRunManifest, rejectRunManifest } from './run-engine/run-loop-service';
+import { fetchProjectBoard } from './github/board-service';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -878,6 +879,7 @@ safeOn('pty:prime', (id: string) => {
 // set it off from a window.
 safeHandle('db:runs:inbox', () => runsRepo.listInbox());
 safeHandle('db:runs:active', () => runsRepo.listActive());
+safeHandle('db:projects:board', (projectNumber?: number) => fetchProjectBoard(projectNumber));
 
 // The permission requests a run's gate is blocked on, and a person's answer
 // to one (CO-722, #288). Writing a reply is the one run-engine action the app
