@@ -38,6 +38,25 @@ describe('parseConfig', () => {
     expect(r.config.projects['17'].context).toBe('Bodhi Pulse');
   });
 
+  test('parses a repo\'s expectedChecks and expectedChecksAfterReview', () => {
+    const raw = JSON.stringify({
+      version: 1,
+      repos: { Bodhilander: { expectedChecks: ['quality-gate', 'test (ubuntu-latest)'], expectedChecksAfterReview: ['arbiter/review'] } },
+    });
+    const r = parseConfig(raw);
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') throw new Error('unreachable');
+    expect(r.config.repos['Bodhilander'].expectedChecks).toEqual(['quality-gate', 'test (ubuntu-latest)']);
+    expect(r.config.repos['Bodhilander'].expectedChecksAfterReview).toEqual(['arbiter/review']);
+  });
+
+  test('a repo without check fields leaves them undefined', () => {
+    const r = parseConfig(JSON.stringify({ version: 1, repos: { x: { keyPrefix: 'X' } } }));
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') throw new Error('unreachable');
+    expect(r.config.repos['x'].expectedChecks).toBeUndefined();
+  });
+
   test('invalid JSON is a problem', () => {
     const r = parseConfig('{ not json');
     expect(r.status).toBe('problem');

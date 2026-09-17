@@ -883,6 +883,10 @@ export interface RepoConfig {
   ownerAgent?: string;
   /** Free-text context injected into this repo's owner brief. */
   context?: string;
+  /** CI check names that must be green — what "green" MEANS here. Omit = no bar. */
+  expectedChecks?: string[];
+  /** Checks owed only once a review is requested (e.g. `arbiter/review`). */
+  expectedChecksAfterReview?: string[];
 }
 
 export interface OrchestrationConfig {

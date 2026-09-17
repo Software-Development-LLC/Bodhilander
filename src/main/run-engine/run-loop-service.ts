@@ -41,7 +41,7 @@ import { processDeps, runCommand } from './command-runner';
 import { agentsForOwner, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
 import { lookAtGate, type AttentionDeps } from './attention-pass';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
-import { reconcileOnce } from './reconcile';
+import { reconcileOnce, expectedChecksLookup, type ChecksLookup } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
 import { pendingRequests, writeDecision, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
@@ -192,6 +192,24 @@ async function baseBranches(repos: readonly string[]): Promise<Record<string, st
   }
 }
 
+/**
+ * A repo's expected checks (Phase 3): from the central config, not
+ * `registry_entry.py`. No config repo set → noBar (nothing defines green); a
+ * config that can't be read → retry (transient, re-attempted like a gh failure).
+ */
+async function expectedChecksLookupFor(repo: string): Promise<ChecksLookup> {
+  if (machine.configRepo() === null) {
+    return { kind: 'noBar', reason: `no config repo is set, so nothing defines green for ${repo}` };
+  }
+  let res: ConfigResult | null = null;
+  try {
+    res = await loadOrchestrationConfig();
+  } catch {
+    // expectedChecksLookup maps a null result to `retry`.
+  }
+  return expectedChecksLookup(res, repo);
+}
+
 /** Cut a run's worktrees in TS: resolve base branches from config, then `cutWorktrees`. */
 async function cutRunWorktrees(initiative: string, repos: readonly string[], bodhiRoot: string) {
   const bases = await baseBranches(repos);
@@ -329,7 +347,8 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     },
     recordPr: (run, owner, pr) =>
       runsRepo.recordOwnerPullRequest(run.id, owner.repo, { prNumber: pr.number, prUrl: pr.url }),
-    reconcile: async (run, t) => reconcileOnce(t, processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' })),
+    reconcile: async (run, t) =>
+      reconcileOnce(t, await expectedChecksLookupFor(t.registryRepo), processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' })),
     advance: async (run, owner, event) => {
       // The loop names the owner; its executor and spawner are that repo's.
       const { target, deps } = await executorFor(config, ghPath, run, owner);
