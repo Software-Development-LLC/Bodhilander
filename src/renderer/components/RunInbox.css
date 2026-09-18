@@ -33,7 +33,8 @@
 
 /* A stopped run is the one to open first, so it is the one that is marked.
    Runs that are merely waiting keep the ordinary border. */
-.run-inbox__row--inconclusive {
+.run-inbox__row--inconclusive,
+.run-inbox__row--failed {
   border-left-color: var(--status-error, #c15b5b);
 }
 

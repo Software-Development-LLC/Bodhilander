@@ -20,6 +20,7 @@ const WHY: Record<string, string> = {
   waitingPermission: 'a tool is asking for permission',
   waitingHumanGate: 'waiting for you to approve the gate',
   inconclusive: 'stopped — nobody could establish an answer',
+  failed: 'the run failed',
 };
 
 /**
@@ -360,8 +361,8 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
   if (rows.length === 0) {
     return (
       <div className="run-inbox run-inbox--empty">
-        <h2>Nothing is waiting on you</h2>
-        <p>Runs appear here when they stop and need a person.</p>
+        <h2>Nothing needs your attention</h2>
+        <p>Runs appear here when they stop, fail, or need a person.</p>
         {staleNote}
       </div>
     );
@@ -370,12 +371,20 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
   const clock = (now ?? Date.now)();
   return (
     <div className="run-inbox">
+      {/* "Attention", not "waiting on you": the inbox now also carries failed
+          runs, which are not waiting on anyone — they need to be seen and
+          dismissed. */}
       <h2>
-        {rows.length} run{rows.length === 1 ? '' : 's'} waiting on you
+        {rows.length} run{rows.length === 1 ? '' : 's'} need{rows.length === 1 ? 's' : ''} your attention
       </h2>
       {staleNote}
       <ul className="run-inbox__list">
-        {rows.map((row) => (
+        {rows.map((row) => {
+          // A failed run is terminal: "Halt" (stop driving) makes no sense — it
+          // has stopped. The same action (abandon) applies, but it reads as
+          // "Dismiss": acknowledge it and clear it from the list.
+          const terminal = row.state === 'failed';
+          return (
           <li key={row.id} className={`run-inbox__row run-inbox__row--${row.state}`}>
             <div className="run-inbox__head">
               <span className="run-inbox__key">{row.initiativeKey || row.id}</span>
@@ -387,13 +396,17 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
                 className="run-inbox__halt"
                 disabled={halting.has(row.id)}
                 onClick={() => void onHalt(row.id)}
-                title="Stop driving this run and clear it from the inbox (leaves worktrees in place)"
+                title={terminal
+                  ? 'Acknowledge this failed run and clear it from the list (leaves worktrees in place)'
+                  : 'Stop driving this run and clear it from the inbox (leaves worktrees in place)'}
               >
-                {halting.has(row.id) ? 'Halting…' : 'Halt'}
+                {halting.has(row.id) ? (terminal ? 'Dismissing…' : 'Halting…') : (terminal ? 'Dismiss' : 'Halt')}
               </button>
             </div>
             {haltError[row.id] && (
-              <p className="run-inbox__halt-error" role="alert">Halt failed: {haltError[row.id]}</p>
+              <p className="run-inbox__halt-error" role="alert">
+                {terminal ? 'Dismiss' : 'Halt'} failed: {haltError[row.id]}
+              </p>
             )}
             <p className="run-inbox__reason">{reasonFor(row)}</p>
             {row.repos.length > 0 && (
@@ -406,7 +419,8 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
               <ManifestApproval runId={row.id} onDecided={() => void fetch()} />
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );

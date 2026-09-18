@@ -403,9 +403,19 @@ describe('the inbox', () => {
     expect(runs.listInbox()).toEqual([]);
   });
 
-  test('a finished run is not in it', () => {
-    for (const state of ['approved', 'done', 'failed']) seed(`f-${state}`, state);
+  test('a cleanly-finished or dismissed run is not in it', () => {
+    // approved/done finished well; abandoned was already acknowledged. None
+    // needs a person's eyes.
+    for (const state of ['approved', 'done', 'abandoned']) seed(`f-${state}`, state);
     expect(runs.listInbox()).toEqual([]);
+  });
+
+  test('a FAILED run IS in it — a failure must be seen, not vanish', () => {
+    // failed is terminal, but unlike approved/done it is a bad outcome the
+    // operator never chose. It stays visible (with its reason) until dismissed,
+    // rather than silently dropping out of every list.
+    seed('boom', 'failed');
+    expect(runs.listInbox().map((r) => r.id)).toContain('boom');
   });
 
   test('the longest wait comes first', () => {
