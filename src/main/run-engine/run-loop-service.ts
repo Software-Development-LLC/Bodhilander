@@ -192,6 +192,26 @@ async function baseBranches(repos: readonly string[]): Promise<Record<string, st
 }
 
 /**
+ * The owner agent the central config names for each repo (Phase 4). Repos the
+ * config doesn't name are omitted — they fall back to the harness's
+ * single-candidate resolution in `resolveOwners`.
+ */
+async function configOwnersFor(repos: readonly string[]): Promise<Record<string, string>> {
+  try {
+    const res = await loadOrchestrationConfig();
+    if (res.status !== 'ok') return {};
+    const out: Record<string, string> = {};
+    for (const repo of repos) {
+      const agent = res.config.repos[repo]?.ownerAgent;
+      if (agent) out[repo] = agent;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * A repo's expected checks (Phase 3): from the central config, not
  * `registry_entry.py`. No config repo set → noBar (nothing defines green); a
  * config that can't be read → retry (transient, re-attempted like a gh failure).
@@ -239,6 +259,7 @@ async function cutRunWorktrees(initiative: string, repos: readonly string[], bod
  */
 const spawnDeps: SpawnDeps = {
   cut: (initiative, repos, bodhiRoot) => cutRunWorktrees(initiative, repos, bodhiRoot),
+  configOwners: (repos) => configOwnersFor(repos),
   readFile: readIfPresent,
   materialize: (request) =>
     materializeOwners(request, { run: (exe, argv) => runCommand(exe, argv, { timeoutMs: 60_000 }) }),
