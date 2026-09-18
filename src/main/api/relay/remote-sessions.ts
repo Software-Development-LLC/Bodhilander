@@ -18,6 +18,7 @@ import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as groupsRepo from '../../repositories/groups';
 import { ptyManager } from '../../pty-manager';
+import { withSpawnRetry, isTransientSpawnError } from '../../spawn-retry';
 import { getApiServer } from '../index';
 import { soundManager } from '../../sound-manager';
 import { resolveLaunchProviderId } from '../../providers';
@@ -119,7 +120,25 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
   }
 
   // Step 2 — spawn the PTY exactly as pty:create does.
-  ptyManager.createSession(id, cwd, opts.launchClaude, resolveLaunchProviderId(session.provider, opts.provider));
+  //
+  // A remote owner connecting can open sessions in a burst, which is exactly
+  // when macOS hands back a transient `posix_spawnp failed` (EAGAIN — the
+  // process/PTY limit momentarily reached). Keep the common path fully
+  // synchronous (this function returns a Session and its callers aren't async),
+  // but on a transient failure ride it out with delayed background retries so
+  // the pty still attaches to the row we already created, instead of the
+  // session arriving permanently terminal-less.
+  const spawn = (): void =>
+    ptyManager.createSession(id, cwd, opts.launchClaude, resolveLaunchProviderId(session.provider, opts.provider));
+  try {
+    spawn();
+  } catch (err) {
+    if (!isTransientSpawnError(err)) throw err;
+    log.warn('[Relay] transient pty spawn failure; retrying in background', { id });
+    void withSpawnRetry(spawn, { retries: 3, delayMs: 400 }).catch((finalErr) => {
+      log.error('[Relay] pty spawn failed after retries', { id, error: finalErr });
+    });
+  }
   try {
     soundManager.playStartSound();
   } catch {
