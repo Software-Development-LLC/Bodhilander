@@ -776,9 +776,16 @@ export const NOT_THE_OPERATOR: readonly RunState[] = ['waitingReview'];
  * arriving through the inbox -- so a new state appears here by default, and
  * leaving it out has to be a deliberate line in the list above.
  */
-export const INBOX_STATES: readonly RunState[] = NEEDS_A_PERSON.filter(
-  (state) => !NOT_THE_OPERATOR.includes(state),
-);
+export const INBOX_STATES: readonly RunState[] = [
+  ...NEEDS_A_PERSON.filter((state) => !NOT_THE_OPERATOR.includes(state)),
+  // A FAILED run is terminal — it is not "waiting" on anyone and cannot advance,
+  // so it is deliberately NOT in NEEDS_A_PERSON. But it must not vanish silently:
+  // the operator needs to SEE it failed and why (its blocked_reason), then
+  // dismiss it. So the inbox surfaces it even though nothing can act on it but a
+  // person acknowledging it. `abandoned` is excluded — that IS the acknowledged
+  // state, and re-surfacing it would defeat dismissal.
+  'failed',
+];
 
 /**
  * Runs waiting on the person at this window, oldest wait first.

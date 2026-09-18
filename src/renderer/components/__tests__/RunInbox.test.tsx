@@ -32,7 +32,7 @@ function row(over: Partial<RunInboxRow> = {}): RunInboxRow {
 describe('what it says when nothing is waiting', () => {
   test('an empty inbox is the good state, and says so', async () => {
     const { container } = render(<RunInbox load={async () => []} now={() => NOW} />);
-    await screen.findByText('Nothing is waiting on you');
+    await screen.findByText('Nothing needs your attention');
     expect(container.querySelector('.run-inbox--empty')).not.toBeNull();
   });
 
@@ -44,7 +44,7 @@ describe('what it says when nothing is waiting', () => {
       <RunInbox load={async () => { throw new Error('database is locked'); }} now={() => NOW} />,
     );
     await screen.findByRole('alert');
-    expect(screen.queryByText('Nothing is waiting on you')).toBeNull();
+    expect(screen.queryByText('Nothing needs your attention')).toBeNull();
     expect(screen.getByText('database is locked')).toBeTruthy();
   });
 
@@ -52,7 +52,7 @@ describe('what it says when nothing is waiting', () => {
     // Never resolves: the first paint must not claim an answer it does not
     // have yet.
     render(<RunInbox load={() => new Promise(() => {})} now={() => NOW} />);
-    expect(screen.queryByText('Nothing is waiting on you')).toBeNull();
+    expect(screen.queryByText('Nothing needs your attention')).toBeNull();
   });
 });
 
@@ -102,14 +102,14 @@ describe('what it says when something is', () => {
 
   test('the count is the headline, and it is grammatical', async () => {
     render(<RunInbox load={async () => [row()]} now={() => NOW} />);
-    await screen.findByText('1 run waiting on you');
+    await screen.findByText('1 run needs your attention');
   });
 
   test('and plural when it should be', async () => {
     render(
       <RunInbox load={async () => [row(), row({ id: 'run-2' })]} now={() => NOW} />,
     );
-    await screen.findByText('2 runs waiting on you');
+    await screen.findByText('2 runs need your attention');
   });
 
   test('the order it was given is the order shown', async () => {
@@ -187,7 +187,7 @@ describe('a refresh that fails over a list we already have', () => {
       <RunInbox load={async () => { throw new Error('locked'); }} now={() => NOW} pollMs={5} />,
     );
     await screen.findByRole('alert');
-    expect(screen.queryByText('Nothing is waiting on you')).toBeNull();
+    expect(screen.queryByText('Nothing needs your attention')).toBeNull();
   });
 });
 
@@ -251,7 +251,29 @@ describe('halting a run', () => {
     fireEvent.click(await screen.findByText('Halt'));
     await waitFor(() => expect(halted).toEqual(['run-1']));
     // After the abandon, the refresh returns [] and the row is gone.
-    await screen.findByText('Nothing is waiting on you');
+    await screen.findByText('Nothing needs your attention');
+  });
+
+  test('a FAILED run is surfaced (not vanished) with its reason, and Dismiss clears it', async () => {
+    // The gap this fixes: a failed run is terminal, so it used to fall out of
+    // both the active list and the inbox — the operator saw it disappear with no
+    // idea it failed or why. Now it shows here with its reason, dismissible.
+    const dismissed: string[] = [];
+    let loads = 0;
+    render(
+      <RunInbox
+        load={async () => { loads++; return loads === 1 ? [row({ state: 'failed', blockedReason: 'install failed: yarn ELIFECYCLE' })] : []; }}
+        abandon={async (id) => { dismissed.push(id); return true; }}
+        now={() => NOW}
+      />,
+    );
+    await screen.findByText('install failed: yarn ELIFECYCLE');
+    // The action reads as Dismiss, not Halt — the run has already stopped.
+    const dismiss = screen.getByText('Dismiss');
+    fireEvent.click(dismiss);
+    // It invokes abandon for THIS run and, once gone, the inbox is empty.
+    await waitFor(() => expect(dismissed).toEqual(['run-1']));
+    await screen.findByText('Nothing needs your attention');
   });
 
   test('a failed halt surfaces an error instead of a silent no-op', async () => {
@@ -264,7 +286,7 @@ describe('halting a run', () => {
     );
     fireEvent.click(await screen.findByText('Halt'));
     // The operator sees it failed rather than believing the run was halted.
-    await screen.findByText(/Halt failed: IPC exploded/);
+    await screen.findByText(/Could not halt this run: IPC exploded/);
     // And the run is still there to try again.
     expect(screen.getByText('CO-722')).toBeDefined();
   });
