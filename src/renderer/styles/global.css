@@ -171,6 +171,16 @@ body {
   grid-area: content;
   display: flex;
   flex-direction: column;
+  /* A grid item defaults to min-height:auto, so a tall content view (a long
+   * board "Ready to start" list, the Runs inbox) forces the `1fr` content row
+   * to grow PAST the viewport instead of staying bounded. body has
+   * overflow:hidden, so that excess is clipped, not scrollable — and the inner
+   * flex:1;min-height:0;overflow:auto children (.board, .runs-view, .arena-panel)
+   * never get a bounded height to scroll within. min-height:0 pins this column
+   * to its `1fr` track so those children actually scroll. This is the parent
+   * half of the board/runs scroll fixes (#343, #344), which only fixed the
+   * children. */
+  min-height: 0;
   /* Positioning context for the content column. Without this, an absolutely
    * positioned destination resolved against the VIEWPORT — .arena-panel used
    * `position:absolute; inset:0` and therefore covered the sidebar and the
