@@ -14,7 +14,7 @@
  * Run with: bun test src/main/run-engine
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { runGate, backgroundIdFor, backgroundIdFromOutput, GateSpawnError, type GateOutcome } from '../gate-process';
+import { runGate, backgroundIdFor, backgroundIdFromOutput, launchTail, GateSpawnError, type GateOutcome } from '../gate-process';
 import type { GateCommand } from '../gate-command';
 
 const SESSION = '11111111-2222-3333-4444-555555555555';
@@ -197,6 +197,20 @@ describe('a background gate', () => {
     expect(backgroundIdFromOutput('started, but said nothing else')).toBeNull();
     // Not fooled by a longer hex run that merely begins with eight.
     expect(backgroundIdFromOutput('  claude attach deadbeefcafe   x')).toBeNull();
+  });
+
+  test('launchTail keeps the END of stdout (where the banner is), capped, over the first line', () => {
+    // firstText gave only the preamble; the banner/error that explains a
+    // no-id launch is at the tail. This is what makes the failure legible.
+    const out = 'starting session...\nsetting up plugins...\nclaude attach WEIRDFORMAT open in this terminal';
+    expect(launchTail(out, '')).toContain('claude attach WEIRDFORMAT');
+    // Falls back to stderr when stdout is empty.
+    expect(launchTail('', 'ENOENT: claude not found')).toBe('ENOENT: claude not found');
+    // Capped so a runaway launch can't flood a persisted reason.
+    const huge = 'x'.repeat(5000);
+    const tail = launchTail(huge, '') ?? '';
+    expect(tail.length).toBeLessThan(huge.length);
+    expect(tail.startsWith('…')).toBe(true);
   });
 
   test('a non-zero exit is undriveable and keeps stderr', async () => {

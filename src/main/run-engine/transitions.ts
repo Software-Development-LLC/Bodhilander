@@ -89,7 +89,13 @@ export type RunEvent =
   | { kind: 'provisionFailed'; reason?: string }
   /** Nothing ran: no worktree, no package manager. Not a result. */
   | { kind: 'provisionUndriveable' }
-  | { kind: 'gateFinished'; gate: Gate; verdict: GateVerdict }
+  /**
+   * `reason` carries WHY when the verdict is `inconclusive` — the gate's own
+   * output (a `--bg` launch that printed no attachable id, a missing receipt,
+   * a gone session). It becomes the run's blocked_reason so "could not
+   * establish a verdict" says what actually happened, not just that it did.
+   */
+  | { kind: 'gateFinished'; gate: Gate; verdict: GateVerdict; reason?: string }
   | { kind: 'permissionRequested' }
   | { kind: 'permissionAnswered' }
   | { kind: 'prOpened' }
@@ -250,9 +256,12 @@ function onProvisioning(event: RunEvent): Decision | null {
   return null;
 }
 
-function onGateFinished(gate: Gate, verdict: GateVerdict): Decision {
+function onGateFinished(gate: Gate, verdict: GateVerdict, reason?: string): Decision {
   if (verdict === 'inconclusive') {
-    return inconclusive(`gate ${gate} could not establish a verdict`);
+    const detail = reason?.trim();
+    return inconclusive(
+      detail ? `gate ${gate} could not establish a verdict: ${detail}` : `gate ${gate} could not establish a verdict`,
+    );
   }
   if (verdict === 'fail') {
     // Red means the owner keeps working. It does not mean "note it on the
@@ -286,7 +295,7 @@ function onRunning(event: RunEvent, context: RunContext): Decision | null {
         `ignored a gate ${event.gate} report while gate ${context.activeGate ?? 'none'} is in flight`,
       );
     }
-    return onGateFinished(event.gate, event.verdict);
+    return onGateFinished(event.gate, event.verdict, event.reason);
   }
   if (event.kind === 'permissionRequested') {
     return stay('waitingPermission', 'a tool needs approval');

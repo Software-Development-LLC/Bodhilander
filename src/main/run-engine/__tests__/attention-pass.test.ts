@@ -61,7 +61,7 @@ describe('the gathering half of attention', () => {
   test('a session the daemon does not list is gone', async () => {
     const look = await lookAtGate(RUN, GATE, deps({ agents: [{ id: 'other', status: 'busy' }] }));
     expect(look.status).toBe('gone');
-    expect(look.attention.event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(look.attention.event).toMatchObject({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
   });
 
   test('the daemon’s word is passed through, and a busy gate is left alone', async () => {
@@ -90,7 +90,7 @@ describe('the gathering half of attention', () => {
     const path = 'C:/init/BDH-239/gates/2-bodhilander-lead.json';
     const stale = RECEIPT.replace('2026-09-15T02:28:00Z', '2026-09-15T00:19:00Z');
     const look = await lookAtGate(RUN, GATE, deps({ files: { [path]: stale } }));
-    expect(look.attention.event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(look.attention.event).toMatchObject({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
     expect(look.attention.note).toContain('previous attempt');
   });
 

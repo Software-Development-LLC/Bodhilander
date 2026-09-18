@@ -16,7 +16,7 @@ describe('a launched gate, looked at again', () => {
       receipt: { verdict: 'fail', blocking: [], reason: 'the gate failed without listing a blocking finding', writtenAt: null },
       status: 'idle',
     });
-    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'fail' });
+    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'fail', reason: 'the gate failed without listing a blocking finding' });
     expect(note).toContain('the gate failed without listing a blocking finding');
   });
 
@@ -35,7 +35,7 @@ describe('a launched gate, looked at again', () => {
     // a fail -- the branch was never judged -- and not a pass, because
     // nothing said so.
     const { event, note } = attend({ ...BASE, receipt: null, status: 'gone' });
-    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(event).toMatchObject({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
     expect(note).toContain('no longer running and wrote no receipt');
   });
 
@@ -44,7 +44,7 @@ describe('a launched gate, looked at again', () => {
     // note differs from gone because the fix differs: a crash is the
     // machine's, a missing sign-off is the role's.
     const { event, note } = attend({ ...BASE, receipt: null, status: 'idle' });
-    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(event).toMatchObject({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
     expect(note).toContain('finished its turn without writing a receipt');
   });
 
@@ -66,7 +66,7 @@ describe('a launched gate, looked at again', () => {
     const { event, note } = attend({
       ...BASE, receipt: null, status: 'busy', busyForMs: 3 * 60 * 60 * 1000, busyCeilingMs: 2 * 60 * 60 * 1000,
     });
-    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(event).toMatchObject({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
     expect(note).toContain('running for 180 minutes');
     expect(note).toContain('busy now');
     expect(note).toContain('120-minute ceiling');
@@ -121,7 +121,7 @@ describe('a launched gate, looked at again', () => {
       startedAt: '2026-09-15T02:23:22Z',
       status: 'gone',
     });
-    expect(event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(event).toMatchObject({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
     expect(note).toContain('previous attempt');
     expect(note).toContain('wrote no receipt');
   });
@@ -153,7 +153,7 @@ describe('a launched gate, looked at again', () => {
       startedAt: '2026-09-14T22:23:22-04:00',
       status: 'gone',
     });
-    expect(stale.event).toEqual({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(stale.event).toMatchObject({ kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
     expect(stale.note).toContain('previous attempt');
 
     // And the same instant written as UTC gives the same answer.
