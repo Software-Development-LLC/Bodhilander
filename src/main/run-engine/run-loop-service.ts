@@ -506,6 +506,37 @@ export function boardInitiativeKey(title: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * Annotate each initiative with whether a run for its key is already active
+ * (Phase 4). Pure — takes the set of active keys — so the join is testable and
+ * the board read stays a plain GitHub read. An initiative whose title has no
+ * `[KEY-N]` (key null) is never marked in-progress.
+ */
+export function annotateBoardInProgress(board: BoardResult, activeKeys: ReadonlySet<string>): BoardResult {
+  if (board.status !== 'ok') return board;
+  return {
+    ...board,
+    project: {
+      ...board.project,
+      initiatives: board.project.initiatives.map((init) => {
+        const key = boardInitiativeKey(init.item.title);
+        return { ...init, inProgress: key !== null && activeKeys.has(key) };
+      }),
+    },
+  };
+}
+
+/**
+ * Read the board and annotate which initiatives already have an active local run
+ * (Phase 4), so the Board view shows "In progress" rather than offering a second
+ * Initiate. This is what the `db:projects:board` IPC serves.
+ */
+export async function getBoardWithRunState(projectNumber?: number): Promise<BoardResult> {
+  const board = await fetchProjectBoard(projectNumber);
+  const activeKeys = new Set(runsRepo.listActive().map((r) => r.initiativeKey));
+  return annotateBoardInProgress(board, activeKeys);
+}
+
 /** The tracking key + child repos to initiate, or a refusal. Pure, so the decision is testable. */
 export type BoardInitiatePlan =
   | { status: 'ok'; key: string; repos: string[] }
@@ -547,6 +578,15 @@ export async function initiateFromBoard(
 ): Promise<RunCrossRepoPrepareResult> {
   const plan = planBoardInitiate(await fetchProjectBoard(projectNumber), repo, issueNumber);
   if (plan.status === 'refused') return { status: 'refused', refusals: plan.refusals };
+  // Defense in depth behind the UI's "In progress" state: never start a second
+  // run for an initiative that already has one active. The board view is polled
+  // and can lag, and a stale tab could otherwise double-initiate.
+  if (runsRepo.listActive().some((r) => r.initiativeKey === plan.key)) {
+    return {
+      status: 'refused',
+      refusals: [{ what: `${plan.key} already has an active run`, fix: 'Open the Runs tab to see it; there is nothing to start.' }],
+    };
+  }
   return prepareCrossRepoRun(plan.key, plan.repos);
 }
 
