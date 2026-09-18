@@ -17,6 +17,10 @@ let mainWindow: BrowserWindow | null = null;
 let isDownloading = false;
 let isDialogOpen = false;
 let isDownloadingFromAbout = false;
+// Set once a macOS update has finished downloading and is staged in pending/.
+// The quit path reads it (hasPendingMacUpdate) to arm Squirrel's install before
+// the guarded fast-exit — see armPendingMacUpdateInstall / index.ts before-quit.
+let macUpdateReadyToInstall = false;
 let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string; error?: string }) => void) | null = null;
 
 // Update channels supported by Bodhilander (BDHLNDR-32). "stable" maps to
@@ -99,9 +103,10 @@ function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
  * The marker is set as soon as a download completes, not right before an
  * install is actually attempted, so it can also be left behind if the user
  * dismisses "Restart Now" and then quits abnormally (crash, force-quit)
- * before ever restarting — `autoInstallOnAppQuit` covers a normal quit by
- * installing anyway, so this gap is abnormal termination only, and it
- * self-clears (as a single false report) the next time the app runs.
+ * before ever restarting — a normal quit now arms the install itself (see
+ * `armPendingMacUpdateInstall`, called from the before-quit path), so this gap
+ * is abnormal termination only, and it self-clears (as a single false report)
+ * the next time the app runs.
  */
 function verifyPendingInstall(): void {
   if (!IS_MAC) return;
@@ -272,7 +277,13 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
   // fire, so a silently-failed macOS install is caught on the next launch
   // regardless of which path the user took. Mac-only — see
   // `PENDING_UPDATE_VERSION_PREF_KEY`.
-  if (IS_MAC) setPreference(PENDING_UPDATE_VERSION_PREF_KEY, info.version);
+  if (IS_MAC) {
+    setPreference(PENDING_UPDATE_VERSION_PREF_KEY, info.version);
+    // The quit path now arms the install itself for a NORMAL quit (see
+    // armPendingMacUpdateInstall); before this flag existed, autoInstallOnAppQuit
+    // was silently defeated by the guarded before-quit's app.exit(0).
+    macUpdateReadyToInstall = true;
+  }
   isDownloading = false;
   const wasFromAbout = isDownloadingFromAbout;
   isDownloadingFromAbout = false;
@@ -303,6 +314,39 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     }
   });
 });
+
+/**
+ * Is a downloaded macOS update staged and waiting to install?
+ *
+ * True only after `update-downloaded` on macOS. The quit path checks this to
+ * decide whether it must arm Squirrel before exiting.
+ */
+export function hasPendingMacUpdate(): boolean {
+  return IS_MAC && macUpdateReadyToInstall;
+}
+
+/**
+ * Arm Squirrel.Mac's install for a downloaded-but-not-yet-installed update, the
+ * same way the "Restart Now" dialog does (`quitAndInstall(false, true)`).
+ *
+ * This exists because the app's guarded `before-quit` teardown ends in
+ * `app.exit(0)` to clear ShipIt's "App Still Running" (-9) race — but a plain
+ * `app.exit(0)` also skips electron-updater's `autoInstallOnAppQuit`, so a user
+ * who dismisses "Restart Now" and later quits normally never installs the
+ * update (it loops in pending/ forever). Calling this from `before-quit` when
+ * `hasPendingMacUpdate()` mirrors the proven Restart-Now sequence: arm the
+ * install, then let the guarded fast-exit hand off to ShipIt.
+ *
+ * Safe to call at most once; the re-entrant `before-quit` is guarded by
+ * `shuttingDown` in index.ts so this never recurses into a second teardown.
+ */
+export function armPendingMacUpdateInstall(): void {
+  if (!hasPendingMacUpdate()) return;
+  macUpdateReadyToInstall = false; // one-shot; don't re-arm on a re-entrant quit
+  markAppQuitting();
+  log.info('[auto-updater] arming pending macOS update install on quit');
+  autoUpdater.quitAndInstall(false, true);
+}
 
 // Error handling
 autoUpdater.on('error', (err) => {
