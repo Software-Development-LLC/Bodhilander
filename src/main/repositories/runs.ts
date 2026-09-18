@@ -200,6 +200,23 @@ export function setRunState(runId: string, state: RunState, blockedReason?: stri
     .run(state, blockedReason ?? null, runId);
 }
 
+/**
+ * Halt a run: mark it `abandoned` (terminal) so the loop stops driving it and it
+ * drops out of the active + inbox lists, keeping its row and history (CO-722).
+ *
+ * Deliberately does NOT touch the run's worktrees or any gate process it left
+ * behind — halting is a bookkeeping act, and chasing child processes is what
+ * locks the app up. Those are the operator's to clean up. Returns false when
+ * there is no such run (already gone), true when it was halted.
+ */
+export function abandonRun(runId: string, reason = 'Halted by the operator'): boolean {
+  const info = getDatabase()
+    .prepare("UPDATE runs SET state = 'abandoned', blocked_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .run(reason, runId);
+  if (info.changes > 0) appendEvent(runId, 'abandoned');
+  return info.changes > 0;
+}
+
 export function getRun(id: string): RunRow | null {
   const row = getDatabase().prepare('SELECT * FROM runs WHERE id = ?').get(id) as
     | RawRun
@@ -218,7 +235,7 @@ export function listActiveRuns(): RunRow[] {
   const rows = getDatabase()
     .prepare(
       `SELECT * FROM runs
-        WHERE state NOT IN ('approved', 'done', 'failed')
+        WHERE state NOT IN ('approved', 'done', 'failed', 'abandoned')
         ORDER BY created_at DESC`,
     )
     .all() as RawRun[];
@@ -853,7 +870,7 @@ export function listActive(): ActiveRow[] {
     .prepare(
       `SELECT id, initiative_key, state, kind, bootstrap_state, blocked_reason, updated_at
          FROM runs
-        WHERE state NOT IN ('approved', 'done', 'failed')
+        WHERE state NOT IN ('approved', 'done', 'failed', 'abandoned')
         ORDER BY updated_at DESC, id ASC`,
     )
     .all() as {

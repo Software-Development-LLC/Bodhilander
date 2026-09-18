@@ -25,7 +25,7 @@ import {
 const ALL_STATES: RunState[] = [
   'preparing', 'provisioning', 'running', 'waitingPermission', 'waitingHumanGate',
   'waitingChecks', 'reviewNotRequested', 'waitingReview', 'inconclusive',
-  'failed', 'approved', 'done',
+  'failed', 'approved', 'done', 'abandoned',
 ];
 
 const ALL_EVENTS: RunEvent[] = [

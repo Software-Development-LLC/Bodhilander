@@ -57,6 +57,8 @@ interface ElectronAPI {
   // that starts, stops or advances a run.
   getRunInbox: () => Promise<RunInboxRow[]>;
   getActiveRuns: () => Promise<RunActiveRow[]>;
+  /** Halt a run: mark it abandoned so it stops being driven and leaves the lists. */
+  abandonRun: (runId: string) => Promise<boolean>;
   getProjectBoard: (projectNumber?: number) => Promise<BoardResult>;
   getOrchestrationConfig: (force?: boolean) => Promise<ConfigResult>;
   getRunPermissions: (runId: string) => Promise<RunPermissionRequest[]>;

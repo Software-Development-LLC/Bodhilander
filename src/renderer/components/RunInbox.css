@@ -44,6 +44,27 @@
   gap: 12px;
 }
 
+/* Halt: a quiet outline button that reveals its intent (a negative action) on
+ * hover, so it never competes with the row's primary approve/deny controls. */
+.run-inbox__halt {
+  margin-left: auto;
+  padding: 0.2rem 0.55rem;
+  border-radius: 5px;
+  border: 1px solid var(--border, #555);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.run-inbox__halt:hover:not(:disabled) {
+  border-color: var(--accent-negative, #d66);
+  color: var(--accent-negative, #d66);
+}
+.run-inbox__halt:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .run-inbox__key {
   font-weight: 600;
 }

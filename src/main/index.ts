@@ -895,6 +895,7 @@ safeOn('pty:prime', (id: string) => {
 // set it off from a window.
 safeHandle('db:runs:inbox', () => runsRepo.listInbox());
 safeHandle('db:runs:active', () => runsRepo.listActive());
+safeHandle('db:runs:abandon', (runId: string) => runsRepo.abandonRun(runId));
 safeHandle('db:projects:board', (projectNumber?: number) => getBoardWithRunState(projectNumber));
 safeHandle('db:config:load', (force?: boolean) => loadOrchestrationConfig({ force }));
 

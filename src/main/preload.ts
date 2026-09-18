@@ -177,6 +177,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:runs:inbox'),
   getActiveRuns: (): Promise<RunActiveRow[]> =>
     ipcRenderer.invoke('db:runs:active'),
+  abandonRun: (runId: string): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:abandon', runId),
   getProjectBoard: (projectNumber?: number): Promise<BoardResult> =>
     ipcRenderer.invoke('db:projects:board', projectNumber),
   getOrchestrationConfig: (force?: boolean): Promise<ConfigResult> =>

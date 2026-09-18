@@ -264,15 +264,18 @@ export const ManifestApproval: React.FC<ManifestApprovalProps> = ({
 interface RunInboxProps {
   /** Injected in tests; the real one is the read-only IPC channel. */
   load?: () => Promise<RunInboxRow[]>;
+  /** Injected in tests; the real one halts a run over IPC. */
+  abandon?: (runId: string) => Promise<boolean>;
   /** Injected in tests so "waiting 2h" is not a clock the suite races. */
   now?: () => number;
   /** How often to ask again. A minute in the app; milliseconds in tests. */
   pollMs?: number;
 }
 
-export const RunInbox: React.FC<RunInboxProps> = ({ load, now, pollMs }) => {
+export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }) => {
   const [rows, setRows] = useState<RunInboxRow[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const [halting, setHalting] = useState<Set<string>>(new Set());
 
   const fetch = useCallback(async () => {
     try {
@@ -289,6 +292,23 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now, pollMs }) => {
       setFailed(err instanceof Error ? err.message : String(err));
     }
   }, [load]);
+
+  const onHalt = useCallback(async (runId: string) => {
+    setHalting((s) => new Set(s).add(runId));
+    try {
+      await (abandon ?? window.electronAPI.abandonRun)(runId);
+      await fetch(); // it drops out of the inbox once abandoned
+    } catch {
+      // A failed halt just leaves the row; the reason is already on screen and
+      // the user can try again. Nothing to surface beyond clearing the spinner.
+    } finally {
+      setHalting((s) => {
+        const next = new Set(s);
+        next.delete(runId);
+        return next;
+      });
+    }
+  }, [abandon, fetch]);
 
   useEffect(() => {
     void fetch();
@@ -354,6 +374,15 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, now, pollMs }) => {
               <span className="run-inbox__waited" title={row.since}>
                 {waitedFor(row.since, clock)}
               </span>
+              <button
+                type="button"
+                className="run-inbox__halt"
+                disabled={halting.has(row.id)}
+                onClick={() => void onHalt(row.id)}
+                title="Stop driving this run and clear it from the inbox (leaves worktrees in place)"
+              >
+                {halting.has(row.id) ? 'Halting…' : 'Halt'}
+              </button>
             </div>
             <p className="run-inbox__reason">{reasonFor(row)}</p>
             {row.repos.length > 0 && (
