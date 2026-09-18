@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { runGuardedShutdown } from './shutdown';
+import { withSpawnRetry, isTransientSpawnError } from './spawn-retry';
 import { isAppQuitting, markAppQuitting, shouldHideToTrayOnClose } from './quit-state';
 import { resolveLaunchProviderId } from './providers';
 import { startProviderInstall, cancelProviderInstall } from './provider-install';
@@ -839,11 +840,26 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     // only bridges first launches where the terminal mounted before the row
     // was persisted. Unknown ids degrade to the default inside
     // PtyManager.createSession (resolveProvider).
-    ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId));
+    //
+    // Wrapped in withSpawnRetry so a transient `posix_spawnp failed` (EAGAIN —
+    // the process/PTY limit momentarily hit under load) is ridden out rather
+    // than surfaced as a failed "new session". createSession throws before it
+    // registers the pty in its map, so a retry starts from a clean slate.
+    await withSpawnRetry(() =>
+      ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId)),
+    );
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {
     log.error('[Main] Failed to create PTY session:', error);
+    // A transient resource failure survived the retries: tell the renderer
+    // something the user can act on, instead of the raw node-pty string.
+    if (isTransientSpawnError(error)) {
+      throw new Error(
+        'Could not start a terminal — the system is temporarily out of process resources. ' +
+          'This usually clears in a few seconds; try again, or close some sessions.',
+      );
+    }
     throw error; // Re-throw so renderer knows it failed
   }
 });
