@@ -849,6 +849,13 @@ export interface BoardInitiative {
   repos: string[];
   /** The initiative's "Approved for Development" value marks it eligible to start. */
   eligible: boolean;
+  /**
+   * True when a run for this initiative's key is already active locally (Phase 4).
+   * Annotated by the app after reading the board — GitHub doesn't know about the
+   * app's runs — so the board shows "In progress" instead of offering a second
+   * Initiate. Optional: the raw board read leaves it undefined.
+   */
+  inProgress?: boolean;
 }
 
 export interface BoardProject {

@@ -142,6 +142,11 @@ const Initiative: React.FC<{
   initiateState?: InitiateState;
 }> = ({ init, initiate, initiateState }) => {
   const { item, children, repos, eligible } = init;
+  // A run already exists for this initiative (annotated from the DB, so it
+  // survives navigating away and back — unlike the ephemeral initiateState).
+  // It takes precedence over the Initiate button so the same initiative can't be
+  // started twice.
+  const running = init.inProgress === true;
   return (
     <>
       <div className="board__init-head">
@@ -150,12 +155,13 @@ const Initiative: React.FC<{
         <a className="board__init-title" href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
         {item.approval && <span className="board__approval">{item.approval}</span>}
         {item.status && <span className={`board__status board__status--${item.status.replace(/\s+/g, '-').toLowerCase()}`}>{STATUS_LABEL[item.status] ?? item.status}</span>}
-        {initiate && initiateState?.kind !== 'started' && (
+        {running && <span className="board__initiated">In progress</span>}
+        {!running && initiate && initiateState?.kind !== 'started' && (
           <button type="button" className="board__initiate" disabled={initiateState?.kind === 'busy'} onClick={initiate}>
             {initiateState?.kind === 'busy' ? 'Initiating…' : 'Initiate'}
           </button>
         )}
-        {initiateState?.kind === 'started' && <span className="board__initiated">Started ✓</span>}
+        {!running && initiateState?.kind === 'started' && <span className="board__initiated">Started ✓</span>}
       </div>
       {initiateState?.kind === 'error' && <p className="board__initiate-error" role="alert">{initiateState.reason}</p>}
       <p className="board__repos">
