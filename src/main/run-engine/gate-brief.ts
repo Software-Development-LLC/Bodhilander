@@ -37,6 +37,13 @@ export interface RunFacts {
   /** The pinned harness. Its scripts are absolute from here, not relative. */
   harnessPath: string;
   gate: Gate;
+  /**
+   * Externally-authored context for this repo/owner from the central config
+   * (Phase 4) — the team's domain knowledge, not the app's. Passed through
+   * verbatim like `task`: the app invents nothing, it only carries what the
+   * config author wrote. Absent when the config names none.
+   */
+  context?: string | null;
 }
 
 /**
@@ -62,6 +69,9 @@ export function gateBrief(facts: RunFacts, task: string): string {
     'team.yaml and seams.yaml are in the initiative directory above.',
     'Harness scripts are under the harness path above, by absolute path.',
     '',
+    // The config's context for this repo/owner, verbatim — data the author
+    // wrote, carried like the task, only when present.
+    ...(facts.context && facts.context.trim().length > 0 ? ['# Context', '', facts.context.trim(), ''] : []),
     '# Task',
     '',
     task.trim(),

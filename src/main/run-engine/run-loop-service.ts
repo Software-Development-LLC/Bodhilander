@@ -272,6 +272,23 @@ function accountConfigDirFor(run: RunRow): string | null {
   return resolveAccountForGroup(run.groupId)?.configDir ?? null;
 }
 
+/**
+ * The central config's context for an owner's repo + owner agent (Phase 4),
+ * joined for the gate brief, or null when the config names none. Externally
+ * authored — the app carries it, it doesn't invent it.
+ */
+async function repoContextFor(owner: RunOwnerRow): Promise<string | null> {
+  try {
+    const res = await loadOrchestrationConfig();
+    if (res.status !== 'ok') return null;
+    const parts = [res.config.repos[owner.repo]?.context, owner.agent ? res.config.owners?.[owner.agent]?.context : undefined];
+    const joined = parts.filter((p): p is string => typeof p === 'string' && p.trim().length > 0).join('\n\n');
+    return joined.length > 0 ? joined : null;
+  } catch {
+    return null;
+  }
+}
+
 function archDeps(config: SpawnConfig, run: RunRow): ArchDeps {
   return {
     accountConfigDir: accountConfigDirFor(run),
@@ -350,7 +367,7 @@ async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, own
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run));
+  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner));
   return { target, deps: { ...commands, spawnGate, provision: () => provisionRunFor(run) } };
 }
 
