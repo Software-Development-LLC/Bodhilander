@@ -15,7 +15,7 @@ import type { BoardResult, BoardInitiative } from '../../../shared/types';
 // helpers under test are pure, so stub those two and import dynamically.
 mock.module('electron', () => ({ app: { getPath: () => '/nonexistent-userdata', isPackaged: false, getAppPath: () => '/app' } }));
 mock.module('electron-log', () => ({ default: { info() {}, warn() {}, error() {} } }));
-const { boardInitiativeKey, planBoardInitiate, annotateBoardInProgress } = await import('../run-loop-service');
+const { boardInitiativeKey, planBoardInitiate, annotateBoardInProgress, probeEnv } = await import('../run-loop-service');
 
 const initiative = (over: Partial<BoardInitiative['item']> & { repos?: string[]; eligible?: boolean } = {}): BoardInitiative => ({
   item: {
@@ -109,5 +109,17 @@ describe('annotateBoardInProgress', () => {
     const out = annotateBoardInProgress(b, new Set());
     if (out.status !== 'ok') throw new Error('unreachable');
     expect(out.project.initiatives[0].inProgress).toBe(false);
+  });
+});
+
+describe('probeEnv — the status probe runs under the run\'s managed account', () => {
+  test('a managed account config dir becomes CLAUDE_CONFIG_DIR', () => {
+    // The whole fix: `claude agents` must probe the SAME account the --bg gate
+    // was launched under, or a live background gate is misread as `gone`.
+    expect(probeEnv('/accts/abc/.claude')).toEqual({ CLAUDE_CONFIG_DIR: '/accts/abc/.claude' });
+  });
+
+  test('no account means ambient env (undefined), not an empty override', () => {
+    expect(probeEnv(null)).toBeUndefined();
   });
 });
