@@ -338,14 +338,12 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
         // owner's provision did not start). Open its gate 2.
         drove = true;
         ok = (await startOwner(run, owner, report)) && ok;
-      } else if (state === 'running') {
-        drove = true;
-        ok = (await lookAtOwner(run, owner, report)) && ok;
-      } else if (isBypassWaiting(run, owner)) {
-        // A bypass gate's `waiting` is answered out of band (`claude attach`),
-        // not through the app, so the loop keeps looking here — the owner stays
-        // in the inbox (visible), and when the agent resolves and writes its
-        // receipt this pass reads it and advances the gate, instead of sticking.
+      } else if (state === 'running' || isBypassWaiting(run, owner)) {
+        // A running owner — or a bypass gate waiting on a person. Bypass has no
+        // permission channel, so its prompt is answered out of band (`claude
+        // attach`), not through the app; the loop must keep looking here so the
+        // owner (still in the inbox, visible) advances when the agent resolves
+        // and writes its receipt, instead of sticking in waitingPermission.
         drove = true;
         ok = (await lookAtOwner(run, owner, report)) && ok;
       } else if (RECONCILES.has(state)) {

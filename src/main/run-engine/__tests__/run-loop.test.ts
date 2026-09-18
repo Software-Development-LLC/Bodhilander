@@ -291,6 +291,21 @@ describe('the schedule', () => {
     expect(f.calls).toEqual([]);
   });
 
+  test('a waiting owner with no open gate row degrades to not-bypass, not a throw', async () => {
+    // isBypassWaiting reads the active gate's posture; if the row is gone the
+    // optional chain must yield false (the owner is left for the inbox), never
+    // throw and take the whole tick down.
+    const f = fake({
+      runs: [run('r1', 'waitingPermission')],
+      owners: { r1: [owner('r1', { state: 'waitingPermission' })] },
+      activeGate: () => null,
+    });
+    const report = await createRunLoop(f.deps).tick();
+    expect(report.problems).toEqual([]);
+    expect(report.due).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
   test('a throw inside one run’s pass is that run’s problem, not the tick’s', async () => {
     const f = fake({
       runs: [run('r1', 'running'), run('r2', 'running')],
