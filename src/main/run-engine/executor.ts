@@ -155,6 +155,12 @@ export function provisionEvent(code: number, detail?: string): RunEvent {
   return { kind: 'provisionUndriveable' };
 }
 
+/** Cap a reason so a runaway install log can't flood blocked_reason. */
+const MAX_REASON_CHARS = 600;
+function clampReason(text: string): string {
+  return text.length <= MAX_REASON_CHARS ? text : `${text.slice(0, MAX_REASON_CHARS)}… (truncated)`;
+}
+
 /**
  * What launching a gate established.
  *
@@ -214,9 +220,10 @@ async function provision(
     return;
   }
   const run = await deps.provision();
-  // The install's own output (provisionRun's log / first failing line) so a
-  // failed provision records WHAT broke, not just that it did.
-  const detail = run.stdout.trim() || run.stderr.trim() || `provision exited ${run.code}`;
+  // provisionRun's log — a per-repo summary that already condenses each failing
+  // install to its first line, NOT the raw multi-line install blob. Capped so a
+  // pathological log can't flood a persisted blocked_reason or a notification.
+  const detail = clampReason(run.stdout.trim() || run.stderr.trim() || `provision exited ${run.code}`);
   const event = provisionEvent(run.code, detail);
   result.events.push(event);
   if (event.kind !== 'provisioned') {

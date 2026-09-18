@@ -162,6 +162,24 @@ describe('provisioning', () => {
     expect(result.events).toEqual([{ kind: 'provisioned' }]);
     expect(result.notifications).toEqual([]);
   });
+
+  test('a failed install threads its output into the event reason', async () => {
+    const { deps } = fake({ provision: { code: 1, stdout: 'bsa: yarn failed: ELIFECYCLE', stderr: '' } });
+    const result = await execute([{ kind: 'provision' }], TARGET, deps);
+    expect(result.events).toEqual([{ kind: 'provisionFailed', reason: 'bsa: yarn failed: ELIFECYCLE' }]);
+    expect(result.notifications[0]).toBe('bsa: yarn failed: ELIFECYCLE');
+  });
+
+  test('a runaway install log is truncated, not flooded verbatim', async () => {
+    const huge = 'x'.repeat(5000);
+    const { deps } = fake({ provision: { code: 1, stdout: huge, stderr: '' } });
+    const result = await execute([{ kind: 'provision' }], TARGET, deps);
+    const event = result.events[0];
+    expect(event.kind).toBe('provisionFailed');
+    const reason = event.kind === 'provisionFailed' ? event.reason ?? '' : '';
+    expect(reason.length).toBeLessThan(huge.length);
+    expect(reason.endsWith('… (truncated)')).toBe(true);
+  });
 });
 
 describe('spawning a gate', () => {
@@ -280,7 +298,8 @@ describe('order', () => {
       deps,
     );
     expect(calls.map((c) => c.kind)).toEqual(['provision']);
-    expect(result.events).toEqual([{ kind: 'provisionFailed' }]);
+    // The event now carries the install's output so the failure is diagnosable.
+    expect(result.events).toEqual([{ kind: 'provisionFailed', reason: 'yarn install failed' }]);
     expect(result.problems[0]).toContain('spawnGate was not performed');
   });
 
