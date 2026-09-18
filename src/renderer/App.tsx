@@ -1797,12 +1797,17 @@ const App: React.FC = () => {
           />
         )}
         {contentView === 'runs' && (
-          <>
+          // Four stacked panels below the .view-switcher. Wrapped in a single
+          // scroll container (flex:1; min-height:0; overflow-y:auto) so the
+          // whole stack scrolls in place rather than growing past the bottom
+          // of the content column with its lower panels/actions unreachable --
+          // the same class of bug .board and .arena-panel already document.
+          <div className="runs-view">
             <RunPrepare onArmed={() => setRunsRefresh((n) => n + 1)} />
             <RunArm onArmed={() => setRunsRefresh((n) => n + 1)} />
             <RunList key={`active-${runsRefresh}`} />
             <RunInbox key={runsRefresh} />
-          </>
+          </div>
         )}
         {contentView === 'board' && <BoardView />}
         {/* The terminal area is HIDDEN, never unmounted, when another view is

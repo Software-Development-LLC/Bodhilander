@@ -1871,6 +1871,20 @@ body {
   overflow: hidden;
 }
 
+/* The Runs content-area view: RunPrepare / RunArm / RunList / RunInbox stacked
+ * below the .view-switcher. Like .arena-panel, it takes the height left in the
+ * column (flex:1; min-height:0) rather than `height:100%` (which would resolve
+ * against the FULL column, switcher included). overflow-y:auto so a long run
+ * list or a tall permission inbox scrolls the stack in place instead of
+ * pushing its lower panels and their actions off the bottom of the viewport.
+ * The child panels keep their own padding, so the container adds none. */
+.runs-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .arena-header {
   display: flex;
   align-items: center;
