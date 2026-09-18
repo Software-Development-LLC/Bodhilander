@@ -126,6 +126,15 @@ describe('inconclusive is never a pass and never a failure', () => {
     expect(d.state).toBe('failed');
   });
 
+  test('a failed install records the install output in its note, not a generic line', () => {
+    // So blocked_reason says WHAT broke — the person can act on it without
+    // reproducing the run.
+    const d = go('provisioning', { kind: 'provisionFailed', reason: 'bodhi-service-api: yarn install failed: ELIFECYCLE' });
+    expect(d.state).toBe('failed');
+    expect(d.note).toContain('ELIFECYCLE');
+    expect(d.actions).toContainEqual({ kind: 'notify', reason: d.note });
+  });
+
   test('the budget running out is inconclusive: no verdict was reached', () => {
     expect(go('running', { kind: 'budgetExceeded' }).state).toBe('inconclusive');
   });

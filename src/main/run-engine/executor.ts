@@ -149,9 +149,9 @@ export interface ExecutorResult {
  * `pkg` nor `lang` has nothing to install, and stopping for it would block
  * every Go and dotnet repo on a step that does not apply to them.
  */
-export function provisionEvent(code: number): RunEvent {
+export function provisionEvent(code: number, detail?: string): RunEvent {
   if (code === 0 || code === 3) return { kind: 'provisioned' };
-  if (code === 1) return { kind: 'provisionFailed' };
+  if (code === 1) return { kind: 'provisionFailed', reason: detail };
   return { kind: 'provisionUndriveable' };
 }
 
@@ -214,12 +214,15 @@ async function provision(
     return;
   }
   const run = await deps.provision();
-  const event = provisionEvent(run.code);
+  // The install's own output (provisionRun's log / first failing line) so a
+  // failed provision records WHAT broke, not just that it did.
+  const detail = run.stdout.trim() || run.stderr.trim() || `provision exited ${run.code}`;
+  const event = provisionEvent(run.code, detail);
   result.events.push(event);
   if (event.kind !== 'provisioned') {
     // The event moves the run; this is for the person who has to fix it, and
     // the plugin's own output says more than a code can.
-    result.notifications.push(run.stdout.trim() || run.stderr.trim() || `provision exited ${run.code}`);
+    result.notifications.push(detail);
   }
 }
 
