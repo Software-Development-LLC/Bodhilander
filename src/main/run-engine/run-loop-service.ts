@@ -106,11 +106,32 @@ export function permissionsRoot(userData: string): string {
   return path.join(userData, 'run-engine', 'permissions');
 }
 
-/** The real attention dependencies: read the receipt file, ask `claude agents`. */
-function attentionDeps(config: SpawnConfig): AttentionDeps {
+/**
+ * The env the `claude agents` status probe runs under: the run's managed
+ * account config dir (#327), or ambient when there is none. Exported and pure so
+ * the "probe the right account, not the default" decision is a value a test can
+ * assert — the whole point of the fix, since probing the wrong account reads a
+ * live gate as `gone`.
+ */
+export function probeEnv(accountConfigDir: string | null): Record<string, string> | undefined {
+  return accountConfigDir ? { CLAUDE_CONFIG_DIR: accountConfigDir } : undefined;
+}
+
+/**
+ * The real attention dependencies: read the receipt file, ask `claude agents`.
+ *
+ * `accountConfigDir` is threaded in because the status probe (`claude agents
+ * --json`) MUST run under the same managed account the gate was launched with
+ * (#327). A `--bg` gate registers its background session in that account's
+ * config; probing under the ambient/default config finds no such session and
+ * reads it as `gone` — which is exactly how a live owner gate that was still
+ * working got declared inconclusive minutes before it committed its work.
+ */
+function attentionDeps(config: SpawnConfig, accountConfigDir: string | null = null): AttentionDeps {
+  const env = probeEnv(accountConfigDir);
   return {
     readFile: readIfPresent,
-    run: (executable, argv) => runCommand(executable, argv, { timeoutMs: PROBE_TIMEOUT_MS }),
+    run: (executable, argv) => runCommand(executable, [...argv], { timeoutMs: PROBE_TIMEOUT_MS, env }),
     claudePath: config.claudePath,
     now: () => Date.now(),
     busyCeilingMs: GATE_BUSY_CEILING_MS,
@@ -377,7 +398,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     listActiveRuns: () => runsRepo.listActiveRuns(),
     listOwners: (id) => runsRepo.listOwners(id),
     activeGate: (id, repo) => runsRepo.activeGate(id, repo),
-    look: (run, gate) => lookAtGate(run, gate, attentionDeps(config)),
+    look: (run, gate) => lookAtGate(run, gate, attentionDeps(config, accountConfigDirFor(run))),
     pending: (run, gate) => pendingRequests(config.permissionsRoot, run.id, gate, channelIo).length,
     discoverPr: async (_run, owner) => {
       // `gh` in the owner's worktree, so it reads that repo's remote and auth
