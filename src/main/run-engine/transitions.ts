@@ -83,8 +83,10 @@ export interface ReviewVerdict {
 export type RunEvent =
   | { kind: 'prepared' }
   | { kind: 'provisioned' }
-  /** An install ran and failed. A real result, unlike the one below. */
-  | { kind: 'provisionFailed' }
+  /** An install ran and failed. A real result, unlike the one below. `reason`
+   *  carries the install's own output (first failing line) so the run's
+   *  blocked_reason says WHAT broke, not just that something did. */
+  | { kind: 'provisionFailed'; reason?: string }
   /** Nothing ran: no worktree, no package manager. Not a result. */
   | { kind: 'provisionUndriveable' }
   | { kind: 'gateFinished'; gate: Gate; verdict: GateVerdict }
@@ -230,10 +232,14 @@ function onProvisioning(event: RunEvent): Decision | null {
     };
   }
   if (event.kind === 'provisionFailed') {
+    const detail = event.reason?.trim();
+    // The install's own output beats a generic line — it is what the person has
+    // to act on. Falls back to the generic note when nothing came back.
+    const why = detail ? `install failed: ${detail}` : 'an install ran and failed — a real result';
     return {
       state: 'failed',
-      actions: [{ kind: 'notify', reason: 'install failed' }],
-      note: 'an install ran and failed — a real result',
+      actions: [{ kind: 'notify', reason: why }],
+      note: why,
     };
   }
   if (event.kind === 'provisionUndriveable') {

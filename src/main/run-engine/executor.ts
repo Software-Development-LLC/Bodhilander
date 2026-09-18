@@ -149,10 +149,16 @@ export interface ExecutorResult {
  * `pkg` nor `lang` has nothing to install, and stopping for it would block
  * every Go and dotnet repo on a step that does not apply to them.
  */
-export function provisionEvent(code: number): RunEvent {
+export function provisionEvent(code: number, detail?: string): RunEvent {
   if (code === 0 || code === 3) return { kind: 'provisioned' };
-  if (code === 1) return { kind: 'provisionFailed' };
+  if (code === 1) return { kind: 'provisionFailed', reason: detail };
   return { kind: 'provisionUndriveable' };
+}
+
+/** Cap a reason so a runaway install log can't flood blocked_reason. */
+const MAX_REASON_CHARS = 600;
+function clampReason(text: string): string {
+  return text.length <= MAX_REASON_CHARS ? text : `${text.slice(0, MAX_REASON_CHARS)}… (truncated)`;
 }
 
 /**
@@ -214,12 +220,16 @@ async function provision(
     return;
   }
   const run = await deps.provision();
-  const event = provisionEvent(run.code);
+  // provisionRun's log — a per-repo summary that already condenses each failing
+  // install to its first line, NOT the raw multi-line install blob. Capped so a
+  // pathological log can't flood a persisted blocked_reason or a notification.
+  const detail = clampReason(run.stdout.trim() || run.stderr.trim() || `provision exited ${run.code}`);
+  const event = provisionEvent(run.code, detail);
   result.events.push(event);
   if (event.kind !== 'provisioned') {
     // The event moves the run; this is for the person who has to fix it, and
     // the plugin's own output says more than a code can.
-    result.notifications.push(run.stdout.trim() || run.stderr.trim() || `provision exited ${run.code}`);
+    result.notifications.push(detail);
   }
 }
 

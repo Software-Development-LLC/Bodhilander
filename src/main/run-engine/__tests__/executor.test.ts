@@ -120,8 +120,15 @@ describe('provisioning', () => {
     // Unchanged from docs/EXIT-CODES.md: 0 installed, 1 an install ran and
     // failed, 2 nothing could be run, 3 nothing was owed.
     expect(provisionEvent(0)).toEqual({ kind: 'provisioned' });
-    expect(provisionEvent(1)).toEqual({ kind: 'provisionFailed' });
+    expect(provisionEvent(1)).toEqual({ kind: 'provisionFailed', reason: undefined });
     expect(provisionEvent(2)).toEqual({ kind: 'provisionUndriveable' });
+  });
+
+  test('a failed provision carries the install output as its reason', () => {
+    // So the run's blocked_reason says WHAT broke (the first failing line),
+    // not just that something did.
+    expect(provisionEvent(1, 'bodhi-service-api: yarn install failed: ELIFECYCLE'))
+      .toEqual({ kind: 'provisionFailed', reason: 'bodhi-service-api: yarn install failed: ELIFECYCLE' });
   });
 
   test('nothing owed is a provisioned run, not a fault', () => {
@@ -154,6 +161,24 @@ describe('provisioning', () => {
     const result = await execute([{ kind: 'provision' }], TARGET, deps);
     expect(result.events).toEqual([{ kind: 'provisioned' }]);
     expect(result.notifications).toEqual([]);
+  });
+
+  test('a failed install threads its output into the event reason', async () => {
+    const { deps } = fake({ provision: { code: 1, stdout: 'bsa: yarn failed: ELIFECYCLE', stderr: '' } });
+    const result = await execute([{ kind: 'provision' }], TARGET, deps);
+    expect(result.events).toEqual([{ kind: 'provisionFailed', reason: 'bsa: yarn failed: ELIFECYCLE' }]);
+    expect(result.notifications[0]).toBe('bsa: yarn failed: ELIFECYCLE');
+  });
+
+  test('a runaway install log is truncated, not flooded verbatim', async () => {
+    const huge = 'x'.repeat(5000);
+    const { deps } = fake({ provision: { code: 1, stdout: huge, stderr: '' } });
+    const result = await execute([{ kind: 'provision' }], TARGET, deps);
+    const event = result.events[0];
+    expect(event.kind).toBe('provisionFailed');
+    const reason = event.kind === 'provisionFailed' ? event.reason ?? '' : '';
+    expect(reason.length).toBeLessThan(huge.length);
+    expect(reason.endsWith('… (truncated)')).toBe(true);
   });
 });
 
@@ -273,7 +298,8 @@ describe('order', () => {
       deps,
     );
     expect(calls.map((c) => c.kind)).toEqual(['provision']);
-    expect(result.events).toEqual([{ kind: 'provisionFailed' }]);
+    // The event now carries the install's output so the failure is diagnosable.
+    expect(result.events).toEqual([{ kind: 'provisionFailed', reason: 'yarn install failed' }]);
     expect(result.problems[0]).toContain('spawnGate was not performed');
   });
 
