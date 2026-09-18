@@ -254,20 +254,26 @@ describe('halting a run', () => {
     await screen.findByText('Nothing needs your attention');
   });
 
-  test('a FAILED run is surfaced (not vanished) with its reason and a Dismiss action', async () => {
+  test('a FAILED run is surfaced (not vanished) with its reason, and Dismiss clears it', async () => {
     // The gap this fixes: a failed run is terminal, so it used to fall out of
     // both the active list and the inbox — the operator saw it disappear with no
     // idea it failed or why. Now it shows here with its reason, dismissible.
+    const dismissed: string[] = [];
+    let loads = 0;
     render(
       <RunInbox
-        load={async () => [row({ state: 'failed', blockedReason: 'install failed: yarn ELIFECYCLE' })]}
-        abandon={async () => true}
+        load={async () => { loads++; return loads === 1 ? [row({ state: 'failed', blockedReason: 'install failed: yarn ELIFECYCLE' })] : []; }}
+        abandon={async (id) => { dismissed.push(id); return true; }}
         now={() => NOW}
       />,
     );
     await screen.findByText('install failed: yarn ELIFECYCLE');
     // The action reads as Dismiss, not Halt — the run has already stopped.
-    expect(screen.getByText('Dismiss')).toBeDefined();
+    const dismiss = screen.getByText('Dismiss');
+    fireEvent.click(dismiss);
+    // It invokes abandon for THIS run and, once gone, the inbox is empty.
+    await waitFor(() => expect(dismissed).toEqual(['run-1']));
+    await screen.findByText('Nothing needs your attention');
   });
 
   test('a failed halt surfaces an error instead of a silent no-op', async () => {
@@ -280,7 +286,7 @@ describe('halting a run', () => {
     );
     fireEvent.click(await screen.findByText('Halt'));
     // The operator sees it failed rather than believing the run was halted.
-    await screen.findByText(/Halt failed: IPC exploded/);
+    await screen.findByText(/Could not halt this run: IPC exploded/);
     // And the run is still there to try again.
     expect(screen.getByText('CO-722')).toBeDefined();
   });

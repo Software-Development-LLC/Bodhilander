@@ -380,10 +380,16 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
       {staleNote}
       <ul className="run-inbox__list">
         {rows.map((row) => {
-          // A failed run is terminal: "Halt" (stop driving) makes no sense — it
-          // has stopped. The same action (abandon) applies, but it reads as
-          // "Dismiss": acknowledge it and clear it from the list.
-          const terminal = row.state === 'failed';
+          // A failed run has already stopped, so "Halt" (stop driving) makes no
+          // sense — the same action (abandon) reads as "Dismiss": acknowledge it
+          // and clear it from the list. `isFailed` names exactly that case, not
+          // "terminal in general", so a future terminal-but-inbox-visible state
+          // has to opt in here rather than inherit this wording.
+          const isFailed = row.state === 'failed';
+          const busy = halting.has(row.id);
+          const verb = isFailed ? 'Dismiss' : 'Halt';
+          const gerund = isFailed ? 'Dismissing…' : 'Halting…';
+          const actionLabel = busy ? gerund : verb;
           return (
           <li key={row.id} className={`run-inbox__row run-inbox__row--${row.state}`}>
             <div className="run-inbox__head">
@@ -394,18 +400,18 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
               <button
                 type="button"
                 className="run-inbox__halt"
-                disabled={halting.has(row.id)}
+                disabled={busy}
                 onClick={() => void onHalt(row.id)}
-                title={terminal
+                title={isFailed
                   ? 'Acknowledge this failed run and clear it from the list (leaves worktrees in place)'
                   : 'Stop driving this run and clear it from the inbox (leaves worktrees in place)'}
               >
-                {halting.has(row.id) ? (terminal ? 'Dismissing…' : 'Halting…') : (terminal ? 'Dismiss' : 'Halt')}
+                {actionLabel}
               </button>
             </div>
             {haltError[row.id] && (
               <p className="run-inbox__halt-error" role="alert">
-                {terminal ? 'Dismiss' : 'Halt'} failed: {haltError[row.id]}
+                Could not {verb.toLowerCase()} this run: {haltError[row.id]}
               </p>
             )}
             <p className="run-inbox__reason">{reasonFor(row)}</p>
