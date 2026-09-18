@@ -1,15 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { BoardInitiative, BoardResult } from '../../shared/types';
+import { BoardInitiative, BoardResult, RunCrossRepoPrepareResult } from '../../shared/types';
 import './BoardView.css';
 
 /**
- * The board (board-driven orchestration, Phase 1 — read-only).
+ * The board (board-driven orchestration).
  *
  * A view onto a GitHub Projects v2 board: the project's initiatives, which repos
  * each touches (cross-repo children grouped under their initiative), each one's
  * Status + Priority, and which are **eligible** to start (the "Approved for
- * Development" gate). No "initiate" yet — this is the visibility surface the
- * driving phases build on. Read-only by design, like the run inbox.
+ * Development" gate). Eligible ones carry an **Initiate** button (Phase 4) that
+ * creates a cross-repo run from the initiative; the rest are read-only.
  */
 
 /** Friendly label for a Status value; unknown values pass through. */
@@ -27,12 +27,18 @@ const priorityRank = (p: string | null): number => (p !== null && p in PRIORITY_
 interface BoardViewProps {
   /** Injected in tests; the real one is the read-only IPC channel. */
   load?: (projectNumber?: number) => Promise<BoardResult>;
+  /** Injected in tests; the real one creates a cross-repo run from the initiative. */
+  initiate?: (projectNumber: number, repo: string, issueNumber: number) => Promise<RunCrossRepoPrepareResult>;
   projectNumber?: number;
   pollMs?: number;
 }
 
-export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollMs }) => {
+/** Per-initiative initiate feedback, keyed by `repo#number`. */
+type InitiateState = { kind: 'busy' } | { kind: 'started' } | { kind: 'error'; reason: string };
+
+export const BoardView: React.FC<BoardViewProps> = ({ load, initiate, projectNumber, pollMs }) => {
   const [result, setResult] = useState<BoardResult | null>(null);
+  const [initiated, setInitiated] = useState<Record<string, InitiateState>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -42,6 +48,22 @@ export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollM
       setResult({ status: 'problem', problem: err instanceof Error ? err.message : String(err) });
     }
   }, [load, projectNumber]);
+
+  const onInitiate = useCallback(async (boardNumber: number, init: BoardInitiative) => {
+    const key = `${init.item.repo}#${init.item.number}`;
+    setInitiated((s) => ({ ...s, [key]: { kind: 'busy' } }));
+    try {
+      const res = await (initiate ?? window.electronAPI.initiateFromBoard)(boardNumber, init.item.repo, init.item.number);
+      setInitiated((s) => ({
+        ...s,
+        [key]: res.status === 'prepared'
+          ? { kind: 'started' }
+          : { kind: 'error', reason: res.refusals.map((r) => `${r.what} — ${r.fix}`).join('; ') },
+      }));
+    } catch (err) {
+      setInitiated((s) => ({ ...s, [key]: { kind: 'error', reason: err instanceof Error ? err.message : String(err) } }));
+    }
+  }, [initiate]);
 
   useEffect(() => {
     void refresh();
@@ -87,7 +109,11 @@ export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollM
           <ul className="board__list">
             {eligible.map((init) => (
               <li key={`${init.item.repo}#${init.item.number}`} className="board__init board__init--eligible">
-                <Initiative init={init} />
+                <Initiative
+                  init={init}
+                  initiate={() => void onInitiate(project.number, init)}
+                  initiateState={initiated[`${init.item.repo}#${init.item.number}`]}
+                />
               </li>
             ))}
           </ul>
@@ -110,7 +136,11 @@ export const BoardView: React.FC<BoardViewProps> = ({ load, projectNumber, pollM
   );
 };
 
-const Initiative: React.FC<{ init: BoardInitiative }> = ({ init }) => {
+const Initiative: React.FC<{
+  init: BoardInitiative;
+  initiate?: () => void;
+  initiateState?: InitiateState;
+}> = ({ init, initiate, initiateState }) => {
   const { item, children, repos, eligible } = init;
   return (
     <>
@@ -120,7 +150,14 @@ const Initiative: React.FC<{ init: BoardInitiative }> = ({ init }) => {
         <a className="board__init-title" href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
         {item.approval && <span className="board__approval">{item.approval}</span>}
         {item.status && <span className={`board__status board__status--${item.status.replace(/\s+/g, '-').toLowerCase()}`}>{STATUS_LABEL[item.status] ?? item.status}</span>}
+        {initiate && initiateState?.kind !== 'started' && (
+          <button type="button" className="board__initiate" disabled={initiateState?.kind === 'busy'} onClick={initiate}>
+            {initiateState?.kind === 'busy' ? 'Initiating…' : 'Initiate'}
+          </button>
+        )}
+        {initiateState?.kind === 'started' && <span className="board__initiated">Started ✓</span>}
       </div>
+      {initiateState?.kind === 'error' && <p className="board__initiate-error" role="alert">{initiateState.reason}</p>}
       <p className="board__repos">
         {repos.length > 1 ? `${repos.length} repos: ` : ''}{repos.join(' · ')}
       </p>

@@ -66,6 +66,7 @@ interface ElectronAPI {
   listHarnessRepos: () => Promise<string[]>;
   prepareInitiative: (issueId: string, repo: string, budgetUsd?: number) => Promise<RunPrepareResult>;
   prepareCrossRepoRun: (issueId: string, repos: string[], budgetUsd?: number) => Promise<RunCrossRepoPrepareResult>;
+  initiateFromBoard: (projectNumber: number, repo: string, issueNumber: number) => Promise<RunCrossRepoPrepareResult>;
   readRunManifest: (runId: string) => Promise<SeamManifest | null>;
   approveRunManifest: (runId: string) => Promise<boolean>;
   rejectRunManifest: (runId: string, reason: string) => Promise<boolean>;

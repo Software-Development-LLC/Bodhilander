@@ -11,7 +11,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
-import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun, readRunManifest, approveRunManifest, rejectRunManifest } from './run-engine/run-loop-service';
+import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun, initiateFromBoard, readRunManifest, approveRunManifest, rejectRunManifest } from './run-engine/run-loop-service';
 import { fetchProjectBoard } from './github/board-service';
 import { loadOrchestrationConfig } from './github/orchestration-config';
 import * as sessionsRepo from './repositories/sessions';
@@ -911,6 +911,9 @@ safeHandle('db:runs:prepare', (issueId: string, repo: string, budgetUsd?: number
 );
 safeHandle('db:runs:prepareCrossRepo', (issueId: string, repos: string[], budgetUsd?: number) =>
   prepareCrossRepoRun(issueId, repos, budgetUsd),
+);
+safeHandle('db:runs:initiateFromBoard', (projectNumber: number, repo: string, issueNumber: number) =>
+  initiateFromBoard(projectNumber, repo, issueNumber),
 );
 safeHandle('db:runs:bootstrap:manifest', (runId: string) => readRunManifest(runId));
 safeHandle('db:runs:bootstrap:approve', (runId: string) => approveRunManifest(runId));
