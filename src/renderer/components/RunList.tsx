@@ -101,7 +101,24 @@ export const RunList: React.FC<RunListProps> = ({ load, now, pollMs }) => {
                 {waitedFor(row.since, clock)}
               </span>
             </div>
-            {row.repos.length > 0 && <p className="run-list__repos">{row.repos.join(', ')}</p>}
+            {row.owners.length > 0 ? (
+              // Per-owner status, so a cross-repo run shows each track's gate and
+              // state at a glance ("api · gate 4 · in review") instead of one
+              // opaque rollup. Falls back to the plain repo line when there are
+              // no owners yet (a run still bootstrapping).
+              <ul className="run-list__owners">
+                {row.owners.map((o) => (
+                  <li key={o.repo} className={`run-list__owner run-list__owner--${o.state ?? 'pending'}`}>
+                    <span className="run-list__owner-repo">{o.repo}</span>
+                    {o.gate != null && <span className="run-list__owner-gate">gate {o.gate}</span>}
+                    {o.agent && <span className="run-list__owner-agent">{o.agent}</span>}
+                    {o.state && <span className="run-list__owner-state">{STATE_LABEL[o.state] ?? o.state}</span>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              row.repos.length > 0 && <p className="run-list__repos">{row.repos.join(', ')}</p>
+            )}
             {row.blockedReason && <p className="run-list__reason">{row.blockedReason}</p>}
           </li>
         ))}

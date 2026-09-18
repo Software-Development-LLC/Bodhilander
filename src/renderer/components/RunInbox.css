@@ -220,3 +220,16 @@
   opacity: 0.5;
   cursor: default;
 }
+
+/* The `claude attach` command for a bypass gate waiting on a person (no broker). */
+.run-inbox__attach {
+  margin: 0.4rem 0 0;
+  font-size: 0.82rem;
+}
+.run-inbox__attach code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  font-size: 0.8rem;
+  user-select: all;
+}
