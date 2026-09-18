@@ -261,6 +261,36 @@ describe('the schedule', () => {
     expect(f.calls).toEqual([]);
   });
 
+  test('a BYPASS gate waiting on a person is still polled and self-recovers, unlike a broker posture', async () => {
+    // Bypass runs --dangerously-skip-permissions: no permission channel, so the
+    // prompt is answered out of band (`claude attach`). The loop must keep
+    // looking, or the run sticks in waitingPermission forever. Here the agent
+    // has resolved (look returns a passing receipt) and the pass advances it.
+    const f = fake({
+      runs: [run('r1', 'waitingPermission')],
+      owners: { r1: [owner('r1', { state: 'waitingPermission' })] },
+      activeGate: () => ({ ...GATE, posture: 'bypass' }),
+      look: async () => look({ kind: 'gateFinished', gate: 2, verdict: 'pass' }),
+    });
+    const report = await createRunLoop(f.deps).tick();
+    expect(report.due).toEqual(['r1']);                    // scheduled, not parked
+    // Re-looked AND advanced when it resolved — the whole point of the fix.
+    expect(f.calls).toContain('advance:gateFinished');
+  });
+
+  test('a MANUAL gate waiting on a person is left for the inbox, not polled', async () => {
+    // The contrast: a broker posture is answered IN the app, which moves the
+    // owner out of waitingPermission, so the loop must NOT keep looking here.
+    const f = fake({
+      runs: [run('r1', 'waitingPermission')],
+      owners: { r1: [owner('r1', { state: 'waitingPermission' })] },
+      activeGate: () => ({ ...GATE, posture: 'manual' }),
+    });
+    const report = await createRunLoop(f.deps).tick();
+    expect(report.due).toEqual([]);
+    expect(f.calls).toEqual([]);
+  });
+
   test('a throw inside one run’s pass is that run’s problem, not the tick’s', async () => {
     const f = fake({
       runs: [run('r1', 'running'), run('r2', 'running')],

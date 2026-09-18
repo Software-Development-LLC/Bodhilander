@@ -166,12 +166,31 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
   // the loop: the next tick skips it (it is here) and drives the others.
   const running = new Set<string>();
 
+  /**
+   * An owner blocked on a prompt under BYPASS posture. Bypass runs
+   * `--dangerously-skip-permissions`, so there is no permission-broker channel:
+   * the prompt is answered out of band (`claude attach <id>`), not in the app.
+   * Such an owner must keep being scheduled and re-looked, or the run sticks in
+   * waitingPermission forever after the person answers.
+   */
+  function isBypassWaiting(run: RunRow, owner: RunOwnerRow): boolean {
+    return owner.state === 'waitingPermission' && deps.activeGate(run.id, owner.repo)?.posture === 'bypass';
+  }
+
   function remember(run: RunRow): ScheduledRun {
     // The cadence is the FASTEST owner's, not the rollup's (CO-722 multi-owner).
     // Scheduling off the rollup would let one stuck owner (its person-state
     // outranks the others) zero out a healthy owner's cadence and starve it.
     const owners = deps.listOwners(run.id);
-    const state = schedulingState(owners.map((o) => o.state), run.state);
+    // A bypass gate has no permission broker: its `waiting` is answered out of
+    // band (`claude attach`), so the loop must KEEP polling that owner rather
+    // than parking it — otherwise the run sticks in waitingPermission forever,
+    // never noticing the agent resolved and wrote its receipt. Schedule such an
+    // owner like a running one (and re-look it in the dispatch below).
+    const state = schedulingState(
+      owners.map((o) => (isBypassWaiting(run, o) ? 'running' : o.state)),
+      run.state,
+    );
     const known = memory.get(run.id);
     // The state is the database's, always; only the bookkeeping is ours.
     const next: ScheduledRun = known
@@ -322,12 +341,19 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
       } else if (state === 'running') {
         drove = true;
         ok = (await lookAtOwner(run, owner, report)) && ok;
+      } else if (isBypassWaiting(run, owner)) {
+        // A bypass gate's `waiting` is answered out of band (`claude attach`),
+        // not through the app, so the loop keeps looking here — the owner stays
+        // in the inbox (visible), and when the agent resolves and writes its
+        // receipt this pass reads it and advances the gate, instead of sticking.
+        drove = true;
+        ok = (await lookAtOwner(run, owner, report)) && ok;
       } else if (RECONCILES.has(state)) {
         drove = true;
         ok = (await reconcileOwner(run, owner, report)) && ok;
       }
-      // Any other owner state (waiting on a person, terminal) is not this
-      // loop's to move -- the inbox has it, or it is done.
+      // Any other owner state (waiting on a person under a broker posture,
+      // terminal) is not this loop's to move -- the inbox has it, or it is done.
     }
     return drove ? ok : true;
   }
