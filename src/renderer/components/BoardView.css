@@ -2,7 +2,15 @@
 .board {
   padding: 0.75rem 1rem;
   overflow: auto;
-  height: 100%;
+  /* An ordinary flex child of .main, below the .view-switcher. `flex:1;
+   * min-height:0` rather than `height:100%` for the reason spelled out on
+   * .arena-panel: with the switcher above it, `height:100%` resolves against
+   * the FULL column, so a long "Ready to start" list overflows the bottom of
+   * the viewport instead of scrolling here. min-height:0 lets this box shrink
+   * below its content's min-content height, which is what makes overflow:auto
+   * actually engage. */
+  flex: 1;
+  min-height: 0;
 }
 .board--loading,
 .board--problem {
