@@ -25,6 +25,7 @@ function row(over: Partial<RunInboxRow> = {}): RunInboxRow {
     blockedReason: null,
     since: '2026-09-14T11:00:00Z',
     repos: [],
+    owners: [],
     ...over,
   };
 }
@@ -274,6 +275,21 @@ describe('halting a run', () => {
     // It invokes abandon for THIS run and, once gone, the inbox is empty.
     await waitFor(() => expect(dismissed).toEqual(['run-1']));
     await screen.findByText('Nothing needs your attention');
+  });
+
+  test('a bypass gate waiting on a person shows the attach command to answer it', async () => {
+    // Bypass has no in-app allow/deny (no broker), so the row would otherwise
+    // leave the operator nothing to do. Surface the exact `claude attach`.
+    render(
+      <RunInbox
+        now={() => NOW}
+        load={async () => [row({
+          state: 'waitingPermission',
+          owners: [{ repo: 'insights', agent: 'bsa-platform', state: 'waitingPermission', gate: 2, attachId: '7365f43b' }],
+        })]}
+      />,
+    );
+    await screen.findByText(/claude attach 7365f43b/);
   });
 
   test('a failed halt surfaces an error instead of a silent no-op', async () => {

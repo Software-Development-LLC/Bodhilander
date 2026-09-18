@@ -19,7 +19,7 @@ const NOW = Date.parse('2026-09-16T12:00:00Z');
 function row(over: Partial<RunActiveRow> = {}): RunActiveRow {
   return {
     id: 'run-1', initiativeKey: 'BWA-1', state: 'preparing', kind: 'single',
-    bootstrapState: null, blockedReason: null, since: '2026-09-16T11:57:00Z', repos: [],
+    bootstrapState: null, blockedReason: null, since: '2026-09-16T11:57:00Z', repos: [], owners: [],
     ...over,
   };
 }
@@ -82,5 +82,23 @@ describe('what the list renders', () => {
   test('it does not flash "nothing running" before it has loaded', () => {
     const { container } = render(<RunList load={() => new Promise(() => {})} now={() => NOW} />);
     expect(container.querySelector('.run-list')).toBeNull();
+  });
+
+  test('a cross-repo run shows each owner’s gate and state, not one opaque rollup', async () => {
+    render(
+      <RunList
+        now={() => NOW}
+        load={async () => [row({
+          state: 'running',
+          owners: [
+            { repo: 'bodhi-service-api', agent: 'bsa-lead', state: 'running', gate: 4, attachId: null },
+            { repo: 'bodhi-service-insights', agent: 'bsa-platform', state: 'waitingReview', gate: 4, attachId: null },
+          ],
+        })]}
+      />,
+    );
+    await screen.findByText('bodhi-service-api');
+    await screen.findByText('bodhi-service-insights');
+    expect(screen.getAllByText('gate 4').length).toBe(2);
   });
 });

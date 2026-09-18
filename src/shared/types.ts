@@ -780,6 +780,28 @@ export interface SeamManifest {
  * type shared by reference makes every column added in main visible in a
  * window by default.
  */
+/**
+ * One owner's live status for the run card / inbox (CO-722 multi-owner).
+ *
+ * A cross-repo run has several tracks at once; this is the per-track snapshot
+ * so the UI can show "gate 2 · api · running" instead of a single opaque state.
+ */
+export interface RunOwnerSummary {
+  repo: string;
+  /** The role at this owner's active gate, or null before one is recorded. */
+  agent: string | null;
+  /** The owner's own state (running, waitingPermission, waitingReview, …), or null. */
+  state: string | null;
+  /** The gate number in flight for this owner, or null when none is open. */
+  gate: number | null;
+  /**
+   * The background session to `claude attach` — set ONLY when this owner is a
+   * bypass gate waiting on a person (answered out of band, not in the app), so
+   * the inbox can show the exact command. Null otherwise.
+   */
+  attachId: string | null;
+}
+
 export interface RunInboxRow {
   id: string;
   initiativeKey: string;
@@ -788,6 +810,8 @@ export interface RunInboxRow {
   blockedReason: string | null;
   since: string;
   repos: string[];
+  /** Per-owner live status (empty for a single run with no owners yet). */
+  owners: RunOwnerSummary[];
 }
 
 /**
@@ -811,6 +835,8 @@ export interface RunActiveRow {
   blockedReason: string | null;
   since: string;
   repos: string[];
+  /** Per-owner live status (empty for a single run with no owners yet). */
+  owners: RunOwnerSummary[];
 }
 
 /**

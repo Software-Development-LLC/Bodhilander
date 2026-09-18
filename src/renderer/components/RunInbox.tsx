@@ -418,6 +418,15 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
             {row.repos.length > 0 && (
               <p className="run-inbox__repos">{row.repos.join(', ')}</p>
             )}
+            {/* A bypass gate has no in-app allow/deny (no broker), so a person
+                answers by attaching to the session. Surface the exact command
+                instead of leaving the row with nothing to act on. */}
+            {row.owners.filter((o) => o.attachId).map((o) => (
+              <p key={o.repo} className="run-inbox__attach">
+                Answer it in a terminal: <code>claude attach {o.attachId}</code>
+                {row.owners.length > 1 ? ` (${o.repo})` : ''}
+              </p>
+            ))}
             {row.state === 'waitingPermission' && (
               <PermissionRequests runId={row.id} onAnswered={() => void fetch()} />
             )}

@@ -14,6 +14,7 @@
  */
 import { getDatabase } from '../database';
 import { NEEDS_A_PERSON, rollupState, type RunState } from '../run-engine/transitions';
+import type { RunOwnerSummary } from '../../shared/types';
 import type { BootstrapState, RunKind } from '../run-engine/bootstrap';
 
 export type PermissionPosture = 'manual' | 'denyOnPrompt' | 'bypass';
@@ -751,6 +752,8 @@ export interface InboxRow {
   since: string;
   /** The repos this run touches, for a line a person can recognise. */
   repos: string[];
+  /** Per-owner live status; carries the `claude attach` id for a bypass wait. */
+  owners: RunOwnerSummary[];
 }
 
 /**
@@ -813,7 +816,9 @@ export function listInbox(): InboxRow[] {
 
   // One query for the batch, not one per row -- shared with the active list so
   // the two answer "which repos, in what order" the same way.
-  const byRun = reposByRun(rows.map((row) => row.id));
+  const ids = rows.map((row) => row.id);
+  const byRun = reposByRun(ids);
+  const ownersByRun = ownersSummaryByRun(ids);
 
   return rows.map((row) => ({
     id: row.id,
@@ -822,6 +827,7 @@ export function listInbox(): InboxRow[] {
     blockedReason: row.blocked_reason,
     since: row.updated_at,
     repos: byRun.get(row.id) ?? [],
+    owners: ownersByRun.get(row.id) ?? [],
   }));
 }
 
@@ -832,6 +838,45 @@ export function listInbox(): InboxRow[] {
  * lifted out so the active list and the inbox cannot answer "which repos" two
  * different ways.
  */
+/**
+ * Per-owner live status for a batch of runs, keyed by run id (CO-722).
+ *
+ * One query joining each owner to its OPEN gate (ended_at IS NULL). `attachId`
+ * is the gate's background session, exposed only when the owner is a BYPASS gate
+ * waiting on a person — the one case answered out of band (`claude attach`), so
+ * the inbox can show the command. Every other case leaves it null.
+ */
+function ownersSummaryByRun(ids: string[]): Map<string, RunOwnerSummary[]> {
+  const byRun = new Map<string, RunOwnerSummary[]>();
+  if (ids.length === 0) return byRun;
+  const rows = getDatabase()
+    .prepare(
+      `SELECT o.run_id AS run_id, o.repo AS repo, o.agent AS agent, o.state AS state,
+              g.gate AS gate, g.bg_session_id AS bg_session_id, g.posture AS posture
+         FROM run_owners o
+         LEFT JOIN run_gates g
+           ON g.run_id = o.run_id AND g.repo = o.repo AND g.ended_at IS NULL
+        WHERE o.run_id IN (${ids.map(() => '?').join(', ')})
+        ORDER BY o.run_id ASC,
+                 CASE WHEN o.merge_order IS NULL THEN 1 ELSE 0 END, o.merge_order ASC, o.repo ASC`,
+    )
+    .all(...ids) as {
+    run_id: string;
+    repo: string;
+    agent: string | null;
+    state: string | null;
+    gate: number | null;
+    bg_session_id: string | null;
+    posture: string | null;
+  }[];
+  for (const r of rows) {
+    const attachId = r.posture === 'bypass' && r.state === 'waitingPermission' ? r.bg_session_id : null;
+    const summary: RunOwnerSummary = { repo: r.repo, agent: r.agent, state: r.state, gate: r.gate, attachId };
+    byRun.set(r.run_id, [...(byRun.get(r.run_id) ?? []), summary]);
+  }
+  return byRun;
+}
+
 function reposByRun(ids: string[]): Map<string, string[]> {
   const byRun = new Map<string, string[]>();
   if (ids.length === 0) return byRun;
@@ -861,6 +906,7 @@ export interface ActiveRow {
   blockedReason: string | null;
   since: string;
   repos: string[];
+  owners: RunOwnerSummary[];
 }
 
 /**
@@ -890,7 +936,9 @@ export function listActive(): ActiveRow[] {
     updated_at: string;
   }[];
 
-  const byRun = reposByRun(rows.map((row) => row.id));
+  const ids = rows.map((row) => row.id);
+  const byRun = reposByRun(ids);
+  const ownersByRun = ownersSummaryByRun(ids);
   return rows.map((row) => ({
     id: row.id,
     initiativeKey: row.initiative_key,
@@ -900,5 +948,6 @@ export function listActive(): ActiveRow[] {
     blockedReason: row.blocked_reason,
     since: row.updated_at,
     repos: byRun.get(row.id) ?? [],
+    owners: ownersByRun.get(row.id) ?? [],
   }));
 }

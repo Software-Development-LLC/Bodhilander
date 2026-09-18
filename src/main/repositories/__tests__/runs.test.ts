@@ -559,6 +559,25 @@ describe('per-owner gate state (multi-owner)', () => {
     expect(runs.activeGate(BASE.id)).toMatchObject({ id: 'gb' });
   });
 
+  test('listActive owners carry each track’s gate + state, and the attach id only for a bypass wait', () => {
+    // repo-a: a BYPASS gate whose owner is waiting on a person — the one case
+    // answered out of band, so the UI needs its `claude attach` id.
+    runs.startGate({ id: 'g', runId: BASE.id, gate: 2, repo: 'repo-a', agent: 'bsa-lead', posture: 'bypass', bgSessionId: '7365f43b' });
+    runs.recordOwnerTransition(BASE.id, 'repo-a', 'waitingPermission', 'permissionRequested');
+    // repo-b: a running owner under a manual gate — no attach id.
+    runs.startGate({ id: 'gb', runId: BASE.id, gate: 4, repo: 'repo-b', agent: 'verifier', posture: 'manual' });
+    runs.recordOwnerTransition(BASE.id, 'repo-b', 'running', 'spawned');
+
+    const row = runs.listActive().find((r) => r.id === BASE.id)!;
+    const a = row.owners.find((o) => o.repo === 'repo-a')!;
+    expect(a.gate).toBe(2);
+    expect(a.state).toBe('waitingPermission');
+    expect(a.attachId).toBe('7365f43b');
+    const b = row.owners.find((o) => o.repo === 'repo-b')!;
+    expect(b.gate).toBe(4);
+    expect(b.attachId).toBeNull(); // manual posture, not a bypass wait
+  });
+
   test('two owners at gate 4 share the verifier role but keep separate attempts', () => {
     runs.startGate({ id: 'v-a', runId: BASE.id, gate: 4, repo: 'repo-a', agent: 'verifier', posture: 'manual' });
     runs.startGate({ id: 'v-b', runId: BASE.id, gate: 4, repo: 'repo-b', agent: 'verifier', posture: 'manual' });
