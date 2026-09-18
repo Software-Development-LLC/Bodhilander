@@ -1757,8 +1757,16 @@ app.on('before-quit', (event) => {
     // wedged handoff can't leave the app alive.
     forceExit: () => {
       if (hasPendingMacUpdate()) {
-        armPendingMacUpdateInstall();
+        // Arm the hard-exit fallback FIRST, so even a synchronously-throwing
+        // quitAndInstall (e.g. the staged file was removed) can't strand the
+        // app running — the timer still fires. Then hand off to electron-updater.
         setTimeout(() => app.exit(0), UPDATE_INSTALL_FALLBACK_MS).unref?.();
+        try {
+          armPendingMacUpdateInstall();
+        } catch (e) {
+          log.error('[quit] arming macOS update install failed; hard-exiting now', e);
+          app.exit(0);
+        }
         return;
       }
       app.exit(0);

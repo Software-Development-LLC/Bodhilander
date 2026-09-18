@@ -4,6 +4,7 @@ import * as log from 'electron-log';
 import { getPreference, setPreference, deletePreference } from './repositories/preferences';
 import { markAppQuitting } from './quit-state';
 import { checkPendingInstall } from './update-verify';
+import { createMacUpdateInstaller } from './mac-update-install';
 
 // Configure logging
 autoUpdater.logger = log;
@@ -17,10 +18,6 @@ let mainWindow: BrowserWindow | null = null;
 let isDownloading = false;
 let isDialogOpen = false;
 let isDownloadingFromAbout = false;
-// Set once a macOS update has finished downloading and is staged in pending/.
-// The quit path reads it (hasPendingMacUpdate) to arm Squirrel's install before
-// the guarded fast-exit — see armPendingMacUpdateInstall / index.ts before-quit.
-let macUpdateReadyToInstall = false;
 let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string; error?: string }) => void) | null = null;
 
 // Update channels supported by Bodhilander (BDHLNDR-32). "stable" maps to
@@ -36,6 +33,20 @@ const UPDATE_CHANNEL_PREF_KEY = 'updateChannel';
 // and the log line / notification below are worded for the mac case.
 const PENDING_UPDATE_VERSION_PREF_KEY = 'pendingUpdateVersion';
 const IS_MAC = process.platform === 'darwin';
+
+// Tracks a downloaded-but-not-yet-installed macOS update and arms its install on
+// quit (see mac-update-install.ts for the why). A NORMAL quit uses
+// quitAndInstall(false, false): install on the way out but do NOT force a
+// relaunch — the user asked to quit. The explicit "Restart Now" path below
+// keeps its own quitAndInstall(false, true) (relaunch is the whole point there)
+// and consumes the flag so this doesn't arm a second install on the re-entrant
+// before-quit.
+const macUpdateInstaller = createMacUpdateInstaller({
+  isMac: IS_MAC,
+  quitAndInstall: () => autoUpdater.quitAndInstall(false, false),
+  onArm: markAppQuitting,
+  log: (msg) => log.info(`[auto-updater] ${msg}`),
+});
 
 function parseChannel(raw: string | null): UpdateChannel {
   return raw === 'beta' ? 'beta' : 'stable';
@@ -280,9 +291,9 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
   if (IS_MAC) {
     setPreference(PENDING_UPDATE_VERSION_PREF_KEY, info.version);
     // The quit path now arms the install itself for a NORMAL quit (see
-    // armPendingMacUpdateInstall); before this flag existed, autoInstallOnAppQuit
-    // was silently defeated by the guarded before-quit's app.exit(0).
-    macUpdateReadyToInstall = true;
+    // mac-update-install.ts); before this, autoInstallOnAppQuit was silently
+    // defeated by the guarded before-quit's app.exit(0).
+    macUpdateInstaller.markDownloaded();
   }
   isDownloading = false;
   const wasFromAbout = isDownloadingFromAbout;
@@ -310,42 +321,28 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
       // main window's close-to-tray handler doesn't swallow the window close
       // and strand the app running — which blocks ShipIt from installing (#139).
       markAppQuitting();
+      // Consume the staged flag so the re-entrant before-quit (quitAndInstall
+      // calls app.quit) doesn't arm a SECOND install for the same update.
+      macUpdateInstaller.consume();
       autoUpdater.quitAndInstall(false, true);
     }
   });
 });
 
-/**
- * Is a downloaded macOS update staged and waiting to install?
- *
- * True only after `update-downloaded` on macOS. The quit path checks this to
- * decide whether it must arm Squirrel before exiting.
- */
+/** Is a downloaded macOS update staged and waiting to install? (see mac-update-install.ts) */
 export function hasPendingMacUpdate(): boolean {
-  return IS_MAC && macUpdateReadyToInstall;
+  return macUpdateInstaller.hasPending();
 }
 
 /**
- * Arm Squirrel.Mac's install for a downloaded-but-not-yet-installed update, the
- * same way the "Restart Now" dialog does (`quitAndInstall(false, true)`).
- *
- * This exists because the app's guarded `before-quit` teardown ends in
- * `app.exit(0)` to clear ShipIt's "App Still Running" (-9) race — but a plain
- * `app.exit(0)` also skips electron-updater's `autoInstallOnAppQuit`, so a user
- * who dismisses "Restart Now" and later quits normally never installs the
- * update (it loops in pending/ forever). Calling this from `before-quit` when
- * `hasPendingMacUpdate()` mirrors the proven Restart-Now sequence: arm the
- * install, then let the guarded fast-exit hand off to ShipIt.
- *
- * Safe to call at most once; the re-entrant `before-quit` is guarded by
- * `shuttingDown` in index.ts so this never recurses into a second teardown.
+ * Arm the staged macOS update install on a normal quit — the gap electron-updater's
+ * `autoInstallOnAppQuit` leaves once the guarded `before-quit` force-exits via
+ * `app.exit(0)`. No-op when nothing is pending. Returns whether it invoked the
+ * install; lets a thrown `quitAndInstall` propagate (the flag is already cleared)
+ * so the caller's hard-exit fallback can run. See mac-update-install.ts.
  */
-export function armPendingMacUpdateInstall(): void {
-  if (!hasPendingMacUpdate()) return;
-  macUpdateReadyToInstall = false; // one-shot; don't re-arm on a re-entrant quit
-  markAppQuitting();
-  log.info('[auto-updater] arming pending macOS update install on quit');
-  autoUpdater.quitAndInstall(false, true);
+export function armPendingMacUpdateInstall(): boolean {
+  return macUpdateInstaller.arm();
 }
 
 // Error handling
