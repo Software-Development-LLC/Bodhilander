@@ -37,6 +37,7 @@ const OWNERS: Extract<WorktreeResult, { status: 'ok' }>['owners'] = {
 
 function harness(opts: {
   cut?: WorktreeResult; seams?: string | null; materialize?: MaterializeResult;
+  configOwners?: Record<string, string>;
 } = {}): { deps: SpawnDeps; rec: Rec } {
   const rec: Rec = { cuts: [], materializeReqs: [] };
   const deps: SpawnDeps = {
@@ -44,6 +45,7 @@ function harness(opts: {
       rec.cuts.push({ initiative, repos: [...repos], bodhiRoot });
       return opts.cut ?? { status: 'ok', owners: OWNERS };
     },
+    configOwners: async () => opts.configOwners ?? {},
     readFile: () => (opts.seams === undefined ? 'merge_order: [a, b]\nseams: []\n' : opts.seams),
     materialize: async (request): Promise<MaterializeResult> => {
       rec.materializeReqs.push(request);
@@ -68,6 +70,13 @@ describe('runSpawn', () => {
     expect(rec.materializeReqs[0].mergeOrder).toEqual(['a', 'b']);
     expect(rec.materializeReqs[0].runId).toBe('r1');
     expect(rec.materializeReqs[0].worktrees).toBe(OWNERS);
+  });
+
+  test('config-named owners are passed to materialize to disambiguate resolution', async () => {
+    const { deps, rec } = harness({ configOwners: { a: 'bsa-lead' } });
+    await runSpawn(run(), deps);
+    // Only repos the config names appear; the rest resolve from the harness.
+    expect(rec.materializeReqs[0].owners).toEqual({ a: 'bsa-lead' });
   });
 
   test('a refused cut is a one-line reason, and owners are never materialized', async () => {

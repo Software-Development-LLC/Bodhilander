@@ -22,6 +22,13 @@ import { mergeOrderFromSeams } from './arm-run';
 export interface SpawnDeps {
   /** Cut (or resume) a worktree per repo, base branch resolved from the central config. */
   cut(initiative: string, repos: readonly string[], bodhiRoot: string): Promise<WorktreeResult>;
+  /**
+   * The owner agent each repo is assigned in the central config, keyed by repo
+   * (Phase 4). Repos the config doesn't name are omitted and fall back to the
+   * harness's single-candidate resolution; a named agent disambiguates a repo
+   * the harness offers several owners for (the CO-838 park).
+   */
+  configOwners(repos: readonly string[]): Promise<Record<string, string>>;
   readFile(p: string): string | null;
   materialize(request: MaterializeRequest): Promise<MaterializeResult>;
   log(line: string): void;
@@ -48,6 +55,11 @@ export async function runSpawn(run: RunRow, deps: SpawnDeps): Promise<SpawnResul
     return { status: 'refused', reason: cut.reason };
   }
 
+  // Owners come from the central config where it names them; the rest resolve
+  // from the harness. This is what disambiguates a repo with several harness
+  // owner candidates (the CO-838 "3 possible owners" park).
+  const owners = await deps.configOwners(mergeOrder);
+
   const materialized = await deps.materialize({
     runId: run.id,
     initiativePath: run.initiativeDir,
@@ -55,6 +67,7 @@ export async function runSpawn(run: RunRow, deps: SpawnDeps): Promise<SpawnResul
     pythonPath: run.pythonPath ?? 'python',
     mergeOrder,
     worktrees: cut.owners,
+    owners,
   });
   if (materialized.status === 'refused') {
     return {
