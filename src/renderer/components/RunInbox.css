@@ -64,6 +64,11 @@
   opacity: 0.6;
   cursor: default;
 }
+.run-inbox__halt-error {
+  margin: 0.35rem 0 0;
+  color: var(--accent-negative, #d66);
+  font-size: 0.8rem;
+}
 
 .run-inbox__key {
   font-weight: 600;

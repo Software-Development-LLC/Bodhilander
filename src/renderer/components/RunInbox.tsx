@@ -276,6 +276,9 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
   const [rows, setRows] = useState<RunInboxRow[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [halting, setHalting] = useState<Set<string>>(new Set());
+  // Per-run halt error, so a failed halt is visible rather than a no-op that
+  // looks exactly like success. Keyed by run id; cleared when a halt is retried.
+  const [haltError, setHaltError] = useState<Record<string, string>>({});
 
   const fetch = useCallback(async () => {
     try {
@@ -295,12 +298,17 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
 
   const onHalt = useCallback(async (runId: string) => {
     setHalting((s) => new Set(s).add(runId));
+    // Clear any prior error on retry (no unused-binding / delete smell).
+    setHaltError((e) => Object.fromEntries(Object.entries(e).filter(([k]) => k !== runId)));
     try {
+      // The boolean result (false = already gone) needs no branch: either way a
+      // refresh drops the row from the inbox.
       await (abandon ?? window.electronAPI.abandonRun)(runId);
       await fetch(); // it drops out of the inbox once abandoned
-    } catch {
-      // A failed halt just leaves the row; the reason is already on screen and
-      // the user can try again. Nothing to surface beyond clearing the spinner.
+    } catch (err) {
+      // A silent no-op catch would look identical to success — the operator
+      // would believe a stuck run was halted when it wasn't. Surface it inline.
+      setHaltError((e) => ({ ...e, [runId]: err instanceof Error ? err.message : String(err) }));
     } finally {
       setHalting((s) => {
         const next = new Set(s);
@@ -384,6 +392,9 @@ export const RunInbox: React.FC<RunInboxProps> = ({ load, abandon, now, pollMs }
                 {halting.has(row.id) ? 'Halting…' : 'Halt'}
               </button>
             </div>
+            {haltError[row.id] && (
+              <p className="run-inbox__halt-error" role="alert">Halt failed: {haltError[row.id]}</p>
+            )}
             <p className="run-inbox__reason">{reasonFor(row)}</p>
             {row.repos.length > 0 && (
               <p className="run-inbox__repos">{row.repos.join(', ')}</p>
