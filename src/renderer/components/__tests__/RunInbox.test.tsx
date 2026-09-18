@@ -221,15 +221,52 @@ describe('asking again', () => {
   });
 });
 
-describe('what it cannot do', () => {
-  test('there is nothing here that acts on a run', async () => {
-    // Read-only by design, matching the channel behind it: no start, no stop,
-    // no advance. The only button in this component is on the error path.
-    const { container } = render(<RunInbox load={async () => [row()]} now={() => NOW} />);
+describe('halting a run', () => {
+  test('a row offers exactly one run-acting control: Halt', async () => {
+    // The inbox is otherwise read-only (the loop drives everything else), but a
+    // person must be able to STOP a stuck or unwanted run — the one thing the
+    // loop cannot do for them. On a plain inconclusive row that is the only
+    // button present.
+    const { container } = render(
+      <RunInbox load={async () => [row()]} abandon={async () => true} now={() => NOW} />,
+    );
     await screen.findByText('CO-722');
     await waitFor(() => {
-      expect(container.querySelectorAll('button')).toHaveLength(0);
+      const buttons = container.querySelectorAll('button');
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0].textContent).toBe('Halt');
     });
+  });
+
+  test('clicking Halt calls abandon with the run id, then refreshes', async () => {
+    const halted: string[] = [];
+    let loads = 0;
+    render(
+      <RunInbox
+        load={async () => { loads++; return loads === 1 ? [row()] : []; }}
+        abandon={async (id) => { halted.push(id); return true; }}
+        now={() => NOW}
+      />,
+    );
+    fireEvent.click(await screen.findByText('Halt'));
+    await waitFor(() => expect(halted).toEqual(['run-1']));
+    // After the abandon, the refresh returns [] and the row is gone.
+    await screen.findByText('Nothing is waiting on you');
+  });
+
+  test('a failed halt surfaces an error instead of a silent no-op', async () => {
+    render(
+      <RunInbox
+        load={async () => [row()]}
+        abandon={async () => { throw new Error('IPC exploded'); }}
+        now={() => NOW}
+      />,
+    );
+    fireEvent.click(await screen.findByText('Halt'));
+    // The operator sees it failed rather than believing the run was halted.
+    await screen.findByText(/Halt failed: IPC exploded/);
+    // And the run is still there to try again.
+    expect(screen.getByText('CO-722')).toBeDefined();
   });
 });
 

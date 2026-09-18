@@ -586,3 +586,32 @@ describe('per-owner gate state (multi-owner)', () => {
     expect(events.at(-1)?.repo).toBe('repo-a');
   });
 });
+
+describe('abandonRun — halting a run (CO-722)', () => {
+  test('marks the run abandoned with a reason and drops it from the active list', () => {
+    runs.createRun(BASE);
+    runs.setRunState('run-1', 'inconclusive', 'stuck at owner resolution');
+    expect(runs.listActive().some((r) => r.id === 'run-1')).toBe(true);
+
+    const ok = runs.abandonRun('run-1');
+    expect(ok).toBe(true);
+    const run = runs.getRun('run-1')!;
+    expect(run.state).toBe('abandoned');
+    expect(run.blockedReason).toBe('Halted by the operator');
+    // Gone from both the active list and the person-inbox.
+    expect(runs.listActive().some((r) => r.id === 'run-1')).toBe(false);
+    expect(runs.listInbox().some((r) => r.id === 'run-1')).toBe(false);
+  });
+
+  test('records an append-only event so the halt is auditable', () => {
+    runs.createRun(BASE);
+    runs.abandonRun('run-1', 'no longer wanted');
+    const events = runs.listEvents('run-1');
+    expect(events.some((e) => e.kind === 'abandoned')).toBe(true);
+    expect(runs.getRun('run-1')!.blockedReason).toBe('no longer wanted');
+  });
+
+  test('returns false for an unknown run rather than throwing', () => {
+    expect(runs.abandonRun('nope')).toBe(false);
+  });
+});

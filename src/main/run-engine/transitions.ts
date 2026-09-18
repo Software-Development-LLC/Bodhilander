@@ -45,7 +45,14 @@ export type RunState =
   | 'inconclusive'
   | 'failed'
   | 'approved'
-  | 'done';
+  | 'done'
+  /**
+   * Halted by a person (CO-722). A terminal state the engine never enters on its
+   * own — set out-of-band when someone stops a stuck or unwanted run, exactly as
+   * manifest approval is set out-of-band. Distinct from `failed` so the history
+   * says "someone stopped this", not "the work broke".
+   */
+  | 'abandoned';
 
 /** Gates this slice drives. 0 and 1 are bootstrapped by `init-task.sh`. */
 export type Gate = 2 | 3 | 4;
@@ -398,6 +405,8 @@ const HANDLERS: Record<RunState, Handler> = {
   approved: onApproved,
   failed: absorbing,
   done: absorbing,
+  // Halted out-of-band; nothing the machine does re-animates it (like failed/done).
+  abandoned: absorbing,
 };
 
 /**
@@ -426,7 +435,7 @@ export const IS_WORKING: readonly RunState[] = ['preparing', 'provisioning', 'ru
 
 /** Nothing further will happen on its own. */
 export function isTerminal(state: RunState): boolean {
-  return state === 'approved' || state === 'done' || state === 'failed';
+  return state === 'approved' || state === 'done' || state === 'failed' || state === 'abandoned';
 }
 
 /**
