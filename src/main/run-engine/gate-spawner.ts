@@ -155,6 +155,8 @@ export function spawnGateFor(
   log: (line: string) => void = () => undefined,
   /** The run's managed account config dir (#327), resolved by the wiring; null = ambient. */
   accountConfigDir: string | null = null,
+  /** The config's context for this owner's repo (Phase 4), resolved by the wiring; null = none. */
+  repoContext: string | null = null,
 ): ExecutorDeps['spawnGate'] {
   const modeFor = config.modeFor ?? defaultModeFor;
   const taskFor = config.taskFor ?? defaultTaskFor;
@@ -183,6 +185,7 @@ export function spawnGateFor(
           worktree: owner.worktree,
           harnessPath: run.harnessPath,
           gate,
+          context: repoContext,
         },
         taskFor(gate, run),
       ),

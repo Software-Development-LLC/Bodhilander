@@ -62,4 +62,18 @@ describe('what a gate is told about its run', () => {
     // The role comes from the harness, but WHICH gate is the run's to say.
     expect(gateBrief({ ...FACTS, gate: 4 }, 'go')).toContain('gate         4');
   });
+
+  test('config context is carried as its own section, before the task', () => {
+    // Externally-authored (config) context, passed through like the task —
+    // between the facts and the task, only when present.
+    const brief = gateBrief({ ...FACTS, context: 'You own Bodhilander. Conventions: bun, strict TS.' }, 'go');
+    expect(brief).toContain('# Context\n\nYou own Bodhilander. Conventions: bun, strict TS.\n');
+    expect(brief.indexOf('# Context')).toBeLessThan(brief.indexOf('# Task'));
+  });
+
+  test('no context section when the config names none', () => {
+    // The default brief is unchanged — the pinned test above still holds.
+    expect(gateBrief({ ...FACTS, context: null }, 'go')).not.toContain('# Context');
+    expect(gateBrief({ ...FACTS, context: '   ' }, 'go')).not.toContain('# Context');
+  });
 });
