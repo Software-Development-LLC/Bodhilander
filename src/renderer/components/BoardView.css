@@ -116,6 +116,32 @@
   border: 1px solid var(--accent-positive, #3a7);
   opacity: 0.85;
 }
+.board__initiate {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent-positive, #3a7);
+  color: #041;
+  cursor: pointer;
+}
+.board__initiate:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.board__initiated {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-positive, #3a7);
+}
+.board__initiate-error {
+  margin: 0.3rem 0 0;
+  font-size: 0.72rem;
+  color: var(--accent-negative, #d56);
+}
 .board__repos {
   margin: 0.3rem 0 0;
   font-size: 0.75rem;

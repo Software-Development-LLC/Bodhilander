@@ -201,6 +201,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('db:runs:prepare', issueId, repo, budgetUsd),
   prepareCrossRepoRun: (issueId: string, repos: string[], budgetUsd?: number): Promise<RunCrossRepoPrepareResult> =>
     ipcRenderer.invoke('db:runs:prepareCrossRepo', issueId, repos, budgetUsd),
+  initiateFromBoard: (projectNumber: number, repo: string, issueNumber: number): Promise<RunCrossRepoPrepareResult> =>
+    ipcRenderer.invoke('db:runs:initiateFromBoard', projectNumber, repo, issueNumber),
   readRunManifest: (runId: string): Promise<SeamManifest | null> =>
     ipcRenderer.invoke('db:runs:bootstrap:manifest', runId),
   approveRunManifest: (runId: string): Promise<boolean> =>

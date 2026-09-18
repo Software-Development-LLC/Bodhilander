@@ -54,12 +54,13 @@ import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { cutWorktrees } from './worktrees';
 import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
+import { fetchProjectBoard } from '../github/board-service';
 import { resolveAccountForGroup } from '../account-resolver';
 import { launchGate } from './gate-launcher';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
 import type { ScopeIo } from './scope-initiative';
-import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest, SeamManifest, ConfigResult } from '../../shared/types';
+import type { RunPrepareResult, RunCrossRepoPrepareResult, RunPermissionRequest, SeamManifest, ConfigResult, BoardResult } from '../../shared/types';
 import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
@@ -480,6 +481,56 @@ export function prepareCrossRepoRun(
   runsRepo.createRun(plan.input);
   log.info(`[RunLoop] cross-repo ${plan.input.initiativeKey} (${plan.input.id}) created; the loop will bootstrap it`);
   return { status: 'prepared', runId: plan.input.id };
+}
+
+/** The `KEY-N` tracking key inside a board initiative's title (e.g. `[CO-838] …`), or null. */
+export function boardInitiativeKey(title: string): string | null {
+  const m = /\[([A-Za-z][A-Za-z0-9]*-\d+)\]/.exec(title);
+  return m ? m[1] : null;
+}
+
+/** The tracking key + child repos to initiate, or a refusal. Pure, so the decision is testable. */
+export type BoardInitiatePlan =
+  | { status: 'ok'; key: string; repos: string[] }
+  | { status: 'refused'; refusals: { what: string; fix: string }[] };
+
+/**
+ * Decide what a board initiative would initiate: find it, check it's eligible,
+ * and derive its `[KEY-N]` key. Refuses (never guesses) when the initiative is
+ * gone, not eligible, or has no `[KEY-N]` title.
+ */
+export function planBoardInitiate(board: BoardResult, repo: string, issueNumber: number): BoardInitiatePlan {
+  if (board.status !== 'ok') {
+    return { status: 'refused', refusals: [{ what: 'the board could not be read', fix: board.problem }] };
+  }
+  const init = board.project.initiatives.find((i) => i.item.repo === repo && i.item.number === issueNumber);
+  if (!init) {
+    return { status: 'refused', refusals: [{ what: `initiative ${repo}#${issueNumber} is not on the board`, fix: 'Refresh the board and try again.' }] };
+  }
+  if (!init.eligible) {
+    return { status: 'refused', refusals: [{ what: `${repo}#${issueNumber} is not eligible to start`, fix: 'Approve it for development on the board first.' }] };
+  }
+  const key = boardInitiativeKey(init.item.title);
+  if (!key) {
+    return { status: 'refused', refusals: [{ what: `initiative has no [KEY-N] title: ${init.item.title}`, fix: 'Give the tracking issue a [KEY-N] title prefix so runs can key on it.' }] };
+  }
+  return { status: 'ok', key, repos: init.repos };
+}
+
+/**
+ * Initiate a cross-repo run straight from a board initiative (Phase 4). Re-reads
+ * the board (freshness), then hands the key + child repos to the same
+ * `prepareCrossRepoRun` a tester's manual pick uses — driving the proven
+ * scope→arch→manifest→spawn bootstrap unchanged.
+ */
+export async function initiateFromBoard(
+  projectNumber: number,
+  repo: string,
+  issueNumber: number,
+): Promise<RunCrossRepoPrepareResult> {
+  const plan = planBoardInitiate(await fetchProjectBoard(projectNumber), repo, issueNumber);
+  if (plan.status === 'refused') return { status: 'refused', refusals: plan.refusals };
+  return prepareCrossRepoRun(plan.key, plan.repos);
 }
 
 /**
