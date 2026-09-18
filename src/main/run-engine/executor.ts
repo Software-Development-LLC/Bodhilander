@@ -171,7 +171,10 @@ function clampReason(text: string): string {
 export function gateEvent(gate: Gate, outcome: GateOutcome): RunEvent | null {
   if (outcome.status === 'launched') return null;
   if (outcome.status === 'undriveable') {
-    return { kind: 'gateFinished', gate, verdict: 'inconclusive' };
+    // Carry WHY into the event so the run's blocked_reason names it: the generic
+    // reason for context, plus the gate's own captured output when there is any.
+    const reason = outcome.detail ? `${outcome.reason} — ${outcome.detail}` : outcome.reason;
+    return { kind: 'gateFinished', gate, verdict: 'inconclusive', reason };
   }
   return { kind: 'gateFinished', gate, verdict: readGateVerdict(outcome.structuredOutput).verdict };
 }

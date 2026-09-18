@@ -196,8 +196,28 @@ describe('spawning a gate', () => {
       gate: { status: 'undriveable', reason: 'the gate did not finish', detail: null, durationMs: 1 },
     });
     const result = await execute([{ kind: 'spawnGate', gate: 3, agent: 'reviewer' }], TARGET, deps);
-    expect(result.events).toEqual([{ kind: 'gateFinished', gate: 3, verdict: 'inconclusive' }]);
+    // The reason now travels on the event so the run's blocked_reason names it.
+    expect(result.events).toEqual([{ kind: 'gateFinished', gate: 3, verdict: 'inconclusive', reason: 'the gate did not finish' }]);
     expect(result.notifications[0]).toContain('did not finish');
+  });
+
+  test('an undriveable gate threads its captured output (detail) into the event reason', async () => {
+    // e.g. a --bg launch that printed no attachable id: the banner it DID print
+    // is the detail, and it must reach the run's blocked_reason, not be dropped.
+    const { deps } = fake({
+      gate: {
+        status: 'undriveable',
+        reason: 'the background gate launched but printed no session id to attach to',
+        detail: 'claude attach ABCD-1234 (unexpected format)',
+        durationMs: 1,
+      },
+    });
+    const result = await execute([{ kind: 'spawnGate', gate: 2, agent: 'bsa-lead' }], TARGET, deps);
+    const event = result.events[0];
+    expect(event.kind).toBe('gateFinished');
+    const reason = event.kind === 'gateFinished' ? event.reason ?? '' : '';
+    expect(reason).toContain('printed no session id');
+    expect(reason).toContain('claude attach ABCD-1234');
   });
 
   test('a completed gate reports the verdict it actually returned', () => {

@@ -135,6 +135,19 @@ describe('inconclusive is never a pass and never a failure', () => {
     expect(d.actions).toContainEqual({ kind: 'notify', reason: d.note });
   });
 
+  test('an inconclusive gate carries its reason into the blocked note, not a generic line', () => {
+    // So "gate 2 could not establish a verdict" says WHY — the --bg launch
+    // banner, a missing receipt — instead of vanishing the cause.
+    const d = go('running', { kind: 'gateFinished', gate: 2, verdict: 'inconclusive', reason: 'launched but printed no session id' });
+    expect(d.state).toBe('inconclusive');
+    expect(d.note).toContain('launched but printed no session id');
+  });
+
+  test('an inconclusive gate with no reason falls back to the generic line', () => {
+    const d = go('running', { kind: 'gateFinished', gate: 2, verdict: 'inconclusive' });
+    expect(d.note).toBe('gate 2 could not establish a verdict');
+  });
+
   test('the budget running out is inconclusive: no verdict was reached', () => {
     expect(go('running', { kind: 'budgetExceeded' }).state).toBe('inconclusive');
   });

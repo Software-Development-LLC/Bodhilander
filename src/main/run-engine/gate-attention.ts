@@ -145,7 +145,7 @@ export function attend(facts: GateFacts): Attention {
     const why = reason ? `: ${reason}` : '';
     const still = facts.status === 'busy' ? '; the gate was still working when its receipt was read' : '';
     return {
-      event: { kind: 'gateFinished', gate: facts.gate, verdict },
+      event: { kind: 'gateFinished', gate: facts.gate, verdict, reason: reason ?? undefined },
       note: `${who} wrote a receipt with verdict ${verdict}${why}${still}`,
     };
   }
@@ -155,7 +155,7 @@ export function attend(facts: GateFacts): Attention {
       // Not a fail -- the branch was never judged -- and not a pass, because
       // nothing said so. The one word that is true.
       return {
-        event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
+        event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive', reason: `${who} is no longer running and wrote no receipt` },
         note: `${who} is no longer running and wrote no receipt, so it established nothing`,
       };
     case 'idle':
@@ -163,7 +163,7 @@ export function attend(facts: GateFacts): Attention {
       // note, because the fix is different: a crash is the machine's, a
       // missing sign-off is the role's.
       return {
-        event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
+        event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive', reason: `${who} finished its turn without writing a receipt` },
         note: `${who} finished its turn without writing a receipt, so it established nothing`,
       };
     case 'waiting': {
@@ -185,7 +185,12 @@ export function attend(facts: GateFacts): Attention {
       if (busyForMs != null && busyCeilingMs != null && busyForMs > busyCeilingMs) {
         const attach = facts.backgroundId ? ` -- \`claude attach ${facts.backgroundId}\` to see it` : '';
         return {
-          event: { kind: 'gateFinished', gate: facts.gate, verdict: 'inconclusive' },
+          event: {
+            kind: 'gateFinished',
+            gate: facts.gate,
+            verdict: 'inconclusive',
+            reason: `still busy with no receipt past the ${Math.round(busyCeilingMs / 60_000)}-minute ceiling${attach}`,
+          },
           note:
             `${who} has been running for ${Math.round(busyForMs / 60_000)} minutes with no receipt and is busy now, ` +
             `past the ${Math.round(busyCeilingMs / 60_000)}-minute ceiling; ` +

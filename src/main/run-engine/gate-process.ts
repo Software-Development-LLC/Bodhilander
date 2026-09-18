@@ -177,6 +177,22 @@ export function backgroundIdFromOutput(stdout: string): string | null {
 }
 
 /**
+ * A diagnostic tail of a `--bg` launch that produced no attachable id.
+ *
+ * `firstText` gave only the first line, which is preamble — the launch banner
+ * (and any error) is at the END of stdout. So when the id can't be parsed, keep
+ * the tail of stdout (where the banner is) and fall back to stderr, capped so a
+ * runaway launch can't flood a persisted blocked_reason. This is what turns
+ * "could not establish a verdict" into the actual banner the regex missed.
+ */
+const MAX_LAUNCH_TAIL = 800;
+export function launchTail(stdout: string, stderr: string): string | null {
+  const out = stdout.trim();
+  const tail = out.length > MAX_LAUNCH_TAIL ? `…${out.slice(-MAX_LAUNCH_TAIL)}` : out;
+  return firstText(tail, stderr);
+}
+
+/**
  * Run one gate to completion (print) or to launch (background).
  *
  * Never rejects on a gate that went badly — a gate that fails, times out or
@@ -298,7 +314,7 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
         if (!backgroundId) {
           undriveable(
             'the background gate launched but printed no session id to attach to',
-            firstText(stdout.trim(), stderrTail),
+            launchTail(stdout, stderrTail),
           );
           return;
         }
