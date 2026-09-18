@@ -38,7 +38,7 @@ import {
 import { dismissArrival, readArrival, resolveRelink } from './arrival';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
-import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
+import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel, hasPendingMacUpdate, armPendingMacUpdateInstall } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
@@ -1727,6 +1727,11 @@ let shuttingDown = false;
 // Comfortably inside ShipIt's tolerance; better-sqlite3 WAL is crash-safe.
 const QUIT_CLEANUP_BUDGET_MS = 2000;
 
+// After arming a pending macOS update install on quit, give electron-updater /
+// Squirrel this long to take over the process exit before we hard-exit anyway,
+// so a wedged install handoff can never strand the app running.
+const UPDATE_INSTALL_FALLBACK_MS = 3000;
+
 app.on('before-quit', (event) => {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -1743,7 +1748,29 @@ app.on('before-quit', (event) => {
     // notably ptyManager.killAll(), so child terminals may be orphaned to the
     // OS. That's an accepted tradeoff: a stuck teardown blocking the update
     // forever is worse, and the OS reaps orphaned PTYs on session end.
-    forceExit: () => app.exit(0),
+    //
+    // EXCEPTION: a plain app.exit(0) skips electron-updater's
+    // autoInstallOnAppQuit, so a downloaded macOS update that the user didn't
+    // "Restart Now" into never installs — it loops in pending/ forever. When one
+    // is staged, arm Squirrel's install (mirroring the Restart-Now path) and let
+    // electron-updater manage the quit + relaunch, with a hard-exit fallback so a
+    // wedged handoff can't leave the app alive.
+    forceExit: () => {
+      if (hasPendingMacUpdate()) {
+        // Arm the hard-exit fallback FIRST, so even a synchronously-throwing
+        // quitAndInstall (e.g. the staged file was removed) can't strand the
+        // app running — the timer still fires. Then hand off to electron-updater.
+        setTimeout(() => app.exit(0), UPDATE_INSTALL_FALLBACK_MS).unref?.();
+        try {
+          armPendingMacUpdateInstall();
+        } catch (e) {
+          log.error('[quit] arming macOS update install failed; hard-exiting now', e);
+          app.exit(0);
+        }
+        return;
+      }
+      app.exit(0);
+    },
     cleanup: async () => {
       try {
         await ptyManager.killAll();
