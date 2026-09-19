@@ -216,7 +216,15 @@ export function buildBoard(
   const initiatives: BoardInitiative[] = topLevel.map((n) => {
     const item = toItem(n);
     const children = childrenByParent.get(keyOf(n.repo, n.number)) ?? [];
-    const repos = [...new Set([item.repo, ...children.map((c) => c.repo)])];
+    // An initiative's scope is its CHILDREN's repos: each work repo contributes a
+    // child issue, and the scope is exactly those repos. The initiative's own
+    // repo counts only when it has a child there -- so an umbrella/tracking issue
+    // filed in a hub repo (a coordination or docs repo that does no work for this
+    // initiative) does not force that repo to become an owner with nothing to
+    // implement, spawning a worktree and a gate that open an empty PR. A childless
+    // item is a single-repo initiative: its scope is its own repo.
+    const childRepos = children.map((c) => c.repo);
+    const repos = childRepos.length > 0 ? [...new Set(childRepos)] : [item.repo];
     // Eligible: the initiative's "Approved for Development" value is one of the
     // gate values, and it isn't already closed/done. Children carry their own
     // progress; the gate is on the initiative you start, and the in-app manifest

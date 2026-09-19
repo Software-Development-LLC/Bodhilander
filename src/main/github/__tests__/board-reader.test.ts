@@ -127,9 +127,25 @@ describe('buildBoard', () => {
     const b = buildBoard(nodes, { title: 'Bodhi Pulse', number: 17 }, GATE);
     const co130 = b.initiatives.find((i) => i.item.number === 130 && i.item.repo === 'bodhi-code')!;
     expect(co130.children.map((c) => c.repo).sort()).toEqual(['bodhi-service-api', 'bodhi-service-insights']);
-    expect(co130.repos.sort()).toEqual(['bodhi-code', 'bodhi-service-api', 'bodhi-service-insights']);
+    // Scope is the CHILDREN's repos only: the umbrella issue lives in bodhi-code,
+    // which does no work here, so bodhi-code is NOT an owner. Without this the run
+    // spawns a third owner for the tracking repo that opens an empty PR.
+    expect(co130.repos.sort()).toEqual(['bodhi-service-api', 'bodhi-service-insights']);
     // Children are NOT listed as their own initiatives.
     expect(b.initiatives.some((i) => i.item.number === 2561)).toBe(false);
+  });
+
+  test('the initiative repo IS in scope when it has a child there (a real work repo)', () => {
+    // Umbrella in bodhi-code with a bodhi-code child (work in the hub too) plus an
+    // api child -> the parent repo earns its place via its own child issue.
+    const withSelfChild: RawBoardNode[] = [
+      node({ number: 200, title: '[CO-200][Initiative] Y', repo: 'bodhi-code', approval: 'Approved' }),
+      node({ number: 201, repo: 'bodhi-code', parent: { repo: 'bodhi-code', number: 200 } }),
+      node({ number: 202, repo: 'bodhi-service-api', parent: { repo: 'bodhi-code', number: 200 } }),
+    ];
+    const b = buildBoard(withSelfChild, { title: 'x', number: 17 }, GATE);
+    const co200 = b.initiatives.find((i) => i.item.number === 200)!;
+    expect(co200.repos.sort()).toEqual(['bodhi-code', 'bodhi-service-api']);
   });
 
   test('eligibility keys on the approval value, not closed', () => {
