@@ -95,7 +95,7 @@ export function checkManifestAnomalies(seamsYaml: string, scopeRepos: readonly s
     if (typeof step.repo === 'string' && !scope.has(step.repo)) offenders.add(step.repo);
   }
   if (offenders.size > 0) {
-    const list = [...offenders].sort().join(', ');
+    const list = [...offenders].sort((a, b) => a.localeCompare(b)).join(', ');
     return {
       ok: false,
       reason: `the manifest would build or merge repos outside this run's scope: ${list}`,
@@ -103,6 +103,22 @@ export function checkManifestAnomalies(seamsYaml: string, scopeRepos: readonly s
   }
 
   return { ok: true };
+}
+
+/**
+ * The auto-approval verdict for a manifest that may not be on disk.
+ *
+ * `arch` reports `parked` only after writing seams.yaml, so a null here means
+ * something removed it between the write and this read -- itself a reason to
+ * hold for a person rather than spawn against a manifest that is gone. Splitting
+ * this from `checkManifestAnomalies` keeps the file-read concern testable
+ * without a filesystem: the caller supplies the text (or null) it read.
+ */
+export function manifestVerdict(seamsYaml: string | null, scopeRepos: readonly string[]): ManifestAnomaly {
+  if (seamsYaml === null) {
+    return { ok: false, reason: 'the seam manifest could not be read for review' };
+  }
+  return checkManifestAnomalies(seamsYaml, scopeRepos);
 }
 
 /** A seam's producer repo, or null when the seam does not name one. */

@@ -10,7 +10,7 @@
  * Run with: bun test src/main/run-engine/__tests__/manifest-anomaly.test.ts
  */
 import { describe, expect, test } from 'bun:test';
-import { checkManifestAnomalies, MAX_SEAMS } from '../manifest-anomaly';
+import { checkManifestAnomalies, manifestVerdict, MAX_SEAMS } from '../manifest-anomaly';
 
 const SCOPE = ['bodhi-service-api', 'bodhi-web-apps'];
 
@@ -119,5 +119,20 @@ seams:
   test('exactly at the ceiling is still ok (boundary)', () => {
     const many = Array.from({ length: MAX_SEAMS }, (_, i) => `  - id: s${i}\n    producer:\n      repo: bodhi-service-api`).join('\n');
     expect(checkManifestAnomalies(`seams:\n${many}\n`, SCOPE)).toEqual({ ok: true });
+  });
+});
+
+describe('manifestVerdict handles a manifest that is not on disk', () => {
+  test('a null (missing) manifest is a hold, not a spawn', () => {
+    // arch reports parked only after writing seams.yaml, so null means it went
+    // missing between the write and the read -- a person should look.
+    expect(manifestVerdict(null, SCOPE)).toEqual({
+      ok: false,
+      reason: 'the seam manifest could not be read for review',
+    });
+  });
+
+  test('a present manifest delegates to the anomaly check', () => {
+    expect(manifestVerdict(CLEAN, SCOPE)).toEqual({ ok: true });
   });
 });

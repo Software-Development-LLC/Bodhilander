@@ -49,7 +49,7 @@ import { armInitiative, mergeOrderFromSeams } from './arm-run';
 import { armRun, materializeOwners, type IgnitionResult } from './ignition';
 import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
 import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
-import { checkManifestAnomalies, type ManifestAnomaly } from './manifest-anomaly';
+import { manifestVerdict, type ManifestAnomaly } from './manifest-anomaly';
 import { runArchGate, type ArchDeps } from './bootstrap-arch';
 import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { cutWorktrees } from './worktrees';
@@ -637,10 +637,7 @@ export function readRunManifest(runId: string): SeamManifest | null {
  */
 function evaluateManifest(run: RunRow): ManifestAnomaly {
   const seams = readIfPresent(path.join(run.initiativeDir, 'seams.yaml'));
-  if (seams === null) {
-    return { ok: false, reason: 'the seam manifest could not be read for review' };
-  }
-  return checkManifestAnomalies(seams, run.scopeRepos ?? []);
+  return manifestVerdict(seams, run.scopeRepos ?? []);
 }
 
 /**
