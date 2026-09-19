@@ -49,6 +49,7 @@ import { armInitiative, mergeOrderFromSeams } from './arm-run';
 import { armRun, materializeOwners, type IgnitionResult } from './ignition';
 import { prepareInitiative, reposFromRegistry } from './prepare-initiative';
 import { driveBootstrap, type BootstrapStore } from './bootstrap-driver';
+import { manifestVerdict, type ManifestAnomaly } from './manifest-anomaly';
 import { runArchGate, type ArchDeps } from './bootstrap-arch';
 import { runSpawn, type SpawnDeps } from './bootstrap-spawn';
 import { cutWorktrees } from './worktrees';
@@ -425,6 +426,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
         io: bootstrapIo,
         store: bootstrapStore,
         arch: (r) => runArchGate(r, archDeps(config, r)),
+        evaluateManifest: (r) => evaluateManifest(r),
         spawn: (r) => runSpawn(r, spawnDeps),
         log: (line) => log.info(`[RunLoop] ${line}`),
       });
@@ -624,6 +626,18 @@ export function readRunManifest(runId: string): SeamManifest | null {
   const seams = readIfPresent(path.join(run.initiativeDir, 'seams.yaml'));
   if (seams === null) return null;
   return { mergeOrder: mergeOrderFromSeams(seams), seamsYaml: seams };
+}
+
+/**
+ * Judge the parked seam manifest for auto-approval (CO-722 B2).
+ *
+ * Reads the seams.yaml arch just wrote and runs the policy checks. A missing
+ * file is itself a hold: arch reports `parked` only after writing it, so its
+ * absence here means something removed it and a person should look.
+ */
+function evaluateManifest(run: RunRow): ManifestAnomaly {
+  const seams = readIfPresent(path.join(run.initiativeDir, 'seams.yaml'));
+  return manifestVerdict(seams, run.scopeRepos ?? []);
 }
 
 /**

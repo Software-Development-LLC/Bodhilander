@@ -18,6 +18,7 @@ import { driveBootstrap, type BootstrapDeps, type BootstrapStore } from '../boot
 import type { ScopeIo } from '../scope-initiative';
 import type { ArchResult } from '../bootstrap-arch';
 import type { SpawnResult } from '../bootstrap-spawn';
+import type { ManifestAnomaly } from '../manifest-anomaly';
 
 function multiRun(bootstrapState: BootstrapState | null): RunRow {
   return {
@@ -59,14 +60,17 @@ function scopeIo(code: number, stderr = ''): ScopeIo {
 
 const parked = async (): Promise<ArchResult> => ({ status: 'parked' });
 const spawned = async (): Promise<SpawnResult> => ({ status: 'spawned', owners: { a: 'lead' } });
+/** A clean manifest by default; a test overrides it to exercise the hold path. */
+const clean = (): ManifestAnomaly => ({ ok: true });
 
 function deps(
   io: ScopeIo,
   s: BootstrapStore,
   arch: (run: RunRow) => Promise<ArchResult> = parked,
   spawn: (run: RunRow) => Promise<SpawnResult> = spawned,
+  evaluateManifest: (run: RunRow) => ManifestAnomaly = clean,
 ): BootstrapDeps {
-  return { io, store: s, arch, spawn, log: () => {} };
+  return { io, store: s, arch, evaluateManifest, spawn, log: () => {} };
 }
 
 describe('scoping', () => {
@@ -93,14 +97,29 @@ describe('scoping', () => {
 });
 
 describe('architecting drives the arch gate', () => {
-  test('a parked manifest advances to awaitingManifest and parks for a person', async () => {
+  test('a clean manifest is auto-approved and released straight to spawning', async () => {
     const { store: s, rec } = store();
-    const result = await driveBootstrap(multiRun('architecting'), deps(scopeIo(0), s, async () => ({ status: 'parked' })));
+    const result = await driveBootstrap(multiRun('architecting'), deps(scopeIo(0), s, parked, spawned, () => ({ ok: true })));
     expect(result).toEqual({ drove: true, problems: [] });
-    expect(rec.events).toEqual([{ kind: 'archManifest', gate: 1 }]);
+    // No human click: the run advances to spawning + preparing on its own.
+    expect(rec.events).toEqual([{ kind: 'archManifest', gate: 1 }, { kind: 'manifestAutoApproved', gate: 1 }]);
+    expect(rec.bootstrap).toEqual(['spawning']);
+    expect(rec.runState).toEqual([{ state: 'preparing', reason: undefined }]);
+    expect(rec.inconclusive).toEqual([]);
+  });
+
+  test('an anomalous manifest is HELD for a person, with the reason on the run', async () => {
+    const { store: s, rec } = store();
+    const reason = "the manifest would build or merge repos outside this run's scope: bodhi-foo";
+    const result = await driveBootstrap(
+      multiRun('architecting'),
+      deps(scopeIo(0), s, parked, spawned, () => ({ ok: false, reason })),
+    );
+    expect(result).toEqual({ drove: true, problems: [] });
+    expect(rec.events).toEqual([{ kind: 'archManifest', gate: 1 }, { kind: 'manifestHeldForReview', gate: 1 }]);
     expect(rec.bootstrap).toEqual(['awaitingManifest']);
-    // Parked for approval: waitingHumanGate is not movable, so the loop stops.
-    expect(rec.runState).toEqual([{ state: 'waitingHumanGate', reason: undefined }]);
+    // Parked for approval, with the reason so the inbox says WHY it is held.
+    expect(rec.runState).toEqual([{ state: 'waitingHumanGate', reason }]);
     expect(rec.inconclusive).toEqual([]);
   });
 
