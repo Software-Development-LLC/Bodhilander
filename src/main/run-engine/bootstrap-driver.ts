@@ -9,11 +9,14 @@
  *   scoping        -> write team.yaml from the tester's repo picks (gate 0),
  *                     mechanically. -> architecting
  *   architecting   -> drive the `arch` gate to author seams.yaml (gate 1),
- *                     verify + publish it. -> awaitingManifest        [slice 3]
+ *                     verify it, then evaluate the manifest: a sound one is
+ *                     auto-approved straight to `spawning`; an anomalous one
+ *                     parks at `awaitingManifest` for a person (CO-722 B2).
  *   awaitingManifest -> parked at runs.state 'waitingHumanGate' for a person to
- *                     approve. Not driven here; the loop skips it.      [slice 4]
+ *                     approve. Only reached when the manifest looked off; the
+ *                     loop skips it until approval flips it to spawning.
  *   spawning       -> spawn.py cuts the worktrees and materializes owners, then
- *                     hands off to the per-owner machine.               [slice 4]
+ *                     hands off to the per-owner machine.
  *
  * This module holds no Electron or DB imports: the writes go through an injected
  * store and the scripts through an injected io, so the whole sequence is
@@ -25,6 +28,7 @@ import type { BootstrapState } from './bootstrap';
 import { scopeInitiative, type ScopeIo } from './scope-initiative';
 import type { ArchResult } from './bootstrap-arch';
 import type { SpawnResult } from './bootstrap-spawn';
+import type { ManifestAnomaly } from './manifest-anomaly';
 
 /** The run-level writes the bootstrap makes, injected (real ones are the repo). */
 export interface BootstrapStore {
@@ -40,6 +44,11 @@ export interface BootstrapDeps {
   store: BootstrapStore;
   /** Drive gate 1 (arch): author + verify the seam manifest, or say why not. */
   arch(run: RunRow): Promise<ArchResult>;
+  /**
+   * Judge whether the parked manifest can be auto-approved, or name why a person
+   * is needed. Runs against the seams.yaml arch just wrote (CO-722 B2).
+   */
+  evaluateManifest(run: RunRow): ManifestAnomaly;
   /** Cut the worktrees and write the owner rows, or say why not. */
   spawn(run: RunRow): Promise<SpawnResult>;
   log(line: string): void;
@@ -103,11 +112,29 @@ async function architect(run: RunRow, deps: BootstrapDeps): Promise<BootstrapPas
     return { drove: true, problems: [result.reason] };
   }
   deps.store.appendEvent(run.id, 'archManifest', 1);
-  deps.store.setBootstrapState(run.id, 'awaitingManifest');
-  // Park for a person. waitingHumanGate is not movable, so the loop stops
-  // polling this run until approval flips it to spawning.
-  deps.store.setRunState(run.id, 'waitingHumanGate');
-  deps.log(`${run.id}: seam manifest ready; awaiting approval`);
+
+  // Auto-approve a sound manifest so an otherwise hands-off run does not stop
+  // for a click; hold only when something looks off (CO-722 B2). The anomaly
+  // check is narrow -- arch already ran the harness's deep verifier -- so a
+  // hold here means a policy problem a person should see, not a structural one.
+  const anomaly = deps.evaluateManifest(run);
+  if (!anomaly.ok) {
+    deps.store.setBootstrapState(run.id, 'awaitingManifest');
+    // Park for a person, with the reason on the run so the inbox says WHY it is
+    // held. waitingHumanGate is not movable, so the loop stops polling this run
+    // until approval (or rejection) flips it.
+    deps.store.setRunState(run.id, 'waitingHumanGate', anomaly.reason);
+    deps.store.appendEvent(run.id, 'manifestHeldForReview', 1);
+    deps.log(`${run.id}: seam manifest held for review -- ${anomaly.reason}`);
+    return { drove: true, problems: [] };
+  }
+
+  // Clean: release straight to spawn, mirroring approveRunManifest's transition
+  // (spawning + preparing) so the loop re-picks the run and the spawn step runs.
+  deps.store.appendEvent(run.id, 'manifestAutoApproved', 1);
+  deps.store.setBootstrapState(run.id, 'spawning');
+  deps.store.setRunState(run.id, 'preparing');
+  deps.log(`${run.id}: seam manifest auto-approved; spawning next`);
   return { drove: true, problems: [] };
 }
 
