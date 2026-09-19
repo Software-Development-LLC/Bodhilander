@@ -39,6 +39,7 @@ import { buildGateCommand, type GateMode, type RunSpawnContext } from './gate-co
 import { runGate, type GateOutcome, type GateSpawnOptions } from './gate-process';
 import { GATE_VERDICT_SCHEMA } from './gate-verdict';
 import { channelDirFor, hookSettingsText, mcpConfigText, PERMISSION_TOOL } from './permission-channel';
+import { ensureDangerousModeAccepted } from '../claude-settings';
 
 export class GateLaunchError extends Error {
   // Set explicitly: without it `error.name` reads "Error" in a log, and the
@@ -415,6 +416,16 @@ export interface GateLaunch {
  */
 export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
   const agent = await loadAgent(launch.context.harnessPath, launch.agentName);
+
+  // A `bypass` gate launches with `--dangerously-skip-permissions`, which the
+  // CLI refuses on a config dir that has never accepted the one-time disclaimer
+  // (a `--bg` gate exits 1). A managed account has never been through that
+  // interactive accept, so seed the acceptance here -- idempotent, and only for
+  // the posture that needs it, right before the launch that would fail without
+  // it. Ambient login (no configDir) is left to the person's own acceptance.
+  if (launch.context.posture === 'bypass' && launch.context.configDir) {
+    ensureDangerousModeAccepted(launch.context.configDir);
+  }
 
   // Only the posture that asks needs somewhere to ask. `bypass` prompts for
   // nothing and `denyOnPrompt` refuses without asking, so handing either a

@@ -14,10 +14,22 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { app } from 'electron';
 import log from 'electron-log';
 import { getPreference, setPreference } from './repositories/preferences';
+import {
+  type ClaudeSettingsConfig,
+  type HookCommand,
+  type HookConfig,
+  resolveConfigDir,
+  readClaudeSettings,
+  writeClaudeSettings,
+} from './claude-settings';
+
+// The bypass-disclaimer seed lives in the leaf settings module (it needs no
+// `app`), but callers reach for it here alongside the other Claude-config
+// helpers, so re-export it rather than make them learn a second module.
+export { ensureDangerousModeAccepted } from './claude-settings';
 
 interface McpServerConfig {
   command: string;
@@ -25,32 +37,11 @@ interface McpServerConfig {
   env?: Record<string, string>;
 }
 
-interface HookCommand {
-  type: 'command';
-  command: string;
-  timeout?: number;
-}
-
-interface HookConfig {
-  matcher: string;
-  hooks: HookCommand[];
-}
-
 interface ClaudeMcpConfig {
   mcpServers?: Record<string, McpServerConfig>;
   [key: string]: unknown;
 }
 
-interface ClaudeSettingsConfig {
-  hooks?: {
-    PreToolUse?: HookConfig[];
-    PostToolUse?: HookConfig[];
-    Stop?: HookConfig[];
-    Notification?: HookConfig[];
-    [key: string]: HookConfig[] | undefined;
-  };
-  [key: string]: unknown;
-}
 
 /**
  * Name of the MCP server this app used to register. The server itself is gone;
@@ -145,9 +136,6 @@ function purgeOurHooks(settings: ClaudeSettingsConfig, keepPath?: string): boole
  * Pass an account's isolated configDir to target that account's sandbox
  * instead of the global one.
  */
-function resolveConfigDir(configDir?: string): string {
-  return configDir ?? path.join(os.homedir(), '.claude');
-}
 
 /**
  * Get the path to Claude Code's MCP config file for the given config dir.
@@ -202,61 +190,6 @@ function writeClaudeMcpConfig(config: ClaudeMcpConfig, configDir?: string): bool
     return true;
   } catch (err) {
     log.error('[MCP Config] Failed to write Claude MCP config:', err);
-    return false;
-  }
-}
-
-/**
- * Get path to Claude Code settings file. Hooks are configured here.
- * Default: `~/.claude/settings.json`. With a configDir passed: `<configDir>/settings.json`.
- */
-function getClaudeSettingsPath(configDir?: string): string {
-  return path.join(resolveConfigDir(configDir), 'settings.json');
-}
-
-/**
- * Read Claude Code settings for the given config dir.
- * Default target: `~/.claude/settings.json`.
- */
-function readClaudeSettings(configDir?: string): ClaudeSettingsConfig {
-  const settingsPath = getClaudeSettingsPath(configDir);
-
-  try {
-    if (fs.existsSync(settingsPath)) {
-      const content = fs.readFileSync(settingsPath, 'utf-8');
-      return JSON.parse(content);
-    }
-  } catch (err) {
-    log.warn('[Hooks Config] Failed to read Claude settings:', err);
-  }
-
-  return {};
-}
-
-/**
- * Write Claude Code settings
- */
-function writeClaudeSettings(settings: ClaudeSettingsConfig, configDir?: string): boolean {
-  const settingsPath = getClaudeSettingsPath(configDir);
-
-  try {
-    // Ensure the target .claude directory exists
-    const claudeDir = path.dirname(settingsPath);
-    if (!fs.existsSync(claudeDir)) {
-      fs.mkdirSync(claudeDir, { recursive: true });
-    }
-
-    // Temp file + atomic rename, same as writeClaudeMcpConfig. settings.json is
-    // the user's own Claude Code configuration (permissions, model, statusLine,
-    // their own hooks) and we rewrite it on every launch, so a torn write from
-    // a crash or power loss would cost them real state. rename() within a
-    // directory is atomic on both POSIX and NTFS.
-    const tmpPath = `${settingsPath}.bodhilander.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8');
-    fs.renameSync(tmpPath, settingsPath);
-    return true;
-  } catch (err) {
-    log.error('[Hooks Config] Failed to write Claude settings:', err);
     return false;
   }
 }
