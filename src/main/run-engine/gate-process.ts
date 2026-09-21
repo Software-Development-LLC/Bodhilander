@@ -71,6 +71,14 @@ export type GateOutcome =
       reason: string;
       detail: string | null;
       durationMs: number;
+      /**
+       * The gate's own run hit an API error (`is_error`/`terminal_reason:
+       * api_error`) rather than reaching a conclusion. A usage-cap and a
+       * transient overload both surface this way; the resilience wrapper tells
+       * them apart from the CLI's structured quota entry. Absent/false for every
+       * other undriveable (timeout, cancellation, a bad launch).
+       */
+      apiError?: boolean;
     };
 
 export interface GateSpawnOptions {
@@ -236,8 +244,8 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
       options.signal?.removeEventListener('abort', onAbort);
       resolve(outcome);
     };
-    const undriveable = (reason: string, detail: string | null = null): void =>
-      done({ status: 'undriveable', reason, detail, durationMs: Date.now() - startedAt });
+    const undriveable = (reason: string, detail: string | null = null, apiError = false): void =>
+      done({ status: 'undriveable', reason, detail, apiError, durationMs: Date.now() - startedAt });
 
     const child = spawn(options.executable, command.argv, {
       cwd: command.cwd,
@@ -339,10 +347,15 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
         return;
       }
       if (!reportsSuccess(result)) {
+        // An api_error can be a usage-cap or a transient overload; both look
+        // like this. Flag it so the resilience wrapper can read the CLI's own
+        // quota entry to tell them apart -- a cap holds, an overload retries.
+        const apiError = result.terminal_reason === 'api_error' || result.is_error === true;
         undriveable(
           `the gate reported ${result.subtype ?? 'no subtype'}` +
             (result.terminal_reason ? ` (${result.terminal_reason})` : ''),
           firstText(result.result?.slice(-500), stderrTail),
+          apiError,
         );
         return;
       }

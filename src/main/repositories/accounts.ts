@@ -20,6 +20,19 @@ export function getDefaultAccount(): ClaudeAccount | null {
   return row ? mapRow(row) : null;
 }
 
+/**
+ * The account whose config dir is `configDir`, or null.
+ *
+ * A gate is launched with a resolved `CLAUDE_CONFIG_DIR`, not an account id, so
+ * when it hits a usage cap the resilience wrapper maps that dir back to the
+ * account to mark it limited. The mapping is 1:1 (each account owns its dir).
+ */
+export function getAccountByConfigDir(configDir: string): ClaudeAccount | null {
+  const db = getDatabase();
+  const row = db.prepare('SELECT * FROM claude_accounts WHERE config_dir = ?').get(configDir);
+  return row ? mapRow(row) : null;
+}
+
 export interface CreateAccountInput {
   id: string;
   label: string;

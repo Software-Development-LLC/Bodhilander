@@ -20,7 +20,8 @@ import type { RunGateRow, RunOwnerRow, RunRow } from '../repositories/runs';
 import type { ExecutorDeps, ExecutorTarget } from './executor';
 import { gateBrief } from './gate-brief';
 import type { GateMode } from './gate-command';
-import { launchGate, rolesFromHarness } from './gate-launcher';
+import { launchGate, rolesFromHarness, type GateLaunch } from './gate-launcher';
+import type { GateOutcome } from './gate-process';
 import { repoSlugFromUrl } from './pr-discovery';
 import type { Gate } from './transitions';
 
@@ -157,6 +158,13 @@ export function spawnGateFor(
   accountConfigDir: string | null = null,
   /** The config's context for this owner's repo (Phase 4), resolved by the wiring; null = none. */
   repoContext: string | null = null,
+  /**
+   * How a gate is launched. Injected so the wiring can wrap `launchGate` with
+   * quota-resilience (CO-722 R1) without this module importing the accounts
+   * repository. Defaults to the bare `launchGate` for tests and callers that
+   * don't need the wrapper.
+   */
+  launch: (launch: GateLaunch) => Promise<GateOutcome> = launchGate,
 ): ExecutorDeps['spawnGate'] {
   const modeFor = config.modeFor ?? defaultModeFor;
   const taskFor = config.taskFor ?? defaultTaskFor;
@@ -173,7 +181,7 @@ export function spawnGateFor(
       );
     }
     log(`launching gate ${gate} as ${agent} for ${owner.repo}`);
-    return launchGate({
+    return launch({
       gate,
       agentName: agent,
       mode: modeFor(gate),
