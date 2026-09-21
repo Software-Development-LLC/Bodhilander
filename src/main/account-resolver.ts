@@ -1,6 +1,7 @@
 import { ClaudeAccount } from '../shared/types';
 import { getDatabase } from './database';
 import { mapAccountRow } from './repositories/account-row';
+import { getAccountsInFallbackOrder, isAccountHealthy } from './repositories/accounts';
 
 /**
  * Resolve which Claude account a given session should launch under (BDHLNDR-31).
@@ -42,10 +43,11 @@ export function resolveAccountForSession(sessionId: string): ClaudeAccount | nul
  * keyed on a group rather than a session, because a gate belongs to a run, not
  * a terminal session.
  */
-export function resolveAccountForGroup(groupId: string | null): ClaudeAccount | null {
+export function resolveAccountForGroup(groupId: string | null, now: Date = new Date()): ClaudeAccount | null {
   try {
     const db = getDatabase();
 
+    let candidate: ClaudeAccount | null = null;
     if (groupId) {
       const row = db.prepare(`
         SELECT a.*
@@ -53,13 +55,28 @@ export function resolveAccountForGroup(groupId: string | null): ClaudeAccount | 
         LEFT JOIN claude_accounts a ON a.id = g.claude_account_id
         WHERE g.id = ?
       `).get(groupId) as any;
-      if (row?.id) return mapAccountRow(row);
+      if (row?.id) candidate = mapAccountRow(row);
     }
+    if (!candidate) {
+      const fallback = db.prepare(
+        'SELECT * FROM claude_accounts WHERE is_default = 1 LIMIT 1'
+      ).get() as any;
+      candidate = fallback ? mapAccountRow(fallback) : null;
+    }
+    if (!candidate) return null;
+    const chosen = candidate;
 
-    const fallback = db.prepare(
-      'SELECT * FROM claude_accounts WHERE is_default = 1 LIMIT 1'
-    ).get() as any;
-    return fallback ? mapAccountRow(fallback) : null;
+    // Step aside from a rate-limited account. A gate launches under a fixed
+    // CLAUDE_CONFIG_DIR, so pointing it at an account known to be spent (its
+    // `limitedUntil` still in the future) would just burn a launch into the
+    // same 429. When the chosen account is limited, prefer the next healthy one
+    // in fallback order; if none is healthy there is nothing better to do, so
+    // keep the original rather than return nothing.
+    if (isAccountHealthy(chosen, now)) return chosen;
+    const healthy = getAccountsInFallbackOrder().find(
+      (a) => a.id !== chosen.id && isAccountHealthy(a, now),
+    );
+    return healthy ?? chosen;
   } catch {
     // A gate spawn must not fail because the DB is unopened or the accounts
     // table is absent (a partial fixture, an early boot): fall back to ambient.

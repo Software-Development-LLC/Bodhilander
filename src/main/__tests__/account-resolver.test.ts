@@ -71,3 +71,35 @@ describe('resolveAccountForGroup', () => {
     expect(resolveAccountForGroup('g1')).toBeNull();
   });
 });
+
+describe('health-aware step-aside (CO-722 R1)', () => {
+  const FUTURE = '2999-01-01T00:00:00Z';
+  function seedLimited(id: string, isDefault: number, untilISO: string) {
+    db.prepare(
+      `INSERT INTO claude_accounts (id, label, config_dir, is_default, created_at, limited_until)
+       VALUES (?, ?, ?, ?, '2026-01-01T00:00:00Z', ?)`,
+    ).run(id, id, `/cfg/${id}/.claude`, isDefault, untilISO);
+  }
+  const rank = (id: string, n: number) =>
+    db.prepare('UPDATE claude_accounts SET fallback_rank = ? WHERE id = ?').run(n, id);
+
+  test('a rate-limited default steps aside to a healthy fallback account', () => {
+    seedLimited('def', 1, FUTURE);
+    seedAccount('backup'); // healthy
+    rank('def', 0);
+    rank('backup', 1);
+    // Launching under a spent account just burns a 429; prefer the healthy one.
+    expect(resolveAccountForGroup(null)?.id).toBe('backup');
+  });
+
+  test('a limited default with no healthy account keeps the default (nothing better)', () => {
+    seedLimited('def', 1, FUTURE);
+    expect(resolveAccountForGroup(null)?.id).toBe('def');
+  });
+
+  test('a healthy default is used even when a limited account also exists', () => {
+    seedAccount('def', 1); // healthy
+    seedLimited('other', 0, FUTURE);
+    expect(resolveAccountForGroup(null)?.id).toBe('def');
+  });
+});

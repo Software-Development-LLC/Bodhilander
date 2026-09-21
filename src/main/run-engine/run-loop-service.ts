@@ -57,7 +57,10 @@ import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
 import { fetchProjectBoard } from '../github/board-service';
 import { resolveAccountForGroup } from '../account-resolver';
-import { launchGate } from './gate-launcher';
+import { launchGate, type GateLaunch } from './gate-launcher';
+import type { GateOutcome } from './gate-process';
+import { runGateResilient } from './gate-resilience';
+import { markAccountLimited, getAccountByConfigDir } from '../repositories/accounts';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
 import type { ScopeIo } from './scope-initiative';
@@ -295,6 +298,27 @@ function accountConfigDirFor(run: RunRow): string | null {
 }
 
 /**
+ * `launchGate` wrapped with quota-resilience (CO-722 R1).
+ *
+ * Every gate launches through here so a spent account holds with a clear reason
+ * (and is marked limited, so `resolveAccountForGroup` steps aside next tick) and
+ * a transient API error gets a bounded retry -- instead of a single hiccup
+ * parking the whole run. The DB writes are injected into the pure wrapper here,
+ * at the wiring layer, so neither `gate-spawner` nor the wrapper imports the
+ * accounts repository.
+ */
+function resilientLaunch(launch: GateLaunch): Promise<GateOutcome> {
+  return runGateResilient({
+    run: () => launchGate(launch),
+    configDir: launch.context.configDir ?? null,
+    sessionId: launch.context.sessionId,
+    startedAt: new Date(),
+    markLimited: markAccountLimited,
+    accountIdForDir: (dir) => getAccountByConfigDir(dir)?.id ?? null,
+  });
+}
+
+/**
  * The central config's context for an owner's repo + owner agent (Phase 4),
  * joined for the gate brief, or null when the config names none. Externally
  * authored — the app carries it, it doesn't invent it.
@@ -317,7 +341,7 @@ function archDeps(config: SpawnConfig, run: RunRow): ArchDeps {
     startGate: (input) => runsRepo.startGate(input),
     activeGate: (runId, repo) => runsRepo.activeGate(runId, repo),
     finishGate: (id, status, verdict) => runsRepo.finishGate(id, status, verdict),
-    launch: (launch) => launchGate(launch),
+    launch: (launch) => resilientLaunch(launch),
     run: (exe, argv, opts) => runCommand(exe, argv, { timeoutMs: 15 * 60_000, env: opts.env }),
     readFile: readIfPresent,
     config: {
@@ -389,7 +413,7 @@ async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, own
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner));
+  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner), resilientLaunch);
   return { target, deps: { ...commands, spawnGate, provision: () => provisionRunFor(run) } };
 }
 
