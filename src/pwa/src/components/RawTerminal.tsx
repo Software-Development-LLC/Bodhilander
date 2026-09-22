@@ -165,19 +165,40 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
     // safe even if SessionDetail had its own subscribeSession running.
     const unsubSession = wsClient.subscribeSession(sessionId);
 
-    // xterm 6's scrollable viewport handles the mouse wheel only, not touch
-    // — translate a vertical finger drag into scrollLines (same fix
-    // relay/web carries for the same package). preventDefault only fires
-    // once a drag actually moved a line, so a plain tap still reaches the
-    // onClick focus handler.
+    // xterm 6's viewport handles the wheel only, not touch; translate drags
+    // into scrollLines like relay/web does for the same package. A gesture
+    // locks its axis on the first move past AXIS_LOCK_THRESHOLD — vertical
+    // scrolls for the rest of the gesture, horizontal is left to native pan
+    // (the header's trade-off) so a diagonal swipe doesn't lose it partway.
+    const AXIS_LOCK_THRESHOLD = 10;
+    let startX = 0;
+    let startY = 0;
     let lastTouchY = 0;
     let scrollAccum = 0;
+    let axis: 'vertical' | 'horizontal' | null = null;
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) { lastTouchY = e.touches[0]!.clientY; scrollAccum = 0; }
+      if (e.touches.length === 1) {
+        startX = e.touches[0]!.clientX;
+        lastTouchY = startY = e.touches[0]!.clientY;
+        scrollAccum = 0;
+        axis = null;
+      }
     };
     const onTouchMove = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
+      const x = e.touches[0]!.clientX;
       const y = e.touches[0]!.clientY;
+
+      if (axis === null) {
+        const dx = x - startX;
+        const dy = y - startY;
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < AXIS_LOCK_THRESHOLD) return;
+        axis = Math.abs(dy) > Math.abs(dx) ? 'vertical' : 'horizontal';
+        scrollAccum = dy;
+        lastTouchY = y;
+      }
+      if (axis === 'horizontal') return;
+
       scrollAccum += y - lastTouchY;
       lastTouchY = y;
       const cell = Math.max(1, host.clientHeight / xterm.rows);

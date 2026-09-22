@@ -22,9 +22,9 @@ class FakeTerm {
 }
 
 /** happy-dom has no TouchEvent constructor; a plain Event with `touches` set is all the handler reads. */
-function touch(type: string, clientY: number): Event {
+function touch(type: string, clientY: number, clientX = 0): Event {
   const e = new Event(type, { cancelable: true });
-  Object.defineProperty(e, 'touches', { value: [{ clientY }] });
+  Object.defineProperty(e, 'touches', { value: [{ clientX, clientY }] });
   return e;
 }
 
@@ -72,4 +72,16 @@ test('a touchmove drag scrolls by lines, and the listener is gone after unmount'
   host.dispatchEvent(touch('touchstart', 100));
   host.dispatchEvent(touch('touchmove', 50));
   expect(liveTerm?.scrollCalls).toEqual([20]);
+});
+
+test('a horizontal drag is left to native pan for the whole gesture', () => {
+  const { container } = render(<RawTerminal sessionId="s1" />);
+  const host = container.querySelector('.overflow-auto') as HTMLDivElement;
+
+  host.dispatchEvent(touch('touchstart', 100, 100));
+  const move = touch('touchmove', 105, 130); // dx=30, dy=5 — locks horizontal
+  host.dispatchEvent(move);
+
+  expect(liveTerm?.scrollCalls).toEqual([]);
+  expect(move.defaultPrevented).toBe(false);
 });
