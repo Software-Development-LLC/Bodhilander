@@ -5,8 +5,11 @@
  */
 import { afterEach, expect, test } from 'bun:test';
 
+const originalOnError = window.onerror;
+
 afterEach(() => {
   delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  window.onerror = originalOnError;
 });
 
 test('window.onerror logs every message and never suppresses one', async () => {

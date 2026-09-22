@@ -172,12 +172,10 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     const rect = terminalRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
-    // fitAddon.fit() drives xterm's internal resize (onResize →
-    // _renderService.handleResize / the deferred _pausedResizeTask). Refs are
-    // nulled on cleanup so a queued resize (ResizeObserver rAF, window
-    // 'resize', activation-effect timers) normally early-returns before
-    // reaching here; this try/catch is the remaining safety net against any
-    // dispose/paused-renderer race that slips through anyway.
+    // Refs are nulled on cleanup so a queued resize (ResizeObserver rAF,
+    // window 'resize', activation-effect timers) normally early-returns
+    // before reaching here; this try/catch is the remaining defense against
+    // a dispose/paused-renderer race that slips through anyway.
     try {
       fitAddonRef.current.fit();
       const { cols, rows } = xtermRef.current;
