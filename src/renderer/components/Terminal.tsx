@@ -524,6 +524,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         cursor: '#d4d4d4',
         cursorAccent: '#1e1e1e',
         selectionBackground: '#2a3570',
+        // The scrollbar is xterm's own overlay slider now, not a styleable
+        // .xterm-viewport — these reproduce the old thin dark-grey look.
+        scrollbarSliderBackground: '#3a3a3a',
+        scrollbarSliderHoverBackground: '#4a4a4a',
+        scrollbarSliderActiveBackground: '#5a5a5a',
       },
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 14,

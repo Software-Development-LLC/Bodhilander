@@ -165,7 +165,35 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
     // safe even if SessionDetail had its own subscribeSession running.
     const unsubSession = wsClient.subscribeSession(sessionId);
 
+    // xterm 6's scrollable viewport handles the mouse wheel only, not touch
+    // — translate a vertical finger drag into scrollLines (same fix
+    // relay/web carries for the same package). preventDefault only fires
+    // once a drag actually moved a line, so a plain tap still reaches the
+    // onClick focus handler.
+    let lastTouchY = 0;
+    let scrollAccum = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) { lastTouchY = e.touches[0]!.clientY; scrollAccum = 0; }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const y = e.touches[0]!.clientY;
+      scrollAccum += y - lastTouchY;
+      lastTouchY = y;
+      const cell = Math.max(1, host.clientHeight / xterm.rows);
+      const lines = Math.trunc(scrollAccum / cell);
+      if (lines !== 0) {
+        xterm.scrollLines(-lines); // drag down → reveal older lines above
+        scrollAccum -= lines * cell;
+        e.preventDefault();
+      }
+    };
+    host.addEventListener('touchstart', onTouchStart, { passive: true });
+    host.addEventListener('touchmove', onTouchMove, { passive: false });
+
     return () => {
+      host.removeEventListener('touchstart', onTouchStart);
+      host.removeEventListener('touchmove', onTouchMove);
       offOutput();
       offError();
       unsubSession();

@@ -22,6 +22,11 @@ test('a paused resize queued before dispose does not throw once it runs', async 
     renderService._isPaused = true;
     renderService.handleResize(100, 30);
 
+    // Proves the paused-resize branch actually queued a task — without this,
+    // a rename of `_isPaused` would make handleResize take the normal path,
+    // queue nothing, and let the test pass having exercised no risk at all.
+    expect(renderService._pausedResizeTask._queue._tasks.length).toBe(1);
+
     let uncaught: unknown = null;
     const onError = (e: ErrorEvent) => { uncaught = e.error ?? e.message; };
     window.addEventListener('error', onError);
