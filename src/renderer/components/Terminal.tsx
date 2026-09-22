@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Terminal as XTerm } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { WebglAddon } from 'xterm-addon-webgl';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { ProviderInstallHint, RelayResizeRequest } from '../../shared/types';
 import { ProviderInstallModal } from './ProviderInstallModal';
 import { KEEP_MY_SIZE, RESIZE_ONCE, resizeRequestCopy, shouldPrompt } from './resizeRequestPrompt';
@@ -9,7 +9,7 @@ import { KEEP_MY_SIZE, RESIZE_ONCE, resizeRequestCopy, shouldPrompt } from './re
 // useKeyboardShortcuts.ts. Importing the predicates (instead of re-deriving
 // them here) is what keeps the xterm allowlist and the app handler in sync.
 import { IS_MAC, isAppShortcut, isCopyShortcut, isPasteShortcut } from '../hooks/useKeyboardShortcuts';
-import 'xterm/css/xterm.css';
+import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
 interface TerminalProps {

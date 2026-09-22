@@ -46,10 +46,10 @@ class FakeTerm {
   constructor() { liveTerm = this; }
 }
 
-mock.module('xterm', () => ({ Terminal: FakeTerm }));
+mock.module('@xterm/xterm', () => ({ Terminal: FakeTerm }));
 // fit() re-measures the container and reflows the terminal to it — the real
 // behaviour, and the thing that used to undo an accepted fit on any focus.
-mock.module('xterm-addon-fit', () => ({
+mock.module('@xterm/addon-fit', () => ({
   FitAddon: class {
     fit = () => {
       if (!liveTerm) return;
@@ -58,7 +58,7 @@ mock.module('xterm-addon-fit', () => ({
     };
   },
 }));
-mock.module('xterm-addon-webgl', () => ({
+mock.module('@xterm/addon-webgl', () => ({
   WebglAddon: class { onContextLoss = noop; dispose = noop; },
 }));
 
