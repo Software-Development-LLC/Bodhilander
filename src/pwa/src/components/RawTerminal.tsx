@@ -43,7 +43,7 @@
  * count drops to zero and the desktop sends `terminal:unsubscribe`).
  */
 
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -212,9 +212,16 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
     host.addEventListener('touchstart', onTouchStart, { passive: true });
     host.addEventListener('touchmove', onTouchMove, { passive: false });
 
+    // Tapping anywhere on the host focuses xterm so the mobile keyboard
+    // opens. The xterm helper textarea is invisible; without an explicit
+    // focus call iOS sometimes leaves the keyboard down on the first tap.
+    const onClick = () => xterm.focus();
+    host.addEventListener('click', onClick);
+
     return () => {
       host.removeEventListener('touchstart', onTouchStart);
       host.removeEventListener('touchmove', onTouchMove);
+      host.removeEventListener('click', onClick);
       offOutput();
       offError();
       unsubSession();
@@ -254,16 +261,6 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
     };
   }, []);
 
-  // Tapping anywhere on the host focuses xterm so the mobile keyboard
-  // opens. The xterm helper textarea is invisible; without an explicit
-  // focus call iOS sometimes leaves the keyboard down on the first tap.
-  const focusXterm = () => {
-    xtermRef.current?.focus();
-  };
-  const focusXtermOnKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Enter' || e.key === ' ') focusXterm();
-  };
-
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[#0a0a0a]">
       {permError && (
@@ -277,10 +274,6 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
       )}
       <div
         ref={hostRef}
-        onClick={focusXterm}
-        onKeyDown={focusXtermOnKey}
-        role="button"
-        tabIndex={0}
         className="flex-1 overflow-auto touch-pan-x touch-pinch-zoom"
         // The xterm.css handles internal styling; we just provide a
         // scrollable host that occupies the remaining flex space.
