@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Terminal as XTerm } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { WebglAddon } from 'xterm-addon-webgl';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { ProviderInstallHint, RelayResizeRequest } from '../../shared/types';
 import { ProviderInstallModal } from './ProviderInstallModal';
 import { KEEP_MY_SIZE, RESIZE_ONCE, resizeRequestCopy, shouldPrompt } from './resizeRequestPrompt';
@@ -9,7 +9,7 @@ import { KEEP_MY_SIZE, RESIZE_ONCE, resizeRequestCopy, shouldPrompt } from './re
 // useKeyboardShortcuts.ts. Importing the predicates (instead of re-deriving
 // them here) is what keeps the xterm allowlist and the app handler in sync.
 import { IS_MAC, isAppShortcut, isCopyShortcut, isPasteShortcut } from '../hooks/useKeyboardShortcuts';
-import 'xterm/css/xterm.css';
+import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
 interface TerminalProps {
@@ -172,15 +172,10 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     const rect = terminalRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
-    // BDHLNDR-43: fitAddon.fit() drives xterm's internal resize
-    // (onResize → _renderService.handleResize / the deferred
-    // _pausedResizeTask). If a queued resize (ResizeObserver rAF, window
-    // 'resize', activation-effect timers) lands during/after teardown, those
-    // xterm internals are undefined and throw the recurring
-    // "Cannot read properties of undefined (reading 'handleResize')". Refs are
-    // nulled on cleanup so this normally early-returns; this try/catch is the
-    // final safety net so any residual dispose/paused-renderer race can never
-    // escape to window.onerror (same posture as the BDHLNDR-8 dispose guards).
+    // Refs are nulled on cleanup so a queued resize (ResizeObserver rAF,
+    // window 'resize', activation-effect timers) normally early-returns
+    // before reaching here; this try/catch is the remaining defense against
+    // a dispose/paused-renderer race that slips through anyway.
     try {
       fitAddonRef.current.fit();
       const { cols, rows } = xtermRef.current;
@@ -529,6 +524,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         cursor: '#d4d4d4',
         cursorAccent: '#1e1e1e',
         selectionBackground: '#2a3570',
+        // The scrollbar is xterm's own overlay slider now, not a styleable
+        // .xterm-viewport — these reproduce the old thin dark-grey look.
+        scrollbarSliderBackground: '#3a3a3a',
+        scrollbarSliderHoverBackground: '#4a4a4a',
+        scrollbarSliderActiveBackground: '#5a5a5a',
       },
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 14,
@@ -556,7 +556,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         term.loadAddon(webglAddon);
         webglAddonRef.current = webglAddon;
       } catch (e) {
-        console.warn('WebGL addon failed to load, using canvas renderer:', e);
+        console.warn('WebGL addon failed to load, falling back to the DOM renderer:', e);
       }
     });
 

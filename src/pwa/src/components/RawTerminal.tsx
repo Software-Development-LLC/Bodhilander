@@ -44,9 +44,9 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Terminal as XTerm } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import 'xterm/css/xterm.css';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
 
 import {
   wsClient,
@@ -165,7 +165,63 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
     // safe even if SessionDetail had its own subscribeSession running.
     const unsubSession = wsClient.subscribeSession(sessionId);
 
+    // xterm 6's viewport handles the wheel only, not touch; translate drags
+    // into scrollLines like relay/web does for the same package. A gesture
+    // locks its axis on the first move past AXIS_LOCK_THRESHOLD — vertical
+    // scrolls for the rest of the gesture, horizontal is left to native pan
+    // (the header's trade-off) so a diagonal swipe doesn't lose it partway.
+    const AXIS_LOCK_THRESHOLD = 10;
+    let startX = 0;
+    let startY = 0;
+    let lastTouchY = 0;
+    let scrollAccum = 0;
+    let axis: 'vertical' | 'horizontal' | null = null;
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        startX = e.touches[0]!.clientX;
+        lastTouchY = startY = e.touches[0]!.clientY;
+        scrollAccum = 0;
+        axis = null;
+      }
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const x = e.touches[0]!.clientX;
+      const y = e.touches[0]!.clientY;
+
+      if (axis === null) {
+        const dx = x - startX;
+        const dy = y - startY;
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < AXIS_LOCK_THRESHOLD) return;
+        axis = Math.abs(dy) > Math.abs(dx) ? 'vertical' : 'horizontal';
+        scrollAccum = dy;
+        lastTouchY = y;
+      }
+      if (axis === 'horizontal') return;
+
+      scrollAccum += y - lastTouchY;
+      lastTouchY = y;
+      const cell = Math.max(1, host.clientHeight / xterm.rows);
+      const lines = Math.trunc(scrollAccum / cell);
+      if (lines !== 0) {
+        xterm.scrollLines(-lines); // drag down → reveal older lines above
+        scrollAccum -= lines * cell;
+        e.preventDefault();
+      }
+    };
+    host.addEventListener('touchstart', onTouchStart, { passive: true });
+    host.addEventListener('touchmove', onTouchMove, { passive: false });
+
+    // Tapping anywhere on the host focuses xterm so the mobile keyboard
+    // opens. The xterm helper textarea is invisible; without an explicit
+    // focus call iOS sometimes leaves the keyboard down on the first tap.
+    const onClick = () => xterm.focus();
+    host.addEventListener('click', onClick);
+
     return () => {
+      host.removeEventListener('touchstart', onTouchStart);
+      host.removeEventListener('touchmove', onTouchMove);
+      host.removeEventListener('click', onClick);
       offOutput();
       offError();
       unsubSession();
@@ -205,13 +261,6 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
     };
   }, []);
 
-  // Tapping anywhere on the host focuses xterm so the mobile keyboard
-  // opens. The xterm helper textarea is invisible; without an explicit
-  // focus call iOS sometimes leaves the keyboard down on the first tap.
-  const focusXterm = () => {
-    xtermRef.current?.focus();
-  };
-
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[#0a0a0a]">
       {permError && (
@@ -225,8 +274,7 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
       )}
       <div
         ref={hostRef}
-        onClick={focusXterm}
-        className="flex-1 overflow-auto"
+        className="flex-1 overflow-auto touch-pan-x touch-pinch-zoom"
         // The xterm.css handles internal styling; we just provide a
         // scrollable host that occupies the remaining flex space.
       />

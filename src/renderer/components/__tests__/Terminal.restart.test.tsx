@@ -52,9 +52,9 @@ class FakeTerm {
   dispose = () => { this.disposed = true; };
 }
 
-mock.module('xterm', () => ({ Terminal: FakeTerm }));
-mock.module('xterm-addon-fit', () => ({ FitAddon: class { fit = noop; } }));
-mock.module('xterm-addon-webgl', () => ({
+mock.module('@xterm/xterm', () => ({ Terminal: FakeTerm }));
+mock.module('@xterm/addon-fit', () => ({ FitAddon: class { fit = noop; } }));
+mock.module('@xterm/addon-webgl', () => ({
   // Terminal loads this one behind a try/catch inside a rAF; throwing here
   // would exercise the fallback path rather than the restart path.
   WebglAddon: class { onContextLoss = noop; dispose = noop; },
