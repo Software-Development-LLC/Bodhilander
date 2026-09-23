@@ -226,6 +226,7 @@ jobs:
             release/*.exe
             release/*.dmg
             release/*.zip
+            release/*.blockmap
             release/latest*.yml
           if-no-files-found: ignore
 
@@ -290,6 +291,7 @@ jobs:
             artifacts/**/*.exe
             artifacts/**/*.dmg
             artifacts/**/*.zip
+            artifacts/**/*.blockmap
             artifacts/**/*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
