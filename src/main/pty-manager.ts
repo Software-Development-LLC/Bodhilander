@@ -16,7 +16,7 @@ import {
   ProviderDefinition,
 } from './providers';
 import { detectShell, ShellInfo } from './shell-detector';
-import { classifySpawnFailure } from './spawn-failure';
+import { detectSpawnFailure } from './spawn-failure';
 import { LiveAccountBinding, LiveAccountBindings, ProviderInstallHint } from '../shared/types';
 import { getShellLaunch } from './shell-launch';
 import {
@@ -727,13 +727,14 @@ export class PtyManager extends EventEmitter {
     if (!session?.provider || session.spawnFailureNotified) return;
     if (Date.now() - session.spawnedAt > SPAWN_FAILURE_WINDOW_MS) return;
 
-    const kind = classifySpawnFailure(session.provider.command, session.launchOutput);
-    if (!kind) return;
+    const failure = detectSpawnFailure(session.provider.command, session.launchOutput);
+    if (!failure) return;
+    const { kind } = failure;
 
     session.spawnFailureNotified = true;
     session.launchOutput = '';
     const { setup } = session.provider;
-    log.warn(`[PTY] ${session.provider.name} launch failure (${kind}) detected for session ${id}`);
+    log.warn(`[PTY] ${session.provider.name} launch failure (${kind}) detected for session ${id}: ${failure.line}`);
     const hint: ProviderInstallHint = {
       sessionId: id,
       providerId: session.provider.id,
