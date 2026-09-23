@@ -12,11 +12,12 @@ class FakeTerm {
   disposed = false;
   rows = 24;
   scrollCalls: number[] = [];
+  focusCalls = 0;
   loadAddon = noop;
   open = noop;
   write = noop;
   onData = () => ({ dispose: noop });
-  focus = noop;
+  focus = () => { this.focusCalls += 1; };
   scrollLines = (n: number) => { this.scrollCalls.push(n); };
   dispose = () => { this.disposed = true; };
 }
@@ -134,4 +135,16 @@ test('a horizontal drag is left to native pan for the whole gesture', () => {
 
   expect(liveTerm?.scrollCalls).toEqual([]);
   expect(move.defaultPrevented).toBe(false);
+});
+
+test('a tap on the host focuses xterm, and stops once unmounted', () => {
+  const { container, unmount } = render(<RawTerminal sessionId="s1" />);
+  const host = container.querySelector('.overflow-auto') as HTMLDivElement;
+
+  host.dispatchEvent(new Event('click'));
+  expect(liveTerm?.focusCalls).toBe(1);
+
+  unmount();
+  host.dispatchEvent(new Event('click'));
+  expect(liveTerm?.focusCalls).toBe(1);
 });
