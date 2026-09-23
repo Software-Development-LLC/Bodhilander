@@ -275,7 +275,7 @@ export function RawTerminal({ sessionId }: RawTerminalProps) {
       <div
         ref={hostRef}
         onClick={focusXterm}
-        className="flex-1 overflow-auto"
+        className="flex-1 overflow-auto touch-pan-x touch-pinch-zoom"
         // The xterm.css handles internal styling; we just provide a
         // scrollable host that occupies the remaining flex space.
       />
