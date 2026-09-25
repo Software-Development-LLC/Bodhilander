@@ -139,6 +139,51 @@ export function schedulingState(
   );
 }
 
+/**
+ * Owners ordered by merge_order (CO-722 sequential owners): lowest first,
+ * unordered owners (no merge_order) last, repo as the stable tie-break.
+ *
+ * The engine drives owners in this order so the first PR cut is the one a person
+ * merges first, and -- with `ownersBlockingStart` below -- so a later owner's
+ * heavy gate-2 session does not run at the same time as an earlier one's.
+ */
+export function orderOwnersByMerge(owners: readonly RunOwnerRow[]): RunOwnerRow[] {
+  return [...owners].sort((a, b) => {
+    const ao = a.mergeOrder ?? Number.POSITIVE_INFINITY;
+    const bo = b.mergeOrder ?? Number.POSITIVE_INFINITY;
+    if (ao !== bo) return ao - bo;
+    if (a.repo < b.repo) return -1;
+    if (a.repo > b.repo) return 1;
+    return 0;
+  });
+}
+
+/**
+ * The earlier-merge_order owners that must clear their heavy gate before `owner`
+ * may start its own (CO-722 sequential owners).
+ *
+ * Running several bypass gate-2 implementation sessions at once drove the
+ * managed account into repeated rate-limiting under concurrent load, so an owner
+ * waits until every owner ordered before it has stopped occupying a gate. `busy`
+ * says which siblings are still on a gate (running, about to start, or paused on
+ * a bypass prompt); a parked or reconciling predecessor is not busy and does not
+ * hold the line, so one owner stalling never deadlocks the rest.
+ *
+ * An owner with no merge_order has no predecessors and blocks nobody: it starts
+ * in parallel exactly as before (single-repo and unordered runs are unchanged).
+ */
+export function ownersBlockingStart(
+  owner: Pick<RunOwnerRow, 'repo' | 'mergeOrder'>,
+  owners: readonly RunOwnerRow[],
+  busy: (o: RunOwnerRow) => boolean,
+): RunOwnerRow[] {
+  if (owner.mergeOrder === null) return [];
+  const order = owner.mergeOrder;
+  return owners.filter(
+    (o) => o.repo !== owner.repo && o.mergeOrder !== null && o.mergeOrder < order && busy(o),
+  );
+}
+
 export interface RunLoop {
   /** One pass over every due run. Never rejects; problems are reported. */
   tick(): Promise<TickReport>;
@@ -175,6 +220,18 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
    */
   function isBypassWaiting(run: RunRow, owner: RunOwnerRow): boolean {
     return owner.state === 'waitingPermission' && deps.activeGate(run.id, owner.repo)?.posture === 'bypass';
+  }
+
+  /**
+   * Whether an owner is still occupying a gate -- and so would run concurrently
+   * with a later owner if that one started now (CO-722 sequential owners). An
+   * owner not yet on its track (null) is counted busy: it is about to start, so a
+   * successor must not overtake it. A `running` owner holds a live gate; a
+   * bypass-waiting one holds a paused gate that resumes out of band. Everything
+   * else -- reconciling a PR, parked, done -- is no longer on a heavy gate.
+   */
+  function occupyingGate(run: RunRow, owner: RunOwnerRow): boolean {
+    return owner.state === null || owner.state === 'running' || isBypassWaiting(run, owner);
   }
 
   function remember(run: RunRow): ScheduledRun {
@@ -314,7 +371,10 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
     if (run.kind === 'multi' && run.bootstrapState && run.bootstrapState !== 'done') {
       return deps.driveBootstrap(run, report);
     }
-    const owners = deps.listOwners(run.id);
+    // Ordered by merge_order (CO-722 sequential owners): owners[0] is the owner
+    // that rides the run's one provision below, and the start guard holds each
+    // later owner behind its predecessors.
+    const owners = orderOwnersByMerge(deps.listOwners(run.id));
     if (owners.length === 0) {
       report.skipped.push({ runId: run.id, why: 'no owner recorded, so nothing to drive' });
       return false;
@@ -335,7 +395,17 @@ export function createRunLoop(deps: LoopDeps): RunLoop {
       const state = owner.state;
       if (state === null) {
         // Provisioned, but never brought onto its track (a repo the first
-        // owner's provision did not start). Open its gate 2.
+        // owner's provision did not start). Open its gate 2 -- unless an earlier
+        // merge_order owner is still on a heavy gate, in which case hold this one
+        // so the two do not run at once and trip rate limits (CO-722 sequential
+        // owners). A held owner keeps the run due (schedulingState treats null as
+        // preparing), so it is re-evaluated every tick until its predecessors
+        // clear; holding is not driving, and not a failure.
+        const blockers = ownersBlockingStart(owner, owners, (o) => occupyingGate(run, o));
+        if (blockers.length > 0) {
+          deps.log(`${run.id} ${owner.repo}: holding start behind ${blockers.map((b) => b.repo).join(', ')} (merge order)`);
+          continue;
+        }
         drove = true;
         ok = (await startOwner(run, owner, report)) && ok;
       } else if (state === 'running' || isBypassWaiting(run, owner)) {
