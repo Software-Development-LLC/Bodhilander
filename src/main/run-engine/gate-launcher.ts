@@ -39,7 +39,7 @@ import { buildGateCommand, type GateMode, type RunSpawnContext } from './gate-co
 import { runGate, type GateOutcome, type GateSpawnOptions } from './gate-process';
 import { GATE_VERDICT_SCHEMA } from './gate-verdict';
 import { channelDirFor, hookSettingsText, mcpConfigText, PERMISSION_TOOL } from './permission-channel';
-import { ensureDangerousModeAccepted } from '../claude-settings';
+import { ensureDangerousModeAccepted, ensureWorkspaceTrusted } from '../claude-settings';
 
 export class GateLaunchError extends Error {
   // Set explicitly: without it `error.name` reads "Error" in a log, and the
@@ -425,6 +425,16 @@ export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
   // it. Ambient login (no configDir) is left to the person's own acceptance.
   if (launch.context.posture === 'bypass' && launch.context.configDir) {
     ensureDangerousModeAccepted(launch.context.configDir);
+  }
+
+  // Separately from the disclaimer, Claude Code refuses to run in a folder whose
+  // trust prompt has not been accepted -- a `--bg` gate in an untrusted folder
+  // exits 1 ("Workspace not trusted"). Each run cuts a FRESH worktree, which is
+  // untrusted by default, so trust the gate's cwd for the managed account before
+  // launch. Not posture-gated: it is the `--bg` owner gate that needs it, and the
+  // seed is idempotent and harmless for the reading gates.
+  if (launch.context.configDir) {
+    ensureWorkspaceTrusted(launch.context.configDir, launch.context.cwd);
   }
 
   // Only the posture that asks needs somewhere to ask. `bypass` prompts for

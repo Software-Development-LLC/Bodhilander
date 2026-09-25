@@ -146,3 +146,62 @@ export function ensureDangerousModeAccepted(configDir?: string): boolean {
   }
   return wrote;
 }
+
+/** Claude Code's per-config-dir state file, holding per-project trust + more. */
+export function getClaudeJsonPath(configDir?: string): string {
+  return path.join(resolveConfigDir(configDir), '.claude.json');
+}
+
+/**
+ * Pre-accept the workspace-trust dialog for one folder under a config dir.
+ *
+ * Distinct from the bypass disclaimer: Claude Code refuses to run in a folder
+ * whose trust prompt has not been accepted, and a `--bg` gate in an untrusted
+ * folder exits 1 ("Workspace not trusted"). Each cross-repo run cuts FRESH
+ * worktrees, which are untrusted by default, so an autonomous run parks at its
+ * first owner gate. Claude Code records trust in `.claude.json` as
+ * `projects[<absolute cwd>].hasTrustDialogAccepted: true`, so we set it ourselves
+ * for the gate's cwd before launch.
+ *
+ * `.claude.json` is Claude Code's own large state file (project history, OAuth,
+ * machine id), so this is a careful read -> merge -> atomic write that preserves
+ * every other key, and it REFUSES to write over a file it could not parse rather
+ * than clobber real state. Idempotent: no write when the folder is already
+ * trusted.
+ */
+export function ensureWorkspaceTrusted(configDir: string | undefined, cwd: string): boolean {
+  const file = getClaudeJsonPath(configDir);
+
+  let state: Record<string, unknown> = {};
+  if (fs.existsSync(file)) {
+    try {
+      state = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
+    } catch (err) {
+      // A real, multi-KB state file we cannot parse must never be overwritten.
+      log.warn(`[Claude Settings] .claude.json unparseable; not seeding trust for ${cwd}:`, err);
+      return false;
+    }
+  }
+
+  const projects = state.projects && typeof state.projects === 'object'
+    ? (state.projects as Record<string, Record<string, unknown>>)
+    : {};
+  const existing = projects[cwd];
+  if (existing?.hasTrustDialogAccepted === true) {
+    return true; // Already trusted -- no write.
+  }
+
+  projects[cwd] = { ...(existing ?? {}), hasTrustDialogAccepted: true };
+  state.projects = projects;
+
+  try {
+    const tmp = `${file}.bodhilander.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+    fs.renameSync(tmp, file);
+    log.info(`[Claude Settings] Trusted workspace ${cwd} for ${configDir ?? '(default)'}`);
+    return true;
+  } catch (err) {
+    log.error(`[Claude Settings] Failed to write .claude.json trust for ${cwd}:`, err);
+    return false;
+  }
+}
