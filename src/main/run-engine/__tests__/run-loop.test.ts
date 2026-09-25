@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { RunGateRow, RunOwnerRow, RunRow } from '../../repositories/runs';
 import type { GateLook } from '../attention-pass';
-import { createRunLoop, schedulingState, MAX_CONCURRENT_RUNS, type LoopDeps } from '../run-loop';
+import { createRunLoop, orderOwnersByMerge, ownersBlockingStart, schedulingState, MAX_CONCURRENT_RUNS, type LoopDeps } from '../run-loop';
 import { CHECKS_INTERVAL_MS, ESCALATE_AFTER, GATE_INTERVAL_MS } from '../reconcile-loop';
 import type { RunEvent } from '../transitions';
 
@@ -18,7 +18,7 @@ function run(id: string, state: RunRow['state']): RunRow {
 function owner(runId: string, over: Partial<RunOwnerRow> = {}): RunOwnerRow {
   return {
     runId, repo: 'Bodhilander', worktree: 'C:/wt', branch: 'feat/x', base: 'origin/development', scratch: null,
-    agent: 'bodhilander-lead', status: 'pending', prNumber: null, prUrl: null, ...over,
+    agent: 'bodhilander-lead', status: 'pending', mergeOrder: null, prNumber: null, prUrl: null, ...over,
   };
 }
 
@@ -503,6 +503,120 @@ describe('starting a run that has been armed but never run (CO-722)', () => {
     expect(schedulingState([null, null], 'preparing')).toBe('preparing');
     expect(schedulingState(['approved', null], 'approved')).toBe('preparing');
     expect(schedulingState(['approved', 'done'], 'approved')).toBe('approved');
+  });
+});
+
+describe('sequential owners by merge_order (CO-722)', () => {
+  test('orderOwnersByMerge: lowest merge_order first, unordered last, repo as tie-break', () => {
+    const owners = [
+      owner('r1', { repo: 'zeta', mergeOrder: null }),
+      owner('r1', { repo: 'beta', mergeOrder: 1 }),
+      owner('r1', { repo: 'alpha', mergeOrder: null }),
+      owner('r1', { repo: 'gamma', mergeOrder: 0 }),
+    ];
+    expect(orderOwnersByMerge(owners).map((o) => o.repo)).toEqual(['gamma', 'beta', 'alpha', 'zeta']);
+  });
+
+  test('orderOwnersByMerge does not mutate its input', () => {
+    const owners = [owner('r1', { repo: 'b', mergeOrder: 1 }), owner('r1', { repo: 'a', mergeOrder: 0 })];
+    orderOwnersByMerge(owners);
+    expect(owners.map((o) => o.repo)).toEqual(['b', 'a']);
+  });
+
+  test('ownersBlockingStart: an unordered owner has no predecessors and blocks nobody', () => {
+    const owners = [owner('r1', { repo: 'a', mergeOrder: 0, state: 'running' }), owner('r1', { repo: 'b', mergeOrder: null, state: null })];
+    expect(ownersBlockingStart(owners[1], owners, (o) => o.state === 'running')).toEqual([]);
+  });
+
+  test('ownersBlockingStart: only earlier, still-busy owners hold the line', () => {
+    const owners = [
+      owner('r1', { repo: 'a', mergeOrder: 0, state: 'running' }),   // earlier, busy -> blocks
+      owner('r1', { repo: 'b', mergeOrder: 1, state: 'waitingChecks' }), // earlier, not busy -> no block
+      owner('r1', { repo: 'c', mergeOrder: 2, state: null }),        // the one starting
+      owner('r1', { repo: 'd', mergeOrder: 3, state: 'running' }),   // LATER, busy -> irrelevant
+    ];
+    const busy = (o: RunOwnerRow) => o.state === null || o.state === 'running';
+    expect(ownersBlockingStart(owners[2], owners, busy).map((o) => o.repo)).toEqual(['a']);
+  });
+
+  test('a later owner is held while an earlier merge_order owner is still on its gate', async () => {
+    const f = fake({
+      runs: [run('r1', 'running')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'api', mergeOrder: 0, state: 'running' }),
+          owner('r1', { repo: 'insights', mergeOrder: 1, state: null }),
+        ],
+      },
+    });
+    const loop = createRunLoop(f.deps);
+    await loop.tick();
+    // The earlier owner is looked at; the later one is held, not started.
+    expect(f.calls).toContain('look');
+    expect(f.calls).not.toContain('startOwner:insights');
+    expect(f.calls.some((c) => c.startsWith('log:') && c.includes('insights'))).toBe(true);
+    // Holding is not a failure -- the run just waits for its predecessor.
+    expect(loop.schedule().get('r1')?.failures).toBe(0);
+  });
+
+  test('the later owner starts once the earlier one reaches its PR (no longer on a gate)', async () => {
+    const f = fake({
+      runs: [run('r1', 'running')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'api', mergeOrder: 0, state: 'waitingChecks', prNumber: 4, prUrl: 'https://github.com/o/api/pull/4' }),
+          owner('r1', { repo: 'insights', mergeOrder: 1, state: null }),
+        ],
+      },
+    });
+    await createRunLoop(f.deps).tick();
+    expect(f.calls).toContain('startOwner:insights');
+  });
+
+  test('a parked (inconclusive) predecessor does not deadlock the successor', async () => {
+    // Sequencing spreads load; it must never let one stuck owner strand the rest.
+    const f = fake({
+      runs: [run('r1', 'running')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'api', mergeOrder: 0, state: 'inconclusive', blockedReason: 'gate 2 could not establish' }),
+          owner('r1', { repo: 'insights', mergeOrder: 1, state: null }),
+        ],
+      },
+    });
+    await createRunLoop(f.deps).tick();
+    expect(f.calls).toContain('startOwner:insights');
+  });
+
+  test('unordered owners (no merge_order) still start in parallel', async () => {
+    const f = fake({
+      runs: [run('r1', 'running')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'api', mergeOrder: null, state: null }),
+          owner('r1', { repo: 'insights', mergeOrder: null, state: null }),
+        ],
+      },
+    });
+    await createRunLoop(f.deps).tick();
+    expect(f.calls).toContain('startOwner:api');
+    expect(f.calls).toContain('startOwner:insights');
+  });
+
+  test('provision rides the lowest merge_order owner, whatever order the rows come in', async () => {
+    const seen: string[] = [];
+    const f = fake({
+      runs: [run('r1', 'preparing')],
+      owners: {
+        r1: [
+          owner('r1', { repo: 'insights', mergeOrder: 1, state: null }),
+          owner('r1', { repo: 'api', mergeOrder: 0, state: null }),
+        ],
+      },
+      advance: async (_r, o, e) => { seen.push(`${e.kind}:${o.repo}`); return { state: 'running', applied: [e], problems: [], notifications: [], released: false, runaway: null }; },
+    });
+    await createRunLoop(f.deps).tick();
+    expect(seen).toEqual(['prepared:api']);
   });
 });
 
