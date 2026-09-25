@@ -739,6 +739,13 @@ export const RUN_ENGINE_PREF_KEYS = {
   // runtime so project/owner policy needs no app release (Phase 2).
   configRepo: 'runEngine.configRepo',
   configPath: 'runEngine.configPath',
+  // Continuous auto-drive (CO-722 Workstream B): opt-in board watcher that
+  // starts runs for eligible initiatives on its own. Off by default; bounded by
+  // a per-day cap (0/unset = unlimited) and a max-concurrent-runs cap so it
+  // never spends more quota than the operator allows.
+  autoDriveEnabled: 'runEngine.autoDriveEnabled',
+  autoDrivePerDay: 'runEngine.autoDrivePerDay',
+  autoDriveMaxConcurrent: 'runEngine.autoDriveMaxConcurrent',
 } as const;
 
 /** What preparing an initiative reported: the armable directory, or why not (CO-722). */

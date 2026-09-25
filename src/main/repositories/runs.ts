@@ -243,6 +243,35 @@ export function listActiveRuns(): RunRow[] {
   return rows.map(toRun);
 }
 
+/**
+ * How many runs were created since `sinceEpochMs` (CO-722 auto-drive N/day cap).
+ *
+ * Counts every run regardless of state: a run started and later abandoned still
+ * spent the quota the cap exists to preserve, so it must count against the day.
+ * `created_at` is stored as a UTC `CURRENT_TIMESTAMP` string, so the threshold is
+ * compared via SQLite's own `datetime(?, 'unixepoch')` (same format), not string
+ * math in JS.
+ */
+export function countRunsCreatedSince(sinceEpochMs: number): number {
+  const row = getDatabase()
+    .prepare("SELECT COUNT(*) AS n FROM runs WHERE created_at >= datetime(?, 'unixepoch')")
+    .get(Math.floor(sinceEpochMs / 1000)) as { n: number };
+  return row.n;
+}
+
+/**
+ * Whether ANY run has ever existed for this initiative key (CO-722 auto-drive
+ * dedup). Auto-drive starts one run per key ever; re-running a done, failed or
+ * abandoned initiative is a deliberate manual Initiate, never automatic — so this
+ * checks every state, unlike `listActive` which excludes the terminal ones.
+ */
+export function hasRunForKey(initiativeKey: string): boolean {
+  const row = getDatabase()
+    .prepare('SELECT 1 FROM runs WHERE initiative_key = ? LIMIT 1')
+    .get(initiativeKey);
+  return row != null;
+}
+
 /** What an event may carry beyond its kind. */
 export interface EventDetail {
   gate?: number;

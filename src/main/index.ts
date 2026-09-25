@@ -12,7 +12,7 @@ import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
 import * as runsRepo from './repositories/runs';
-import { startRunLoopService, stopRunLoopService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun, initiateFromBoard, getBoardWithRunState, readRunManifest, approveRunManifest, rejectRunManifest } from './run-engine/run-loop-service';
+import { startRunLoopService, stopRunLoopService, startBoardWatcherService, stopBoardWatcherService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun, initiateFromBoard, getBoardWithRunState, readRunManifest, approveRunManifest, rejectRunManifest } from './run-engine/run-loop-service';
 import { loadOrchestrationConfig } from './github/orchestration-config';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
@@ -1614,6 +1614,10 @@ app.whenReady().then(() => {
   // answers a permission prompt, which is the inbox's job (CO-722).
   try {
     startRunLoopService();
+    // The auto-drive watcher starts alongside it but does nothing until a person
+    // turns auto-drive on in Settings (CO-722 Workstream B). Its own try/catch
+    // above the loop's would swallow the loop's failure, so keep them separate.
+    startBoardWatcherService();
   } catch (error) {
     // A loop that fails to start must not take the app down with it: the app
     // is a session manager first, and the engine ships behind it.
@@ -1785,6 +1789,7 @@ app.on('before-quit', (event) => {
       } catch (e) {
         log.error('Error stopping relay client on quit:', e);
       }
+      stopBoardWatcherService();
       stopRunLoopService();
       closeDatabase();
     },

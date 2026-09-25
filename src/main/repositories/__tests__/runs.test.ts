@@ -644,3 +644,34 @@ describe('abandonRun — halting a run (CO-722)', () => {
     expect(runs.abandonRun('nope')).toBe(false);
   });
 });
+
+describe('auto-drive dedup and per-day count (CO-722 Workstream B)', () => {
+  test('hasRunForKey is true once ANY run exists for the key, including a terminal one', () => {
+    expect(runs.hasRunForKey('CO-1')).toBe(false);
+    runs.createRun({ ...BASE, id: 'r-a', initiativeKey: 'CO-1' });
+    expect(runs.hasRunForKey('CO-1')).toBe(true);
+    // A completed/abandoned run still counts: auto-drive is one-run-ever.
+    runs.abandonRun('r-a');
+    expect(runs.hasRunForKey('CO-1')).toBe(true);
+    expect(runs.hasRunForKey('CO-2')).toBe(false);
+  });
+
+  test('countRunsCreatedSince counts fresh runs and excludes older ones', () => {
+    // A run created "now" (CURRENT_TIMESTAMP default).
+    runs.createRun({ ...BASE, id: 'fresh', initiativeKey: 'CO-NEW' });
+    // A run created two days ago, inserted directly so created_at is in the past.
+    db.prepare(
+      "INSERT INTO runs (id, initiative_key, initiative_dir, harness_path, bodhi_root, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-2 days'))",
+    ).run('stale', 'CO-OLD', '/d', '/h', '/r');
+
+    const since = Date.now() - 24 * 60 * 60 * 1000;
+    // Only the fresh run is inside the trailing 24h window.
+    expect(runs.countRunsCreatedSince(since)).toBe(1);
+    // A window that reaches back three days catches both.
+    expect(runs.countRunsCreatedSince(Date.now() - 3 * 24 * 60 * 60 * 1000)).toBe(2);
+  });
+
+  test('countRunsCreatedSince is zero when nothing was created', () => {
+    expect(runs.countRunsCreatedSince(Date.now() - 24 * 60 * 60 * 1000)).toBe(0);
+  });
+});
