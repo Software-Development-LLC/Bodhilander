@@ -161,3 +161,40 @@ export function permissionPosture(): PermissionPosture {
 export function configPath(): string {
   return resolved(K.configPath, 'BODHI_CONFIG_PATH', 'orchestration.json');
 }
+
+/**
+ * Continuous auto-drive settings (CO-722 Workstream B).
+ *
+ * Auto-drive is OFF unless a person turns it on -- a run started on its own
+ * spends real quota, so the default is the safe one. The default max-concurrent
+ * is deliberately below the loop's own lane cap: the point of auto-drive is to
+ * preserve usage, so it starts a few initiatives at a time, not a burst.
+ */
+const AUTODRIVE_DEFAULT_MAX_CONCURRENT = 3;
+
+/** Whether the board watcher may start runs on its own. Off unless explicitly enabled. */
+export function autoDriveEnabled(): boolean {
+  const raw = resolved(K.autoDriveEnabled, 'BODHI_AUTODRIVE', 'false').toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'on' || raw === 'yes';
+}
+
+/**
+ * The most runs auto-drive may create in a trailing 24h, or null for unlimited.
+ * Unset OR 0 both mean unlimited -- 0 reads as "no cap", not "start nothing".
+ */
+export function autoDrivePerDay(): number | null {
+  const env = process.env.BODHI_AUTODRIVE_PER_DAY?.trim();
+  const raw = pref(K.autoDrivePerDay) ?? (env && env.length > 0 ? env : null);
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** The most runs (of any origin) that may be active before auto-drive stops starting more. */
+export function autoDriveMaxConcurrent(): number {
+  const env = process.env.BODHI_AUTODRIVE_MAX?.trim();
+  const raw = pref(K.autoDriveMaxConcurrent) ?? (env && env.length > 0 ? env : null);
+  if (!raw) return AUTODRIVE_DEFAULT_MAX_CONCURRENT;
+  const n = Number.parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : AUTODRIVE_DEFAULT_MAX_CONCURRENT;
+}

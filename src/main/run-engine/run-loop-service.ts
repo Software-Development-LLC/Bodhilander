@@ -43,6 +43,7 @@ import { lookAtGate, type AttentionDeps } from './attention-pass';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
 import { reconcileOnce, expectedChecksLookup, type ChecksLookup, type CommandResult } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
+import { createBoardWatcher, type BoardWatcher } from './board-watcher';
 import { pendingRequests, writeDecision, type ChannelIo } from './permission-inbox';
 import { GATE_BUSY_CEILING_MS } from './reconcile-loop';
 import { armInitiative, mergeOrderFromSeams } from './arm-run';
@@ -70,6 +71,12 @@ import * as machine from './machine-config';
 
 /** How often the timer fires. Each tick still only acts on runs that are DUE. */
 const TICK_MS = 15_000;
+/**
+ * How often the auto-drive watcher reads the board (CO-722 Workstream B). Far
+ * slower than the run loop: starting a run is a rare event and a board read is a
+ * `gh` round-trip, so a minute is plenty and keeps the API load light.
+ */
+const WATCH_TICK_MS = 60_000;
 /** A print gate's ceiling. Background gates get the receipt path instead. */
 const GATE_TIMEOUT_MS = 30 * 60 * 1000;
 /** How long `claude agents` and `gh pr list` may take before the pass gives up on them. */
@@ -787,4 +794,43 @@ export function startRunLoopService(): RunLoop {
 export function stopRunLoopService(): void {
   started?.stop();
   started = null;
+}
+
+let watcher: BoardWatcher | null = null;
+
+/**
+ * Start the auto-drive board watcher (CO-722 Workstream B). Idempotent.
+ *
+ * The timer runs whether or not auto-drive is on: each tick checks the
+ * `autoDriveEnabled` preference first and does nothing while it is off, so
+ * turning auto-drive on or off in Settings takes effect on the next tick with no
+ * restart. Every decision is the watcher's pure `watchTick`; this only supplies
+ * the real board read, run counts and the same `prepareCrossRepoRun` Initiate
+ * uses.
+ */
+export function startBoardWatcherService(): BoardWatcher {
+  if (watcher) return watcher;
+  const w = createBoardWatcher({
+    now: () => Date.now(),
+    enabled: () => machine.autoDriveEnabled(),
+    projectNumber: () => machine.projectNumber(),
+    perDayCap: () => machine.autoDrivePerDay(),
+    maxConcurrent: () => machine.autoDriveMaxConcurrent(),
+    readBoard: (projectNumber) => getBoardWithRunState(projectNumber),
+    countActiveRuns: () => runsRepo.listActive().length,
+    countRunsCreatedSince: (sinceEpochMs) => runsRepo.countRunsCreatedSince(sinceEpochMs),
+    hasRunForKey: (key) => runsRepo.hasRunForKey(key),
+    startRun: (key, repos) => prepareCrossRepoRun(key, repos),
+    log: (line) => log.info(line),
+  });
+  w.start(WATCH_TICK_MS);
+  log.info(`[BoardWatcher] started; checking the board every ${WATCH_TICK_MS / 1000}s (auto-drive off until enabled)`);
+  watcher = w;
+  return w;
+}
+
+/** Stop the board watcher at shutdown. */
+export function stopBoardWatcherService(): void {
+  watcher?.stop();
+  watcher = null;
 }
