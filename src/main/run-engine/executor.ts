@@ -64,6 +64,14 @@ export interface ExecutorDeps {
    * is running is a fact the driver holds and this module must not guess at.
    */
   spawnGate(gate: Gate, agent: string): Promise<GateOutcome>;
+
+  /**
+   * How many times this gate/role has run for the owner -- the review round.
+   * Fed to the machine so a non-converging review gate parks after
+   * `MAX_REVIEW_ROUNDS` failures instead of looping back to the owner forever.
+   * Optional: absent means the cap is not applied (older callers, tests).
+   */
+  reviewRound?(gate: Gate, agent: string): number;
 }
 
 /**
@@ -168,7 +176,7 @@ function clampReason(text: string): string {
  * verdict arrives later in a receipt. Saying anything here would be saying it
  * before the gate has done the work.
  */
-export function gateEvent(gate: Gate, outcome: GateOutcome): RunEvent | null {
+export function gateEvent(gate: Gate, outcome: GateOutcome, round?: number): RunEvent | null {
   if (outcome.status === 'launched') return null;
   if (outcome.status === 'undriveable') {
     // Carry WHY into the event so the run's blocked_reason names it: the generic
@@ -176,7 +184,9 @@ export function gateEvent(gate: Gate, outcome: GateOutcome): RunEvent | null {
     const reason = outcome.detail ? `${outcome.reason} — ${outcome.detail}` : outcome.reason;
     return { kind: 'gateFinished', gate, verdict: 'inconclusive', reason };
   }
-  return { kind: 'gateFinished', gate, verdict: readGateVerdict(outcome.structuredOutput).verdict };
+  // `round` rides along so the machine can cap a non-converging review loop; it
+  // matters only for a `fail` on a review gate and is ignored otherwise.
+  return { kind: 'gateFinished', gate, verdict: readGateVerdict(outcome.structuredOutput).verdict, round };
 }
 
 async function requestReview(
@@ -265,7 +275,9 @@ async function performAction(
     }
     case 'spawnGate': {
       const outcome = await deps.spawnGate(action.gate, action.agent);
-      const event = gateEvent(action.gate, outcome);
+      // The round this gate just completed, for the review-loop cap.
+      const round = deps.reviewRound?.(action.gate, action.agent);
+      const event = gateEvent(action.gate, outcome, round);
       if (event) result.events.push(event);
       if (outcome.status === 'launched') {
         result.launched.push({ gate: action.gate, sessionId: outcome.sessionId, backgroundId: outcome.backgroundId });

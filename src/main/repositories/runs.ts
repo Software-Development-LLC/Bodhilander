@@ -628,6 +628,22 @@ export function startGate(input: StartGateInput): void {
 }
 
 /**
+ * How many times one role has run a gate for one owner -- the "round" number,
+ * counted exactly as `startGate` numbers `attempt` (per run/gate/agent/repo).
+ * The review-round cap uses this: when a review gate has failed this many times
+ * without converging, the run parks for a person instead of looping (CO-722).
+ */
+export function countGateRuns(runId: string, repo: string | null, gate: number, agent: string): number {
+  const row = getDatabase()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM run_gates
+        WHERE run_id = ? AND gate = ? AND agent = ? AND IFNULL(repo, '') = IFNULL(?, '')`,
+    )
+    .get(runId, gate, agent, repo ?? null) as { n: number };
+  return row.n;
+}
+
+/**
  * Close a gate out.
  *
  * `verdict` is stored as given, including an inconclusive one. A gate that

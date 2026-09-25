@@ -12,6 +12,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   IS_WORKING,
+  MAX_REVIEW_ROUNDS,
   NEEDS_A_PERSON,
   isTerminal,
   rollupState,
@@ -478,5 +479,39 @@ describe('the run-level rollup of owner states (multi-owner)', () => {
 
   test('no owners yet reads as the run-level prelude', () => {
     expect(rollupState([])).toBe('preparing');
+  });
+});
+
+describe('review-round cap: a non-converging review loop parks instead of looping', () => {
+  const failAt = (gate: Gate, round?: number) =>
+    go('running', { kind: 'gateFinished', gate, verdict: 'fail', round });
+
+  test('a review fail below the cap sends the owner back to gate 2', () => {
+    const d = failAt(3, MAX_REVIEW_ROUNDS - 1);
+    expect(d.actions).toContainEqual({ kind: 'spawnGate', gate: 2 });
+    expect(d.state).not.toBe('inconclusive');
+  });
+
+  test('a review fail at the cap parks the run inconclusive for a person', () => {
+    const d = failAt(3, MAX_REVIEW_ROUNDS);
+    expect(d.state).toBe('inconclusive');
+    expect(d.actions.some((a) => a.kind === 'spawnGate')).toBe(false);
+    expect(d.note.toLowerCase()).toContain('without converging');
+  });
+
+  test('gate 4 is capped the same way', () => {
+    expect(failAt(4, MAX_REVIEW_ROUNDS).state).toBe('inconclusive');
+  });
+
+  test('no round supplied keeps the old behaviour (back to gate 2), never a silent park', () => {
+    const d = failAt(3, undefined);
+    expect(d.actions).toContainEqual({ kind: 'spawnGate', gate: 2 });
+    expect(d.state).not.toBe('inconclusive');
+  });
+
+  test('the cap carries the reviewer reason into the blocked note when present', () => {
+    const d = go('running', { kind: 'gateFinished', gate: 3, verdict: 'fail', round: MAX_REVIEW_ROUNDS, reason: 'two competing branches; pick one' });
+    expect(d.state).toBe('inconclusive');
+    expect(d.note).toContain('two competing branches');
   });
 });
