@@ -85,4 +85,22 @@ describe('ensureWorkspaceTrusted', () => {
     ensureWorkspaceTrusted(cfg, CWD);
     expect(fs.readdirSync(cfg).filter((f) => f.includes('.tmp'))).toEqual([]);
   });
+
+  test('a WINDOWS backslash cwd is stored under the forward-slash key that --bg reads', () => {
+    // The bug that made #371 ineffective: Claude Code normalizes trust keys to
+    // forward slashes internally, so a backslash key never matches for --bg.
+    expect(ensureWorkspaceTrusted(cfg, 'C:\\work\\repos\\_wt-co-1-service-api')).toBe(true);
+    const projects = readJson().projects;
+    expect(projects['C:/work/repos/_wt-co-1-service-api'].hasTrustDialogAccepted).toBe(true);
+    expect(projects['C:\\work\\repos\\_wt-co-1-service-api']).toBeUndefined();
+  });
+
+  test('idempotent across the slash forms (backslash input recognises a forward-slash entry)', () => {
+    writeJson({ projects: { 'C:/work/repos/_wt-co-2-service-api': { hasTrustDialogAccepted: true } } });
+    const before = fs.readFileSync(getClaudeJsonPath(cfg), 'utf-8');
+
+    expect(ensureWorkspaceTrusted(cfg, 'C:\\work\\repos\\_wt-co-2-service-api')).toBe(true);
+
+    expect(fs.readFileSync(getClaudeJsonPath(cfg), 'utf-8')).toBe(before);
+  });
 });

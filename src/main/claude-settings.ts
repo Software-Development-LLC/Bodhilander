@@ -172,6 +172,13 @@ export function getClaudeJsonPath(configDir?: string): string {
 export function ensureWorkspaceTrusted(configDir: string | undefined, cwd: string): boolean {
   const file = getClaudeJsonPath(configDir);
 
+  // Claude Code stores and looks up workspace trust by the FORWARD-SLASH form of
+  // the path (it normalizes internally), even on Windows. Seeding the raw
+  // backslash path leaves `--bg` still reporting the folder untrusted -- an exact
+  // key mismatch -- so normalize here. Confirmed empirically: a forward-slash key
+  // makes `claude --bg` launch in a fresh worktree; the backslash key does not.
+  const key = cwd.replace(/\\/g, '/');
+
   let state: Record<string, unknown> = {};
   if (fs.existsSync(file)) {
     try {
@@ -186,12 +193,12 @@ export function ensureWorkspaceTrusted(configDir: string | undefined, cwd: strin
   const projects = state.projects && typeof state.projects === 'object'
     ? (state.projects as Record<string, Record<string, unknown>>)
     : {};
-  const existing = projects[cwd];
+  const existing = projects[key];
   if (existing?.hasTrustDialogAccepted === true) {
     return true; // Already trusted -- no write.
   }
 
-  projects[cwd] = { ...(existing ?? {}), hasTrustDialogAccepted: true };
+  projects[key] = { ...(existing ?? {}), hasTrustDialogAccepted: true };
   state.projects = projects;
 
   try {
