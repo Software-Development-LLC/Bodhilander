@@ -60,6 +60,7 @@ import { resolveAccountForGroup } from '../account-resolver';
 import { launchGate, type GateLaunch } from './gate-launcher';
 import type { GateOutcome } from './gate-process';
 import { runGateResilient } from './gate-resilience';
+import type { Gate } from './transitions';
 import { markAccountLimited, getAccountByConfigDir } from '../repositories/accounts';
 import { SCOPE_REPO } from './bootstrap';
 import { planCrossRepoRun } from './cross-repo-prepare';
@@ -414,7 +415,17 @@ async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, own
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
   const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner), resilientLaunch);
-  return { target, deps: { ...commands, spawnGate, provision: () => provisionRunFor(run) } };
+  return {
+    target,
+    deps: {
+      ...commands,
+      spawnGate,
+      provision: () => provisionRunFor(run),
+      // The review-round count for the loop cap: how many times this gate/role
+      // has run for this owner (CO-722).
+      reviewRound: (gate: Gate, agent: string) => runsRepo.countGateRuns(run.id, owner.repo, gate, agent),
+    },
+  };
 }
 
 export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {

@@ -95,7 +95,7 @@ export type RunEvent =
    * a gone session). It becomes the run's blocked_reason so "could not
    * establish a verdict" says what actually happened, not just that it did.
    */
-  | { kind: 'gateFinished'; gate: Gate; verdict: GateVerdict; reason?: string }
+  | { kind: 'gateFinished'; gate: Gate; verdict: GateVerdict; reason?: string; round?: number }
   | { kind: 'permissionRequested' }
   | { kind: 'permissionAnswered' }
   | { kind: 'prOpened' }
@@ -256,7 +256,20 @@ function onProvisioning(event: RunEvent): Decision | null {
   return null;
 }
 
-function onGateFinished(gate: Gate, verdict: GateVerdict, reason?: string): Decision {
+/**
+ * How many times a review gate (3 or 4) may fail before the run stops looping
+ * back to the owner and parks for a person.
+ *
+ * A failing review gate sends the owner back to gate 2 to fix the branch. That
+ * is right for a fixable finding, but an owner and reviewer that cannot converge
+ * -- or a finding only a human can resolve (which branch is canonical, a design
+ * call) -- would otherwise loop gate 2<->3 forever, burning quota and never
+ * reaching a PR. After this many failures the run parks inconclusive so a person
+ * decides; the reviewer's findings are in its receipt.
+ */
+export const MAX_REVIEW_ROUNDS = 3;
+
+function onGateFinished(gate: Gate, verdict: GateVerdict, reason?: string, round?: number): Decision {
   if (verdict === 'inconclusive') {
     const detail = reason?.trim();
     return inconclusive(
@@ -264,6 +277,16 @@ function onGateFinished(gate: Gate, verdict: GateVerdict, reason?: string): Deci
     );
   }
   if (verdict === 'fail') {
+    // Non-converging review loop: after MAX_REVIEW_ROUNDS failures on a review
+    // gate, stop sending the owner back and park for a person rather than loop.
+    if ((gate === 3 || gate === 4) && round !== undefined && round >= MAX_REVIEW_ROUNDS) {
+      const detail = reason?.trim();
+      return inconclusive(
+        detail
+          ? `gate ${gate} failed ${round} review rounds without converging; a person needs to decide: ${detail}`
+          : `gate ${gate} failed ${round} review rounds without converging; a person needs to decide (see the reviewer's receipt)`,
+      );
+    }
     // Red means the owner keeps working. It does not mean "note it on the
     // PR" — and a failing gate 3 or 4 returns to gate 2 rather than ending
     // the run, because the branch is still soft.
@@ -295,7 +318,7 @@ function onRunning(event: RunEvent, context: RunContext): Decision | null {
         `ignored a gate ${event.gate} report while gate ${context.activeGate ?? 'none'} is in flight`,
       );
     }
-    return onGateFinished(event.gate, event.verdict, event.reason);
+    return onGateFinished(event.gate, event.verdict, event.reason, event.round);
   }
   if (event.kind === 'permissionRequested') {
     return stay('waitingPermission', 'a tool needs approval');
