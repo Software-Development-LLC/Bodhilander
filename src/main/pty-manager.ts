@@ -1109,7 +1109,7 @@ export class PtyManager extends EventEmitter {
       signal();
       return promise;
     }
-    return this.enqueueTeardown(ptyProcess, signal).then(() => promise);
+    return this.enqueueTeardown(id, ptyProcess, signal).then(() => promise);
   }
 
   /**
@@ -1157,7 +1157,7 @@ export class PtyManager extends EventEmitter {
    * Queue `signal` behind earlier teardowns; resolves once it is sent. The queue
    * moves on when the pty exits, or after a bound past the force path.
    */
-  private enqueueTeardown(ptyProcess: pty.IPty, signal: () => void): Promise<void> {
+  private enqueueTeardown(id: string, ptyProcess: pty.IPty, signal: () => void): Promise<void> {
     let exited = false;
     const exit = new Promise<void>((resolve) => {
       this.exitWaiters.set(ptyProcess, () => { exited = true; resolve(); });
@@ -1167,7 +1167,7 @@ export class PtyManager extends EventEmitter {
       .catch(() => {})
       .then(() => this.waitBounded(exit, this.killGraceMs * 2))
       .then(() => {
-        if (!exited) log.warn(`[PTY] pid ${ptyProcess.pid} has not exited; releasing the teardown queue`);
+        if (!exited) log.warn(`[PTY] Session ${id} (pid ${ptyProcess.pid}) has not exited; releasing the teardown queue`);
       })
       .finally(() => this.exitWaiters.delete(ptyProcess));
     return signalled;
