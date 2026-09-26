@@ -251,6 +251,8 @@ export class PtyManager extends EventEmitter {
   private readonly serializeTeardown: boolean;
   private teardownTail: Promise<void> = Promise.resolve();
   private readonly exitWaiters: Map<pty.IPty, () => void> = new Map();
+  /** Queued ptys not yet signalled, so killAll can signal them out of turn. */
+  private readonly queuedSignals: Map<pty.IPty, () => void> = new Map();
 
   constructor(opts?: { killGraceMs?: number; serializeTeardown?: boolean }) {
     super();
@@ -1166,7 +1168,12 @@ export class PtyManager extends EventEmitter {
     const exit = new Promise<void>((resolve) => {
       this.exitWaiters.set(ptyProcess, () => { exited = true; resolve(); });
     });
-    const signalled = this.teardownTail.then(() => { if (!exited) signal(); });
+    const send = (): void => {
+      if (!this.queuedSignals.delete(ptyProcess) || exited) return;
+      signal();
+    };
+    this.queuedSignals.set(ptyProcess, send);
+    const signalled = this.teardownTail.then(send);
     this.teardownTail = signalled
       .catch(() => {})
       .then(() => this.waitBounded(exit, this.killGraceMs * 2))
@@ -1193,7 +1200,15 @@ export class PtyManager extends EventEmitter {
 
   async killAll(): Promise<void> {
     const sessionIds = Array.from(this.sessions.keys());
-    await Promise.all(sessionIds.map(id => this.teardown(id, false)));
+    const pending = Array.from(this.pendingKills.values(), (entry) => entry.promise);
+    for (const send of Array.from(this.queuedSignals.values())) {
+      try {
+        send();
+      } catch (err) {
+        log.error('[PTY] Signalling a queued pty on killAll failed:', err);
+      }
+    }
+    await Promise.all([...sessionIds.map(id => this.teardown(id, false)), ...pending]);
   }
 
   getSession(id: string): PtySession | undefined {

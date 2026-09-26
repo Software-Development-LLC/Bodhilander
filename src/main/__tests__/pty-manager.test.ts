@@ -605,6 +605,30 @@ describe('serialized teardown', () => {
     expect(done).toBe(true);
   });
 
+  test('killAll signals ptys still waiting in the queue and waits for them', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2, p3] = createHeld(manager, ['s1', 's2', 's3']);
+    void manager.kill('s1');
+    void manager.kill('s2');
+    await flush();
+    expect(p2.killSignals).toStrictEqual([]);
+
+    let done = false;
+    const all = manager.killAll().then(() => { done = true; });
+    await flush();
+    expect([p1, p2, p3].map((p) => p.killSignals)).toStrictEqual([[undefined], [undefined], [undefined]]);
+
+    p1.exitCb!({ exitCode: 0 });
+    p3.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(done).toBe(false);
+    p2.exitCb!({ exitCode: 0 });
+    await all;
+    // Its turn in the queue comes later and must not signal it twice.
+    await flush();
+    expect(p2.killSignals).toStrictEqual([undefined]);
+  });
+
   test('a kill resolves, and so frees its id to respawn, only once the queue drains', async () => {
     const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
     const [p1, p2] = createHeld(manager, ['s1', 's2']);
