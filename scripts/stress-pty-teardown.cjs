@@ -1,10 +1,11 @@
 // Opt-in Windows stress for concurrent conpty teardown; not run in CI. Kills a
 // batch of ptys in one tick and repeats. Surviving every round is the pass.
-//   node scripts/stress-pty-teardown.cjs [rounds=300] [batch=12]
+// Long runs exhaust memory on node-pty's per-pty worker leak, unrelated to this crash.
+//   node scripts/stress-pty-teardown.cjs [rounds=30] [batch=12]
 //   ./node_modules/.bin/electron scripts/stress-pty-teardown.cjs [rounds] [batch]
 const pty = require('node-pty');
 
-const rounds = Number(process.argv[2]) || 300;
+const rounds = Number(process.argv[2]) || 30;
 const batch = Number(process.argv[3]) || 12;
 
 if (process.platform !== 'win32') {

@@ -504,6 +504,27 @@ describe('serialized teardown', () => {
     });
   }
 
+  test.each([['win32', true], ['darwin', false], ['linux', false]])(
+    'on %s, serialization defaults to %p',
+    async (platform, serialized) => {
+      const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { value: platform });
+      try {
+        const manager = new PtyManager({ killGraceMs: 10_000 });
+        const [p1, p2] = createHeld(manager, ['s1', 's2']);
+        const kills = [manager.kill('s1'), manager.kill('s2')];
+        await flush();
+        expect(p2.killSignals).toStrictEqual(serialized ? [] : [undefined]);
+        p1.exitCb!({ exitCode: 0 });
+        await flush();
+        p2.exitCb!({ exitCode: 0 });
+        await Promise.all(kills);
+      } finally {
+        Object.defineProperty(process, 'platform', realPlatform);
+      }
+    },
+  );
+
   test('the next pty is not signalled until the previous one exits', async () => {
     const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
     const [p1, p2] = createHeld(manager, ['s1', 's2']);
