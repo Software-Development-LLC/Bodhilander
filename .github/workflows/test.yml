@@ -114,8 +114,8 @@ jobs:
       - name: The native module loads and works under node
         run: node .github/scripts/check-native.js
 
-      # The one that actually answers the question. On linux there is no
-      # prebuild, so node-pty is compiled by node-gyp against NODE's headers
+      # The one that actually answers the question. node-pty is built for NODE
+      # (its prebuilds, or node-gyp where none matches)
       # -- and what ships is loaded by ELECTRON. node-pty builds against
       # node-addon-api, so N-API is supposed to make those the same thing.
       # "Supposed to" is not a check, and running the node binary under node

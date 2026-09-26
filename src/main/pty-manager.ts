@@ -243,11 +243,22 @@ export class PtyManager extends EventEmitter {
   private socketPath: string;
   /** How long a signalled pty gets to exit before kill() escalates by force. */
   private readonly killGraceMs: number;
+  /**
+   * kill() takes ptys one at a time, each waiting for its own exit, so a batch
+   * restart never has conpty tearing several down at once. Extra protection on
+   * top of node-pty's own locking; killAll bypasses it to fit the quit budget.
+   */
+  private readonly serializeTeardown: boolean;
+  private teardownTail: Promise<void> = Promise.resolve();
+  private readonly exitWaiters: Map<pty.IPty, () => void> = new Map();
+  /** Queued ptys not yet signalled, so killAll can signal them out of turn. */
+  private readonly queuedSignals: Map<pty.IPty, () => void> = new Map();
 
-  constructor(opts?: { killGraceMs?: number }) {
+  constructor(opts?: { killGraceMs?: number; serializeTeardown?: boolean }) {
     super();
     this.socketPath = getSocketPath();
     this.killGraceMs = opts?.killGraceMs ?? 3000;
+    this.serializeTeardown = opts?.serializeTeardown ?? process.platform === 'win32';
   }
 
   private getShellInfo(): ShellInfo {
@@ -1016,8 +1027,20 @@ export class PtyManager extends EventEmitter {
    * from BOTH the effect cleanup and the restart effect, in an order React does
    * not promise. The second caller must wait on the first teardown rather than
    * see an empty map and conclude the process is gone.
+   *
+   * With serialized teardown it resolves only once every queued teardown is done.
    */
   async kill(id: string): Promise<void> {
+    const tracked = this.sessions.has(id) || this.pendingKills.has(id);
+    try {
+      await this.teardown(id, this.serializeTeardown);
+    } finally {
+      // Callers respawn on resolve or reject, and a spawn races exits still queued.
+      if (this.serializeTeardown && tracked) await this.teardownTail;
+    }
+  }
+
+  private async teardown(id: string, serialize: boolean): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) {
       // No live pty: either a teardown is still draining for this id (join it)
@@ -1081,11 +1104,25 @@ export class PtyManager extends EventEmitter {
     };
     this.pendingKills.set(id, entry);
 
-    // Arm the force path BEFORE signalling: a pty that exits synchronously
-    // inside kill() would otherwise settle first and leave this timer armed on
-    // an already-settled entry, warning about a process that died on time.
-    // This is the bound on how long a pty that ignores the signal can hold up
-    // its caller, not the mechanism that normally settles.
+    const signal = (): void => {
+      this.armForceKill(id, pid, ptyProcess, entry);
+      // The onExit handler registered at spawn calls settleKill, which resolves
+      // the promise returned here.
+      ptyProcess.kill();
+    };
+
+    if (!serialize) {
+      signal();
+      return promise;
+    }
+    return this.enqueueTeardown(id, ptyProcess, signal).then(() => promise);
+  }
+
+  /**
+   * Bounds a pty that ignores the signal. Armed BEFORE signalling, or a pty that
+   * exits synchronously inside kill() would leave it armed on a settled entry.
+   */
+  private armForceKill(id: string, pid: number, ptyProcess: pty.IPty, entry: PendingKill): void {
     if (process.platform === 'win32' && pid) {
       entry.timer = setTimeout(() => {
         log.warn(`[PTY] Force-killing session ${id} (pid ${pid}) after ${this.killGraceMs}ms timeout`);
@@ -1120,16 +1157,42 @@ export class PtyManager extends EventEmitter {
         entry.settle();
       }, this.killGraceMs);
     }
+  }
 
-    // Send the graceful kill signal. The onExit handler registered at spawn
-    // calls settleKill, which resolves the promise returned here.
-    session.pty.kill();
+  /**
+   * Queue `signal` behind earlier teardowns; resolves once it is sent. The queue
+   * moves on when the pty exits, or after a bound past the force path.
+   */
+  private enqueueTeardown(id: string, ptyProcess: pty.IPty, signal: () => void): Promise<void> {
+    let exited = false;
+    const exit = new Promise<void>((resolve) => {
+      this.exitWaiters.set(ptyProcess, () => { exited = true; resolve(); });
+    });
+    const send = (): void => {
+      if (!this.queuedSignals.delete(ptyProcess) || exited) return;
+      signal();
+    };
+    this.queuedSignals.set(ptyProcess, send);
+    const signalled = this.teardownTail.then(send);
+    this.teardownTail = signalled
+      .catch(() => {})
+      .then(() => this.waitBounded(exit, this.killGraceMs * 2))
+      .then(() => {
+        if (!exited) log.warn(`[PTY] Session ${id} (pid ${ptyProcess.pid}) has not exited; releasing the teardown queue`);
+      })
+      .finally(() => this.exitWaiters.delete(ptyProcess));
+    return signalled;
+  }
 
-    return promise;
+  private waitBounded(exit: Promise<void>, ms: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+    return Promise.race([exit, bound]).finally(() => clearTimeout(timer));
   }
 
   /** Release a kill() waiting on this exact pty. No-op for any other pty (#164). */
   private settleKill(id: string, ptyProcess: pty.IPty): void {
+    this.exitWaiters.get(ptyProcess)?.();
     const pending = this.pendingKills.get(id);
     if (pending?.pty !== ptyProcess) return;
     pending.settle();
@@ -1137,7 +1200,15 @@ export class PtyManager extends EventEmitter {
 
   async killAll(): Promise<void> {
     const sessionIds = Array.from(this.sessions.keys());
-    await Promise.all(sessionIds.map(id => this.kill(id)));
+    const pending = Array.from(this.pendingKills.values(), (entry) => entry.promise);
+    for (const send of Array.from(this.queuedSignals.values())) {
+      try {
+        send();
+      } catch (err) {
+        log.error('[PTY] Signalling a queued pty on killAll failed:', err);
+      }
+    }
+    await Promise.all([...sessionIds.map(id => this.teardown(id, false)), ...pending]);
   }
 
   getSession(id: string): PtySession | undefined {

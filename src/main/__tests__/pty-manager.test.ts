@@ -490,6 +490,197 @@ describe('kill() force path (injectable grace)', () => {
   });
 });
 
+describe('serialized teardown', () => {
+  const posixTest = process.platform === 'win32' ? test.skip : test;
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  /** Sessions whose ptys record signals but exit only when the test says so. */
+  function createHeld(manager: InstanceType<typeof PtyManager>, ids: string[]): FakePty[] {
+    return ids.map((id) => {
+      createAgentSession(manager, id);
+      const proc = spawned[spawned.length - 1];
+      proc.kill = (signal?: string) => { proc.killSignals.push(signal); };
+      return proc;
+    });
+  }
+
+  test.each([['win32', true], ['darwin', false], ['linux', false]])(
+    'on %s, serialization defaults to %p',
+    async (platform, serialized) => {
+      const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { value: platform });
+      try {
+        const manager = new PtyManager({ killGraceMs: 10_000 });
+        const [p1, p2] = createHeld(manager, ['s1', 's2']);
+        const kills = [manager.kill('s1'), manager.kill('s2')];
+        await flush();
+        expect(p2.killSignals).toStrictEqual(serialized ? [] : [undefined]);
+        p1.exitCb!({ exitCode: 0 });
+        await flush();
+        p2.exitCb!({ exitCode: 0 });
+        await Promise.all(kills);
+      } finally {
+        Object.defineProperty(process, 'platform', realPlatform);
+      }
+    },
+  );
+
+  test('the next pty is not signalled until the previous one exits', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    const k1 = manager.kill('s1');
+    const k2 = manager.kill('s2');
+    await flush();
+    expect(p1.killSignals).toStrictEqual([undefined]);
+    expect(p2.killSignals).toStrictEqual([]);
+    // Both leave the map at once, so nothing writes to a pty queued for death.
+    expect(manager.getSession('s2')).toBeUndefined();
+
+    p1.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(p2.killSignals).toStrictEqual([undefined]);
+
+    p2.exitCb!({ exitCode: 0 });
+    await Promise.all([k1, k2]);
+  });
+
+  test('a queued pty that exits on its own is never signalled', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    const k1 = manager.kill('s1');
+    const k2 = manager.kill('s2');
+    await flush();
+    p2.exitCb!({ exitCode: 0 });
+    p1.exitCb!({ exitCode: 0 });
+    await Promise.all([k1, k2]);
+
+    expect(p2.killSignals).toStrictEqual([]);
+  });
+
+  // A stuck pty reaches the force path, which is taskkill on win32.
+  posixTest('a pty that never exits releases the queue after the bound', async () => {
+    const manager = new PtyManager({ killGraceMs: 200, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    void manager.kill('s1');
+    const k2 = manager.kill('s2');
+    await new Promise((r) => setTimeout(r, 300));
+    // The force path has fired for p1, but the queue still waits on its exit.
+    expect(p1.killSignals).toStrictEqual([undefined, 'SIGKILL']);
+    expect(p2.killSignals).toStrictEqual([]);
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(p2.killSignals[0]).toBeUndefined();
+    expect(p2.killSignals.length).toBeGreaterThan(0);
+    p2.exitCb!({ exitCode: 0 });
+    await k2;
+  });
+
+  test('a graceful kill that throws rejects its caller only once the queue drains', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p0, p1, p2] = createHeld(manager, ['s0', 's1', 's2']);
+    p1.kill = () => { throw new Error('native handle already gone'); };
+
+    void manager.kill('s0');
+    let rejection: unknown = null;
+    const k1 = manager.kill('s1').catch((err) => { rejection = err; });
+    const k2 = manager.kill('s2');
+
+    p0.exitCb!({ exitCode: 0 });
+    await flush();
+    p1.exitCb!({ exitCode: 0 });
+    await flush();
+    // The queue moved past the throw, and the caller is still held behind it.
+    expect(p2.killSignals).toStrictEqual([undefined]);
+    expect(rejection).toBeNull();
+
+    p2.exitCb!({ exitCode: 0 });
+    await Promise.all([k1, k2]);
+    expect((rejection as Error).message).toBe('native handle already gone');
+  });
+
+  test('killing an id with nothing to tear down does not wait on the queue', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1] = createHeld(manager, ['s1']);
+    void manager.kill('s1');
+
+    await manager.kill('never-spawned');
+    expect(p1.killSignals).toStrictEqual([undefined]);
+    p1.exitCb!({ exitCode: 0 });
+  });
+
+  test('killAll signals every pty before any exits, bypassing the queue', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const procs = createHeld(manager, ['s1', 's2', 's3']);
+
+    let done = false;
+    const all = manager.killAll().then(() => { done = true; });
+    await flush();
+    expect(procs.map((p) => p.killSignals)).toStrictEqual([[undefined], [undefined], [undefined]]);
+    expect(done).toBe(false);
+
+    for (const p of procs) p.exitCb!({ exitCode: 0 });
+    await all;
+    expect(done).toBe(true);
+  });
+
+  test('killAll signals ptys still waiting in the queue and waits for them', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2, p3] = createHeld(manager, ['s1', 's2', 's3']);
+    void manager.kill('s1');
+    void manager.kill('s2');
+    await flush();
+    expect(p2.killSignals).toStrictEqual([]);
+
+    let done = false;
+    const all = manager.killAll().then(() => { done = true; });
+    await flush();
+    expect([p1, p2, p3].map((p) => p.killSignals)).toStrictEqual([[undefined], [undefined], [undefined]]);
+
+    p1.exitCb!({ exitCode: 0 });
+    p3.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(done).toBe(false);
+    p2.exitCb!({ exitCode: 0 });
+    await all;
+    // Its turn in the queue comes later and must not signal it twice.
+    await flush();
+    expect(p2.killSignals).toStrictEqual([undefined]);
+  });
+
+  test('a kill resolves, and so frees its id to respawn, only once the queue drains', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+    const resolved: string[] = [];
+    void manager.kill('s1').then(() => resolved.push('first'));
+    void manager.kill('s2');
+    // The renderer's second, coalesced kill for the same id.
+    void manager.kill('s1').then(() => resolved.push('joined'));
+
+    p1.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(resolved).toStrictEqual([]);
+
+    p2.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(resolved.sort()).toStrictEqual(['first', 'joined']);
+  });
+
+  test('without serialization every pty is signalled at once', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: false });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    const kills = [manager.kill('s1'), manager.kill('s2')];
+    expect(p1.killSignals).toStrictEqual([undefined]);
+    expect(p2.killSignals).toStrictEqual([undefined]);
+    p1.exitCb!({ exitCode: 0 });
+    p2.exitCb!({ exitCode: 0 });
+    await Promise.all(kills);
+  });
+});
+
 describe('live account bindings (#165)', () => {
   test('no binding is published for a provider without account support', () => {
     const manager = new PtyManager();
