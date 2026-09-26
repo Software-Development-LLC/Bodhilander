@@ -244,8 +244,9 @@ export class PtyManager extends EventEmitter {
   /** How long a signalled pty gets to exit before kill() escalates by force. */
   private readonly killGraceMs: number;
   /**
-   * Kill ptys one at a time, each waiting for its own exit. conpty's native
-   * exit watchers mutate a shared handle list, so concurrent exits can crash.
+   * kill() takes ptys one at a time, each waiting for its own exit, so a batch
+   * restart never has conpty tearing several down at once. Extra protection on
+   * top of node-pty's own locking; killAll bypasses it to fit the quit budget.
    */
   private readonly serializeTeardown: boolean;
   private teardownTail: Promise<void> = Promise.resolve();
@@ -1029,12 +1030,15 @@ export class PtyManager extends EventEmitter {
    */
   async kill(id: string): Promise<void> {
     const tracked = this.sessions.has(id) || this.pendingKills.has(id);
-    await this.teardown(id);
-    // Callers respawn on resolve, and a spawn races exits still in the queue.
-    if (this.serializeTeardown && tracked) await this.teardownTail;
+    try {
+      await this.teardown(id, this.serializeTeardown);
+    } finally {
+      // Callers respawn on resolve or reject, and a spawn races exits still queued.
+      if (this.serializeTeardown && tracked) await this.teardownTail;
+    }
   }
 
-  private async teardown(id: string): Promise<void> {
+  private async teardown(id: string, serialize: boolean): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) {
       // No live pty: either a teardown is still draining for this id (join it)
@@ -1105,7 +1109,7 @@ export class PtyManager extends EventEmitter {
       ptyProcess.kill();
     };
 
-    if (!this.serializeTeardown) {
+    if (!serialize) {
       signal();
       return promise;
     }
@@ -1189,7 +1193,7 @@ export class PtyManager extends EventEmitter {
 
   async killAll(): Promise<void> {
     const sessionIds = Array.from(this.sessions.keys());
-    await Promise.all(sessionIds.map(id => this.kill(id)));
+    await Promise.all(sessionIds.map(id => this.teardown(id, false)));
   }
 
   getSession(id: string): PtySession | undefined {

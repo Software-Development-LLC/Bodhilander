@@ -557,24 +557,27 @@ describe('serialized teardown', () => {
     await k2;
   });
 
-  posixTest('a graceful kill that throws rejects its caller and the queue still moves on', async () => {
-    const manager = new PtyManager({ killGraceMs: 20, serializeTeardown: true });
-    const [p1, p2] = createHeld(manager, ['s1', 's2']);
-    p1.kill = (signal?: string) => {
-      if (signal === undefined) throw new Error('native handle already gone');
-      p1.killSignals.push(signal);
-    };
+  test('a graceful kill that throws rejects its caller only once the queue drains', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p0, p1, p2] = createHeld(manager, ['s0', 's1', 's2']);
+    p1.kill = () => { throw new Error('native handle already gone'); };
 
-    const k1 = manager.kill('s1');
+    void manager.kill('s0');
+    let rejection: unknown = null;
+    const k1 = manager.kill('s1').catch((err) => { rejection = err; });
     const k2 = manager.kill('s2');
-    await expect(k1).rejects.toThrow('native handle already gone');
 
-    await new Promise((r) => setTimeout(r, 100));
-    expect(p1.killSignals).toStrictEqual(['SIGKILL']);
-    expect(p2.killSignals[0]).toBeUndefined();
-    expect(p2.killSignals.length).toBeGreaterThan(0);
+    p0.exitCb!({ exitCode: 0 });
+    await flush();
+    p1.exitCb!({ exitCode: 0 });
+    await flush();
+    // The queue moved past the throw, and the caller is still held behind it.
+    expect(p2.killSignals).toStrictEqual([undefined]);
+    expect(rejection).toBeNull();
+
     p2.exitCb!({ exitCode: 0 });
-    await k2;
+    await Promise.all([k1, k2]);
+    expect((rejection as Error).message).toBe('native handle already gone');
   });
 
   test('killing an id with nothing to tear down does not wait on the queue', async () => {
@@ -587,18 +590,17 @@ describe('serialized teardown', () => {
     p1.exitCb!({ exitCode: 0 });
   });
 
-  test('killAll signals one pty at a time', async () => {
+  test('killAll signals every pty before any exits, bypassing the queue', async () => {
     const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
     const procs = createHeld(manager, ['s1', 's2', 's3']);
 
     let done = false;
     const all = manager.killAll().then(() => { done = true; });
-    for (let i = 0; i < procs.length; i++) {
-      await flush();
-      expect(procs.map((p) => p.killSignals.length)).toEqual(procs.map((_, j) => (j <= i ? 1 : 0)));
-      expect(done).toBe(false);
-      procs[i].exitCb!({ exitCode: 0 });
-    }
+    await flush();
+    expect(procs.map((p) => p.killSignals)).toStrictEqual([[undefined], [undefined], [undefined]]);
+    expect(done).toBe(false);
+
+    for (const p of procs) p.exitCb!({ exitCode: 0 });
     await all;
     expect(done).toBe(true);
   });
