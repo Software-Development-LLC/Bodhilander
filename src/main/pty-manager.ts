@@ -243,11 +243,19 @@ export class PtyManager extends EventEmitter {
   private socketPath: string;
   /** How long a signalled pty gets to exit before kill() escalates by force. */
   private readonly killGraceMs: number;
+  /**
+   * Kill ptys one at a time, each waiting for its own exit. conpty's native
+   * exit watchers mutate a shared handle list, so concurrent exits can crash.
+   */
+  private readonly serializeTeardown: boolean;
+  private teardownTail: Promise<void> = Promise.resolve();
+  private readonly exitWaiters: Map<pty.IPty, () => void> = new Map();
 
-  constructor(opts?: { killGraceMs?: number }) {
+  constructor(opts?: { killGraceMs?: number; serializeTeardown?: boolean }) {
     super();
     this.socketPath = getSocketPath();
     this.killGraceMs = opts?.killGraceMs ?? 3000;
+    this.serializeTeardown = opts?.serializeTeardown ?? process.platform === 'win32';
   }
 
   private getShellInfo(): ShellInfo {
@@ -1018,6 +1026,12 @@ export class PtyManager extends EventEmitter {
    * see an empty map and conclude the process is gone.
    */
   async kill(id: string): Promise<void> {
+    await this.teardown(id);
+    // Callers respawn on resolve, and a spawn races exits still in the queue.
+    if (this.serializeTeardown) await this.teardownTail;
+  }
+
+  private async teardown(id: string): Promise<void> {
     const session = this.sessions.get(id);
     if (!session) {
       // No live pty: either a teardown is still draining for this id (join it)
@@ -1081,11 +1095,25 @@ export class PtyManager extends EventEmitter {
     };
     this.pendingKills.set(id, entry);
 
-    // Arm the force path BEFORE signalling: a pty that exits synchronously
-    // inside kill() would otherwise settle first and leave this timer armed on
-    // an already-settled entry, warning about a process that died on time.
-    // This is the bound on how long a pty that ignores the signal can hold up
-    // its caller, not the mechanism that normally settles.
+    const signal = (): void => {
+      this.armForceKill(id, pid, ptyProcess, entry);
+      // The onExit handler registered at spawn calls settleKill, which resolves
+      // the promise returned here.
+      ptyProcess.kill();
+    };
+
+    if (!this.serializeTeardown) {
+      signal();
+      return promise;
+    }
+    return this.enqueueTeardown(ptyProcess, signal).then(() => promise);
+  }
+
+  /**
+   * Bounds a pty that ignores the signal. Armed BEFORE signalling, or a pty that
+   * exits synchronously inside kill() would leave it armed on a settled entry.
+   */
+  private armForceKill(id: string, pid: number, ptyProcess: pty.IPty, entry: PendingKill): void {
     if (process.platform === 'win32' && pid) {
       entry.timer = setTimeout(() => {
         log.warn(`[PTY] Force-killing session ${id} (pid ${pid}) after ${this.killGraceMs}ms timeout`);
@@ -1120,16 +1148,34 @@ export class PtyManager extends EventEmitter {
         entry.settle();
       }, this.killGraceMs);
     }
+  }
 
-    // Send the graceful kill signal. The onExit handler registered at spawn
-    // calls settleKill, which resolves the promise returned here.
-    session.pty.kill();
+  /**
+   * Queue `signal` behind earlier teardowns; resolves once it is sent. The queue
+   * moves on when the pty exits, or after a bound past the force path.
+   */
+  private enqueueTeardown(ptyProcess: pty.IPty, signal: () => void): Promise<void> {
+    let exited = false;
+    const exit = new Promise<void>((resolve) => {
+      this.exitWaiters.set(ptyProcess, () => { exited = true; resolve(); });
+    });
+    const signalled = this.teardownTail.then(() => { if (!exited) signal(); });
+    this.teardownTail = signalled
+      .catch(() => {})
+      .then(() => this.waitBounded(exit, this.killGraceMs * 2))
+      .finally(() => this.exitWaiters.delete(ptyProcess));
+    return signalled;
+  }
 
-    return promise;
+  private waitBounded(exit: Promise<void>, ms: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+    return Promise.race([exit, bound]).finally(() => clearTimeout(timer));
   }
 
   /** Release a kill() waiting on this exact pty. No-op for any other pty (#164). */
   private settleKill(id: string, ptyProcess: pty.IPty): void {
+    this.exitWaiters.get(ptyProcess)?.();
     const pending = this.pendingKills.get(id);
     if (pending?.pty !== ptyProcess) return;
     pending.settle();
