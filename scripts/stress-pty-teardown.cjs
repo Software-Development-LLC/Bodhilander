@@ -1,14 +1,7 @@
-/**
- * Opt-in Windows stress test for concurrent conpty teardown. Not run in CI.
- *
- * Spawns a batch of ptys, kills them all in the same tick, waits for every
- * exit, and repeats. With a node-pty whose native handle list is unguarded,
- * concurrent exits crash the process natively; surviving every round is the pass.
- *
- * Usage:
- *   node scripts/stress-pty-teardown.cjs [rounds=300] [batch=12]
- *   ./node_modules/.bin/electron scripts/stress-pty-teardown.cjs [rounds] [batch]
- */
+// Opt-in Windows stress for concurrent conpty teardown; not run in CI. Kills a
+// batch of ptys in one tick and repeats. Surviving every round is the pass.
+//   node scripts/stress-pty-teardown.cjs [rounds=300] [batch=12]
+//   ./node_modules/.bin/electron scripts/stress-pty-teardown.cjs [rounds] [batch]
 const pty = require('node-pty');
 
 const rounds = Number(process.argv[2]) || 300;

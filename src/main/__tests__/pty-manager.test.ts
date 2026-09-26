@@ -540,21 +540,51 @@ describe('serialized teardown', () => {
 
   // A stuck pty reaches the force path, which is taskkill on win32.
   posixTest('a pty that never exits releases the queue after the bound', async () => {
-    const manager = new PtyManager({ killGraceMs: 50, serializeTeardown: true });
+    const manager = new PtyManager({ killGraceMs: 200, serializeTeardown: true });
     const [p1, p2] = createHeld(manager, ['s1', 's2']);
 
     void manager.kill('s1');
     const k2 = manager.kill('s2');
-    await new Promise((r) => setTimeout(r, 75));
+    await new Promise((r) => setTimeout(r, 300));
     // The force path has fired for p1, but the queue still waits on its exit.
     expect(p1.killSignals).toStrictEqual([undefined, 'SIGKILL']);
     expect(p2.killSignals).toStrictEqual([]);
 
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 300));
     expect(p2.killSignals[0]).toBeUndefined();
     expect(p2.killSignals.length).toBeGreaterThan(0);
     p2.exitCb!({ exitCode: 0 });
     await k2;
+  });
+
+  posixTest('a graceful kill that throws rejects its caller and the queue still moves on', async () => {
+    const manager = new PtyManager({ killGraceMs: 20, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+    p1.kill = (signal?: string) => {
+      if (signal === undefined) throw new Error('native handle already gone');
+      p1.killSignals.push(signal);
+    };
+
+    const k1 = manager.kill('s1');
+    const k2 = manager.kill('s2');
+    await expect(k1).rejects.toThrow('native handle already gone');
+
+    await new Promise((r) => setTimeout(r, 100));
+    expect(p1.killSignals).toStrictEqual(['SIGKILL']);
+    expect(p2.killSignals[0]).toBeUndefined();
+    expect(p2.killSignals.length).toBeGreaterThan(0);
+    p2.exitCb!({ exitCode: 0 });
+    await k2;
+  });
+
+  test('killing an id with nothing to tear down does not wait on the queue', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1] = createHeld(manager, ['s1']);
+    void manager.kill('s1');
+
+    await manager.kill('never-spawned');
+    expect(p1.killSignals).toStrictEqual([undefined]);
+    p1.exitCb!({ exitCode: 0 });
   });
 
   test('killAll signals one pty at a time', async () => {

@@ -1024,11 +1024,14 @@ export class PtyManager extends EventEmitter {
    * from BOTH the effect cleanup and the restart effect, in an order React does
    * not promise. The second caller must wait on the first teardown rather than
    * see an empty map and conclude the process is gone.
+   *
+   * With serialized teardown it resolves only once every queued teardown is done.
    */
   async kill(id: string): Promise<void> {
+    const tracked = this.sessions.has(id) || this.pendingKills.has(id);
     await this.teardown(id);
     // Callers respawn on resolve, and a spawn races exits still in the queue.
-    if (this.serializeTeardown) await this.teardownTail;
+    if (this.serializeTeardown && tracked) await this.teardownTail;
   }
 
   private async teardown(id: string): Promise<void> {
@@ -1163,6 +1166,9 @@ export class PtyManager extends EventEmitter {
     this.teardownTail = signalled
       .catch(() => {})
       .then(() => this.waitBounded(exit, this.killGraceMs * 2))
+      .then(() => {
+        if (!exited) log.warn(`[PTY] pid ${ptyProcess.pid} has not exited; releasing the teardown queue`);
+      })
       .finally(() => this.exitWaiters.delete(ptyProcess));
     return signalled;
   }
