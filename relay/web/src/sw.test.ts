@@ -9,7 +9,7 @@ import path from 'node:path';
 
 const SW_SOURCE = readFileSync(path.join(import.meta.dir, '..', 'sw.js'), 'utf8');
 const ORIGIN = 'https://relay.test';
-const CACHE = 'bodhi-shell-v1';
+const CACHE = 'bodhi-shell-v2';
 
 interface FakeRequest { url: string; method: string; mode: string; }
 type FetchImpl = (req: FakeRequest) => Promise<Response>;
@@ -50,13 +50,37 @@ function loadWorker(fetchImpl: FetchImpl) {
 
   let skipWaitingCalls = 0;
   let claimCalls = 0;
+  // What the worker showed, and what it did with a tap. Recorded rather than
+  // asserted through a spy so the shape the platform sees is what's checked.
+  const shown: Array<{ title: string; options: Record<string, any> }> = [];
+  const opened: string[] = [];
+  const navigated: string[] = [];
+  let windows: Array<Record<string, any>> = [];
+  let currentSub: Record<string, any> | null = null;
+
   const self = {
     location: new URL(`${ORIGIN}/sw.js`),
     addEventListener: (type: string, fn: (event: unknown) => void) => listeners.set(type, fn),
     skipWaiting: () => { skipWaitingCalls++; },
+    registration: {
+      showNotification: async (title: string, options: Record<string, any>) => { shown.push({ title, options }); },
+      pushManager: { getSubscription: async () => currentSub },
+    },
   };
-  const clients = { claim: () => { claimCalls++; } };
-  new Function('self', 'caches', 'clients', 'fetch', SW_SOURCE)(self, caches, clients, fetchImpl);
+  const clients = {
+    claim: () => { claimCalls++; },
+    matchAll: async () => windows,
+    openWindow: async (url: string) => { opened.push(url); return { url }; },
+  };
+  const posts: Array<{ path: string; body: any }> = [];
+  const recordingFetch: FetchImpl = ((input: any, init?: any) => {
+    if (init?.method === 'POST') {
+      posts.push({ path: String(input), body: JSON.parse(String(init.body)) });
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    return fetchImpl(input);
+  }) as unknown as FetchImpl;
+  new Function('self', 'caches', 'clients', 'fetch', SW_SOURCE)(self, caches, clients, recordingFetch);
 
   async function dispatch(type: string, event: Record<string, unknown> = {}): Promise<Response | null> {
     const settled: Promise<unknown>[] = [];
@@ -70,7 +94,52 @@ function loadWorker(fetchImpl: FetchImpl) {
     await Promise.all(settled);
     return res ?? null;
   }
-  return { dispatch, stores, skipWaitingCalls: () => skipWaitingCalls, claimCalls: () => claimCalls };
+  /** A window client the worker can find, focus and navigate. */
+  function addWindow(url: string, over: Record<string, any> = {}) {
+    const win: Record<string, any> = {
+      url,
+      focused: false,
+      focus: async () => { win.focused = true; return win; },
+      navigate: async (to: string) => { navigated.push(to); return win; },
+      ...over,
+    };
+    windows.push(win);
+    return win;
+  }
+
+  return {
+    dispatch,
+    stores,
+    skipWaitingCalls: () => skipWaitingCalls,
+    claimCalls: () => claimCalls,
+    shown,
+    opened,
+    navigated,
+    addWindow,
+    clearWindows: () => { windows = []; },
+    posts,
+    setSubscription: (sub: Record<string, any> | null) => { currentSub = sub; },
+  };
+}
+
+/** A browser subscription as `toJSON()` reports it. */
+const fakeSub = (endpoint: string) => ({
+  endpoint,
+  toJSON: () => ({ keys: { p256dh: 'BPoint', auth: 'Auth' } }),
+});
+
+/** A `push` event carrying `payload` as its JSON data. */
+function pushEvent(payload: unknown) {
+  return { data: { json: () => structuredClone(payload) } };
+}
+
+/** A `notificationclick` event, recording whether the notification was closed. */
+function clickEvent(data: unknown) {
+  const closed = { count: 0 };
+  return {
+    event: { notification: { data, close: () => { closed.count++; } } },
+    closed,
+  };
 }
 
 describe('service worker', () => {
@@ -129,10 +198,21 @@ describe('service worker', () => {
     }
   });
 
+  test('a shell response that is not ok is never cached', async () => {
+    // A transient 502 from a proxy, or a 404 mid-deploy, must not become the
+    // app shell that gets served back once the relay recovers.
+    const sw = loadWorker(() => Promise.resolve(new Response('gateway down', { status: 502 })));
+    await sw.dispatch('install');
+    const res = await sw.dispatch('fetch', { request: req('/app/main.js') });
+    expect(res!.status).toBe(502);
+    const cached = sw.stores.get(CACHE)!.get('/app/main.js')!;
+    expect(await cached.text()).toBe('precached /app/main.js');
+  });
+
   test('activate drops caches from older worker versions only', async () => {
     const sw = loadWorker(offline);
     await sw.dispatch('install');
-    sw.stores.set('bodhi-shell-v0', new Map());
+    sw.stores.set('bodhi-shell-v1', new Map());
     await sw.dispatch('activate');
     expect([...sw.stores.keys()]).toEqual([CACHE]);
   });
@@ -143,5 +223,156 @@ describe('service worker', () => {
     await sw.dispatch('activate');
     expect(sw.skipWaitingCalls()).toBe(0);
     expect(sw.claimCalls()).toBe(0);
+  });
+});
+
+describe('web push', () => {
+  const payload = {
+    title: 'deploy-prod',
+    body: 'Waiting for your input',
+    tag: 's-42',
+    machineId: 'machine-7',
+    sessionId: 's-42',
+  };
+
+  test('shows the session name the agent sealed into the payload', async () => {
+    const sw = loadWorker(offline);
+    await sw.dispatch('push', pushEvent(payload));
+    expect(sw.shown.length).toBe(1);
+    expect(sw.shown[0]!.title).toBe('deploy-prod');
+    expect(sw.shown[0]!.options.body).toBe('Waiting for your input');
+    expect(sw.shown[0]!.options.data).toEqual({ machineId: 'machine-7', sessionId: 's-42' });
+  });
+
+  test('tags per session so a newer alert replaces the older one, and still buzzes', async () => {
+    const sw = loadWorker(offline);
+    await sw.dispatch('push', pushEvent(payload));
+    expect(sw.shown[0]!.options.tag).toBe('s-42');
+    expect(sw.shown[0]!.options.renotify).toBe(true);
+  });
+
+  test('still shows something when the payload is unreadable', async () => {
+    // A worker that takes a push and shows nothing gets killed by the platform,
+    // and repeat offences cost the site its notification permission.
+    const sw = loadWorker(offline);
+    await sw.dispatch('push', {
+      data: { json: () => { throw new SyntaxError('not json'); } },
+    });
+    expect(sw.shown.length).toBe(1);
+    expect(sw.shown[0]!.title).toBe('A session needs you');
+  });
+
+  test('still shows something when there is no payload at all', async () => {
+    const sw = loadWorker(offline);
+    await sw.dispatch('push', { data: null });
+    expect(sw.shown.length).toBe(1);
+    expect(sw.shown[0]!.title).toBe('A session needs you');
+  });
+
+  test('ignores non-string fields rather than rendering them', async () => {
+    const sw = loadWorker(offline);
+    await sw.dispatch('push', pushEvent({ title: 42, body: { a: 1 }, machineId: ['x'] }));
+    expect(sw.shown[0]!.title).toBe('A session needs you');
+    expect(sw.shown[0]!.options.body).toBe('Open Bodhilander to take a look.');
+    expect(sw.shown[0]!.options.data).toEqual({ machineId: null, sessionId: null });
+  });
+});
+
+describe('tapping a notification', () => {
+  test('opens a window aimed at the right machine when nothing is open', async () => {
+    const sw = loadWorker(offline);
+    const { event, closed } = clickEvent({ machineId: 'machine-7' });
+    await sw.dispatch('notificationclick', event);
+    expect(closed.count).toBe(1);
+    expect(sw.opened).toEqual(['/?m=machine-7']);
+  });
+
+  test('focuses an existing window and steers it, rather than piling up tabs', async () => {
+    const sw = loadWorker(offline);
+    const win = sw.addWindow(`${ORIGIN}/`);
+    const { event } = clickEvent({ machineId: 'machine-7' });
+    await sw.dispatch('notificationclick', event);
+    expect(win.focused).toBe(true);
+    expect(sw.navigated).toEqual(['/?m=machine-7']);
+    expect(sw.opened).toEqual([]);
+  });
+
+  test('falls back to a new window when the open one refuses to navigate', async () => {
+    const sw = loadWorker(offline);
+    sw.addWindow(`${ORIGIN}/`, { navigate: async () => { throw new Error('not controlled'); } });
+    const { event } = clickEvent({ machineId: 'machine-7' });
+    await sw.dispatch('notificationclick', event);
+    expect(sw.opened).toEqual(['/?m=machine-7']);
+  });
+
+  test('ignores windows from another origin', async () => {
+    const sw = loadWorker(offline);
+    sw.addWindow('https://elsewhere.test/');
+    const { event } = clickEvent({ machineId: 'machine-7' });
+    await sw.dispatch('notificationclick', event);
+    expect(sw.navigated).toEqual([]);
+    expect(sw.opened).toEqual(['/?m=machine-7']);
+  });
+
+  test('carries the session the notification was about, not just the machine', async () => {
+    const sw = loadWorker(offline);
+    const { event } = clickEvent({ machineId: 'machine-7', sessionId: 'sess-42' });
+    await sw.dispatch('notificationclick', event);
+    expect(sw.opened).toEqual(['/?m=machine-7&s=sess-42']);
+  });
+
+  test('opens a new window when the open one cannot be navigated', async () => {
+    const sw = loadWorker(offline);
+    // `navigate` is not everywhere. Focusing alone would strand the reader on
+    // whatever machine that window happened to be showing.
+    sw.addWindow(`${ORIGIN}/`, { navigate: undefined });
+    const { event } = clickEvent({ machineId: 'machine-7' });
+    await sw.dispatch('notificationclick', event);
+    expect(sw.opened).toEqual(['/?m=machine-7']);
+  });
+
+  test('opens the home page when the payload named no machine', async () => {
+    const sw = loadWorker(offline);
+    const { event } = clickEvent({});
+    await sw.dispatch('notificationclick', event);
+    expect(sw.opened).toEqual(['/']);
+  });
+
+  test('escapes the machine id into the query string', async () => {
+    const sw = loadWorker(offline);
+    const { event } = clickEvent({ machineId: 'a b&c=d' });
+    await sw.dispatch('notificationclick', event);
+    expect(sw.opened).toEqual(['/?m=a%20b%26c%3Dd']);
+  });
+});
+
+describe('a rotated subscription', () => {
+  test('is re-registered with the relay, and the old endpoint dropped', async () => {
+    const sw = loadWorker(offline);
+    await sw.dispatch('pushsubscriptionchange', {
+      oldSubscription: fakeSub('https://push.example.com/send/old'),
+      newSubscription: fakeSub('https://push.example.com/send/new'),
+    });
+    // Otherwise the relay keeps sealing to an endpoint nothing reads, while the
+    // toggle carries on saying On.
+    expect(sw.posts.map((p) => p.path)).toEqual(['/api/push/unsubscribe', '/api/push/subscribe']);
+    expect(sw.posts[0]!.body).toEqual({ endpoint: 'https://push.example.com/send/old' });
+    expect(sw.posts[1]!.body.endpoint).toBe('https://push.example.com/send/new');
+    expect(sw.posts[1]!.body.keys).toEqual({ p256dh: 'BPoint', auth: 'Auth' });
+  });
+
+  test('falls back to the live subscription when the event names neither', async () => {
+    const sw = loadWorker(offline);
+    sw.setSubscription(fakeSub('https://push.example.com/send/current'));
+    await sw.dispatch('pushsubscriptionchange', {});
+    expect(sw.posts.map((p) => p.path)).toEqual(['/api/push/subscribe']);
+    expect(sw.posts[0]!.body.endpoint).toBe('https://push.example.com/send/current');
+  });
+
+  test('does nothing loudly when there is no subscription left to register', async () => {
+    const sw = loadWorker(offline);
+    sw.setSubscription(null);
+    await sw.dispatch('pushsubscriptionchange', { oldSubscription: fakeSub('https://push.example.com/send/old') });
+    expect(sw.posts.map((p) => p.path)).toEqual(['/api/push/unsubscribe']);
   });
 });

@@ -141,6 +141,26 @@ export interface Repositories {
   /** Expired or revoked grants and dead invites, dropped by the reaper. */
   purgeDeadShares(): number;
 
+  // --- web push (M5.3) ---
+
+  /** Small durable server-side settings. Today: the minted VAPID keypair. */
+  getKv(key: string): string | null;
+  setKv(key: string, value: string): void;
+  /** Insert-if-absent, returning whatever is stored afterwards. */
+  setKvIfAbsent(key: string, value: string): string;
+  deleteKv(key: string): void;
+
+  /**
+   * Record a browser's push subscription, replacing the keys if that endpoint
+   * is known. Null when the user is at `MAX_PUSH_SUBSCRIPTIONS_PER_USER` — a
+   * refusal, not an error; the alternative is an unbounded table.
+   */
+  upsertPushSubscription(userId: string, input: PushSubscriptionInput): PushSubscriptionUpsert | null;
+  listPushSubscriptions(userId: string): PushSubscription[];
+  getPushSubscription(id: string): PushSubscription | null;
+  deletePushSubscription(id: string): boolean;
+  /** Scoped by user so an endpoint alone cannot unsubscribe someone else. */
+  deletePushSubscriptionByEndpoint(userId: string, endpoint: string): boolean;
   /**
    * Record this user's handoff, replacing whatever they had prepared before.
    * Returns the bundle it displaced, whose file the caller must remove.
@@ -175,6 +195,40 @@ export interface PutHandoffInput {
   byteSize: number;
   ttlSeconds: number;
 }
+
+export interface PushSubscription {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  /** The subscription's public key, base64url — an uncompressed P-256 point. */
+  p256dh: string;
+  /** The subscription's 16-byte auth secret, base64url. */
+  auth: string;
+  created_at: number;
+}
+
+export interface PushSubscriptionInput {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+export interface PushSubscriptionUpsert {
+  subscription: PushSubscription;
+  /**
+   * The account this endpoint was taken from, if any — a shared device
+   * changing hands. Named so the caller can re-sync THAT account's agents,
+   * which would otherwise keep sealing to a browser it no longer reaches.
+   */
+  displacedUserId: string | null;
+}
+
+/**
+ * Per-account ceiling on stored subscriptions. A person has a handful of
+ * devices; anything past this is churn (a browser that re-subscribes with a
+ * fresh endpoint on every profile wipe) or abuse.
+ */
+export const MAX_PUSH_SUBSCRIPTIONS_PER_USER = 20;
 
 export interface ShareInvite {
   id: string;
@@ -602,6 +656,103 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
       return Number(grants.changes ?? 0) + Number(invites.changes ?? 0);
     },
 
+    // --- web push (M5.3) ---
+
+    getKv(key) {
+      const row = db.query('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | null;
+      return row?.value ?? null;
+    },
+
+    setKv(key, value) {
+      db.query('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+        key,
+        value,
+      );
+    },
+
+    /**
+     * Write only if the key is unset, and return what is stored either way.
+     * Two processes minting a VAPID pair at once would otherwise have the
+     * second overwrite the first, orphaning anything that subscribed between.
+     */
+    setKvIfAbsent(key, value) {
+      db.query('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING').run(key, value);
+      const row = db.query('SELECT value FROM kv WHERE key = ?').get(key) as { value: string } | null;
+      return row?.value ?? value;
+    },
+
+    upsertPushSubscription(userId, input) {
+      return db.transaction((): PushSubscriptionUpsert | null => {
+        const existing = db.query('SELECT * FROM push_subscriptions WHERE endpoint = ?').get(input.endpoint) as
+          | PushSubscription
+          | null;
+
+        // The same account re-subscribing the same browser: refresh the keys in
+        // place. This is the ordinary case and touches nobody else.
+        if (existing && existing.user_id === userId) {
+          db.query('UPDATE push_subscriptions SET p256dh = ?, auth = ? WHERE id = ?').run(
+            input.p256dh,
+            input.auth,
+            existing.id,
+          );
+          return {
+            subscription: { ...existing, p256dh: input.p256dh, auth: input.auth },
+            displacedUserId: null,
+          };
+        }
+
+        // Counted BEFORE anything is deleted. A shared device changing hands is
+        // legitimate, but refusing this caller after dropping the previous
+        // owner's row would take their notifications away for nothing.
+        const count = db.query('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?').get(userId) as {
+          n: number;
+        };
+        if (count.n >= MAX_PUSH_SUBSCRIPTIONS_PER_USER) return null;
+
+        // Delete-then-insert rather than reassigning `user_id`. The old path
+        // returned before the cap was consulted, so taking an endpoint over was
+        // also the way past it — and the displaced account has to be named, or
+        // its agents keep sealing to a device that is no longer theirs.
+        const displacedUserId = existing ? existing.user_id : null;
+        if (existing) db.query('DELETE FROM push_subscriptions WHERE id = ?').run(existing.id);
+
+        const row: PushSubscription = {
+          id: crypto.randomUUID(),
+          user_id: userId,
+          endpoint: input.endpoint,
+          p256dh: input.p256dh,
+          auth: input.auth,
+          created_at: now(),
+        };
+        db.query(
+          'INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(row.id, row.user_id, row.endpoint, row.p256dh, row.auth, row.created_at);
+        return { subscription: row, displacedUserId };
+      })();
+    },
+
+    deleteKv(key) {
+      db.query('DELETE FROM kv WHERE key = ?').run(key);
+    },
+
+    listPushSubscriptions(userId) {
+      return db
+        .query('SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY created_at')
+        .all(userId) as PushSubscription[];
+    },
+
+    getPushSubscription(id) {
+      return (db.query('SELECT * FROM push_subscriptions WHERE id = ?').get(id) as PushSubscription | null) ?? null;
+    },
+
+    deletePushSubscription(id) {
+      return Number(db.query('DELETE FROM push_subscriptions WHERE id = ?').run(id).changes ?? 0) > 0;
+    },
+
+    deletePushSubscriptionByEndpoint(userId, endpoint) {
+      const result = db.query('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?').run(userId, endpoint);
+      return Number(result.changes ?? 0) > 0;
+    },
     putHandoffBundle(input) {
       const ts = now();
       const row: HandoffBundle = {

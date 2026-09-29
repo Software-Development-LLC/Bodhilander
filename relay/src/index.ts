@@ -6,6 +6,8 @@ import { createRepositories } from './repositories';
 import { createGateway, newAgentSocketData, newClientSocketData } from './ws';
 import { parseCookies, SESSION_COOKIE } from './auth/cookies';
 import { createRateLimiter } from './rate-limit';
+import { createVapid } from './push/vapid';
+import { createPushDispatcher } from './push/send';
 import { serveOptions } from './server';
 import { ORPHAN_GRACE_MS, purgeExpiredHandoffs, sweepOrphans } from './handoff-store';
 
@@ -34,6 +36,9 @@ export function main() {
 
   const repos = createRepositories(db);
   const rateLimiter = createRateLimiter();
+  // Web push identity. The keypair is resolved lazily, on the first request
+  // that needs it, so a start-up with no push traffic touches no crypto.
+  const vapid = createVapid({ config, repos, logger });
 
   /** Files a crash stranded between writing one and recording it. */
   const sweepHandoffOrphans = async (): Promise<void> => {
@@ -46,16 +51,24 @@ export function main() {
   };
   void sweepHandoffOrphans();
   // The gateway is built first so the router can call into it. HTTP and
-  // WebSocket are separate surfaces; these two callbacks are the only seam
+  // WebSocket are separate surfaces; these callbacks are the only seam
   // between them, rather than a shared mutable table either side can corrupt.
-  const gateway = createGateway({ repos, logger });
+  const gateway = createGateway({
+    repos,
+    logger,
+    rateLimiter,
+    push: createPushDispatcher({ vapid }),
+  });
   const route = createRouter({
     config,
     logger,
     repos,
     rateLimiter,
+    vapid,
     onGrantRedeemed: (grant) => gateway.notifyGrantRedeemed(grant),
     onGrantRevoked: (grant) => gateway.notifyGrantRevoked(grant),
+    onPushSubscriptionsChanged: (userId) => gateway.notifyPushSubscriptions(userId),
+    isPushCapable: (machineId) => gateway.isPushCapable(machineId),
   });
 
   const server = Bun.serve(serveOptions({
