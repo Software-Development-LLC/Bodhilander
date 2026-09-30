@@ -13,7 +13,7 @@ import * as accountsRepo from './repositories/accounts';
 import * as groupsRepo from './repositories/groups';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
-import { isUsagePressured } from './usage-store';
+import { getUsageThreshold, isUsagePressured } from './usage-store';
 
 /**
  * What happens when an account runs out of quota mid-session.
@@ -66,20 +66,21 @@ export function nextHealthyAccount(excludeId: string | null, now: Date = new Dat
   const healthy = accountsRepo.getAccountsInFallbackOrder().filter(
     account => account.id !== excludeId && accountsRepo.isAccountHealthy(account, now)
   );
-  return preferUnpressured(healthy, now) ?? null;
+  return preferUnpressured(healthy, now, getUsageThreshold()) ?? null;
 }
 
 /**
  * The first account not near its usage limit, else the first of them all: an
  * account over the warning threshold is a last resort, not excluded.
  */
-function preferUnpressured(accounts: ClaudeAccount[], now: Date = new Date()): ClaudeAccount | undefined {
-  return accounts.find(account => !isUsagePressured(account.id, now)) ?? accounts[0];
+function preferUnpressured(accounts: ClaudeAccount[], now: Date, threshold: number): ClaudeAccount | undefined {
+  return accounts.find(account => !isUsagePressured(account.id, now, threshold)) ?? accounts[0];
 }
 
 /**
- * Pin a just-created session to a below-threshold account when the one it
- * would inherit is near its limit. Returns the account it was moved to.
+ * Move a just-created session to a below-threshold account when the one it
+ * would inherit is near its limit, recorded as a failover so it goes home once
+ * that account is back under the threshold. Returns where it went.
  */
 export function routeNewSession(sessionId: string, now: Date = new Date()): { from: ClaudeAccount; to: ClaudeAccount } | null {
   const session = sessionsRepo.getSession(sessionId);
@@ -90,17 +91,22 @@ export function routeNewSession(sessionId: string, now: Date = new Date()): { fr
   const inherited = resolveAccountForSession(sessionId);
   const to = newSessionAccountOverride(inherited, now);
   if (!to || !inherited) return null;
-  sessionsRepo.updateSession(sessionId, { claudeAccountId: to.id });
+  sessionsRepo.updateSession(sessionId, {
+    failoverFromAccountId: inherited.id,
+    failoverPrevAccountId: null,
+    claudeAccountId: to.id,
+  });
   return { from: inherited, to };
 }
 
 /** A healthy below-threshold account to use instead of a near-limit inherited one, or null. */
 export function newSessionAccountOverride(inherited: ClaudeAccount | null, now: Date = new Date()): ClaudeAccount | null {
-  if (!inherited || !isUsagePressured(inherited.id, now)) return null;
+  const threshold = getUsageThreshold();
+  if (!inherited || !isUsagePressured(inherited.id, now, threshold)) return null;
   const alternative = accountsRepo.getAccountsInFallbackOrder().find(
     account => account.id !== inherited.id
       && accountsRepo.isAccountHealthy(account, now)
-      && !isUsagePressured(account.id, now)
+      && !isUsagePressured(account.id, now, threshold)
   );
   return alternative ?? null;
 }
@@ -226,7 +232,9 @@ export interface FailbackCandidate {
 }
 
 /**
- * Sessions whose original account is healthy again.
+ * Sessions whose original account is healthy again and back under the usage
+ * threshold: a session moved for usage alone was never limited, so the
+ * threshold is the only thing it is waiting on.
  *
  * Also cleans up after an account that was deleted while sessions were parked
  * off it: there is no home to return to, so the bookkeeping is dropped rather
@@ -234,6 +242,7 @@ export interface FailbackCandidate {
  */
 export function failbackCandidates(now: Date = new Date()): FailbackCandidate[] {
   const candidates: FailbackCandidate[] = [];
+  const threshold = getUsageThreshold();
 
   for (const session of sessionsRepo.getAllSessions()) {
     if (!session.failoverFromAccountId) continue;
@@ -248,6 +257,7 @@ export function failbackCandidates(now: Date = new Date()): FailbackCandidate[] 
     // The cooldown has run out. Drop it now so the account is a legitimate
     // failover target again even if this particular session never moves back.
     accountsRepo.clearAccountLimit(home.id);
+    if (isUsagePressured(home.id, now, threshold)) continue;
     candidates.push({ sessionId: session.id, home });
   }
 
@@ -351,7 +361,7 @@ export function describeFailover(event: AccountFailoverEvent): { title: string; 
   if (event.reason === 'failback') {
     return {
       title: `Back on ${event.to?.label ?? 'the original account'}`,
-      body: `${sessions} returned now that its usage limit has lifted.`,
+      body: `${sessions} returned now that its account has room again.`,
     };
   }
 

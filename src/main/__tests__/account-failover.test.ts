@@ -651,6 +651,36 @@ describe('routeNewSession', () => {
     expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('fresh');
   });
 
+  test('records the move as a failover, not as a chosen account', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null);
+    usageAt('primary', 90);
+    failover.routeNewSession('s1');
+    const session = sessionsRepo.getSession('s1')!;
+    expect(session.failoverFromAccountId).toBe('primary');
+    expect(session.failoverPrevAccountId).toBeNull();
+  });
+
+  test('goes home to the inherited account once it is back under the threshold', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null, 'stopped');
+    usageAt('primary', 90);
+    failover.routeNewSession('s1');
+
+    expect(failover.failbackCandidates()).toEqual([]);
+    usageAt('primary', 40);
+    expect(failover.failbackCandidates().map(c => c.sessionId)).toEqual(['s1']);
+
+    expect(failover.failBackSession('s1')!.to!.id).toBe('primary');
+    const session = sessionsRepo.getSession('s1')!;
+    expect(session.claudeAccountId).toBeNull();
+    expect(session.failoverFromAccountId).toBeNull();
+  });
+
   test('never overrides an account the session was given explicitly', () => {
     addAccount('primary', 0, true);
     addAccount('fresh', 1);

@@ -2,7 +2,7 @@ import { ClaudeAccount } from '../shared/types';
 import { getDatabase } from './database';
 import { mapAccountRow } from './repositories/account-row';
 import { getAccountsInFallbackOrder, isAccountHealthy } from './repositories/accounts';
-import { isUsagePressured } from './usage-store';
+import { getUsageThreshold, isUsagePressured } from './usage-store';
 
 /**
  * Resolve which Claude account a given session should launch under (BDHLNDR-31).
@@ -87,12 +87,13 @@ export function resolveAccountForGroup(groupId: string | null, now: Date = new D
     // warning threshold is preferred, then the chosen one if it is healthy.
     // A group's own choice is kept under usage pressure, as for sessions.
     const steerByUsage = chosen.id !== groupAccountId(groupId);
+    const threshold = getUsageThreshold();
     const chosenHealthy = isAccountHealthy(chosen, now);
-    if (chosenHealthy && !(steerByUsage && isUsagePressured(chosen.id, now))) return chosen;
+    if (chosenHealthy && !(steerByUsage && isUsagePressured(chosen.id, now, threshold))) return chosen;
     const others = getAccountsInFallbackOrder().filter(
       (a) => a.id !== chosen.id && isAccountHealthy(a, now),
     );
-    const relieved = steerByUsage ? others.find((a) => !isUsagePressured(a.id, now)) : undefined;
+    const relieved = steerByUsage ? others.find((a) => !isUsagePressured(a.id, now, threshold)) : undefined;
     if (relieved) return relieved;
     if (chosenHealthy) return chosen;
     return others[0] ?? chosen;

@@ -39,7 +39,11 @@ export function getUsageThreshold(): number {
 }
 
 /** Near its limit on fresh data, so not to be preferred for new work. */
-export function isUsagePressured(accountId: string, now: Date = new Date()): boolean {
+export function isUsagePressured(
+  accountId: string,
+  now: Date = new Date(),
+  threshold: number = getUsageThreshold(),
+): boolean {
   const usage = getUsage(accountId);
-  return usage !== null && isOverThreshold(usage, getUsageThreshold(), now.getTime());
+  return usage !== null && isOverThreshold(usage, threshold, now.getTime());
 }
