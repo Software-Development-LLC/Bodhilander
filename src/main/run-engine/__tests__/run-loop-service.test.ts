@@ -177,3 +177,18 @@ describe('answering one owner\u2019s permission', () => {
     expect(advanceCalls).toEqual([]);
   });
 });
+
+describe('the account a run launches gates under', () => {
+  test('is recorded against the run, so it stays owned after routing moves', async () => {
+    const { activeGateConfigDirs, clearGateConfigDirs } = await import('../../gate-accounts');
+    clearGateConfigDirs();
+    db.exec(`CREATE TABLE claude_accounts (
+      id TEXT PRIMARY KEY, label TEXT NOT NULL, config_dir TEXT NOT NULL, email TEXT, color TEXT,
+      is_default INTEGER DEFAULT 0, created_at TEXT, last_used_at TEXT, fallback_rank INTEGER,
+      limited_until TEXT, limited_at TEXT)`);
+    db.exec(`INSERT INTO claude_accounts (id, label, config_dir, is_default) VALUES ('a', 'a', '/cfg/a', 1)`);
+    const run = runs.getRun('run-1')!;
+    expect(service.accountConfigDirFor(run)).toBe('/cfg/a');
+    expect(activeGateConfigDirs(['run-1'])).toEqual(['/cfg/a']);
+  });
+});

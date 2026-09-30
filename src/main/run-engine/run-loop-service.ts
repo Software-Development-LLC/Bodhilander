@@ -302,7 +302,7 @@ const spawnDeps: SpawnDeps = {
 };
 
 /** The managed account a run's gates launch under (#327), or null for ambient. */
-function accountConfigDirFor(run: RunRow): string | null {
+export function accountConfigDirFor(run: RunRow): string | null {
   const configDir = resolveAccountForGroup(run.groupId)?.configDir ?? null;
   recordGateConfigDir(run.id, configDir);
   return configDir;
