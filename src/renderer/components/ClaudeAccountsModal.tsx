@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AccountRemovalCost, ClaudeAccount, LiveAccountBindings } from '../../shared/types';
+import { AccountRemovalCost, AccountUsage, AccountUsageMap, ClaudeAccount, LiveAccountBindings } from '../../shared/types';
+import { DEFAULT_USAGE_WARN_THRESHOLD, parseUsageThreshold, usageLevel } from '../../shared/usage';
 import Terminal from './Terminal';
 import { AccountChip } from './AccountChip';
+import { UsageMeters } from './UsageMeters';
 import './ClaudeAccountsModal.css';
 
 // -----------------------------------------------------------------------------
@@ -53,6 +55,9 @@ export const ClaudeAccountsPanel: React.FC = () => {
   const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
   const [loading, setLoading] = useState(false);
   const [loginFlow, setLoginFlow] = useState<{ account: ClaudeAccount; ptyId: string } | null>(null);
+  const [usage, setUsage] = useState<AccountUsageMap>({});
+  const [threshold, setThreshold] = useState(DEFAULT_USAGE_WARN_THRESHOLD);
+  const [now, setNow] = useState(() => Date.now());
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -71,6 +76,21 @@ export const ClaudeAccountsPanel: React.FC = () => {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Opening the panel asks for a fresh poll; pushed updates keep it current,
+  // and the clock ticks so countdowns and "as of" stay honest while it is open.
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI.getAccountUsage().then(map => { if (!cancelled) setUsage(map); }).catch(() => {});
+    window.electronAPI.refreshAccountUsage().then(map => { if (!cancelled) setUsage(map); }).catch(() => {});
+    const off = window.electronAPI.onAccountUsageUpdated(setUsage);
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => {
+      cancelled = true;
+      off();
+      clearInterval(tick);
+    };
+  }, []);
 
   useEffect(() => {
     const off = window.electronAPI.onAccountLoginCompleted(() => {
@@ -198,7 +218,7 @@ export const ClaudeAccountsPanel: React.FC = () => {
         login, so sessions assigned to different accounts can run at the same time.
       </p>
 
-      <FailoverSettings />
+      <FailoverSettings threshold={threshold} onThresholdChange={setThreshold} />
 
       {accounts.length === 0 ? (
         <div className="empty">{emptyText}</div>
@@ -215,6 +235,9 @@ export const ClaudeAccountsPanel: React.FC = () => {
                 key={acc.id}
                 account={acc}
                 runningSessions={runningSessions}
+                usage={usage[acc.id] ?? null}
+                usageThreshold={threshold}
+                now={now}
                 position={index + 1}
                 canMoveUp={index > 0}
                 canMoveDown={index < accounts.length - 1}
@@ -256,6 +279,10 @@ export interface AccountRowProps {
   account: ClaudeAccount;
   /** Running ptys currently spawned under this account (#165). 0 renders no badge. */
   runningSessions: number;
+  /** The merged usage record; omitted renders no meters. */
+  usage?: AccountUsage | null;
+  usageThreshold?: number;
+  now?: number;
   /** 1-based place in the failover queue (#207). */
   position: number;
   canMoveUp: boolean;
@@ -298,6 +325,9 @@ function formatReset(resetAt: Date, now: Date = new Date()): string {
 export const AccountRow: React.FC<AccountRowProps> = ({
   account,
   runningSessions,
+  usage,
+  usageThreshold = DEFAULT_USAGE_WARN_THRESHOLD,
+  now = Date.now(),
   position,
   canMoveUp,
   canMoveDown,
@@ -314,7 +344,11 @@ export const AccountRow: React.FC<AccountRowProps> = ({
       {/* The queue position is the whole point of the ordering, so it is text
           in the row and not a tooltip on an arrow. */}
       <span className="failover-position" aria-hidden="true">{position}</span>
-      <AccountChip account={account} size="md" />
+      <AccountChip
+        account={account}
+        size="md"
+        usageLevel={usage === undefined ? undefined : usageLevel(usage, usageThreshold, now)}
+      />
       {/* The status is a tag beside the address, not a replacement for it: the
           address is what says WHICH account this is, and the one surface where
           a signed-out account can be acted on is the one that must still name
@@ -383,6 +417,7 @@ export const AccountRow: React.FC<AccountRowProps> = ({
           Delete
         </button>
       </div>
+      {usage !== undefined && <UsageMeters usage={usage} threshold={usageThreshold} now={now} />}
     </li>
   );
 };
@@ -394,6 +429,13 @@ export const AccountRow: React.FC<AccountRowProps> = ({
 /** Preference keys, matching account-failover.ts. Absent means enabled. */
 const FAILOVER_PREF = 'accountFailoverEnabled';
 const FAILBACK_PREF = 'accountFailbackEnabled';
+/** Matches usage-store.ts. Absent means the default threshold. */
+const USAGE_THRESHOLD_PREF = 'usageWarnThreshold';
+
+interface FailoverSettingsProps {
+  threshold: number;
+  onThresholdChange: (threshold: number) => void;
+}
 
 /**
  * The two things a user might want to turn off about automatic switching.
@@ -404,9 +446,10 @@ const FAILBACK_PREF = 'accountFailbackEnabled';
  * not the second, and collapsing them into one control would make refusing the
  * restart cost them the whole feature.
  */
-const FailoverSettings: React.FC = () => {
+const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, onThresholdChange }) => {
   const [failover, setFailover] = useState(true);
   const [failback, setFailback] = useState(true);
+  const [thresholdDraft, setThresholdDraft] = useState(String(threshold));
 
   useEffect(() => {
     let cancelled = false;
@@ -414,9 +457,19 @@ const FailoverSettings: React.FC = () => {
       if (cancelled) return;
       setFailover(prefs[FAILOVER_PREF] !== 'false');
       setFailback(prefs[FAILBACK_PREF] !== 'false');
+      const saved = parseUsageThreshold(prefs[USAGE_THRESHOLD_PREF]);
+      onThresholdChange(saved);
+      setThresholdDraft(String(saved));
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [onThresholdChange]);
+
+  const commitThreshold = () => {
+    const next = parseUsageThreshold(thresholdDraft);
+    setThresholdDraft(String(next));
+    onThresholdChange(next);
+    window.electronAPI.setPreference(USAGE_THRESHOLD_PREF, String(next)).catch(() => {});
+  };
 
   const toggle = (key: string, next: boolean, apply: (value: boolean) => void) => {
     apply(next);
@@ -448,6 +501,23 @@ const FailoverSettings: React.FC = () => {
           <strong>Move them back when the limit lifts.</strong>{' '}
           Only while a session is idle, so a switch back never interrupts a turn
           in progress. Without this, sessions stay on the backup account.
+        </span>
+      </label>
+      <label className="failover-toggle usage-threshold">
+        <span>
+          <strong>Avoid accounts above</strong>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            aria-label="Usage warning threshold, percent"
+            value={thresholdDraft}
+            onChange={e => setThresholdDraft(e.target.value)}
+            onBlur={commitThreshold}
+          />
+          <strong>% of either limit.</strong>{' '}
+          New sessions and failover pick an account below this when one exists,
+          and you are told once when an account crosses it.
         </span>
       </label>
     </div>

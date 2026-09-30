@@ -12,6 +12,7 @@ import { describeRateLimitType } from './quota-limit';
 import * as accountsRepo from './repositories/accounts';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
+import { isUsagePressured } from './usage-store';
 
 /**
  * What happens when an account runs out of quota mid-session.
@@ -61,9 +62,33 @@ export interface UsageLimitReport {
  * line") and must not compute it a second way.
  */
 export function nextHealthyAccount(excludeId: string | null, now: Date = new Date()): ClaudeAccount | null {
-  return accountsRepo.getAccountsInFallbackOrder().find(
+  const healthy = accountsRepo.getAccountsInFallbackOrder().filter(
     account => account.id !== excludeId && accountsRepo.isAccountHealthy(account, now)
-  ) ?? null;
+  );
+  return preferUnpressured(healthy, now) ?? null;
+}
+
+/**
+ * The first account not near its usage limit, else the first of them all: an
+ * account over the warning threshold is a last resort, not excluded.
+ */
+function preferUnpressured(accounts: ClaudeAccount[], now: Date = new Date()): ClaudeAccount | undefined {
+  return accounts.find(account => !isUsagePressured(account.id, now)) ?? accounts[0];
+}
+
+/**
+ * The account a brand-new session should start on, given the one it would
+ * inherit. Only steps aside when the inherited account is over the warning
+ * threshold and a healthy account below it exists; otherwise returns null.
+ */
+export function newSessionAccountOverride(inherited: ClaudeAccount | null, now: Date = new Date()): ClaudeAccount | null {
+  if (!inherited || !isUsagePressured(inherited.id, now)) return null;
+  const alternative = accountsRepo.getAccountsInFallbackOrder().find(
+    account => account.id !== inherited.id
+      && accountsRepo.isAccountHealthy(account, now)
+      && !isUsagePressured(account.id, now)
+  );
+  return alternative ?? null;
 }
 
 /**

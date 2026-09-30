@@ -1,5 +1,6 @@
 import React from 'react';
 import { ClaudeAccount } from '../../shared/types';
+import { UsageLevel } from '../../shared/usage';
 import './AccountChip.css';
 
 export interface AccountChipProps {
@@ -17,7 +18,15 @@ export interface AccountChipProps {
   announceDetail?: boolean;
   /** Label used when `account` is null. Default 'Default (~/.claude)'. */
   emptyLabel?: string;
+  /** Usage indicator; omitted or 'unknown' renders none. */
+  usageLevel?: UsageLevel;
 }
+
+const USAGE_LEVEL_TEXT: Record<Exclude<UsageLevel, 'unknown'>, string> = {
+  ok: 'usage below the warning threshold',
+  warn: 'usage near its limit',
+  critical: 'usage limit reached',
+};
 
 /**
  * Swatch for an account that has no colour of its own — every account
@@ -47,6 +56,7 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   detail,
   announceDetail = false,
   emptyLabel = 'Default (~/.claude)',
+  usageLevel,
 }) => {
   const label = account ? account.label : emptyLabel;
 
@@ -67,6 +77,8 @@ export const AccountChip: React.FC<AccountChipProps> = ({
   const titleParts = [`Claude account: ${label}`];
   if (trimmedEmail) titleParts.push(` (${trimmedEmail})`);
   if (detail) titleParts.push(` — ${detail}`);
+  const usageText = usageLevel && usageLevel !== 'unknown' ? USAGE_LEVEL_TEXT[usageLevel] : null;
+  if (usageText) titleParts.push(` — ${usageText}`);
 
   return (
     <span
@@ -84,6 +96,12 @@ export const AccountChip: React.FC<AccountChipProps> = ({
         {email && <span className="account-chip-email">{email}</span>}
         {announceDetail && detail && <span className="sr-only"> — {detail}</span>}
       </span>
+      {usageText && (
+        <>
+          <span className={`account-chip-usage account-chip-usage-${usageLevel}`} aria-hidden="true" />
+          <span className="sr-only"> — {usageText}</span>
+        </>
+      )}
     </span>
   );
 };

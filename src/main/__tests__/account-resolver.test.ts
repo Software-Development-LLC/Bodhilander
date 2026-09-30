@@ -14,6 +14,19 @@ let db: Database;
 mock.module('../database', () => ({ getDatabase: () => db }));
 
 const { resolveAccountForGroup } = await import('../account-resolver');
+const usageStore = await import('../usage-store');
+
+/** A fresh usage reading at `pct` in the 5-hour window. */
+function usageAt(accountId: string, pct: number): void {
+  usageStore.setUsage({
+    accountId,
+    fiveHour: { pct, resetsAt: Date.now() + 3_600_000 },
+    sevenDay: null,
+    source: 'poll',
+    observedAt: Date.now(),
+    unavailable: null,
+  });
+}
 
 function freshDb(): Database {
   const d = new Database(':memory:');
@@ -35,7 +48,7 @@ function seedAccount(id: string, isDefault = 0) {
   ).run(id, id, `/cfg/${id}/.claude`, isDefault);
 }
 
-beforeEach(() => { db = freshDb(); });
+beforeEach(() => { db = freshDb(); usageStore.clearAllUsage(); });
 
 describe('resolveAccountForGroup', () => {
   test('a group with an account resolves to that account', () => {
@@ -101,5 +114,40 @@ describe('health-aware step-aside (CO-722 R1)', () => {
     seedAccount('def', 1); // healthy
     seedLimited('other', 0, FUTURE);
     expect(resolveAccountForGroup(null)?.id).toBe('def');
+  });
+});
+
+describe('resolveAccountForGroup near the usage limit', () => {
+  test('steps aside from an account over the threshold when one below it exists', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 92);
+    usageAt('spare', 10);
+    expect(resolveAccountForGroup(null)?.id).toBe('spare');
+  });
+
+  test('when every account is over, keeps the chosen one as today', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 92);
+    usageAt('spare', 95);
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
+  });
+
+  test('an account with no reading counts as below the threshold', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 92);
+    expect(resolveAccountForGroup(null)?.id).toBe('spare');
+  });
+
+  test('stale readings do not steer', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageStore.setUsage({
+      accountId: 'work', fiveHour: { pct: 99, resetsAt: null }, sevenDay: null,
+      source: 'poll', observedAt: Date.now() - 60 * 60_000, unavailable: null,
+    });
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
   });
 });

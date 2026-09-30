@@ -2,6 +2,7 @@ import { ClaudeAccount } from '../shared/types';
 import { getDatabase } from './database';
 import { mapAccountRow } from './repositories/account-row';
 import { getAccountsInFallbackOrder, isAccountHealthy } from './repositories/accounts';
+import { isUsagePressured } from './usage-store';
 
 /**
  * Resolve which Claude account a given session should launch under (BDHLNDR-31).
@@ -72,11 +73,17 @@ export function resolveAccountForGroup(groupId: string | null, now: Date = new D
     // same 429. When the chosen account is limited, prefer the next healthy one
     // in fallback order; if none is healthy there is nothing better to do, so
     // keep the original rather than return nothing.
-    if (isAccountHealthy(chosen, now)) return chosen;
-    const healthy = getAccountsInFallbackOrder().find(
+    // Near-limit accounts are a last resort: a healthy one below the usage
+    // warning threshold is preferred, then the chosen one if it is healthy.
+    const chosenHealthy = isAccountHealthy(chosen, now);
+    if (chosenHealthy && !isUsagePressured(chosen.id, now)) return chosen;
+    const others = getAccountsInFallbackOrder().filter(
       (a) => a.id !== chosen.id && isAccountHealthy(a, now),
     );
-    return healthy ?? chosen;
+    const relieved = others.find((a) => !isUsagePressured(a.id, now));
+    if (relieved) return relieved;
+    if (chosenHealthy) return chosen;
+    return others[0] ?? chosen;
   } catch {
     // A gate spawn must not fail because the DB is unopened or the accounts
     // table is absent (a partial fixture, an early boot): fall back to ambient.

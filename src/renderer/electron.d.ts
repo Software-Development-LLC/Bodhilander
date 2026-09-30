@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -217,6 +217,9 @@ interface ElectronAPI {
   onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null; verified: boolean }) => void) => () => void;
   onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => () => void;
   onAccountFailover: (callback: (event: AccountFailoverEvent) => void) => () => void;
+  getAccountUsage: () => Promise<AccountUsageMap>;
+  refreshAccountUsage: () => Promise<AccountUsageMap>;
+  onAccountUsageUpdated: (callback: (usage: AccountUsageMap) => void) => () => void;
 
   // Update channel (BDHLNDR-32)
   getUpdateChannel: () => Promise<'stable' | 'beta'>;

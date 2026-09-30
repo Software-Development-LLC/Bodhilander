@@ -49,6 +49,7 @@ const realAssignSessionAccount = realAccountSwitch.assignSessionAccount;
 const failover = await import('../account-failover');
 const accountsRepo = await import('../repositories/accounts');
 const sessionsRepo = await import('../repositories/sessions');
+const usageStore = await import('../usage-store');
 
 const HOUR = 60 * 60 * 1000;
 
@@ -135,6 +136,7 @@ function live(bindings: Record<string, string>): Record<string, any> {
 
 beforeEach(() => {
   db = freshDb();
+  usageStore.clearAllUsage();
   mock.module('../repositories/preferences', prefsModule);
   prefs.clear();
   // Failover is opt-in. These tests are about what it does once
@@ -559,5 +561,81 @@ describe('a session that cannot be moved', () => {
     } finally {
       mock.module('../account-switch', () => ({ assignSessionAccount: realAssignSessionAccount }));
     }
+  });
+});
+
+/** A fresh reading at `pct` in the 5-hour window. */
+function usageAt(accountId: string, pct: number): void {
+  usageStore.setUsage({
+    accountId,
+    fiveHour: { pct, resetsAt: Date.now() + HOUR },
+    sevenDay: null,
+    source: 'poll',
+    observedAt: Date.now(),
+    unavailable: null,
+  });
+}
+
+describe('routing around an account near its usage limit', () => {
+  test('failover skips a target over the threshold when one below it exists', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('fresh', 2);
+    usageAt('nearly', 91);
+    usageAt('fresh', 20);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('fresh');
+  });
+
+  test('when every target is over, the order is unchanged', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('also', 2);
+    usageAt('nearly', 91);
+    usageAt('also', 99);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('with no readings at all, the order is unchanged', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('fresh', 2);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('the threshold is the preference, not a constant', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('fresh', 2);
+    usageAt('nearly', 91);
+    prefs.set('usageWarnThreshold', '95');
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('a limited account is still skipped even when below the threshold', () => {
+    addAccount('primary', 0, true);
+    addAccount('limited', 1);
+    addAccount('nearly', 2);
+    accountsRepo.markAccountLimited('limited', new Date(Date.now() + HOUR));
+    usageAt('nearly', 90);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('a new session steps off an inherited account over the threshold', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    usageAt('primary', 88);
+    const inherited = accountsRepo.getAccount('primary');
+    expect(failover.newSessionAccountOverride(inherited)?.id).toBe('fresh');
+  });
+
+  test('a new session stays put when nothing better exists or nothing is wrong', () => {
+    addAccount('primary', 0, true);
+    addAccount('also', 1);
+    const inherited = accountsRepo.getAccount('primary');
+    expect(failover.newSessionAccountOverride(inherited)).toBeNull();
+    usageAt('primary', 88);
+    usageAt('also', 97);
+    expect(failover.newSessionAccountOverride(inherited)).toBeNull();
+    expect(failover.newSessionAccountOverride(null)).toBeNull();
   });
 });

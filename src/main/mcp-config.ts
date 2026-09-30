@@ -17,6 +17,7 @@ import * as path from 'path';
 import { app } from 'electron';
 import log from 'electron-log';
 import { getPreference, setPreference } from './repositories/preferences';
+import { STATUSLINE_SCRIPT_NAME } from '../shared/usage';
 import {
   type ClaudeSettingsConfig,
   type HookCommand,
@@ -195,22 +196,28 @@ function writeClaudeMcpConfig(config: ClaudeMcpConfig, configDir?: string): bool
 }
 
 /**
- * Get the path to the hook handler script
+ * Get the path to a script built into dist/hooks
  */
-function getHookScriptPath(): string {
+function getHookScriptPath(scriptName = 'bodhilander-hook.js'): string {
   if (!app.isPackaged) {
-    return path.join(app.getAppPath(), 'dist', 'hooks', 'bodhilander-hook.js');
+    return path.join(app.getAppPath(), 'dist', 'hooks', scriptName);
   }
 
   const resourcesPath = process.resourcesPath;
 
   // Check for unpacked location first
-  const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked', 'dist', 'hooks', 'bodhilander-hook.js');
+  const unpackedPath = path.join(resourcesPath, 'app.asar.unpacked', 'dist', 'hooks', scriptName);
   if (fs.existsSync(unpackedPath)) {
     return unpackedPath;
   }
 
-  return path.join(resourcesPath, 'app', 'dist', 'hooks', 'bodhilander-hook.js');
+  return path.join(resourcesPath, 'app', 'dist', 'hooks', scriptName);
+}
+
+/** The statusline sink script, or null when this build does not carry it. */
+export function getStatuslineScriptPath(): string | null {
+  const scriptPath = getHookScriptPath(STATUSLINE_SCRIPT_NAME);
+  return fs.existsSync(scriptPath) ? scriptPath : null;
 }
 
 /**

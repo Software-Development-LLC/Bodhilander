@@ -44,7 +44,12 @@ import { soundManager, SoundEvent } from './sound-manager';
 import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/types';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
-import { registerHooks, cleanupLegacyMcpServer } from './mcp-config';
+import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
+import { resolveAccountForGroup, resolveAccountForSession } from './account-resolver';
+import { installStatuslineSink } from './statusline-sink';
+import { UsageCrossingEvent, UsagePoller } from './usage-poller';
+import { describeCrossing } from './usage-meter';
+import * as usageStore from './usage-store';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
@@ -444,6 +449,71 @@ function registerFailoverWiring(): void {
   app.on('will-quit', () => clearInterval(failbackTimer));
 }
 
+/**
+ * Accounts whose token a running CLI owns: live ptys, plus the account each
+ * active run's gates launch under, since those CLIs are not ptys.
+ */
+function tokenOwnedAccountIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const binding of Object.values(ptyManager.getLiveAccounts())) {
+    if (binding.accountId) ids.add(binding.accountId);
+  }
+  try {
+    for (const run of runsRepo.listActiveRuns()) {
+      const account = resolveAccountForGroup(run.groupId);
+      if (account) ids.add(account.id);
+    }
+  } catch (err) {
+    log.warn('[Usage] Could not list active runs for token ownership:', err);
+  }
+  return ids;
+}
+
+let usagePoller: UsagePoller | null = null;
+function startUsagePolling(): void {
+  if (usagePoller) return;
+  const scriptPath = getStatuslineScriptPath();
+  if (!scriptPath) log.warn('[Usage] Statusline sink script not found; meters rely on polling alone');
+
+  const poller = new UsagePoller({
+    listAccounts: () => accountsRepo.getAllAccounts(),
+    boundAccountIds: tokenOwnedAccountIds,
+    fetch: (url, init) => fetch(url, init),
+    ensureSink: scriptPath
+      ? (account) => { installStatuslineSink(account.configDir, scriptPath); }
+      : undefined,
+    watchSinks: true,
+  });
+  poller.on('updated', (usage) => mainWindow?.webContents.send('usage:updated', usage));
+  poller.on('crossing', ({ account, crossing }: UsageCrossingEvent) => {
+    notificationManager.showAccountNotification({
+      title: `${account.label} is near its usage limit`,
+      body: describeCrossing(account.label, crossing, Date.now()),
+    });
+  });
+  usagePoller = poller;
+  poller.start();
+  app.on('will-quit', () => poller.stop());
+}
+
+/**
+ * Start a brand-new session off an account near its usage limit, when one
+ * below the threshold exists. Only an inherited account is overridden.
+ */
+function routeNewSession(session: Session): void {
+  if (session.claudeAccountId || (session.provider && session.provider !== 'claude')) return;
+  try {
+    const inherited = resolveAccountForSession(session.id);
+    const override = accountFailover.newSessionAccountOverride(inherited);
+    if (!override || !inherited) return;
+    sessionsRepo.updateSession(session.id, { claudeAccountId: override.id });
+    log.info(`[Usage] New session started on ${override.label}; ${inherited.label} is near its usage limit`);
+    mainWindow?.webContents.send('sessions:refresh');
+  } catch (err) {
+    log.warn('[Usage] Could not route a new session by usage:', err);
+  }
+}
+
 function createWindow(): void {
   // BDHLNDR-44: never construct a BrowserWindow before app 'ready' — defends
   // the rapid-relaunch race that produced "Cannot create BrowserWindow before
@@ -730,6 +800,7 @@ function createWindow(): void {
   });
 
   registerFailoverWiring();
+  startUsagePolling();
 
   // PTY state detection forwarding
   ptyManager.on('stateChange', (event) => {
@@ -988,6 +1059,7 @@ safeHandle('db:sessions:getAll', () => {
 
 safeHandle('db:sessions:create', (session: Session) => {
   sessionsRepo.createSession(session);
+  routeNewSession(session);
   // Log session start event (BDHLNDR-17)
   try {
     sessionEventsRepo.createEvent(session.id, 'session_start', null);
@@ -1076,6 +1148,15 @@ safeHandle('accounts:setFallbackOrder', (orderedIds: string[]) => {
  */
 safeHandle('accounts:clearLimit', (id: string) => {
   accountsRepo.clearAccountLimit(id);
+});
+
+// Usage meters: the merged record per account, and an immediate poll for the
+// accounts panel opening. Pushed updates arrive on 'usage:updated'.
+safeHandle('usage:list', () => usageStore.allUsage());
+
+safeHandle('usage:refresh', async () => {
+  await usagePoller?.refreshNow();
+  return usageStore.allUsage();
 });
 
 /** Which account failover would pick next, for the accounts panel to show. */
