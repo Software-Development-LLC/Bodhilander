@@ -1,9 +1,6 @@
 /**
- * The usage poller: which accounts it polls, when it may refresh a token, and
- * what a failure turns into. The rule that matters most is that it never
- * refreshes a token a running CLI owns.
- *
- * Run with: bun test src/main/__tests__/usage-poller.test.ts
+ * The usage poller: what it polls, when it may refresh a token (never one a
+ * running CLI owns), and what a failure becomes. Run with: bun test <this file>
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as fs from 'fs';
@@ -17,7 +14,7 @@ mock.module('../repositories/preferences', () => ({
   deletePreference: (key: string) => { prefs.delete(key); },
 }));
 
-const { UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
+const { ownedAccountIds, UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
 const { OAUTH_TOKEN_URL } = await import('../usage-credentials');
 const usageStore = await import('../usage-store');
 import type { ClaudeAccount } from '../../shared/types';
@@ -283,4 +280,12 @@ test('a deleted account loses its record', async () => {
   accounts.length = 0;
   await p.pollAll();
   expect(usageStore.getUsage('work')).toBeNull();
+});
+
+test('a token is owned by a live pty or an active run, never by a legacy login', () => {
+  const owned = ownedAccountIds({
+    s1: { accountId: 'work', configDir: '/w', spawnedAt: 0 },
+    s2: { accountId: null, configDir: '/legacy', spawnedAt: 0 },
+  }, ['gates', null]);
+  expect([...owned].sort()).toEqual(['gates', 'work']);
 });

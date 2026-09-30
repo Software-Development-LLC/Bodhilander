@@ -1,10 +1,6 @@
 /**
- * Reading usage off the endpoint and the statusline, and judging it.
- *
- * The negative cases matter most: the endpoint is undocumented, so a shape this
- * does not recognise must read as "no data", never as 0% and a green light.
- *
- * Run with: bun test src/main/__tests__/usage-meter.test.ts
+ * Parsing and judging usage. An undocumented shape must read as "no data",
+ * never as 0%. Run with: bun test <this file>
  */
 import { describe, expect, test } from 'bun:test';
 

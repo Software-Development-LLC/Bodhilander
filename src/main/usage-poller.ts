@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import log from 'electron-log';
 
-import { AccountUsage, ClaudeAccount, UsageUnavailableReason } from '../shared/types';
+import { AccountUsage, ClaudeAccount, LiveAccountBindings, UsageUnavailableReason } from '../shared/types';
 import { USAGE_STALE_MS } from '../shared/usage';
 import {
   FetchLike,
@@ -47,6 +47,21 @@ export interface UsagePollerDeps {
   ensureSink?: (account: ClaudeAccount) => void;
   /** Off in tests, which feed sink files in by hand. */
   watchSinks?: boolean;
+}
+
+/**
+ * Accounts whose token a running CLI owns: live ptys, plus the account each
+ * active run's gates launch under, since those CLIs are not ptys.
+ */
+export function ownedAccountIds(live: LiveAccountBindings, runAccountIds: (string | null)[]): Set<string> {
+  const ids = new Set<string>();
+  for (const binding of Object.values(live)) {
+    if (binding.accountId) ids.add(binding.accountId);
+  }
+  for (const id of runAccountIds) {
+    if (id) ids.add(id);
+  }
+  return ids;
 }
 
 export interface UsageCrossingEvent {

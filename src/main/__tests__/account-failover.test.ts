@@ -639,3 +639,34 @@ describe('routing around an account near its usage limit', () => {
     expect(failover.newSessionAccountOverride(null)).toBeNull();
   });
 });
+
+describe('routeNewSession', () => {
+  test('pins a new session that would inherit a near-limit account', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null);
+    usageAt('primary', 90);
+    expect(failover.routeNewSession('s1')?.to.id).toBe('fresh');
+    expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('fresh');
+  });
+
+  test('never overrides an account the session was given explicitly', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', 'primary');
+    usageAt('primary', 90);
+    expect(failover.routeNewSession('s1')).toBeNull();
+    expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('primary');
+  });
+
+  test('leaves the inheritance alone when nothing is near the limit', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null);
+    expect(failover.routeNewSession('s1')).toBeNull();
+    expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBeNull();
+  });
+});

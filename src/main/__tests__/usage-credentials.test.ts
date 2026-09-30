@@ -1,8 +1,6 @@
 /**
- * An account's OAuth tokens: reading them, refreshing them the way the CLI
- * does, and writing the rotation back without losing anything else in the file.
- *
- * Run with: bun test src/main/__tests__/usage-credentials.test.ts
+ * OAuth tokens: reading, refreshing as the CLI does, and writing the rotation
+ * back without losing any other field. Run with: bun test <this file>
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';

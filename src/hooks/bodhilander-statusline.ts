@@ -1,12 +1,7 @@
 #!/usr/bin/env node
 /**
- * Bodhilander statusline sink.
- *
- * Claude Code runs this on every turn with the session's status JSON on stdin.
- * It records the `rate_limits` block for Bodhilander's usage meters, then runs
- * the user's own statusLine command, if one was installed before ours, and
- * prints its output as the status line.
- *
+ * Records the CLI's per-turn `rate_limits` for Bodhilander's usage meters, then
+ * prints the output of the user's own statusLine command, if one was chained.
  * Usage: node bodhilander-statusline.js <config-dir>
  */
 

@@ -81,6 +81,21 @@ function preferUnpressured(accounts: ClaudeAccount[], now: Date = new Date()): C
  * inherit. Only steps aside when the inherited account is over the warning
  * threshold and a healthy account below it exists; otherwise returns null.
  */
+/**
+ * Pin a just-created session to a below-threshold account when the one it
+ * would inherit is near its limit. Returns the account it was moved to.
+ */
+export function routeNewSession(sessionId: string, now: Date = new Date()): { from: ClaudeAccount; to: ClaudeAccount } | null {
+  const session = sessionsRepo.getSession(sessionId);
+  if (!session || session.claudeAccountId) return null;
+  if (session.provider && session.provider !== 'claude') return null;
+  const inherited = resolveAccountForSession(sessionId);
+  const to = newSessionAccountOverride(inherited, now);
+  if (!to || !inherited) return null;
+  sessionsRepo.updateSession(sessionId, { claudeAccountId: to.id });
+  return { from: inherited, to };
+}
+
 export function newSessionAccountOverride(inherited: ClaudeAccount | null, now: Date = new Date()): ClaudeAccount | null {
   if (!inherited || !isUsagePressured(inherited.id, now)) return null;
   const alternative = accountsRepo.getAccountsInFallbackOrder().find(

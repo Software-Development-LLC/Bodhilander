@@ -45,9 +45,9 @@ import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/ty
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
-import { resolveAccountForGroup, resolveAccountForSession } from './account-resolver';
+import { resolveAccountForGroup } from './account-resolver';
 import { installStatuslineSink } from './statusline-sink';
-import { UsageCrossingEvent, UsagePoller } from './usage-poller';
+import { ownedAccountIds, UsageCrossingEvent, UsagePoller } from './usage-poller';
 import { describeCrossing } from './usage-meter';
 import * as usageStore from './usage-store';
 import log from 'electron-log';
@@ -449,24 +449,14 @@ function registerFailoverWiring(): void {
   app.on('will-quit', () => clearInterval(failbackTimer));
 }
 
-/**
- * Accounts whose token a running CLI owns: live ptys, plus the account each
- * active run's gates launch under, since those CLIs are not ptys.
- */
 function tokenOwnedAccountIds(): Set<string> {
-  const ids = new Set<string>();
-  for (const binding of Object.values(ptyManager.getLiveAccounts())) {
-    if (binding.accountId) ids.add(binding.accountId);
-  }
+  let runAccountIds: (string | null)[] = [];
   try {
-    for (const run of runsRepo.listActiveRuns()) {
-      const account = resolveAccountForGroup(run.groupId);
-      if (account) ids.add(account.id);
-    }
+    runAccountIds = runsRepo.listActiveRuns().map(run => resolveAccountForGroup(run.groupId)?.id ?? null);
   } catch (err) {
     log.warn('[Usage] Could not list active runs for token ownership:', err);
   }
-  return ids;
+  return ownedAccountIds(ptyManager.getLiveAccounts(), runAccountIds);
 }
 
 let usagePoller: UsagePoller | null = null;
@@ -496,18 +486,11 @@ function startUsagePolling(): void {
   app.on('will-quit', () => poller.stop());
 }
 
-/**
- * Start a brand-new session off an account near its usage limit, when one
- * below the threshold exists. Only an inherited account is overridden.
- */
 function routeNewSession(session: Session): void {
-  if (session.claudeAccountId || (session.provider && session.provider !== 'claude')) return;
   try {
-    const inherited = resolveAccountForSession(session.id);
-    const override = accountFailover.newSessionAccountOverride(inherited);
-    if (!override || !inherited) return;
-    sessionsRepo.updateSession(session.id, { claudeAccountId: override.id });
-    log.info(`[Usage] New session started on ${override.label}; ${inherited.label} is near its usage limit`);
+    const moved = accountFailover.routeNewSession(session.id);
+    if (!moved) return;
+    log.info(`[Usage] New session started on ${moved.to.label}; ${moved.from.label} is near its usage limit`);
     mainWindow?.webContents.send('sessions:refresh');
   } catch (err) {
     log.warn('[Usage] Could not route a new session by usage:', err);

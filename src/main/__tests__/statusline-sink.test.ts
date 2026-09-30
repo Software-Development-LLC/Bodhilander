@@ -1,9 +1,6 @@
 /**
- * The statusline sink: installing it into a managed config dir without
- * breaking a statusLine the user already had, and what the script itself does
- * with each turn's status JSON.
- *
- * Run with: bun test src/main/__tests__/statusline-sink.test.ts
+ * The statusline sink: installing it without breaking a user's statusLine, and
+ * what the script does with each turn. Run with: bun test <this file>
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';

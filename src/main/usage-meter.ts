@@ -2,10 +2,8 @@ import { AccountUsage, UsageSource, UsageWindow } from '../shared/types';
 import { describeWindow, formatDuration, currentPct, UsageWindowName, USAGE_WINDOWS } from '../shared/usage';
 
 /**
- * Reading an account's usage off the two places the CLI reports it: the
- * undocumented `/api/oauth/usage` endpoint, and the `rate_limits` block it hands
- * a statusline command. Both are parsed defensively: a shape this does not
- * recognise is "no data", never 0%.
+ * Usage from the undocumented `/api/oauth/usage` endpoint and the statusline's
+ * `rate_limits`. An unrecognised shape is "no data", never 0%.
  */
 
 export interface UsageObservation {
