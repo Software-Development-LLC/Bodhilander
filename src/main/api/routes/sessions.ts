@@ -10,6 +10,7 @@ import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as chatEventsRepo from '../../repositories/chat-events';
 import { ptyManager } from '../../pty-manager';
+import { routeNewSessionByUsage } from '../../session-routing';
 import { requireControlPermission, requireModifyPermission } from '../middleware/auth';
 import {
   validateIdParam,
@@ -202,6 +203,7 @@ export function createSessionsRouter(): Router {
         };
 
         sessionsRepo.createSession(session);
+        routeNewSessionByUsage(id);
 
         // Log session start event (BDHLNDR-17)
         try {
@@ -216,7 +218,7 @@ export function createSessionsRouter(): Router {
         }
 
         log.info(`[SessionsAPI] Created session: ${id}`);
-        res.status(201).json({ session });
+        res.status(201).json({ session: sessionsRepo.getSession(id) ?? session });
       } catch (error) {
         log.error('[SessionsAPI] Error creating session:', error);
         res.status(500).json({ error: 'Failed to create session' });

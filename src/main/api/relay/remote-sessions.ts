@@ -22,6 +22,7 @@ import { withSpawnRetry, isTransientSpawnError } from '../../spawn-retry';
 import { getApiServer } from '../index';
 import { soundManager } from '../../sound-manager';
 import { resolveLaunchProviderId } from '../../providers';
+import { routeNewSessionByUsage } from '../../session-routing';
 
 /** Emits 'created' (Session) / 'groupsChanged' when sessions or groups are
  *  created remotely, so the main process can refresh the desktop renderer. */
@@ -108,6 +109,7 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
 
   // Step 1 — persist the row, log the start event, notify LAN clients.
   sessionsRepo.createSession(session);
+  routeNewSessionByUsage(id);
   try {
     sessionEventsRepo.createEvent(session.id, 'session_start', null);
   } catch (err) {
@@ -146,6 +148,7 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
   }
 
   log.info('[Relay] remote session created', { id, groupId: opts.groupId, provider: opts.provider, launchClaude: opts.launchClaude });
-  remoteSessionEvents.emit('created', session);
-  return session;
+  const created = sessionsRepo.getSession(id) ?? session;
+  remoteSessionEvents.emit('created', created);
+  return created;
 }

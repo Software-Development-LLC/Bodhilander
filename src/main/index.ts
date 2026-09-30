@@ -47,6 +47,7 @@ import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
 import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
 import { installStatuslineSink, nodeOnPath } from './statusline-sink';
+import { routeNewSessionByUsage, setSessionRoutedListener } from './session-routing';
 import { ownedAccountIds, runAccountIdsForOwnership, UsageCrossingEvent, UsagePoller } from './usage-poller';
 import { describeCrossing } from './usage-meter';
 import * as usageStore from './usage-store';
@@ -495,16 +496,7 @@ function startUsagePolling(): void {
   app.on('will-quit', () => poller.stop());
 }
 
-function routeNewSession(session: Session): void {
-  try {
-    const moved = accountFailover.routeNewSession(session.id);
-    if (!moved) return;
-    log.info(`[Usage] New session started on ${moved.to.label}; ${moved.from.label} is near its usage limit`);
-    mainWindow?.webContents.send('sessions:refresh');
-  } catch (err) {
-    log.warn('[Usage] Could not route a new session by usage:', err);
-  }
-}
+setSessionRoutedListener(() => mainWindow?.webContents.send('sessions:refresh'));
 
 function createWindow(): void {
   // BDHLNDR-44: never construct a BrowserWindow before app 'ready' — defends
@@ -1051,7 +1043,7 @@ safeHandle('db:sessions:getAll', () => {
 
 safeHandle('db:sessions:create', (session: Session) => {
   sessionsRepo.createSession(session);
-  routeNewSession(session);
+  routeNewSessionByUsage(session.id);
   // Log session start event (BDHLNDR-17)
   try {
     sessionEventsRepo.createEvent(session.id, 'session_start', null);
