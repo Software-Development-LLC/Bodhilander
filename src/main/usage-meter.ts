@@ -35,6 +35,7 @@ function parseWindow(value: unknown, pctKey: string, resetKey: string): WindowPa
   if (value === null || value === undefined) return null;
   if (!isRecord(value)) return 'invalid';
   const pct = value[pctKey];
+  if (pct === null) return null;
   if (typeof pct !== 'number' || !Number.isFinite(pct) || pct < 0) return 'invalid';
   const rawReset = value[resetKey];
   const resetsAt = parseInstant(rawReset);
@@ -53,9 +54,9 @@ function observation(
   return { fiveHour, sevenDay, source, observedAt };
 }
 
-/** The `/api/oauth/usage` body. Both window keys must be present, even as null. */
+/** The `/api/oauth/usage` body. A window that is absent or has no utilization is skipped. */
 export function parseOAuthUsage(body: unknown, observedAt: number): UsageObservation | null {
-  if (!isRecord(body) || !('five_hour' in body) || !('seven_day' in body)) return null;
+  if (!isRecord(body)) return null;
   return observation(
     parseWindow(body.five_hour, 'utilization', 'resets_at'),
     parseWindow(body.seven_day, 'utilization', 'resets_at'),

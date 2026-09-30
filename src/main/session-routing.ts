@@ -1,5 +1,7 @@
 import log from 'electron-log';
 import { routeNewSession } from './account-failover';
+import { resolveAccountForSession } from './account-resolver';
+import { tokenRefreshSettled } from './token-refresh';
 
 type RoutedListener = (sessionId: string) => void;
 
@@ -23,4 +25,15 @@ export function routeNewSessionByUsage(sessionId: string): void {
   } catch (err) {
     log.warn('[Usage] Could not route a new session by usage:', err);
   }
+}
+
+/** Resolves once no token refresh is running for the account a session will launch under. */
+export async function sessionTokenRefreshSettled(sessionId: string): Promise<void> {
+  let configDir: string | undefined;
+  try {
+    configDir = resolveAccountForSession(sessionId)?.configDir;
+  } catch {
+    return;
+  }
+  await tokenRefreshSettled(configDir);
 }

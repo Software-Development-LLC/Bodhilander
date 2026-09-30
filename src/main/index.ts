@@ -41,16 +41,16 @@ import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChanne
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { AccountFailoverEvent, ClaudeAccount, Group, Session, SessionState } from '../shared/types';
-import { isSinkEnabled, USAGE_SINK_PREF, USAGE_THRESHOLD_PREF } from '../shared/usage';
+import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/types';
+import { USAGE_SINK_PREF, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
 import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
-import { nodeOnPath, reconcileStatuslineSink } from './statusline-sink';
-import { routeNewSessionByUsage, setSessionRoutedListener } from './session-routing';
-import { ownedAccountIds, runAccountIdsForOwnership, UsageCrossingEvent, UsagePoller } from './usage-poller';
-import { describeCrossing } from './usage-meter';
+import { credentialStoreFor } from './credential-store';
+import { sinkLaunchFor } from './statusline-sink';
+import { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } from './session-routing';
+import { createUsageService, UsageService } from './usage-service';
 import * as usageStore from './usage-store';
 import log from 'electron-log';
 import { getApiServer } from './api';
@@ -451,55 +451,30 @@ function registerFailoverWiring(): void {
   app.on('will-quit', () => clearInterval(failbackTimer));
 }
 
-function tokenOwnedAccountIds(): Set<string> {
-  let runAccountIds: (string | null)[] = [];
-  try {
-    runAccountIds = runAccountIdsForOwnership(runsRepo.listActiveRuns(), {
+let usageService: UsageService | null = null;
+
+function startUsagePolling(): void {
+  if (usageService) return;
+  const service = createUsageService({
+    listAccounts: () => accountsRepo.getAllAccounts(),
+    getPreference: key => prefsRepo.getPreference(key),
+    liveAccounts: () => ptyManager.getLiveAccounts(),
+    activeRuns: () => runsRepo.listActiveRuns(),
+    ownership: {
       candidate: groupId => candidateAccountForGroup(groupId)?.id ?? null,
       resolved: groupId => resolveAccountForGroup(groupId)?.id ?? null,
       launchedDirs: runsRepo.runningGateConfigDirs,
       accountIdForDir: dir => accountsRepo.getAccountByConfigDir(dir)?.id ?? null,
-    });
-  } catch (err) {
-    log.warn('[Usage] Could not list active runs for token ownership:', err);
-  }
-  return ownedAccountIds(ptyManager.getLiveAccounts(), runAccountIds);
-}
-
-let usagePoller: UsagePoller | null = null;
-let sinkScriptPath: string | null = null;
-
-function ensureSink(account: ClaudeAccount): void {
-  const enabled = isSinkEnabled(prefsRepo.getPreference(USAGE_SINK_PREF));
-  reconcileStatuslineSink(account.configDir, sinkScriptPath, enabled);
-}
-
-function startUsagePolling(): void {
-  if (usagePoller) return;
-  sinkScriptPath = getStatuslineScriptPath();
-  if (!sinkScriptPath) log.warn('[Usage] Statusline sink script not found; meters rely on polling alone');
-  if (sinkScriptPath && !nodeOnPath(process.env)) {
-    log.warn('[Usage] node is not on PATH; statusline sink not installed, meters rely on polling alone');
-    sinkScriptPath = null;
-  }
-
-  const poller = new UsagePoller({
-    listAccounts: () => accountsRepo.getAllAccounts(),
-    boundAccountIds: tokenOwnedAccountIds,
+    },
     fetch: (url, init) => fetch(url, init),
-    ensureSink,
-    watchSinks: true,
+    credentials: credentialStoreFor(process.platform),
+    sink: sinkLaunchFor(getStatuslineScriptPath()),
+    publish: usage => mainWindow?.webContents.send('usage:updated', usage),
+    notify: (title, body) => notificationManager.showAccountNotification({ title, body }),
   });
-  poller.on('updated', (usage) => mainWindow?.webContents.send('usage:updated', usage));
-  poller.on('crossing', ({ account, crossing }: UsageCrossingEvent) => {
-    notificationManager.showAccountNotification({
-      title: `${account.label} is near its usage limit`,
-      body: describeCrossing(account.label, crossing, Date.now()),
-    });
-  });
-  usagePoller = poller;
-  poller.start();
-  app.on('will-quit', () => poller.stop());
+  usageService = service;
+  service.start();
+  app.on('will-quit', () => service.stop());
 }
 
 setSessionRoutedListener(() => mainWindow?.webContents.send('sessions:refresh'));
@@ -905,6 +880,7 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     // the process/PTY limit momentarily hit under load) is ridden out rather
     // than surfaced as a failed "new session". createSession throws before it
     // registers the pty in its map, so a retry starts from a clean slate.
+    await sessionTokenRefreshSettled(id);
     await withSpawnRetry(() =>
       ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId)),
     );
@@ -1145,7 +1121,7 @@ safeHandle('accounts:clearLimit', (id: string) => {
 safeHandle('usage:list', () => usageStore.allUsage());
 
 safeHandle('usage:refresh', async () => {
-  await usagePoller?.refreshNow();
+  await usageService?.poller.refreshNow();
   return usageStore.allUsage();
 });
 
@@ -1234,9 +1210,7 @@ safeHandle('prefs:get', (key: string) => {
 
 safeHandle('prefs:set', (key: string, value: string) => {
   prefsRepo.setPreference(key, value);
-  if (key === USAGE_SINK_PREF && usagePoller) {
-    for (const account of accountsRepo.getAllAccounts()) ensureSink(account);
-  }
+  usageService?.preferenceChanged(key);
 });
 
 safeHandle('prefs:getAll', () => {

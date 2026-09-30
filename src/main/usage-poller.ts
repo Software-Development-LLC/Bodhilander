@@ -4,14 +4,8 @@ import log from 'electron-log';
 
 import { AccountUsage, ClaudeAccount, LiveAccountBindings, UsageUnavailableReason } from '../shared/types';
 import { USAGE_STALE_MS } from '../shared/usage';
-import {
-  FetchLike,
-  isTokenExpired,
-  OAuthCredentials,
-  readOAuthCredentials,
-  refreshOAuthToken,
-  writeRotatedTokens,
-} from './usage-credentials';
+import { CredentialStore } from './credential-store';
+import { FetchLike, isTokenExpired, OAuthCredentials, refreshOAuthToken } from './usage-credentials';
 import {
   emptyUsage,
   mergeUsage,
@@ -22,6 +16,7 @@ import {
   UsageObservation,
 } from './usage-meter';
 import { sinkFilePath } from './statusline-sink';
+import { trackTokenRefresh } from './token-refresh';
 import * as usageStore from './usage-store';
 
 /**
@@ -42,6 +37,8 @@ export interface UsagePollerDeps {
   /** Accounts a running pty is bound to. Their tokens belong to the CLI. */
   boundAccountIds: () => Set<string>;
   fetch: FetchLike;
+  /** Where tokens are read and rotations saved: the token file, or the macOS Keychain. */
+  credentials: CredentialStore;
   now?: () => number;
   /** Keep the statusline sink installed in each account's settings. */
   ensureSink?: (account: ClaudeAccount) => void;
@@ -125,9 +122,7 @@ export class UsagePoller extends EventEmitter {
 
   /** Poll every account once. Concurrent callers share one round. */
   pollAll(minGapMs = 0): Promise<void> {
-    if (!this.inFlight) {
-      this.inFlight = this.runRound(minGapMs).finally(() => { this.inFlight = null; });
-    }
+    this.inFlight ??= this.runRound(minGapMs).finally(() => { this.inFlight = null; });
     return this.inFlight;
   }
 
@@ -197,30 +192,13 @@ export class UsagePoller extends EventEmitter {
     if ((this.retryAt.get(account.id) ?? 0) > now) return;
     this.lastAttempt.set(account.id, now);
 
-    let creds = readOAuthCredentials(account.configDir);
+    const creds = await this.deps.credentials.read(account.configDir);
     if (!creds) {
-      this.markUnavailable(account.id, 'no-credentials');
+      this.markUnavailable(account.id, this.deps.credentials.missing);
       return;
     }
-
-    if (isTokenExpired(creds, now)) {
-      // A running CLI refreshes its own token; refreshing under it would race
-      // the rotation. The file it rewrites is read on the next round.
-      if (this.deps.boundAccountIds().has(account.id)) return;
-      const token = await this.refreshToken(account, creds);
-      if (!token) return;
-      creds = { ...creds, accessToken: token };
-    }
-
-    const response = await this.deps.fetch(USAGE_URL, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${creds.accessToken}`,
-        'anthropic-beta': 'oauth-2025-04-20',
-        'Content-Type': 'application/json',
-      },
-      signal: AbortSignal.timeout(30_000),
-    });
+    const response = await this.authorisedUsage(account, creds, now);
+    if (!response) return;
 
     if (response.status === 429 || response.status >= 500) {
       this.backOff(account, response.status, response.headers.get('retry-after'));
@@ -230,7 +208,7 @@ export class UsagePoller extends EventEmitter {
     this.failures.delete(account.id);
     this.retryAt.delete(account.id);
 
-    if (response.status === 401 || response.status === 403) {
+    if (isAuthRejection(response.status)) {
       this.markUnavailable(account.id, 'reauth');
       return;
     }
@@ -243,7 +221,47 @@ export class UsagePoller extends EventEmitter {
     this.observe(account, obs, threshold);
   }
 
-  private async refreshToken(
+  /**
+   * The usage response, refreshing an unowned account's token first when it has
+   * expired, or once when the endpoint rejects a token the clock called valid.
+   * Null when there is nothing to ask with.
+   */
+  private async authorisedUsage(
+    account: ClaudeAccount,
+    creds: OAuthCredentials,
+    now: number,
+  ): Promise<FetchResponse | null> {
+    const owned = this.deps.boundAccountIds().has(account.id);
+    if (isTokenExpired(creds, now)) {
+      // A running CLI refreshes its own token; refreshing under it would race
+      // the rotation. What it writes is read on the next round.
+      if (owned) return null;
+      const token = await this.refreshToken(account, creds);
+      return token ? this.requestUsage(token) : null;
+    }
+    const response = await this.requestUsage(creds.accessToken);
+    if (!isAuthRejection(response.status) || owned || !creds.refreshToken) return response;
+    const token = await this.refreshToken(account, creds);
+    return token ? this.requestUsage(token) : null;
+  }
+
+  private requestUsage(accessToken: string): Promise<FetchResponse> {
+    return this.deps.fetch(USAGE_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+  }
+
+  private refreshToken(account: ClaudeAccount, creds: OAuthCredentials): Promise<string | null> {
+    return trackTokenRefresh(account.configDir, this.rotateToken(account, creds));
+  }
+
+  private async rotateToken(
     account: ClaudeAccount,
     creds: OAuthCredentials,
   ): Promise<string | null> {
@@ -254,12 +272,12 @@ export class UsagePoller extends EventEmitter {
       if (this.deps.boundAccountIds().has(account.id)) {
         log.warn(`[Usage] ${account.label} was bound during a token refresh; saving the rotation anyway`);
       }
-      if (!writeRotatedTokens(account.configDir, rotated)) {
+      if (!(await this.deps.credentials.writeRotated(account.configDir, rotated))) {
         log.warn(`[Usage] Refreshed ${account.label}'s token but could not save it`);
         this.markUnavailable(account.id, 'reauth');
         return null;
       }
-      log.info(`[Usage] Refreshed the expired token for ${account.label}`);
+      log.info(`[Usage] Refreshed the token for ${account.label}`);
       return rotated.accessToken;
     } catch (err) {
       log.warn(`[Usage] Token refresh failed for ${account.label}: ${describeError(err)}`);
@@ -306,6 +324,12 @@ export class UsagePoller extends EventEmitter {
   private publish(): void {
     this.emit('updated', usageStore.allUsage());
   }
+}
+
+type FetchResponse = Awaited<ReturnType<FetchLike>>;
+
+function isAuthRejection(status: number): boolean {
+  return status === 401 || status === 403;
 }
 
 /** Error text without anything a response body might have carried. */

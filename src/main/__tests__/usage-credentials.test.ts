@@ -90,6 +90,14 @@ describe('refreshOAuthToken', () => {
     });
   });
 
+  test('a token with no recorded scopes asks for the CLI\'s default scopes', async () => {
+    const { calls, fetch } = respond(200, { access_token: 'new-access', expires_in: 60 });
+    await refreshOAuthToken({ ...creds, scopes: [] }, fetch);
+    expect((calls[0].body as { scope: string }).scope).toBe(
+      'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins',
+    );
+  });
+
   test('a response without a new refresh token keeps the old one', async () => {
     const { fetch } = respond(200, { access_token: 'new-access', expires_in: 60 });
     expect((await refreshOAuthToken(creds, fetch)).refreshToken).toBe('old-refresh');

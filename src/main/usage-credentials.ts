@@ -12,6 +12,16 @@ export const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 
 const CREDENTIALS_FILE = '.credentials.json';
 
+/** What the CLI asks for when a refresh token carries no recorded scopes. */
+export const DEFAULT_OAUTH_SCOPES: readonly string[] = [
+  'user:profile',
+  'user:inference',
+  'user:sessions:claude_code',
+  'user:mcp_servers',
+  'user:file_upload',
+  'user:plugins',
+];
+
 /** Refresh a little early, so a token does not expire between check and use. */
 const EXPIRY_SKEW_MS = 60_000;
 
@@ -35,7 +45,7 @@ export function credentialsPath(configDir: string): string {
   return path.join(configDir, CREDENTIALS_FILE);
 }
 
-function readRaw(configDir: string): Record<string, unknown> | null {
+export function readRaw(configDir: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(fs.readFileSync(credentialsPath(configDir), 'utf-8'));
     return typeof parsed === 'object' && parsed !== null ? parsed : null;
@@ -44,9 +54,9 @@ function readRaw(configDir: string): Record<string, unknown> | null {
   }
 }
 
-/** The account's tokens, or null when there is no readable token file. */
-export function readOAuthCredentials(configDir: string): OAuthCredentials | null {
-  const oauth = readRaw(configDir)?.claudeAiOauth as Record<string, unknown> | undefined;
+/** The tokens in a credentials document, or null when it holds none. */
+export function oauthFromDocument(doc: Record<string, unknown> | null): OAuthCredentials | null {
+  const oauth = doc?.claudeAiOauth as Record<string, unknown> | undefined;
   if (typeof oauth?.accessToken !== 'string' || oauth.accessToken === '') return null;
   return {
     accessToken: oauth.accessToken,
@@ -54,6 +64,29 @@ export function readOAuthCredentials(configDir: string): OAuthCredentials | null
     expiresAt: typeof oauth.expiresAt === 'number' ? oauth.expiresAt : null,
     scopes: Array.isArray(oauth.scopes) ? oauth.scopes.filter((s): s is string => typeof s === 'string') : [],
   };
+}
+
+/** The account's tokens, or null when there is no readable token file. */
+export function readOAuthCredentials(configDir: string): OAuthCredentials | null {
+  return oauthFromDocument(readRaw(configDir));
+}
+
+/** The document with the rotated pair folded in and every other field kept, or null without one. */
+export function withRotatedTokens(
+  doc: Record<string, unknown> | null,
+  rotated: RotatedTokens,
+): Record<string, unknown> | null {
+  const oauth = doc?.claudeAiOauth;
+  if (!doc || typeof oauth !== 'object' || oauth === null) return null;
+  const next: Record<string, unknown> = {
+    ...(oauth as Record<string, unknown>),
+    accessToken: rotated.accessToken,
+    refreshToken: rotated.refreshToken,
+    expiresAt: rotated.expiresAt,
+  };
+  if (rotated.scopes) next.scopes = rotated.scopes;
+  if (rotated.refreshTokenExpiresAt !== null) next.refreshTokenExpiresAt = rotated.refreshTokenExpiresAt;
+  return { ...doc, claudeAiOauth: next };
 }
 
 export function isTokenExpired(creds: OAuthCredentials, now: number): boolean {
@@ -86,7 +119,7 @@ export async function refreshOAuthToken(
     refresh_token: creds.refreshToken,
     client_id: OAUTH_CLIENT_ID,
   };
-  if (creds.scopes.length > 0) body.scope = creds.scopes.join(' ');
+  body.scope = (creds.scopes.length > 0 ? creds.scopes : DEFAULT_OAUTH_SCOPES).join(' ');
 
   let response: Awaited<ReturnType<FetchLike>>;
   let data: unknown;
@@ -130,22 +163,12 @@ export function writeRotatedTokens(
   rotated: RotatedTokens,
   rename: (from: string, to: string) => void = fs.renameSync,
 ): boolean {
-  const raw = readRaw(configDir);
-  const oauth = raw?.claudeAiOauth;
-  if (!raw || typeof oauth !== 'object' || oauth === null) return false;
-
-  const next: Record<string, unknown> = {
-    ...(oauth as Record<string, unknown>),
-    accessToken: rotated.accessToken,
-    refreshToken: rotated.refreshToken,
-    expiresAt: rotated.expiresAt,
-  };
-  if (rotated.scopes) next.scopes = rotated.scopes;
-  if (rotated.refreshTokenExpiresAt !== null) next.refreshTokenExpiresAt = rotated.refreshTokenExpiresAt;
+  const doc = withRotatedTokens(readRaw(configDir), rotated);
+  if (!doc) return false;
 
   const file = credentialsPath(configDir);
   const tmp = `${file}.bodhilander.tmp`;
-  const text = JSON.stringify({ ...raw, claudeAiOauth: next });
+  const text = JSON.stringify(doc);
   try {
     fs.writeFileSync(tmp, text, { encoding: 'utf-8', mode: 0o600 });
   } catch {

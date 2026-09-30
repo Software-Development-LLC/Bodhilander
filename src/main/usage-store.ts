@@ -1,5 +1,5 @@
-import { AccountUsage, AccountUsageMap } from '../shared/types';
-import { isOverThreshold, parseUsageThreshold, peakPct, USAGE_THRESHOLD_PREF } from '../shared/usage';
+import { AccountUsage, AccountUsageMap, UsageUnavailableReason } from '../shared/types';
+import { isOverThreshold, isUsageStale, parseUsageThreshold, peakPct, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { getPreference } from './repositories/preferences';
 
 /**
@@ -59,4 +59,27 @@ export function hasUsageRoom(
 ): boolean {
   const peak = peakPct(getUsage(accountId), now.getTime());
   return peak === null || peak < threshold;
+}
+
+const SIGNED_OUT: ReadonlySet<UsageUnavailableReason> = new Set(['reauth', 'no-credentials', 'no-keychain-credentials']);
+
+/** The last poll found no usable sign-in for the account. */
+export function isSignedOut(accountId: string): boolean {
+  const reason = getUsage(accountId)?.unavailable;
+  return reason != null && SIGNED_OUT.has(reason);
+}
+
+/**
+ * Known room: a fresh reading below the threshold on an account still signed
+ * in. Only this justifies a usage-driven move onto an account.
+ */
+export function hasFreshRoom(
+  accountId: string,
+  now: Date = new Date(),
+  threshold: number = getUsageThreshold(),
+): boolean {
+  const usage = getUsage(accountId);
+  if (isUsageStale(usage, now.getTime()) || isSignedOut(accountId)) return false;
+  const peak = peakPct(usage, now.getTime());
+  return peak !== null && peak < threshold;
 }

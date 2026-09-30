@@ -62,6 +62,7 @@
 
 .claude-accounts-panel .account-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
@@ -416,8 +417,4 @@
 .usage-threshold input {
   width: 56px;
   margin: 0 4px;
-}
-
-.claude-accounts-panel .account-row {
-  flex-wrap: wrap;
 }

@@ -23,6 +23,7 @@ const UNAVAILABLE_TEXT: Record<UsageUnavailableReason, string> = {
   reauth: 'usage unavailable (re-auth needed)',
   error: 'usage unavailable',
   'no-credentials': 'usage unavailable (no token file for this account)',
+  'no-keychain-credentials': 'usage unavailable (no Keychain sign-in for this account)',
 };
 
 function levelFor(pct: number, threshold: number): UsageLevel {

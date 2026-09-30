@@ -7,16 +7,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import { spawnSync } from 'child_process';
+
 import {
   installStatuslineSink,
-  nodeOnPath,
-  reconcileStatuslineSink,
+  SinkLaunch,
   sinkCommand,
+  sinkLaunchFor,
+  sinkReconciler,
   uninstallStatuslineSink,
 } from '../statusline-sink';
-import { findGitBash, readChainedCommand, recordRateLimits, runStatusline } from '../../hooks/bodhilander-statusline';
+import { chainEnv, findGitBash, readChainedCommand, recordRateLimits, runStatusline } from '../../hooks/bodhilander-statusline';
 
 const SCRIPT = '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js';
+const LAUNCH: SinkLaunch = { scriptPath: SCRIPT, execPath: '/opt/Bodhilander/Bodhilander', platform: 'darwin' };
 let dir: string;
 
 beforeEach(() => {
@@ -33,44 +37,44 @@ const writeSettings = (value: unknown) => fs.writeFileSync(path.join(dir, 'setti
 describe('installStatuslineSink', () => {
   test('installs into a dir with no statusLine, keeping other settings', () => {
     writeSettings({ model: 'opus', hooks: { Stop: [] } });
-    expect(installStatuslineSink(dir, SCRIPT)).toBe('installed');
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
     expect(settings()).toEqual({
       model: 'opus',
       hooks: { Stop: [] },
-      statusLine: { type: 'command', command: sinkCommand(SCRIPT, dir) },
+      statusLine: { type: 'command', command: sinkCommand(LAUNCH, dir) },
     });
     expect(readChainedCommand(dir)).toBeNull();
   });
 
   test('a user statusLine is chained to, and its padding kept', () => {
     writeSettings({ statusLine: { type: 'command', command: 'bash ~/.claude/line.sh', padding: 2 } });
-    expect(installStatuslineSink(dir, SCRIPT)).toBe('installed');
-    expect(settings().statusLine).toEqual({ type: 'command', command: sinkCommand(SCRIPT, dir), padding: 2 });
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
+    expect(settings().statusLine).toEqual({ type: 'command', command: sinkCommand(LAUNCH, dir), padding: 2 });
     expect(readChainedCommand(dir)).toBe('bash ~/.claude/line.sh');
   });
 
   test('a second install writes nothing and keeps the chain', () => {
     writeSettings({ statusLine: { type: 'command', command: 'echo mine' } });
-    installStatuslineSink(dir, SCRIPT);
+    installStatuslineSink(dir, LAUNCH);
     const mtime = fs.statSync(path.join(dir, 'settings.json')).mtimeMs;
-    expect(installStatuslineSink(dir, SCRIPT)).toBe('unchanged');
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('unchanged');
     expect(fs.statSync(path.join(dir, 'settings.json')).mtimeMs).toBe(mtime);
     expect(readChainedCommand(dir)).toBe('echo mine');
   });
 
   test('a moved install updates the path without losing the chain', () => {
     writeSettings({ statusLine: { type: 'command', command: 'echo mine' } });
-    installStatuslineSink(dir, SCRIPT);
-    const moved = '/Applications/Bodhilander.app/dist/hooks/bodhilander-statusline.js';
+    installStatuslineSink(dir, LAUNCH);
+    const moved = { ...LAUNCH, scriptPath: '/Applications/Bodhilander.app/dist/hooks/bodhilander-statusline.js' };
     expect(installStatuslineSink(dir, moved)).toBe('updated');
     expect(settings().statusLine.command).toBe(sinkCommand(moved, dir));
     expect(readChainedCommand(dir)).toBe('echo mine');
   });
 
   test('a statusLine the user set after ours becomes the new chain', () => {
-    installStatuslineSink(dir, SCRIPT);
+    installStatuslineSink(dir, LAUNCH);
     writeSettings({ statusLine: { type: 'command', command: 'echo newer' } });
-    expect(installStatuslineSink(dir, SCRIPT)).toBe('installed');
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
     expect(readChainedCommand(dir)).toBe('echo newer');
   });
 });
@@ -79,14 +83,14 @@ describe('installStatuslineSink on a settings.json it cannot read', () => {
   test.each([['torn JSON', '{"model": "opus",'], ['an array', '[]'], ['a string', '"x"']])('%s is left untouched, chain and all', (_name, body) => {
     fs.writeFileSync(path.join(dir, 'bodhilander-statusline.json'), '{"chain":{"type":"command","command":"mine"}}');
     fs.writeFileSync(path.join(dir, 'settings.json'), body);
-    expect(installStatuslineSink(dir, SCRIPT)).toBe('error');
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('error');
     expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe(body);
     expect(readChainedCommand(dir)).toBe('mine');
   });
 
   test('a missing settings.json is created', () => {
-    expect(installStatuslineSink(dir, SCRIPT)).toBe('installed');
-    expect(settings().statusLine.command).toBe(sinkCommand(SCRIPT, dir));
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
+    expect(settings().statusLine.command).toBe(sinkCommand(LAUNCH, dir));
   });
 });
 
@@ -96,7 +100,7 @@ describe('uninstallStatuslineSink', () => {
   test('puts back the statusLine it chained to, padding and all, and drops the record', () => {
     const mine = { type: 'command', command: 'bash ~/.claude/line.sh', padding: 2 };
     writeSettings({ model: 'opus', statusLine: mine });
-    installStatuslineSink(dir, SCRIPT);
+    installStatuslineSink(dir, LAUNCH);
     expect(uninstallStatuslineSink(dir)).toBe('restored');
     expect(settings()).toEqual({ model: 'opus', statusLine: mine });
     expect(fs.existsSync(chainFile())).toBe(false);
@@ -104,7 +108,7 @@ describe('uninstallStatuslineSink', () => {
 
   test('with nothing chained, the statusLine is removed', () => {
     writeSettings({ model: 'opus' });
-    installStatuslineSink(dir, SCRIPT);
+    installStatuslineSink(dir, LAUNCH);
     expect(uninstallStatuslineSink(dir)).toBe('removed');
     expect(settings()).toEqual({ model: 'opus' });
   });
@@ -118,10 +122,10 @@ describe('uninstallStatuslineSink', () => {
 
   test('an unreadable record of the user entry keeps ours rather than lose theirs', () => {
     writeSettings({ statusLine: { type: 'command', command: 'echo mine' } });
-    installStatuslineSink(dir, SCRIPT);
+    installStatuslineSink(dir, LAUNCH);
     fs.writeFileSync(chainFile(), '{"chain":');
     expect(uninstallStatuslineSink(dir)).toBe('error');
-    expect(settings().statusLine.command).toBe(sinkCommand(SCRIPT, dir));
+    expect(settings().statusLine.command).toBe(sinkCommand(LAUNCH, dir));
   });
 
   test('an unparseable settings.json is untouched', () => {
@@ -131,15 +135,23 @@ describe('uninstallStatuslineSink', () => {
   });
 });
 
-describe('reconcileStatuslineSink', () => {
+describe('sinkReconciler', () => {
   test('turning it off, or losing the script, restores the user entry', () => {
     const mine = { type: 'command', command: 'echo mine' };
-    for (const [scriptPath, enabled] of [[SCRIPT, false], [null, true]] as const) {
+    for (const [launch, enabled] of [[LAUNCH, false], [null, true]] as const) {
       writeSettings({ statusLine: mine });
-      expect(reconcileStatuslineSink(dir, SCRIPT, true)).toBe('installed');
-      expect(reconcileStatuslineSink(dir, scriptPath, enabled)).toBe('restored');
+      expect(sinkReconciler(LAUNCH, () => true)(dir)).toBe('installed');
+      expect(sinkReconciler(launch, () => enabled)(dir)).toBe('restored');
       expect(settings().statusLine).toEqual(mine);
     }
+  });
+
+  test('the preference is read on every reconcile, not captured once', () => {
+    let enabled = true;
+    const reconcile = sinkReconciler(LAUNCH, () => enabled);
+    expect(reconcile(dir)).toBe('installed');
+    enabled = false;
+    expect(reconcile(dir)).toBe('removed');
   });
 });
 
@@ -165,7 +177,7 @@ describe('the statusline script', () => {
 
   test('passes the user command the same stdin and prints its output', () => {
     writeSettings({ statusLine: { type: 'command', command: 'my-line' } });
-    installStatuslineSink(dir, SCRIPT);
+    installStatuslineSink(dir, LAUNCH);
     const seen: string[] = [];
     const out = runStatusline(dir, turn, { now: () => 1, runChain: (command, input) => { seen.push(command, input); return 'opus | 64%'; } });
     expect(out).toBe('opus | 64%');
@@ -178,11 +190,15 @@ describe('the statusline script', () => {
 
   test('a failing user command costs the status line, not the reading', () => {
     writeSettings({ statusLine: { type: 'command', command: 'boom' } });
-    installStatuslineSink(dir, SCRIPT);
+    installStatuslineSink(dir, LAUNCH);
     const out = runStatusline(dir, turn, { now: () => 5, runChain: () => { throw new Error('boom'); } });
     expect(out).toBe('');
     expect(fs.existsSync(path.join(dir, 'bodhilander-usage.json'))).toBe(true);
   });
+});
+
+test('the chained user command does not run in Node mode', () => {
+  expect(chainEnv({ ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin' })).toEqual({ PATH: '/usr/bin' });
 });
 
 describe('findGitBash', () => {
@@ -200,18 +216,41 @@ describe('findGitBash', () => {
   });
 });
 
-describe('nodeOnPath', () => {
-  test('finds node.exe on a Windows PATH', () => {
-    const env = { Path: String.raw`C:\Windows;C:\Program Files\nodejs` };
-    expect(nodeOnPath(env, 'win32', p => p === String.raw`C:\Program Files\nodejs\node.exe`)).toBe(true);
+describe('the sink command', () => {
+  test('runs this app’s binary in Node mode, guarded on the script existing', () => {
+    expect(sinkCommand(LAUNCH, '/cfg/work')).toBe(
+      "if [ -f '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js' ]; then "
+        + "ELECTRON_RUN_AS_NODE=1 '/opt/Bodhilander/Bodhilander' '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js' '/cfg/work'; fi",
+    );
   });
 
-  test('finds node on a POSIX PATH', () => {
-    expect(nodeOnPath({ PATH: '/usr/bin:/opt/homebrew/bin' }, 'darwin', p => p === '/opt/homebrew/bin/node')).toBe(true);
+  test('on Windows the paths are written for Git Bash, with forward slashes', () => {
+    const launch: SinkLaunch = {
+      scriptPath: String.raw`C:\Program Files\Bodhilander\resources\hooks\bodhilander-statusline.js`,
+      execPath: String.raw`C:\Program Files\Bodhilander\Bodhilander.exe`,
+      platform: 'win32',
+    };
+    const command = sinkCommand(launch, String.raw`C:\Users\me\claude-accounts\a`);
+    expect(command).toContain("'C:/Program Files/Bodhilander/Bodhilander.exe'");
+    expect(command).toContain("'C:/Users/me/claude-accounts/a'");
+    expect(command).not.toContain('\\');
   });
 
-  test('no node anywhere is false', () => {
-    expect(nodeOnPath({ PATH: '/usr/bin' }, 'linux', () => false)).toBe(false);
-    expect(nodeOnPath({}, 'linux', () => true)).toBe(false);
+  test('a launch needs the script; the binary defaults to this process', () => {
+    expect(sinkLaunchFor(null)).toBeNull();
+    expect(sinkLaunchFor(SCRIPT)).toEqual({ scriptPath: SCRIPT, execPath: process.execPath, platform: process.platform });
+  });
+
+  test.skipIf(process.platform === 'win32')('quotes survive a path with spaces and a quote, and a missing script is a no-op', () => {
+    const odd = path.join(dir, "it's here");
+    fs.mkdirSync(odd);
+    const script = path.join(odd, 'bodhilander-statusline.js');
+    fs.writeFileSync(script, 'printf "%s|%s" "$ELECTRON_RUN_AS_NODE" "$1"');
+    const launch: SinkLaunch = { scriptPath: script, execPath: '/bin/sh', platform: process.platform };
+    const run = () => spawnSync('/bin/sh', ['-c', sinkCommand(launch, odd)], { encoding: 'utf-8' });
+
+    expect(run()).toMatchObject({ status: 0, stdout: `1|${odd}` });
+    fs.rmSync(script);
+    expect(run()).toMatchObject({ status: 0, stdout: '' });
   });
 });

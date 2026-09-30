@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Usage: node bodhilander-statusline.js <config-dir>. Records per-turn
- * `rate_limits` for the usage meters, then prints any chained user statusLine.
+ * Usage: bodhilander-statusline.js <config-dir>, run by the app's own binary
+ * in Node mode. Records per-turn `rate_limits` for the usage meters, then
+ * prints any chained user statusLine.
  */
 
 import * as fs from 'fs';
@@ -69,9 +70,17 @@ function chainShell(): string | boolean {
   return findGitBash(process.env) ?? true;
 }
 
+/** The sink runs as Electron in Node mode; the user's command must not inherit that. */
+export function chainEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.ELECTRON_RUN_AS_NODE;
+  return next;
+}
+
 function runChainedCommand(command: string, input: string): string {
   const result = spawnSync(command, {
     input,
+    env: chainEnv(process.env),
     shell: chainShell(),
     encoding: 'utf-8',
     timeout: CHAIN_TIMEOUT_MS,

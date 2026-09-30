@@ -134,11 +134,19 @@ describe('resolveAccountForGroup near the usage limit', () => {
     expect(resolveAccountForGroup(null)?.id).toBe('work');
   });
 
-  test('an account with no reading counts as below the threshold', () => {
+  test('an account with no reading is not somewhere to move to', () => {
     seedAccount('work', 1);
     seedAccount('spare');
     usageAt('work', 92);
-    expect(resolveAccountForGroup(null)?.id).toBe('spare');
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
+  });
+
+  test('a default at 90% keeps a run’s gates when the secondary is signed out', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 90);
+    usageStore.setUsage({ ...usageStore.getUsage('work')!, accountId: 'spare', fiveHour: { pct: 5, resetsAt: null }, unavailable: 'reauth' });
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
   });
 
   test('stale readings do not steer', () => {

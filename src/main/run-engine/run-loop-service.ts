@@ -40,6 +40,7 @@ import { advance, startOwnerGate } from './driver';
 import { processDeps, runCommand } from './command-runner';
 import { agentsForOwner, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
 import { lookAtGate, type AttentionDeps } from './attention-pass';
+import { tokenRefreshSettled } from '../token-refresh';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
 import { reconcileOnce, expectedChecksLookup, type ChecksLookup, type CommandResult } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
@@ -320,7 +321,8 @@ export function configDirForGate(run: RunRow, gate: { configDir: string | null }
  * at the wiring layer, so neither `gate-spawner` nor the wrapper imports the
  * accounts repository.
  */
-function resilientLaunch(launch: GateLaunch): Promise<GateOutcome> {
+async function resilientLaunch(launch: GateLaunch): Promise<GateOutcome> {
+  await tokenRefreshSettled(launch.context.configDir);
   return runGateResilient({
     run: () => launchGate(launch),
     configDir: launch.context.configDir ?? null,

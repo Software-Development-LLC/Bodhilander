@@ -55,4 +55,9 @@ describe('UsageMeters', () => {
     render(<UsageMeters usage={usage({ fiveHour: null, observedAt: null, unavailable: 'no-credentials' })} threshold={85} now={NOW} />);
     expect(text()).toBe('usage unavailable (no token file for this account)');
   });
+
+  test('a Mac with no Keychain sign-in says so, not that a token file is missing', () => {
+    render(<UsageMeters usage={usage({ fiveHour: null, observedAt: null, unavailable: 'no-keychain-credentials' })} threshold={85} now={NOW} />);
+    expect(text()).toBe('usage unavailable (no Keychain sign-in for this account)');
+  });
 });

@@ -39,6 +39,15 @@ mock.module('../gate-spawner', () => ({
   channelKeyFor: (runId: string, repo: string, gate: number, agent: string, attempt: number) =>
     `${runId}-${repo}-g${gate}-${agent}-a${attempt}`,
 }));
+const probes: { argv: readonly string[]; env?: Record<string, string> }[] = [];
+const realCommandRunner = { ...(await import('../command-runner')) };
+mock.module('../command-runner', () => ({
+  ...realCommandRunner,
+  runCommand: async (_exe: string, argv: readonly string[], opts: { env?: Record<string, string> }) => {
+    probes.push({ argv, env: opts.env });
+    return { code: 0, stdout: '[]', stderr: '' };
+  },
+}));
 mock.module('../permission-inbox', () => ({
   pendingRequests: (_root: string, _runId: string, gate: unknown) => (gate ? pending(gate) : []),
   writeDecision: () => wrote,
@@ -194,6 +203,16 @@ describe('the account an open gate is checked under', () => {
     const gate = runs.activeGate('run-1', 'repo-a')!;
     expect(service.accountConfigDirFor(run)).toBe('/cfg/b');
     expect(service.configDirForGate(run, gate)).toBe('/cfg/a');
+  });
+
+  test('the loop probes a gate under the dir it launched with, not the run’s current one', async () => {
+    accounts();
+    runs.setGateConfigDir('g4-repo-a', '/cfg/a');
+    db.prepare('UPDATE run_gates SET bg_session_id = ? WHERE id = ?').run('bg-a', 'g4-repo-a');
+    probes.length = 0;
+    const config = { claudePath: 'claude', permissionsRoot: 'C:/perm' } as Parameters<typeof service.loopDeps>[0];
+    await service.loopDeps(config, 'gh').look(runs.getRun('run-1')!, runs.activeGate('run-1', 'repo-a')!);
+    expect(probes).toEqual([{ argv: ['agents', '--json'], env: { CLAUDE_CONFIG_DIR: '/cfg/a' } }]);
   });
 
   test('a gate row with no recorded dir falls back to the run’s current account', () => {

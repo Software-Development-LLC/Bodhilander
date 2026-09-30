@@ -576,6 +576,10 @@ function usageAt(accountId: string, pct: number, ageMs = 0, resetsInMs = HOUR): 
   });
 }
 
+function emptyRecord(accountId: string) {
+  return { accountId, fiveHour: null, sevenDay: null, source: null, observedAt: null, unavailable: null };
+}
+
 describe('routing around an account near its usage limit', () => {
   test('failover skips a target over the threshold when one below it exists', () => {
     addAccount('primary', 0, true);
@@ -624,8 +628,43 @@ describe('routing around an account near its usage limit', () => {
     addAccount('primary', 0, true);
     addAccount('fresh', 1);
     usageAt('primary', 88);
+    usageAt('fresh', 10);
     const inherited = accountsRepo.getAccount('primary');
     expect(failover.newSessionAccountOverride(inherited)?.id).toBe('fresh');
+  });
+
+  test('failover prefers known room over an account with no reading', () => {
+    addAccount('primary', 0, true);
+    addAccount('unknown', 1);
+    addAccount('fresh', 2);
+    usageAt('fresh', 20);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('fresh');
+  });
+
+  test('failover takes an account with no reading before a signed-out one', () => {
+    addAccount('primary', 0, true);
+    addAccount('signedOut', 1);
+    addAccount('unknown', 2);
+    usageStore.setUsage({ ...usageStore.getUsage('primary') ?? emptyRecord('signedOut'), accountId: 'signedOut', unavailable: 'reauth' });
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('unknown');
+  });
+
+  test('a new session is not moved onto an account with no reading or a lapsed sign-in', () => {
+    addAccount('primary', 0, true);
+    addAccount('unknown', 1);
+    addAccount('signedOut', 2);
+    usageAt('primary', 90);
+    usageAt('signedOut', 5);
+    usageStore.setUsage({ ...usageStore.getUsage('signedOut')!, unavailable: 'reauth' });
+    expect(failover.newSessionAccountOverride(accountsRepo.getAccount('primary'))).toBeNull();
+  });
+
+  test('a new session is not moved on a stale reading of room', () => {
+    addAccount('primary', 0, true);
+    addAccount('spare', 1);
+    usageAt('primary', 90);
+    usageAt('spare', 5, 20 * 60_000);
+    expect(failover.newSessionAccountOverride(accountsRepo.getAccount('primary'))).toBeNull();
   });
 
   test('a new session stays put when nothing better exists or nothing is wrong', () => {
@@ -647,6 +686,7 @@ describe('routeNewSession', () => {
     addGroup('g');
     addSession('s1', 'g', null);
     usageAt('primary', 90);
+    usageAt('fresh', 10);
     expect(failover.routeNewSession('s1')?.to.id).toBe('fresh');
     expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('fresh');
   });
@@ -657,6 +697,7 @@ describe('routeNewSession', () => {
     addGroup('g');
     addSession('s1', 'g', null);
     usageAt('primary', 90);
+    usageAt('fresh', 10);
     failover.routeNewSession('s1');
     const session = sessionsRepo.getSession('s1')!;
     expect(session.failoverFromAccountId).toBe('primary');
@@ -669,6 +710,7 @@ describe('routeNewSession', () => {
     addGroup('g');
     addSession('s1', 'g', null, 'stopped');
     usageAt('primary', 90);
+    usageAt('fresh', 10);
     failover.routeNewSession('s1');
 
     expect(failover.failbackCandidates()).toEqual([]);

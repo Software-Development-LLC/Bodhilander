@@ -13,7 +13,7 @@ import * as accountsRepo from './repositories/accounts';
 import * as groupsRepo from './repositories/groups';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
-import { getUsageThreshold, hasUsageRoom, isUsagePressured } from './usage-store';
+import { getUsageThreshold, hasFreshRoom, hasUsageRoom, isSignedOut, isUsagePressured } from './usage-store';
 
 /**
  * What happens when an account runs out of quota mid-session.
@@ -70,11 +70,13 @@ export function nextHealthyAccount(excludeId: string | null, now: Date = new Dat
 }
 
 /**
- * The first account not near its usage limit, else the first of them all: an
- * account over the warning threshold is a last resort, not excluded.
+ * Known room first, then an account with no reading against it, then the first
+ * of them all: near-limit and signed-out accounts are a last resort.
  */
 function preferUnpressured(accounts: ClaudeAccount[], now: Date, threshold: number): ClaudeAccount | undefined {
-  return accounts.find(account => !isUsagePressured(account.id, now, threshold)) ?? accounts[0];
+  return accounts.find(account => hasFreshRoom(account.id, now, threshold))
+    ?? accounts.find(account => !isUsagePressured(account.id, now, threshold) && !isSignedOut(account.id))
+    ?? accounts[0];
 }
 
 /**
@@ -99,14 +101,14 @@ export function routeNewSession(sessionId: string, now: Date = new Date()): { fr
   return { from: inherited, to };
 }
 
-/** A healthy below-threshold account to use instead of a near-limit inherited one, or null. */
+/** A healthy account with known room to use instead of a near-limit inherited one, or null. */
 export function newSessionAccountOverride(inherited: ClaudeAccount | null, now: Date = new Date()): ClaudeAccount | null {
   const threshold = getUsageThreshold();
   if (!inherited || !isUsagePressured(inherited.id, now, threshold)) return null;
   const alternative = accountsRepo.getAccountsInFallbackOrder().find(
     account => account.id !== inherited.id
       && accountsRepo.isAccountHealthy(account, now)
-      && !isUsagePressured(account.id, now, threshold)
+      && hasFreshRoom(account.id, now, threshold)
   );
   return alternative ?? null;
 }

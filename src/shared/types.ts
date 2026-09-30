@@ -365,7 +365,7 @@ export interface UsageWindow {
 export type UsageSource = 'poll' | 'statusline';
 
 /** Why an account has no current usage reading. */
-export type UsageUnavailableReason = 'reauth' | 'error' | 'no-credentials';
+export type UsageUnavailableReason = 'reauth' | 'error' | 'no-credentials' | 'no-keychain-credentials';
 
 /**
  * An account's merged usage record. A window is null when nothing has reported

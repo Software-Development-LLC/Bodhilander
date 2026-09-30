@@ -20,6 +20,8 @@ mock.module('../repositories/preferences', () => ({
 
 const { ownedAccountIds, runAccountIdsForOwnership, UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
 const { OAUTH_TOKEN_URL } = await import('../usage-credentials');
+const { fileCredentialStore } = await import('../credential-store');
+const { tokenRefreshSettled } = await import('../token-refresh');
 const usageStore = await import('../usage-store');
 import type { ClaudeAccount } from '../../shared/types';
 import type { FetchLike } from '../usage-credentials';
@@ -41,12 +43,17 @@ function writeCreds(acc: ClaudeAccount, expiresAt: number): void {
 }
 
 interface Reply { status: number; body?: unknown; retryAfter?: string }
-type Call = { url: string; auth?: string; body?: unknown };
+type Call = { url: string; auth?: string; beta?: string; body?: unknown };
 
 function fakeFetch(route: (url: string, call: Call) => Reply): { calls: Call[]; fetch: FetchLike } {
   const calls: Call[] = [];
   const fetch: FetchLike = async (url, init) => {
-    const call: Call = { url, auth: init.headers.Authorization, body: init.body ? JSON.parse(init.body) : undefined };
+    const call: Call = {
+      url,
+      auth: init.headers.Authorization,
+      beta: init.headers['anthropic-beta'],
+      body: init.body ? JSON.parse(init.body) : undefined,
+    };
     calls.push(call);
     const reply = route(url, call);
     return {
@@ -69,6 +76,7 @@ function poller(accounts: ClaudeAccount[], fetch: FetchLike, bound: string[] = [
     listAccounts: () => accounts,
     boundAccountIds: () => new Set(bound),
     fetch,
+    credentials: fileCredentialStore,
     now: () => clock,
   });
 }
@@ -93,9 +101,9 @@ describe('polling', () => {
     const { calls, fetch } = fakeFetch(() => ({ status: 200, body: USAGE_BODY }));
     await poller([work, home], fetch).pollAll();
 
-    expect(calls.map(c => [c.url, c.auth])).toEqual([
-      [USAGE_URL, 'Bearer work-access'],
-      [USAGE_URL, 'Bearer home-access'],
+    expect(calls.map(c => [c.url, c.auth, c.beta])).toEqual([
+      [USAGE_URL, 'Bearer work-access', 'oauth-2025-04-20'],
+      [USAGE_URL, 'Bearer home-access', 'oauth-2025-04-20'],
     ]);
     expect(usageStore.getUsage('home')).toMatchObject({
       fiveHour: { pct: 42, resetsAt: Date.parse('2026-09-30T14:00:00Z') },
@@ -212,13 +220,88 @@ describe('expired tokens', () => {
     expect(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).toBe(before);
   });
 
-  test('a 401 from the usage endpoint reads as re-auth needed', async () => {
+  test('a 401 on a clock-valid token is refreshed once, then asked again', async () => {
     const work = account('work');
     writeCreds(work, NOW + 3_600_000);
-    const { fetch } = fakeFetch(() => ({ status: 401 }));
+    const { calls, fetch } = fakeFetch((url, call) => {
+      if (url === OAUTH_TOKEN_URL) return { status: 200, body: { access_token: 'fresh-access', expires_in: 28_800 } };
+      return call.auth === 'Bearer fresh-access' ? { status: 200, body: USAGE_BODY } : { status: 401 };
+    });
+    await poller([work], fetch).pollAll();
+    expect(calls.map(c => c.url)).toEqual([USAGE_URL, OAUTH_TOKEN_URL, USAGE_URL]);
+    expect(usageStore.getUsage('work')).toMatchObject({ unavailable: null, fiveHour: { pct: 42 } });
+  });
+
+  test('a 401 on a token with no expiry is refreshed too', async () => {
+    const work = account('work');
+    fs.writeFileSync(path.join(work.configDir, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: { accessToken: 'work-access', refreshToken: 'work-refresh', scopes: ['user:inference'] },
+    }));
+    const { calls, fetch } = fakeFetch((url) => (url === OAUTH_TOKEN_URL
+      ? { status: 200, body: { access_token: 'fresh-access', expires_in: 28_800 } }
+      : { status: 401 }));
+    await poller([work], fetch).pollAll();
+    expect(calls.map(c => c.url)).toEqual([USAGE_URL, OAUTH_TOKEN_URL, USAGE_URL]);
+    expect(usageStore.getUsage('work')?.unavailable).toBe('reauth');
+  });
+
+  test('a 401 whose refresh fails reads as re-auth needed', async () => {
+    const work = account('work');
+    writeCreds(work, NOW + 3_600_000);
+    const { fetch } = fakeFetch((url) => (url === OAUTH_TOKEN_URL ? { status: 400 } : { status: 401 }));
     await poller([work], fetch).pollAll();
     expect(usageStore.getUsage('work')?.unavailable).toBe('reauth');
   });
+
+  test('a 401 on an account a CLI owns is not refreshed', async () => {
+    const work = account('work');
+    writeCreds(work, NOW + 3_600_000);
+    const { calls, fetch } = fakeFetch(() => ({ status: 401 }));
+    await poller([work], fetch, ['work']).pollAll();
+    expect(calls.map(c => c.url)).toEqual([USAGE_URL]);
+    expect(usageStore.getUsage('work')?.unavailable).toBe('reauth');
+  });
+
+  test('a launch waiting on the account sees the refresh finish first', async () => {
+    const work = account('work');
+    writeCreds(work, NOW - 1000);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const { fetch } = fakeFetch((url) => (url === OAUTH_TOKEN_URL
+      ? { status: 200, body: { access_token: 'fresh-access', expires_in: 28_800 } }
+      : { status: 200, body: USAGE_BODY }));
+    let started: () => void = () => undefined;
+    const refreshing = new Promise<void>(resolve => { started = resolve; });
+    const slowFetch: FetchLike = async (url, init) => {
+      if (url === OAUTH_TOKEN_URL) {
+        started();
+        await gate;
+      }
+      return fetch(url, init);
+    };
+    const round = poller([work], slowFetch).pollAll();
+    await refreshing;
+    let settled = false;
+    const waiting = tokenRefreshSettled(work.configDir).then(() => { settled = true; });
+    await Bun.sleep(5);
+    expect(settled).toBe(false);
+    release();
+    await waiting;
+    const saved = JSON.parse(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).claudeAiOauth;
+    expect(saved.accessToken).toBe('fresh-access');
+    await round;
+  });
+});
+
+test('no tokens reads as unavailable with the store’s own reason', async () => {
+  const work = account('work');
+  const { calls, fetch } = fakeFetch(() => ({ status: 200, body: USAGE_BODY }));
+  const keychain = { ...fileCredentialStore, missing: 'no-keychain-credentials' as const };
+  await new UsagePoller({
+    listAccounts: () => [work], boundAccountIds: () => new Set(), fetch, credentials: keychain, now: () => clock,
+  }).pollAll();
+  expect(calls).toHaveLength(0);
+  expect(usageStore.getUsage('work')?.unavailable).toBe('no-keychain-credentials');
 });
 
 describe('the statusline sink', () => {
@@ -288,7 +371,9 @@ test('a deleted account loses its record', async () => {
   writeCreds(work, NOW + 3_600_000);
   const accounts = [work];
   const { fetch } = fakeFetch(() => ({ status: 200, body: USAGE_BODY }));
-  const p = new UsagePoller({ listAccounts: () => accounts, boundAccountIds: () => new Set(), fetch, now: () => clock });
+  const p = new UsagePoller({
+    listAccounts: () => accounts, boundAccountIds: () => new Set(), fetch, credentials: fileCredentialStore, now: () => clock,
+  });
   await p.pollAll();
   accounts.length = 0;
   await p.pollAll();

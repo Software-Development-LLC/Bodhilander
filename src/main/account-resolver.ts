@@ -2,7 +2,7 @@ import { ClaudeAccount } from '../shared/types';
 import { getDatabase } from './database';
 import { mapAccountRow } from './repositories/account-row';
 import { getAccountsInFallbackOrder, isAccountHealthy } from './repositories/accounts';
-import { getUsageThreshold, isUsagePressured } from './usage-store';
+import { getUsageThreshold, hasFreshRoom, isUsagePressured } from './usage-store';
 
 /**
  * Resolve which Claude account a given session should launch under (BDHLNDR-31).
@@ -83,8 +83,8 @@ export function resolveAccountForGroup(groupId: string | null, now: Date = new D
     // same 429. When the chosen account is limited, prefer the next healthy one
     // in fallback order; if none is healthy there is nothing better to do, so
     // keep the original rather than return nothing.
-    // Near-limit accounts are a last resort: a healthy one below the usage
-    // warning threshold is preferred, then the chosen one if it is healthy.
+    // Near-limit accounts are a last resort: a healthy one with a fresh reading
+    // below the threshold is preferred, then the chosen one if it is healthy.
     // A group's own choice is kept under usage pressure, as for sessions.
     const steerByUsage = chosen.id !== groupAccountId(groupId);
     const threshold = getUsageThreshold();
@@ -93,7 +93,7 @@ export function resolveAccountForGroup(groupId: string | null, now: Date = new D
     const others = getAccountsInFallbackOrder().filter(
       (a) => a.id !== chosen.id && isAccountHealthy(a, now),
     );
-    const relieved = steerByUsage ? others.find((a) => !isUsagePressured(a.id, now, threshold)) : undefined;
+    const relieved = steerByUsage ? others.find((a) => hasFreshRoom(a.id, now, threshold)) : undefined;
     if (relieved) return relieved;
     if (chosenHealthy) return chosen;
     return others[0] ?? chosen;

@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 
-import { getClaudeSettingsPath, readClaudeSettings, writeClaudeSettings } from './claude-settings';
+import { ClaudeSettingsConfig, getClaudeSettingsPath, writeClaudeSettings } from './claude-settings';
 import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
 /**
@@ -29,22 +29,38 @@ function chainFilePath(configDir: string): string {
 }
 
 /**
- * Whether `node` is on PATH. The sink runs as `node "<script>"`, so without it
- * the sink is not installed and a user's own statusLine is left in place.
+ * How the sink runs: this app's own binary in Node mode, so it needs no `node`
+ * on the PATH a statusLine command inherits.
  */
-export function nodeOnPath(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform,
-  exists: (p: string) => boolean = fs.existsSync,
-): boolean {
-  const pathApi = platform === 'win32' ? path.win32 : path.posix;
-  const names = platform === 'win32' ? ['node.exe', 'node.cmd'] : ['node'];
-  const entries = (env.PATH ?? env.Path ?? '').split(pathApi.delimiter).filter(Boolean);
-  return entries.some(dir => names.some(name => exists(pathApi.join(dir, name))));
+export interface SinkLaunch {
+  scriptPath: string;
+  execPath: string;
+  platform: NodeJS.Platform;
 }
 
-export function sinkCommand(scriptPath: string, configDir: string): string {
-  return `node "${scriptPath}" "${configDir}"`;
+function shellQuote(value: string): string {
+  const escaped = value.replaceAll("'", String.raw`'\''`);
+  return `'${escaped}'`;
+}
+
+/**
+ * The statusLine command. The CLI runs it under sh, or Git Bash on Windows, so
+ * one POSIX form serves every OS; it does nothing once the script is gone.
+ */
+export function sinkCommand(launch: SinkLaunch, configDir: string): string {
+  const shellPath = (p: string) => shellQuote(launch.platform === 'win32' ? p.replaceAll('\\', '/') : p);
+  const script = shellPath(launch.scriptPath);
+  const run = ['ELECTRON_RUN_AS_NODE=1', shellPath(launch.execPath), script, shellPath(configDir)].join(' ');
+  return `if [ -f ${script} ]; then ${run}; fi`;
+}
+
+/** The launch for this app, or null when the build carries no sink script. */
+export function sinkLaunchFor(
+  scriptPath: string | null,
+  execPath: string = process.execPath,
+  platform: NodeJS.Platform = process.platform,
+): SinkLaunch | null {
+  return scriptPath ? { scriptPath, execPath, platform } : null;
 }
 
 function isOurs(entry: StatusLineEntry | undefined): boolean {
@@ -68,23 +84,26 @@ function saveChain(configDir: string, chain: StatusLineEntry | null): boolean {
   }
 }
 
-/** An existing settings.json that is not a JSON object must not be rewritten. */
-function settingsUnreadable(configDir: string): boolean {
+/**
+ * The settings object, `{}` when there is no file, or null when the file is
+ * not a JSON object, which must never be rewritten.
+ */
+function loadSettings(configDir: string): ClaudeSettingsConfig | null {
   const file = getClaudeSettingsPath(configDir);
-  if (!fs.existsSync(file)) return false;
+  if (!fs.existsSync(file)) return {};
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    return typeof parsed !== 'object' || parsed === null || Array.isArray(parsed);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : null;
   } catch {
-    return true;
+    return null;
   }
 }
 
-export function installStatuslineSink(configDir: string, scriptPath: string): SinkInstallAction {
-  if (settingsUnreadable(configDir)) return 'error';
-  const settings = readClaudeSettings(configDir);
+export function installStatuslineSink(configDir: string, launch: SinkLaunch): SinkInstallAction {
+  const settings = loadSettings(configDir);
+  if (!settings) return 'error';
   const current = settings.statusLine as StatusLineEntry | undefined;
-  const command = sinkCommand(scriptPath, configDir);
+  const command = sinkCommand(launch, configDir);
 
   if (isOurs(current) && current?.command === command) return 'unchanged';
 
@@ -119,8 +138,8 @@ function readSavedChain(configDir: string): { chain: StatusLineEntry | null } | 
  * saved entry cannot be read, since removing ours then would lose the user's.
  */
 export function uninstallStatuslineSink(configDir: string): SinkUninstallAction {
-  if (settingsUnreadable(configDir)) return 'error';
-  const settings = readClaudeSettings(configDir);
+  const settings = loadSettings(configDir);
+  if (!settings) return 'error';
   if (!isOurs(settings.statusLine as StatusLineEntry | undefined)) return 'unchanged';
 
   const saved = readSavedChain(configDir);
@@ -133,11 +152,13 @@ export function uninstallStatuslineSink(configDir: string): SinkUninstallAction 
   return userEntry ? 'restored' : 'removed';
 }
 
-/** Install the sink when it is wanted and runnable, otherwise take it out. */
-export function reconcileStatuslineSink(
-  configDir: string,
-  scriptPath: string | null,
-  enabled: boolean,
-): SinkInstallAction | SinkUninstallAction {
-  return enabled && scriptPath ? installStatuslineSink(configDir, scriptPath) : uninstallStatuslineSink(configDir);
+/**
+ * Keeps one config dir's sink matching the preference: installed while wanted
+ * and runnable, taken out otherwise.
+ */
+export function sinkReconciler(
+  launch: SinkLaunch | null,
+  isEnabled: () => boolean,
+): (configDir: string) => SinkInstallAction | SinkUninstallAction {
+  return configDir => (launch && isEnabled() ? installStatuslineSink(configDir, launch) : uninstallStatuslineSink(configDir));
 }

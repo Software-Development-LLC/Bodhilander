@@ -56,10 +56,20 @@ describe('parseOAuthUsage', () => {
     expect(obs?.sevenDay).toEqual({ pct: 5, resetsAt: null });
   });
 
+  test('a window with no utilization, or none at all, is skipped, not the whole body', () => {
+    const nullPct = parseOAuthUsage({
+      five_hour: { utilization: null, resets_at: null },
+      seven_day: { utilization: 30, resets_at: null },
+    }, NOW);
+    expect(nullPct).toMatchObject({ fiveHour: null, sevenDay: { pct: 30 } });
+    const missing = parseOAuthUsage({ five_hour: { utilization: 1, resets_at: null } }, NOW);
+    expect(missing).toMatchObject({ fiveHour: { pct: 1 }, sevenDay: null });
+  });
+
   test.each([
     ['not an object', 'nope'],
     ['an array', []],
-    ['missing seven_day', { five_hour: { utilization: 1, resets_at: null } }],
+    ['no windows at all', { extra_usage: { is_enabled: false } }],
     ['both windows null', { five_hour: null, seven_day: null }],
     ['utilization as a string', { five_hour: { utilization: '40', resets_at: null }, seven_day: null }],
     ['negative utilization', { five_hour: { utilization: -1, resets_at: null }, seven_day: null }],
