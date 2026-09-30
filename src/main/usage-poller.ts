@@ -64,6 +64,27 @@ export function ownedAccountIds(live: LiveAccountBindings, runAccountIds: (strin
   return ids;
 }
 
+export interface RunOwnershipDeps {
+  candidate: (groupId: string | null) => string | null;
+  resolved: (groupId: string | null) => string | null;
+  launchedDirs: (activeRunIds: string[]) => string[];
+  accountIdForDir: (configDir: string) => string | null;
+}
+
+/**
+ * The accounts active runs may have gates running on: the group's own account
+ * (a gate launched before a restart), its current resolution, and every dir a
+ * gate was actually launched under. Over-counting only delays a refresh.
+ */
+export function runAccountIdsForOwnership(
+  runs: { id: string; groupId: string | null }[],
+  deps: RunOwnershipDeps,
+): (string | null)[] {
+  const ids = runs.flatMap(run => [deps.candidate(run.groupId), deps.resolved(run.groupId)]);
+  for (const dir of deps.launchedDirs(runs.map(run => run.id))) ids.push(deps.accountIdForDir(dir));
+  return ids;
+}
+
 export interface UsageCrossingEvent {
   account: ClaudeAccount;
   crossing: ThresholdCrossing;
@@ -227,6 +248,11 @@ export class UsagePoller extends EventEmitter {
   ): Promise<string | null> {
     try {
       const rotated = await refreshOAuthToken(creds, this.deps.fetch, this.now);
+      // The old refresh token is spent once this returns, so the rotation is
+      // saved even if a CLI bound to the account during the request.
+      if (this.deps.boundAccountIds().has(account.id)) {
+        log.warn(`[Usage] ${account.label} was bound during a token refresh; saving the rotation anyway`);
+      }
       if (!writeRotatedTokens(account.configDir, rotated)) {
         log.warn(`[Usage] Refreshed ${account.label}'s token but could not save it`);
         this.markUnavailable(account.id, 'reauth');

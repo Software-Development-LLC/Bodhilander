@@ -58,6 +58,7 @@ import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
 import { fetchProjectBoard } from '../github/board-service';
 import { resolveAccountForGroup } from '../account-resolver';
+import { recordGateConfigDir } from '../gate-accounts';
 import { launchGate, type GateLaunch } from './gate-launcher';
 import type { GateOutcome } from './gate-process';
 import { runGateResilient } from './gate-resilience';
@@ -302,7 +303,9 @@ const spawnDeps: SpawnDeps = {
 
 /** The managed account a run's gates launch under (#327), or null for ambient. */
 function accountConfigDirFor(run: RunRow): string | null {
-  return resolveAccountForGroup(run.groupId)?.configDir ?? null;
+  const configDir = resolveAccountForGroup(run.groupId)?.configDir ?? null;
+  recordGateConfigDir(run.id, configDir);
+  return configDir;
 }
 
 /**

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccountRemovalCost, AccountUsage, AccountUsageMap, ClaudeAccount, LiveAccountBindings } from '../../shared/types';
-import { DEFAULT_USAGE_WARN_THRESHOLD, parseUsageThreshold, usageLevel } from '../../shared/usage';
+import { DEFAULT_USAGE_WARN_THRESHOLD, parseUsageThreshold, USAGE_THRESHOLD_PREF, usageLevel } from '../../shared/usage';
 import Terminal from './Terminal';
 import { AccountChip } from './AccountChip';
 import { UsageMeters } from './UsageMeters';
@@ -81,8 +81,9 @@ export const ClaudeAccountsPanel: React.FC = () => {
   // and the clock ticks so countdowns and "as of" stay honest while it is open.
   useEffect(() => {
     let cancelled = false;
-    window.electronAPI.getAccountUsage().then(map => { if (!cancelled) setUsage(map); }).catch(() => {});
-    window.electronAPI.refreshAccountUsage().then(map => { if (!cancelled) setUsage(map); }).catch(() => {});
+    const show = (map: AccountUsageMap) => { if (!cancelled) setUsage(map); };
+    window.electronAPI.getAccountUsage().then(show).catch(() => {})
+      .then(() => window.electronAPI.refreshAccountUsage()).then(map => { if (map) show(map); }).catch(() => {});
     const off = window.electronAPI.onAccountUsageUpdated(setUsage);
     const tick = setInterval(() => setNow(Date.now()), 30_000);
     return () => {
@@ -429,8 +430,6 @@ export const AccountRow: React.FC<AccountRowProps> = ({
 /** Preference keys, matching account-failover.ts. Absent means enabled. */
 const FAILOVER_PREF = 'accountFailoverEnabled';
 const FAILBACK_PREF = 'accountFailbackEnabled';
-/** Matches usage-store.ts. Absent means the default threshold. */
-const USAGE_THRESHOLD_PREF = 'usageWarnThreshold';
 
 interface FailoverSettingsProps {
   threshold: number;

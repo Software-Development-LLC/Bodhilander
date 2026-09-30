@@ -14,7 +14,7 @@ mock.module('../repositories/preferences', () => ({
   deletePreference: (key: string) => { prefs.delete(key); },
 }));
 
-const { ownedAccountIds, UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
+const { ownedAccountIds, runAccountIdsForOwnership, UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
 const { OAUTH_TOKEN_URL } = await import('../usage-credentials');
 const usageStore = await import('../usage-store');
 import type { ClaudeAccount } from '../../shared/types';
@@ -288,4 +288,53 @@ test('a token is owned by a live pty or an active run, never by a legacy login',
     s2: { accountId: null, configDir: '/legacy', spawnedAt: 0 },
   }, ['gates', null]);
   expect([...owned].sort()).toEqual(['gates', 'work']);
+});
+
+describe('runAccountIdsForOwnership', () => {
+  const dirs: Record<string, string> = { '/cfg/a': 'a', '/cfg/b': 'b', '/cfg/c': 'c' };
+
+  test('a gate launched on A still owns A after routing moves the run to B', () => {
+    const ids = runAccountIdsForOwnership([{ id: 'r1', groupId: 'g' }], {
+      candidate: () => 'b',
+      resolved: () => 'c',
+      launchedDirs: () => ['/cfg/a'],
+      accountIdForDir: dir => dirs[dir] ?? null,
+    });
+    expect([...ownedAccountIds({}, ids)].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  test('without a launch record the group account is still owned', () => {
+    const ids = runAccountIdsForOwnership([{ id: 'r1', groupId: 'g' }], {
+      candidate: () => 'a',
+      resolved: () => 'b',
+      launchedDirs: () => [],
+      accountIdForDir: () => null,
+    });
+    expect(ids).toContain('a');
+  });
+
+  test('launch records are asked for by active run id', () => {
+    const asked: string[][] = [];
+    runAccountIdsForOwnership([{ id: 'r1', groupId: null }, { id: 'r2', groupId: 'g' }], {
+      candidate: () => null,
+      resolved: () => null,
+      launchedDirs: ids => { asked.push(ids); return []; },
+      accountIdForDir: () => null,
+    });
+    expect(asked).toEqual([['r1', 'r2']]);
+  });
+});
+
+test('a token expired under a gate still running on it is not refreshed', async () => {
+  const gateAccount = account('a');
+  writeCreds(gateAccount, NOW - 1000);
+  const owned = ownedAccountIds({}, runAccountIdsForOwnership([{ id: 'r1', groupId: 'g' }], {
+    candidate: () => 'a',
+    resolved: () => 'b',
+    launchedDirs: () => [gateAccount.configDir],
+    accountIdForDir: dir => (dir === gateAccount.configDir ? 'a' : null),
+  }));
+  const { calls, fetch } = fakeFetch(() => ({ status: 200, body: {} }));
+  await poller([gateAccount], fetch, [...owned]).pollAll();
+  expect(calls).toHaveLength(0);
 });

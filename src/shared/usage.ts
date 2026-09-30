@@ -5,6 +5,8 @@ import { AccountUsage, UsageWindow } from './types';
  * (meters), so both sides judge "near the limit" and "stale" the same way.
  */
 
+/** Preference key for the warning threshold; absent means the default. */
+export const USAGE_THRESHOLD_PREF = 'usageWarnThreshold';
 export const DEFAULT_USAGE_WARN_THRESHOLD = 85;
 
 /** Older than this, a reading is marked stale and no longer steers routing. */

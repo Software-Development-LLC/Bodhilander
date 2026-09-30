@@ -27,6 +27,21 @@ function chainFilePath(configDir: string): string {
   return path.join(configDir, STATUSLINE_CHAIN_FILE);
 }
 
+/**
+ * Whether `node` is on PATH. The sink runs as `node "<script>"`, so without it
+ * the sink is not installed and a user's own statusLine is left in place.
+ */
+export function nodeOnPath(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  exists: (p: string) => boolean = fs.existsSync,
+): boolean {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const names = platform === 'win32' ? ['node.exe', 'node.cmd'] : ['node'];
+  const entries = (env.PATH ?? env.Path ?? '').split(pathApi.delimiter).filter(Boolean);
+  return entries.some(dir => names.some(name => exists(pathApi.join(dir, name))));
+}
+
 export function sinkCommand(scriptPath: string, configDir: string): string {
   return `node "${scriptPath}" "${configDir}"`;
 }

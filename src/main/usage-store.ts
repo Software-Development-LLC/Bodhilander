@@ -1,5 +1,5 @@
 import { AccountUsage, AccountUsageMap } from '../shared/types';
-import { isOverThreshold, parseUsageThreshold } from '../shared/usage';
+import { isOverThreshold, parseUsageThreshold, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { getPreference } from './repositories/preferences';
 
 /**
@@ -8,7 +8,6 @@ import { getPreference } from './repositories/preferences';
  * exactly as it did before usage was measured.
  */
 
-export const USAGE_THRESHOLD_PREF = 'usageWarnThreshold';
 
 const records = new Map<string, AccountUsage>();
 

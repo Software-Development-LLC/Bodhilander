@@ -45,9 +45,10 @@ import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/ty
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
-import { resolveAccountForGroup } from './account-resolver';
-import { installStatuslineSink } from './statusline-sink';
-import { ownedAccountIds, UsageCrossingEvent, UsagePoller } from './usage-poller';
+import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
+import { activeGateConfigDirs } from './gate-accounts';
+import { installStatuslineSink, nodeOnPath } from './statusline-sink';
+import { ownedAccountIds, runAccountIdsForOwnership, UsageCrossingEvent, UsagePoller } from './usage-poller';
 import { describeCrossing } from './usage-meter';
 import * as usageStore from './usage-store';
 import log from 'electron-log';
@@ -452,7 +453,12 @@ function registerFailoverWiring(): void {
 function tokenOwnedAccountIds(): Set<string> {
   let runAccountIds: (string | null)[] = [];
   try {
-    runAccountIds = runsRepo.listActiveRuns().map(run => resolveAccountForGroup(run.groupId)?.id ?? null);
+    runAccountIds = runAccountIdsForOwnership(runsRepo.listActiveRuns(), {
+      candidate: groupId => candidateAccountForGroup(groupId)?.id ?? null,
+      resolved: groupId => resolveAccountForGroup(groupId)?.id ?? null,
+      launchedDirs: activeGateConfigDirs,
+      accountIdForDir: dir => accountsRepo.getAccountByConfigDir(dir)?.id ?? null,
+    });
   } catch (err) {
     log.warn('[Usage] Could not list active runs for token ownership:', err);
   }
@@ -462,8 +468,12 @@ function tokenOwnedAccountIds(): Set<string> {
 let usagePoller: UsagePoller | null = null;
 function startUsagePolling(): void {
   if (usagePoller) return;
-  const scriptPath = getStatuslineScriptPath();
+  let scriptPath = getStatuslineScriptPath();
   if (!scriptPath) log.warn('[Usage] Statusline sink script not found; meters rely on polling alone');
+  if (scriptPath && !nodeOnPath(process.env)) {
+    log.warn('[Usage] node is not on PATH; statusline sink not installed, meters rely on polling alone');
+    scriptPath = null;
+  }
 
   const poller = new UsagePoller({
     listAccounts: () => accountsRepo.getAllAccounts(),

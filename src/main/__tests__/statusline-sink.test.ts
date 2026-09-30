@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { installStatuslineSink, sinkCommand } from '../statusline-sink';
+import { installStatuslineSink, nodeOnPath, sinkCommand } from '../statusline-sink';
 import { findGitBash, readChainedCommand, recordRateLimits, runStatusline } from '../../hooks/bodhilander-statusline';
 
 const SCRIPT = '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js';
@@ -123,5 +123,21 @@ describe('findGitBash', () => {
 
   test('nothing on disk is null, so the default shell is used', () => {
     expect(findGitBash({ PATH: '' }, () => false)).toBeNull();
+  });
+});
+
+describe('nodeOnPath', () => {
+  test('finds node.exe on a Windows PATH', () => {
+    const env = { Path: String.raw`C:\Windows;C:\Program Files\nodejs` };
+    expect(nodeOnPath(env, 'win32', p => p === String.raw`C:\Program Files\nodejs\node.exe`)).toBe(true);
+  });
+
+  test('finds node on a POSIX PATH', () => {
+    expect(nodeOnPath({ PATH: '/usr/bin:/opt/homebrew/bin' }, 'darwin', p => p === '/opt/homebrew/bin/node')).toBe(true);
+  });
+
+  test('no node anywhere is false', () => {
+    expect(nodeOnPath({ PATH: '/usr/bin' }, 'linux', () => false)).toBe(false);
+    expect(nodeOnPath({}, 'linux', () => true)).toBe(false);
   });
 });

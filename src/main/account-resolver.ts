@@ -37,6 +37,28 @@ export function resolveAccountForSession(sessionId: string): ClaudeAccount | nul
   return fallback ? mapAccountRow(fallback) : null;
 }
 
+/** The group's own account, else the default, before any limit or usage steering. */
+export function candidateAccountForGroup(groupId: string | null): ClaudeAccount | null {
+  const db = getDatabase();
+  let candidate: ClaudeAccount | null = null;
+  if (groupId) {
+    const row = db.prepare(`
+      SELECT a.*
+      FROM groups g
+      LEFT JOIN claude_accounts a ON a.id = g.claude_account_id
+      WHERE g.id = ?
+    `).get(groupId) as any;
+    if (row?.id) candidate = mapAccountRow(row);
+  }
+  if (!candidate) {
+    const fallback = db.prepare(
+      'SELECT * FROM claude_accounts WHERE is_default = 1 LIMIT 1'
+    ).get() as any;
+    candidate = fallback ? mapAccountRow(fallback) : null;
+  }
+  return candidate;
+}
+
 /**
  * Resolve the Claude account a run's gates launch under (CO-722 / #327).
  * Fallback chain: the run's group → the default account → null (ambient
@@ -46,26 +68,8 @@ export function resolveAccountForSession(sessionId: string): ClaudeAccount | nul
  */
 export function resolveAccountForGroup(groupId: string | null, now: Date = new Date()): ClaudeAccount | null {
   try {
-    const db = getDatabase();
-
-    let candidate: ClaudeAccount | null = null;
-    if (groupId) {
-      const row = db.prepare(`
-        SELECT a.*
-        FROM groups g
-        LEFT JOIN claude_accounts a ON a.id = g.claude_account_id
-        WHERE g.id = ?
-      `).get(groupId) as any;
-      if (row?.id) candidate = mapAccountRow(row);
-    }
-    if (!candidate) {
-      const fallback = db.prepare(
-        'SELECT * FROM claude_accounts WHERE is_default = 1 LIMIT 1'
-      ).get() as any;
-      candidate = fallback ? mapAccountRow(fallback) : null;
-    }
-    if (!candidate) return null;
-    const chosen = candidate;
+    const chosen = candidateAccountForGroup(groupId);
+    if (!chosen) return null;
 
     // Step aside from a rate-limited account. A gate launches under a fixed
     // CLAUDE_CONFIG_DIR, so pointing it at an account known to be spent (its
