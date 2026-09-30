@@ -37,6 +37,12 @@ export function resolveAccountForSession(sessionId: string): ClaudeAccount | nul
   return fallback ? mapAccountRow(fallback) : null;
 }
 
+function groupAccountId(groupId: string | null): string | null {
+  if (!groupId) return null;
+  const row = getDatabase().prepare('SELECT claude_account_id FROM groups WHERE id = ?').get(groupId) as any;
+  return row?.claude_account_id ?? null;
+}
+
 /** The group's own account, else the default, before any limit or usage steering. */
 export function candidateAccountForGroup(groupId: string | null): ClaudeAccount | null {
   const db = getDatabase();
@@ -79,12 +85,14 @@ export function resolveAccountForGroup(groupId: string | null, now: Date = new D
     // keep the original rather than return nothing.
     // Near-limit accounts are a last resort: a healthy one below the usage
     // warning threshold is preferred, then the chosen one if it is healthy.
+    // A group's own choice is kept under usage pressure, as for sessions.
+    const steerByUsage = chosen.id !== groupAccountId(groupId);
     const chosenHealthy = isAccountHealthy(chosen, now);
-    if (chosenHealthy && !isUsagePressured(chosen.id, now)) return chosen;
+    if (chosenHealthy && !(steerByUsage && isUsagePressured(chosen.id, now))) return chosen;
     const others = getAccountsInFallbackOrder().filter(
       (a) => a.id !== chosen.id && isAccountHealthy(a, now),
     );
-    const relieved = others.find((a) => !isUsagePressured(a.id, now));
+    const relieved = steerByUsage ? others.find((a) => !isUsagePressured(a.id, now)) : undefined;
     if (relieved) return relieved;
     if (chosenHealthy) return chosen;
     return others[0] ?? chosen;

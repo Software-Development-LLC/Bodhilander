@@ -151,3 +151,25 @@ describe('resolveAccountForGroup near the usage limit', () => {
     expect(resolveAccountForGroup(null)?.id).toBe('work');
   });
 });
+
+describe('resolveAccountForGroup and a group that chose its account', () => {
+  function groupOn(id: string, accountId: string) {
+    db.prepare('INSERT INTO groups (id, claude_account_id) VALUES (?, ?)').run(id, accountId);
+  }
+
+  test('keeps the group’s account under usage pressure', () => {
+    seedAccount('work');
+    seedAccount('spare', 1);
+    groupOn('g', 'work');
+    usageAt('work', 95);
+    expect(resolveAccountForGroup('g')?.id).toBe('work');
+  });
+
+  test('still steps aside when that account is rate-limited', () => {
+    seedAccount('work');
+    seedAccount('spare', 1);
+    groupOn('g', 'work');
+    db.prepare('UPDATE claude_accounts SET limited_until = ? WHERE id = ?').run(new Date(Date.now() + 3_600_000).toISOString(), 'work');
+    expect(resolveAccountForGroup('g')?.id).toBe('spare');
+  });
+});
