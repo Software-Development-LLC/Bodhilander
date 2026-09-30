@@ -240,7 +240,8 @@ export class UsagePoller extends EventEmitter {
       return token ? this.requestUsage(token) : null;
     }
     const response = await this.requestUsage(creds.accessToken);
-    if (!isAuthRejection(response.status) || owned || !creds.refreshToken) return response;
+    if (!isAuthRejection(response.status) || !creds.refreshToken) return response;
+    if (this.deps.boundAccountIds().has(account.id)) return response;
     const token = await this.refreshToken(account, creds);
     return token ? this.requestUsage(token) : null;
   }

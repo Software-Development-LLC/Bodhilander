@@ -15,6 +15,10 @@ export function trackTokenRefresh<T>(configDir: string, work: Promise<T>): Promi
   return work;
 }
 
+export function isTokenRefreshing(configDir: string | null | undefined): boolean {
+  return configDir ? pending.has(configDir) : false;
+}
+
 /** Resolves once no refresh is running for this config dir. Never rejects. */
 export async function tokenRefreshSettled(configDir: string | null | undefined): Promise<void> {
   const work = configDir ? pending.get(configDir) : undefined;

@@ -262,6 +262,20 @@ describe('expired tokens', () => {
     expect(usageStore.getUsage('work')?.unavailable).toBe('reauth');
   });
 
+  test('an account a CLI binds to during the usage request is not refreshed on its 401', async () => {
+    const work = account('work');
+    writeCreds(work, NOW + 3_600_000);
+    const bound = new Set<string>();
+    const { calls, fetch } = fakeFetch(() => {
+      bound.add('work');
+      return { status: 401 };
+    });
+    await new UsagePoller({
+      listAccounts: () => [work], boundAccountIds: () => bound, fetch, credentials: fileCredentialStore, now: () => clock,
+    }).pollAll();
+    expect(calls.map(c => c.url)).toEqual([USAGE_URL]);
+  });
+
   test('a launch waiting on the account sees the refresh finish first', async () => {
     const work = account('work');
     writeCreds(work, NOW - 1000);

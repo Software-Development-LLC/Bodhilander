@@ -1,7 +1,7 @@
 import log from 'electron-log';
 import { routeNewSession } from './account-failover';
 import { resolveAccountForSession } from './account-resolver';
-import { tokenRefreshSettled } from './token-refresh';
+import { isTokenRefreshing, tokenRefreshSettled } from './token-refresh';
 
 type RoutedListener = (sessionId: string) => void;
 
@@ -27,13 +27,20 @@ export function routeNewSessionByUsage(sessionId: string): void {
   }
 }
 
+function sessionConfigDir(sessionId: string): string | undefined {
+  try {
+    return resolveAccountForSession(sessionId)?.configDir;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a token refresh is running for the account a session will launch under. */
+export function sessionTokenRefreshPending(sessionId: string): boolean {
+  return isTokenRefreshing(sessionConfigDir(sessionId));
+}
+
 /** Resolves once no token refresh is running for the account a session will launch under. */
 export async function sessionTokenRefreshSettled(sessionId: string): Promise<void> {
-  let configDir: string | undefined;
-  try {
-    configDir = resolveAccountForSession(sessionId)?.configDir;
-  } catch {
-    return;
-  }
-  await tokenRefreshSettled(configDir);
+  await tokenRefreshSettled(sessionConfigDir(sessionId));
 }

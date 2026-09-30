@@ -22,7 +22,7 @@ import { withSpawnRetry, isTransientSpawnError } from '../../spawn-retry';
 import { getApiServer } from '../index';
 import { soundManager } from '../../sound-manager';
 import { resolveLaunchProviderId } from '../../providers';
-import { routeNewSessionByUsage } from '../../session-routing';
+import { routeNewSessionByUsage, sessionTokenRefreshPending, sessionTokenRefreshSettled } from '../../session-routing';
 
 /** Emits 'created' (Session) / 'groupsChanged' when sessions or groups are
  *  created remotely, so the main process can refresh the desktop renderer. */
@@ -132,14 +132,24 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
   // session arriving permanently terminal-less.
   const spawn = (): void =>
     ptyManager.createSession(id, cwd, opts.launchClaude, resolveLaunchProviderId(session.provider, opts.provider));
-  try {
-    spawn();
-  } catch (err) {
-    if (!isTransientSpawnError(err)) throw err;
-    log.warn('[Relay] transient pty spawn failure; retrying in background', { id });
-    void withSpawnRetry(spawn, { retries: 3, delayMs: 400 }).catch((finalErr) => {
-      log.error('[Relay] pty spawn failed after retries', { id, error: finalErr });
+  const launch = (): void => {
+    try {
+      spawn();
+    } catch (err) {
+      if (!isTransientSpawnError(err)) throw err;
+      log.warn('[Relay] transient pty spawn failure; retrying in background', { id });
+      void withSpawnRetry(spawn, { retries: 3, delayMs: 400 }).catch((finalErr) => {
+        log.error('[Relay] pty spawn failed after retries', { id, error: finalErr });
+      });
+    }
+  };
+  // A CLI started mid-refresh would spend the refresh token the refresh just rotated.
+  if (sessionTokenRefreshPending(id)) {
+    void sessionTokenRefreshSettled(id).then(launch).catch((err) => {
+      log.error('[Relay] pty spawn after a token refresh failed', { id, error: err });
     });
+  } else {
+    launch();
   }
   try {
     soundManager.playStartSound();

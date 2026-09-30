@@ -32,11 +32,13 @@ mock.module('../../../repositories/preferences', () => ({
 }));
 const routedIds: string[] = [];
 let onRoute: (id: string) => void = () => {};
+let refreshSettled: (id: string) => Promise<void> = async () => {};
 mock.module('../../../session-routing', () => ({
   routeNewSessionByUsage: (id: string) => {
     routedIds.push(id);
     onRoute(id);
   },
+  sessionTokenRefreshSettled: (id: string) => refreshSettled(id),
 }));
 // Keeps node-pty's native binding out of the test process; nothing here spawns.
 mock.module('node-pty', () => ({
@@ -150,6 +152,7 @@ afterEach(() => {
   delete patchable.getSession;
   delete patchable.kill;
   delete patchable.createSession;
+  refreshSettled = async () => {};
 });
 
 describe('POST /sessions', () => {
@@ -281,6 +284,36 @@ describe('DELETE /sessions/:id', () => {
     const retry = await fetch(`${baseUrl}/sessions/${id}`, { method: 'DELETE' });
     expect(retry.status).toBe(200);
     expect(sessionRowCount(id)).toBe(0);
+  });
+});
+
+describe('launching waits for a token refresh on the session’s account', () => {
+  async function spawnOrder(request: (id: string) => Promise<Response>, id: string): Promise<string[]> {
+    const order: string[] = [];
+    patchable.createSession = () => { order.push('spawn'); };
+    refreshSettled = async () => {
+      await Bun.sleep(5);
+      order.push('settled');
+    };
+    await request(id);
+    return order;
+  }
+
+  test('POST /sessions', async () => {
+    const order = await spawnOrder(() => fetch(`${baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: randomUUID(), name: 'waits', workingDir: PRESENT_DIR, launchClaude: true }),
+    }), '');
+    expect(order).toEqual(['settled', 'spawn']);
+  });
+
+  test('POST /sessions/:id/start', async () => {
+    const id = randomUUID();
+    insertSession(id, PRESENT_DIR);
+    patchable.getSession = () => undefined;
+    const order = await spawnOrder(sid => fetch(`${baseUrl}/sessions/${sid}/start`, { method: 'POST' }), id);
+    expect(order).toEqual(['settled', 'spawn']);
   });
 });
 

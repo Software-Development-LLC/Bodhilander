@@ -112,6 +112,7 @@ export function keychainCredentialStore(
       const service = keychainService(configDir);
       const args = ['add-generic-password', '-U', '-a', acct, '-s', service, '-X', hex];
       const line = `add-generic-password -U -a "${acct}" -s "${service}" -X "${hex}"\n`;
+      // The old refresh token is already spent, so a long item takes the CLI's argv route rather than lose the pair.
       const { code } = line.length <= SECURITY_STDIN_LIMIT ? await exec(['-i'], line) : await exec(args);
       if (code !== 0) return false;
       return oauthFromDocument(await readDocument(configDir))?.accessToken === rotated.accessToken;

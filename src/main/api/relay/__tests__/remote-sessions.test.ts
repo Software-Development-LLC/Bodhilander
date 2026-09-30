@@ -29,11 +29,15 @@ mock.module('../../../session-routing', () => ({
     const row = rows.get(id);
     if (row) rows.set(id, { ...row, claudeAccountId: 'acct-relief', failoverFromAccountId: 'acct-home' });
   },
+  sessionTokenRefreshPending: () => refreshing !== null,
+  sessionTokenRefreshSettled: () => refreshing ?? Promise.resolve(),
 }));
+let refreshing: Promise<void> | null = null;
 
 const { createRemoteSession, remoteSessionEvents } = await import('../remote-sessions');
 
 beforeEach(() => {
+  refreshing = null;
   rows.clear();
   order.length = 0;
 });
@@ -50,5 +54,15 @@ describe('createRemoteSession', () => {
     expect(session.claudeAccountId).toBe('acct-relief');
     expect(session.failoverFromAccountId).toBe('acct-home');
     expect(emitted).toEqual([session]);
+  });
+
+  test('a token refresh running on the account holds the spawn until it settles', async () => {
+    let finish: () => void = () => undefined;
+    refreshing = new Promise<void>(resolve => { finish = resolve; });
+    const session = createRemoteSession({ groupId: 'g1', name: 'remote', provider: 'claude', launchClaude: true });
+    expect(order).toEqual([`route:${session.id}`]);
+    finish();
+    await Bun.sleep(1);
+    expect(order).toEqual([`route:${session.id}`, `spawn:${session.id}`]);
   });
 });

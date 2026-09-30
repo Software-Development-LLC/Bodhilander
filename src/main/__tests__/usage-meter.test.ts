@@ -178,6 +178,14 @@ describe('ThresholdNotices', () => {
     expect(notices.check(over(90, NOW + 5 * 60 * MIN), 85, NOW + 41 * MIN)).toHaveLength(1);
   });
 
+  test('a window with no reset time announces again once it has dropped back under', () => {
+    const notices = new ThresholdNotices();
+    expect(notices.check(over(90, null), 85, NOW)).toHaveLength(1);
+    expect(notices.check(over(95, null), 85, NOW + MIN)).toHaveLength(0);
+    expect(notices.check(over(10, null), 85, NOW + 2 * MIN)).toHaveLength(0);
+    expect(notices.check(over(90, null), 85, NOW + 3 * MIN)).toHaveLength(1);
+  });
+
   test('below the threshold says nothing', () => {
     expect(new ThresholdNotices().check(over(50, NOW + MIN), 85, NOW)).toHaveLength(0);
   });

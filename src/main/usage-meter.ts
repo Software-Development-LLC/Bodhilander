@@ -121,8 +121,10 @@ export class ThresholdNotices {
     for (const name of USAGE_WINDOWS) {
       const window = usage[name];
       const pct = currentPct(window, now);
-      if (!window || pct === null || pct < threshold) continue;
       const key = `${usage.accountId}:${name}`;
+      // Without a reset time, dropping back under is the only sign of a new window.
+      if (window?.resetsAt === null && pct !== null && pct < threshold) this.notified.delete(key);
+      if (!window || pct === null || pct < threshold) continue;
       if (this.notified.has(key) && this.isSameWindow(this.notified.get(key) ?? null, window.resetsAt)) continue;
       this.notified.set(key, window.resetsAt);
       crossings.push({ accountId: usage.accountId, window: name, pct, resetsAt: window.resetsAt });
