@@ -1,5 +1,5 @@
 import { AccountUsage, AccountUsageMap } from '../shared/types';
-import { isOverThreshold, parseUsageThreshold, USAGE_THRESHOLD_PREF } from '../shared/usage';
+import { isOverThreshold, parseUsageThreshold, peakPct, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { getPreference } from './repositories/preferences';
 
 /**
@@ -46,4 +46,17 @@ export function isUsagePressured(
 ): boolean {
   const usage = getUsage(accountId);
   return usage !== null && isOverThreshold(usage, threshold, now.getTime());
+}
+
+/**
+ * Room to go back to: a stale reading last seen over the threshold still counts
+ * as full until a fresh one says otherwise or its window resets.
+ */
+export function hasUsageRoom(
+  accountId: string,
+  now: Date = new Date(),
+  threshold: number = getUsageThreshold(),
+): boolean {
+  const peak = peakPct(getUsage(accountId), now.getTime());
+  return peak === null || peak < threshold;
 }

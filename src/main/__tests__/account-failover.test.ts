@@ -564,14 +564,14 @@ describe('a session that cannot be moved', () => {
   });
 });
 
-/** A fresh reading at `pct` in the 5-hour window. */
-function usageAt(accountId: string, pct: number): void {
+/** A reading at `pct` in the 5-hour window, taken `ageMs` ago. */
+function usageAt(accountId: string, pct: number, ageMs = 0, resetsInMs = HOUR): void {
   usageStore.setUsage({
     accountId,
-    fiveHour: { pct, resetsAt: Date.now() + HOUR },
+    fiveHour: { pct, resetsAt: Date.now() + resetsInMs },
     sevenDay: null,
     source: 'poll',
-    observedAt: Date.now(),
+    observedAt: Date.now() - ageMs,
     unavailable: null,
   });
 }
@@ -673,6 +673,11 @@ describe('routeNewSession', () => {
 
     expect(failover.failbackCandidates()).toEqual([]);
     usageAt('primary', 40);
+    expect(failover.failbackCandidates().map(c => c.sessionId)).toEqual(['s1']);
+
+    usageAt('primary', 90, HOUR);
+    expect(failover.failbackCandidates()).toEqual([]);
+    usageAt('primary', 90, HOUR, -1);
     expect(failover.failbackCandidates().map(c => c.sessionId)).toEqual(['s1']);
 
     expect(failover.failBackSession('s1')!.to!.id).toBe('primary');

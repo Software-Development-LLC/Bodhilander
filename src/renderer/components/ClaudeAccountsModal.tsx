@@ -494,7 +494,8 @@ export const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, o
   const changeThreshold = (draft: string) => {
     setThresholdDraft(draft);
     cancelPendingSave();
-    if (draft.trim() === '') return;
+    const typed = Number(draft);
+    if (draft.trim() === '' || !(typed >= 1 && typed <= 100)) return;
     const save = () => {
       pendingSave.current = null;
       saveThreshold(parseUsageThreshold(draft));

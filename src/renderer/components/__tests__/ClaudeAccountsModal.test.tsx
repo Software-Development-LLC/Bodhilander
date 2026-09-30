@@ -540,9 +540,9 @@ describe('FailoverSettings', () => {
     expect(writes).toEqual([['usageWarnThreshold', '60']]);
   });
 
-  test('an emptied field waits for a number rather than saving the default', async () => {
+  test.each([[''], ['150'], ['0']])('typing %p waits for blur rather than saving the default', async (value) => {
     await mount();
-    fireEvent.change(thresholdBox(), { target: { value: '' } });
+    fireEvent.change(thresholdBox(), { target: { value } });
     await afterDebounce();
     expect(writes).toEqual([]);
   });
