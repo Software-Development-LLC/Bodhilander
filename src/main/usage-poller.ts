@@ -133,11 +133,12 @@ export class UsagePoller extends EventEmitter {
 
   private async runRound(minGapMs: number): Promise<void> {
     const accounts = this.syncAccounts();
+    const threshold = usageStore.getUsageThreshold();
     for (const account of accounts) {
       const last = this.lastAttempt.get(account.id);
       if (minGapMs > 0 && last !== undefined && this.now() - last < minGapMs) continue;
       try {
-        await this.pollAccount(account);
+        await this.pollAccount(account, threshold);
       } catch (err) {
         log.warn(`[Usage] Poll failed for ${account.label}: ${describeError(err)}`);
         this.markUnavailable(account.id, 'error');
@@ -191,7 +192,7 @@ export class UsagePoller extends EventEmitter {
     return obs ? this.observe(account, obs) : false;
   }
 
-  private async pollAccount(account: ClaudeAccount): Promise<void> {
+  private async pollAccount(account: ClaudeAccount, threshold: number): Promise<void> {
     const now = this.now();
     if ((this.retryAt.get(account.id) ?? 0) > now) return;
     this.lastAttempt.set(account.id, now);
@@ -239,7 +240,7 @@ export class UsagePoller extends EventEmitter {
       this.markUnavailable(account.id, 'error');
       return;
     }
-    this.observe(account, obs);
+    this.observe(account, obs, threshold);
   }
 
   private async refreshToken(
@@ -286,13 +287,17 @@ export class UsagePoller extends EventEmitter {
     usageStore.setUsage({ ...this.record(accountId), unavailable: reason });
   }
 
-  private observe(account: ClaudeAccount, obs: UsageObservation): boolean {
+  private observe(
+    account: ClaudeAccount,
+    obs: UsageObservation,
+    threshold: number = usageStore.getUsageThreshold(),
+  ): boolean {
     const prev = this.record(account.id);
     const next = mergeUsage(prev, obs);
     if (next === prev) return false;
     usageStore.setUsage(next);
     if (this.now() - obs.observedAt > USAGE_STALE_MS) return true;
-    for (const crossing of this.notices.check(next, usageStore.getUsageThreshold(), this.now())) {
+    for (const crossing of this.notices.check(next, threshold, this.now())) {
       this.emit('crossing', { account, crossing } satisfies UsageCrossingEvent);
     }
     return true;

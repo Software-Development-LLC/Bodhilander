@@ -9,6 +9,13 @@ import { AccountUsage, UsageWindow } from './types';
 export const USAGE_THRESHOLD_PREF = 'usageWarnThreshold';
 export const DEFAULT_USAGE_WARN_THRESHOLD = 85;
 
+/** Preference key for installing the statusline sink; absent means on. */
+export const USAGE_SINK_PREF = 'usageStatuslineSink';
+
+export function isSinkEnabled(raw: string | null | undefined): boolean {
+  return raw !== 'false';
+}
+
 /** Older than this, a reading is marked stale and no longer steers routing. */
 export const USAGE_STALE_MS = 15 * 60 * 1000;
 

@@ -8,8 +8,12 @@ import * as os from 'os';
 import * as path from 'path';
 
 const prefs = new Map<string, string>();
+const prefReads: string[] = [];
 mock.module('../repositories/preferences', () => ({
-  getPreference: (key: string) => prefs.get(key) ?? null,
+  getPreference: (key: string) => {
+    prefReads.push(key);
+    return prefs.get(key) ?? null;
+  },
   setPreference: (key: string, value: string) => { prefs.set(key, value); },
   deletePreference: (key: string) => { prefs.delete(key); },
 }));
@@ -267,6 +271,15 @@ describe('threshold notices', () => {
     await p.pollAll();
     expect(seen).toEqual(['fiveHour']);
     expect(usageStore.isUsagePressured('work', new Date(NOW))).toBe(true);
+  });
+
+  test('a round reads the threshold once, however many accounts it polls', async () => {
+    const accounts = ['a', 'b', 'c'].map(account);
+    for (const acc of accounts) writeCreds(acc, NOW + 3_600_000);
+    const { fetch } = fakeFetch(() => ({ status: 200, body: USAGE_BODY }));
+    prefReads.length = 0;
+    await poller(accounts, fetch).pollAll();
+    expect(prefReads.filter(key => key === 'usageWarnThreshold')).toHaveLength(1);
   });
 });
 

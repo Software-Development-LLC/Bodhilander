@@ -41,12 +41,13 @@ import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChanne
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/types';
+import { AccountFailoverEvent, ClaudeAccount, Group, Session, SessionState } from '../shared/types';
+import { isSinkEnabled, USAGE_SINK_PREF, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
 import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
-import { installStatuslineSink, nodeOnPath } from './statusline-sink';
+import { nodeOnPath, reconcileStatuslineSink } from './statusline-sink';
 import { routeNewSessionByUsage, setSessionRoutedListener } from './session-routing';
 import { ownedAccountIds, runAccountIdsForOwnership, UsageCrossingEvent, UsagePoller } from './usage-poller';
 import { describeCrossing } from './usage-meter';
@@ -466,22 +467,27 @@ function tokenOwnedAccountIds(): Set<string> {
 }
 
 let usagePoller: UsagePoller | null = null;
+let sinkScriptPath: string | null = null;
+
+function ensureSink(account: ClaudeAccount): void {
+  const enabled = isSinkEnabled(prefsRepo.getPreference(USAGE_SINK_PREF));
+  reconcileStatuslineSink(account.configDir, sinkScriptPath, enabled);
+}
+
 function startUsagePolling(): void {
   if (usagePoller) return;
-  let scriptPath = getStatuslineScriptPath();
-  if (!scriptPath) log.warn('[Usage] Statusline sink script not found; meters rely on polling alone');
-  if (scriptPath && !nodeOnPath(process.env)) {
+  sinkScriptPath = getStatuslineScriptPath();
+  if (!sinkScriptPath) log.warn('[Usage] Statusline sink script not found; meters rely on polling alone');
+  if (sinkScriptPath && !nodeOnPath(process.env)) {
     log.warn('[Usage] node is not on PATH; statusline sink not installed, meters rely on polling alone');
-    scriptPath = null;
+    sinkScriptPath = null;
   }
 
   const poller = new UsagePoller({
     listAccounts: () => accountsRepo.getAllAccounts(),
     boundAccountIds: tokenOwnedAccountIds,
     fetch: (url, init) => fetch(url, init),
-    ensureSink: scriptPath
-      ? (account) => { installStatuslineSink(account.configDir, scriptPath); }
-      : undefined,
+    ensureSink,
     watchSinks: true,
   });
   poller.on('updated', (usage) => mainWindow?.webContents.send('usage:updated', usage));
@@ -1228,6 +1234,9 @@ safeHandle('prefs:get', (key: string) => {
 
 safeHandle('prefs:set', (key: string, value: string) => {
   prefsRepo.setPreference(key, value);
+  if (key === USAGE_SINK_PREF && usagePoller) {
+    for (const account of accountsRepo.getAllAccounts()) ensureSink(account);
+  }
 });
 
 safeHandle('prefs:getAll', () => {
@@ -1250,6 +1259,10 @@ safeHandle('prefs:getAll', () => {
     soundStartCustomPath: prefsRepo.getPreference('soundStartCustomPath') ?? '',
     soundCompleteEnabled: prefsRepo.getPreference('soundCompleteEnabled') ?? 'true',
     soundCompleteCustomPath: prefsRepo.getPreference('soundCompleteCustomPath') ?? '',
+    accountFailoverEnabled: prefsRepo.getPreference('accountFailoverEnabled') ?? 'true',
+    accountFailbackEnabled: prefsRepo.getPreference('accountFailbackEnabled') ?? 'true',
+    [USAGE_THRESHOLD_PREF]: prefsRepo.getPreference(USAGE_THRESHOLD_PREF) ?? '',
+    [USAGE_SINK_PREF]: prefsRepo.getPreference(USAGE_SINK_PREF) ?? 'true',
   };
   return settings;
 });

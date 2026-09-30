@@ -7,7 +7,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { installStatuslineSink, nodeOnPath, sinkCommand } from '../statusline-sink';
+import {
+  installStatuslineSink,
+  nodeOnPath,
+  reconcileStatuslineSink,
+  sinkCommand,
+  uninstallStatuslineSink,
+} from '../statusline-sink';
 import { findGitBash, readChainedCommand, recordRateLimits, runStatusline } from '../../hooks/bodhilander-statusline';
 
 const SCRIPT = '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js';
@@ -81,6 +87,59 @@ describe('installStatuslineSink on a settings.json it cannot read', () => {
   test('a missing settings.json is created', () => {
     expect(installStatuslineSink(dir, SCRIPT)).toBe('installed');
     expect(settings().statusLine.command).toBe(sinkCommand(SCRIPT, dir));
+  });
+});
+
+describe('uninstallStatuslineSink', () => {
+  const chainFile = () => path.join(dir, 'bodhilander-statusline.json');
+
+  test('puts back the statusLine it chained to, padding and all, and drops the record', () => {
+    const mine = { type: 'command', command: 'bash ~/.claude/line.sh', padding: 2 };
+    writeSettings({ model: 'opus', statusLine: mine });
+    installStatuslineSink(dir, SCRIPT);
+    expect(uninstallStatuslineSink(dir)).toBe('restored');
+    expect(settings()).toEqual({ model: 'opus', statusLine: mine });
+    expect(fs.existsSync(chainFile())).toBe(false);
+  });
+
+  test('with nothing chained, the statusLine is removed', () => {
+    writeSettings({ model: 'opus' });
+    installStatuslineSink(dir, SCRIPT);
+    expect(uninstallStatuslineSink(dir)).toBe('removed');
+    expect(settings()).toEqual({ model: 'opus' });
+  });
+
+  test('a statusLine that is not ours is left alone', () => {
+    writeSettings({ statusLine: { type: 'command', command: 'echo mine' } });
+    const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8');
+    expect(uninstallStatuslineSink(dir)).toBe('unchanged');
+    expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe(before);
+  });
+
+  test('an unreadable record of the user entry keeps ours rather than lose theirs', () => {
+    writeSettings({ statusLine: { type: 'command', command: 'echo mine' } });
+    installStatuslineSink(dir, SCRIPT);
+    fs.writeFileSync(chainFile(), '{"chain":');
+    expect(uninstallStatuslineSink(dir)).toBe('error');
+    expect(settings().statusLine.command).toBe(sinkCommand(SCRIPT, dir));
+  });
+
+  test('an unparseable settings.json is untouched', () => {
+    fs.writeFileSync(path.join(dir, 'settings.json'), '{"model": "opus",');
+    expect(uninstallStatuslineSink(dir)).toBe('error');
+    expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe('{"model": "opus",');
+  });
+});
+
+describe('reconcileStatuslineSink', () => {
+  test('turning it off, or losing the script, restores the user entry', () => {
+    const mine = { type: 'command', command: 'echo mine' };
+    for (const [scriptPath, enabled] of [[SCRIPT, false], [null, true]] as const) {
+      writeSettings({ statusLine: mine });
+      expect(reconcileStatuslineSink(dir, SCRIPT, true)).toBe('installed');
+      expect(reconcileStatuslineSink(dir, scriptPath, enabled)).toBe('restored');
+      expect(settings().statusLine).toEqual(mine);
+    }
   });
 });
 

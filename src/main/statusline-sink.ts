@@ -12,6 +12,7 @@ import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } f
  */
 
 export type SinkInstallAction = 'installed' | 'updated' | 'unchanged' | 'error';
+export type SinkUninstallAction = 'restored' | 'removed' | 'unchanged' | 'error';
 
 interface StatusLineEntry {
   type?: string;
@@ -98,4 +99,45 @@ export function installStatuslineSink(configDir: string, scriptPath: string): Si
   settings.statusLine = { ...layout, type: 'command', command };
   if (!writeClaudeSettings(settings, configDir)) return 'error';
   return action;
+}
+
+/** The statusLine install moved aside, or null when the record cannot be read. */
+function readSavedChain(configDir: string): { chain: StatusLineEntry | null } | null {
+  const file = chainFilePath(configDir);
+  if (!fs.existsSync(file)) return { chain: null };
+  try {
+    const chain = JSON.parse(fs.readFileSync(file, 'utf-8'))?.chain;
+    return { chain: typeof chain?.command === 'string' ? chain : null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Take the sink out of a config dir, putting back the statusLine it chained to.
+ * A statusLine that is not ours is left alone, and so is everything when the
+ * saved entry cannot be read, since removing ours then would lose the user's.
+ */
+export function uninstallStatuslineSink(configDir: string): SinkUninstallAction {
+  if (settingsUnreadable(configDir)) return 'error';
+  const settings = readClaudeSettings(configDir);
+  if (!isOurs(settings.statusLine as StatusLineEntry | undefined)) return 'unchanged';
+
+  const saved = readSavedChain(configDir);
+  if (!saved) return 'error';
+  const userEntry = saved.chain;
+  if (userEntry) settings.statusLine = userEntry;
+  else delete settings.statusLine;
+  if (!writeClaudeSettings(settings, configDir)) return 'error';
+  saveChain(configDir, null);
+  return userEntry ? 'restored' : 'removed';
+}
+
+/** Install the sink when it is wanted and runnable, otherwise take it out. */
+export function reconcileStatuslineSink(
+  configDir: string,
+  scriptPath: string | null,
+  enabled: boolean,
+): SinkInstallAction | SinkUninstallAction {
+  return enabled && scriptPath ? installStatuslineSink(configDir, scriptPath) : uninstallStatuslineSink(configDir);
 }

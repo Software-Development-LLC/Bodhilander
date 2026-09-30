@@ -1,6 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccountRemovalCost, AccountUsage, AccountUsageMap, ClaudeAccount, LiveAccountBindings } from '../../shared/types';
-import { DEFAULT_USAGE_WARN_THRESHOLD, parseUsageThreshold, USAGE_THRESHOLD_PREF, usageLevel } from '../../shared/usage';
+import {
+  DEFAULT_USAGE_WARN_THRESHOLD,
+  isSinkEnabled,
+  parseUsageThreshold,
+  USAGE_SINK_PREF,
+  USAGE_THRESHOLD_PREF,
+  usageLevel,
+} from '../../shared/usage';
 import Terminal from './Terminal';
 import { AccountChip } from './AccountChip';
 import { UsageMeters } from './UsageMeters';
@@ -430,6 +437,7 @@ export const AccountRow: React.FC<AccountRowProps> = ({
 /** Preference keys, matching account-failover.ts. Absent means enabled. */
 const FAILOVER_PREF = 'accountFailoverEnabled';
 const FAILBACK_PREF = 'accountFailbackEnabled';
+export const THRESHOLD_SAVE_DEBOUNCE_MS = 500;
 
 interface FailoverSettingsProps {
   threshold: number;
@@ -445,10 +453,12 @@ interface FailoverSettingsProps {
  * not the second, and collapsing them into one control would make refusing the
  * restart cost them the whole feature.
  */
-const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, onThresholdChange }) => {
+export const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, onThresholdChange }) => {
   const [failover, setFailover] = useState(true);
   const [failback, setFailback] = useState(true);
+  const [sink, setSink] = useState(true);
   const [thresholdDraft, setThresholdDraft] = useState(String(threshold));
+  const pendingSave = useRef<{ timer: ReturnType<typeof setTimeout>; save: () => void } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -456,6 +466,7 @@ const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, onThresh
       if (cancelled) return;
       setFailover(prefs[FAILOVER_PREF] !== 'false');
       setFailback(prefs[FAILBACK_PREF] !== 'false');
+      setSink(isSinkEnabled(prefs[USAGE_SINK_PREF]));
       const saved = parseUsageThreshold(prefs[USAGE_THRESHOLD_PREF]);
       onThresholdChange(saved);
       setThresholdDraft(String(saved));
@@ -463,11 +474,39 @@ const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, onThresh
     return () => { cancelled = true; };
   }, [onThresholdChange]);
 
-  const commitThreshold = () => {
-    const next = parseUsageThreshold(thresholdDraft);
-    setThresholdDraft(String(next));
+  const saveThreshold = useCallback((next: number) => {
     onThresholdChange(next);
     window.electronAPI.setPreference(USAGE_THRESHOLD_PREF, String(next)).catch(() => {});
+  }, [onThresholdChange]);
+
+  const cancelPendingSave = () => {
+    if (pendingSave.current) clearTimeout(pendingSave.current.timer);
+    pendingSave.current = null;
+  };
+
+  useEffect(() => () => {
+    const pending = pendingSave.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pending.save();
+  }, []);
+
+  const changeThreshold = (draft: string) => {
+    setThresholdDraft(draft);
+    cancelPendingSave();
+    if (draft.trim() === '') return;
+    const save = () => {
+      pendingSave.current = null;
+      saveThreshold(parseUsageThreshold(draft));
+    };
+    pendingSave.current = { timer: setTimeout(save, THRESHOLD_SAVE_DEBOUNCE_MS), save };
+  };
+
+  const commitThreshold = () => {
+    cancelPendingSave();
+    const next = parseUsageThreshold(thresholdDraft);
+    setThresholdDraft(String(next));
+    saveThreshold(next);
   };
 
   const toggle = (key: string, next: boolean, apply: (value: boolean) => void) => {
@@ -511,12 +550,24 @@ const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, onThresh
             max={100}
             aria-label="Usage warning threshold, percent"
             value={thresholdDraft}
-            onChange={e => setThresholdDraft(e.target.value)}
+            onChange={e => changeThreshold(e.target.value)}
             onBlur={commitThreshold}
           />
           <strong>% of either limit.</strong>{' '}
           New sessions and failover pick an account below this when one exists,
           and you are told once when an account crosses it.
+        </span>
+      </label>
+      <label className="failover-toggle">
+        <input
+          type="checkbox"
+          checked={sink}
+          onChange={e => toggle(USAGE_SINK_PREF, e.target.checked, setSink)}
+        />
+        <span>
+          <strong>Read usage from the Claude status line.</strong>{' '}
+          Keeps the meters current between polls. Turning it off puts back any
+          status line of your own.
         </span>
       </label>
     </div>

@@ -16,7 +16,16 @@
 import React from 'react';
 import { describe, expect, test, afterEach } from 'bun:test';
 import { act, render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { AccountRow, ClaudeAccountsPanel, LoginBanner, LoginHint, removalWarning, runningWarning } from '../ClaudeAccountsModal';
+import {
+  AccountRow,
+  ClaudeAccountsPanel,
+  FailoverSettings,
+  LoginBanner,
+  LoginHint,
+  removalWarning,
+  runningWarning,
+  THRESHOLD_SAVE_DEBOUNCE_MS,
+} from '../ClaudeAccountsModal';
 import { AccountUsage, ClaudeAccount } from '../../../shared/types';
 
 afterEach(cleanup);
@@ -483,5 +492,58 @@ describe('usage meters', () => {
     await act(async () => { render(<ClaudeAccountsPanel />); });
     expect(refreshed).toBe(1);
     expect(document.querySelector('.usage-meters')!.textContent).toContain('92%');
+  });
+});
+
+describe('FailoverSettings', () => {
+  let writes: [string, string][];
+
+  async function mount(prefs: Record<string, string> = {}) {
+    writes = [];
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      getAllPreferences: async () => prefs,
+      setPreference: async (key: string, value: string) => { writes.push([key, value]); },
+    };
+    await act(async () => { render(<FailoverSettings threshold={85} onThresholdChange={() => {}} />); });
+  }
+
+  const sinkBox = () => screen.getByText('Read usage from the Claude status line.').closest('label')!.querySelector('input')!;
+  const thresholdBox = () => screen.getByLabelText('Usage warning threshold, percent');
+  const afterDebounce = () => act(() => new Promise<void>(r => setTimeout(r, THRESHOLD_SAVE_DEBOUNCE_MS + 100)));
+
+  test('the status line switch starts on, reads a saved off, and saves each flip', async () => {
+    await mount({ usageStatuslineSink: 'false' });
+    expect(sinkBox().checked).toBe(false);
+    fireEvent.click(sinkBox());
+    expect(sinkBox().checked).toBe(true);
+    fireEvent.click(sinkBox());
+    expect(writes).toEqual([['usageStatuslineSink', 'true'], ['usageStatuslineSink', 'false']]);
+    cleanup();
+    await mount();
+    expect(sinkBox().checked).toBe(true);
+  });
+
+  test('typing saves the threshold once it settles, without waiting for blur', async () => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value: '7' } });
+    fireEvent.change(thresholdBox(), { target: { value: '70' } });
+    expect(writes).toEqual([]);
+    await afterDebounce();
+    expect(writes).toEqual([['usageWarnThreshold', '70']]);
+  });
+
+  test('a blur saves at once and the pending save does not repeat it', async () => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value: '60' } });
+    fireEvent.blur(thresholdBox());
+    await afterDebounce();
+    expect(writes).toEqual([['usageWarnThreshold', '60']]);
+  });
+
+  test('an emptied field waits for a number rather than saving the default', async () => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value: '' } });
+    await afterDebounce();
+    expect(writes).toEqual([]);
   });
 });
