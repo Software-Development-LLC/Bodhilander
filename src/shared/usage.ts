@@ -48,6 +48,18 @@ export function peakPct(usage: AccountUsage | null | undefined, now: number): nu
   return peak;
 }
 
+/** Every window the record reports was itself observed recently. */
+export function allWindowsFresh(usage: AccountUsage | null | undefined, now: number): boolean {
+  const windows = USAGE_WINDOWS.map(name => usage?.[name] ?? null).filter((w): w is UsageWindow => w !== null);
+  return windows.length > 0 && windows.every(window => now - window.observedAt <= USAGE_STALE_MS);
+}
+
+export function levelForPct(pct: number, threshold: number): UsageLevel {
+  if (pct >= 100) return 'critical';
+  if (pct >= threshold) return 'warn';
+  return 'ok';
+}
+
 export function usageLevel(
   usage: AccountUsage | null | undefined,
   threshold: number,
@@ -55,9 +67,7 @@ export function usageLevel(
 ): UsageLevel {
   const peak = peakPct(usage, now);
   if (peak === null || isUsageStale(usage, now)) return 'unknown';
-  if (peak >= 100) return 'critical';
-  if (peak >= threshold) return 'warn';
-  return 'ok';
+  return levelForPct(peak, threshold);
 }
 
 /** Over the threshold on fresh data. No data or stale data is never "over". */

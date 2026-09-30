@@ -310,7 +310,7 @@ describe('expired tokens', () => {
 test('no tokens reads as unavailable with the store’s own reason', async () => {
   const work = account('work');
   const { calls, fetch } = fakeFetch(() => ({ status: 200, body: USAGE_BODY }));
-  const keychain = { ...fileCredentialStore, missing: 'no-keychain-credentials' as const };
+  const keychain = { ...fileCredentialStore, read: async () => 'no-keychain-credentials' as const };
   await new UsagePoller({
     listAccounts: () => [work], boundAccountIds: () => new Set(), fetch, credentials: keychain, now: () => clock,
   }).pollAll();

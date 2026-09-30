@@ -9,6 +9,7 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 
 import { STATUSLINE_CHAIN_FILE, STATUSLINE_SINK_FILE } from '../shared/usage';
+import { findGitBash } from '../main/git-bash';
 
 const CHAIN_TIMEOUT_MS = 5_000;
 
@@ -49,19 +50,6 @@ export function readChainedCommand(configDir: string): string | null {
   } catch {
     return null;
   }
-}
-
-/** Windows statusLine commands are written for Git Bash, which the CLI itself uses. */
-export function findGitBash(env: NodeJS.ProcessEnv, exists: (p: string) => boolean = fs.existsSync): string | null {
-  const candidates: string[] = [];
-  if (env.CLAUDE_CODE_GIT_BASH_PATH) candidates.push(env.CLAUDE_CODE_GIT_BASH_PATH);
-  for (const entry of (env.PATH ?? env.Path ?? '').split(path.win32.delimiter)) {
-    if (/[\\/]git[\\/](cmd|bin)[\\/]?$/i.test(entry)) {
-      candidates.push(path.win32.join(entry, '..', 'bin', 'bash.exe'));
-    }
-  }
-  candidates.push(String.raw`C:\Program Files\Git\bin\bash.exe`);
-  return candidates.find(candidate => exists(candidate)) ?? null;
 }
 
 function chainShell(): string | boolean {

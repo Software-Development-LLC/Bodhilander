@@ -4,7 +4,7 @@ import log from 'electron-log';
 
 import { AccountUsage, ClaudeAccount, LiveAccountBindings, UsageUnavailableReason } from '../shared/types';
 import { USAGE_STALE_MS } from '../shared/usage';
-import { CredentialStore } from './credential-store';
+import { CredentialStore, hasCredentials } from './credential-store';
 import { FetchLike, isTokenExpired, OAuthCredentials, refreshOAuthToken } from './usage-credentials';
 import {
   emptyUsage,
@@ -193,8 +193,8 @@ export class UsagePoller extends EventEmitter {
     this.lastAttempt.set(account.id, now);
 
     const creds = await this.deps.credentials.read(account.configDir);
-    if (!creds) {
-      this.markUnavailable(account.id, this.deps.credentials.missing);
+    if (!hasCredentials(creds)) {
+      this.markUnavailable(account.id, creds);
       return;
     }
     const response = await this.authorisedUsage(account, creds, now);

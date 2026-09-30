@@ -1,5 +1,5 @@
 import { AccountUsage, AccountUsageMap, UsageUnavailableReason } from '../shared/types';
-import { isOverThreshold, isUsageStale, parseUsageThreshold, peakPct, USAGE_THRESHOLD_PREF } from '../shared/usage';
+import { allWindowsFresh, isOverThreshold, parseUsageThreshold, peakPct, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { getPreference } from './repositories/preferences';
 
 /**
@@ -69,9 +69,14 @@ export function isSignedOut(accountId: string): boolean {
   return reason != null && SIGNED_OUT.has(reason);
 }
 
+/** Signed out, or its Keychain item could not be read: either way its tokens are out of reach. */
+export function isUnreachable(accountId: string): boolean {
+  return isSignedOut(accountId) || getUsage(accountId)?.unavailable === 'keychain-unavailable';
+}
+
 /**
- * Known room: a fresh reading below the threshold on an account still signed
- * in. Only this justifies a usage-driven move onto an account.
+ * Known room: every window fresh and below the threshold, on an account whose
+ * tokens are in reach. Only this justifies a usage-driven move onto an account.
  */
 export function hasFreshRoom(
   accountId: string,
@@ -79,7 +84,7 @@ export function hasFreshRoom(
   threshold: number = getUsageThreshold(),
 ): boolean {
   const usage = getUsage(accountId);
-  if (isUsageStale(usage, now.getTime()) || isSignedOut(accountId)) return false;
+  if (!allWindowsFresh(usage, now.getTime()) || isUnreachable(accountId)) return false;
   const peak = peakPct(usage, now.getTime());
   return peak !== null && peak < threshold;
 }

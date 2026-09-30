@@ -58,8 +58,11 @@ export interface UsageService {
 }
 
 export function createUsageService(deps: UsageServiceDeps): UsageService {
-  if (!deps.sink) log.warn('[Usage] Statusline sink script not found; meters rely on polling alone');
-  const reconcile = sinkReconciler(deps.sink, () => isSinkEnabled(deps.getPreference(USAGE_SINK_PREF)));
+  if (!deps.sink) log.warn('[Usage] Statusline sink unavailable; meters rely on polling alone');
+  const apply = sinkReconciler(deps.sink, () => isSinkEnabled(deps.getPreference(USAGE_SINK_PREF)));
+  const reconcile = (configDir: string) => {
+    if (apply(configDir) === 'error') log.warn(`[Usage] Could not update the statusline sink in ${configDir}`);
+  };
   const now = deps.now ?? Date.now;
 
   const poller = new UsagePoller({
@@ -68,7 +71,7 @@ export function createUsageService(deps: UsageServiceDeps): UsageService {
     fetch: deps.fetch,
     credentials: deps.credentials,
     now: deps.now,
-    ensureSink: account => { reconcile(account.configDir); },
+    ensureSink: account => reconcile(account.configDir),
     watchSinks: deps.watchSinks ?? true,
   });
   poller.on('updated', deps.publish);

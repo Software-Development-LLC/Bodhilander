@@ -568,7 +568,7 @@ describe('a session that cannot be moved', () => {
 function usageAt(accountId: string, pct: number, ageMs = 0, resetsInMs = HOUR): void {
   usageStore.setUsage({
     accountId,
-    fiveHour: { pct, resetsAt: Date.now() + resetsInMs },
+    fiveHour: { pct, resetsAt: Date.now() + resetsInMs, observedAt: Date.now() - ageMs },
     sevenDay: null,
     source: 'poll',
     observedAt: Date.now() - ageMs,

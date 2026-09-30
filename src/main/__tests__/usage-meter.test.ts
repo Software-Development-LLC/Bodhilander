@@ -15,6 +15,7 @@ import {
 import {
   formatDuration,
   isOverThreshold,
+  levelForPct,
   parseUsageThreshold,
   usageLevel,
   USAGE_STALE_MS,
@@ -24,11 +25,13 @@ import { AccountUsage } from '../../shared/types';
 const NOW = Date.parse('2026-09-30T12:00:00Z');
 const MIN = 60_000;
 
+const w = (pct: number, resetsAt: number | null, observedAt = NOW) => ({ pct, resetsAt, observedAt });
+
 function usage(over: Partial<AccountUsage> = {}): AccountUsage {
   return {
     ...emptyUsage('work'),
-    fiveHour: { pct: 40, resetsAt: NOW + 60 * MIN },
-    sevenDay: { pct: 10, resetsAt: NOW + 3 * 24 * 60 * MIN },
+    fiveHour: w(40, NOW + 60 * MIN),
+    sevenDay: w(10, NOW + 3 * 24 * 60 * MIN),
     source: 'poll',
     observedAt: NOW,
     ...over,
@@ -43,8 +46,8 @@ describe('parseOAuthUsage', () => {
       seven_day_opus: null,
     }, NOW);
     expect(obs).toEqual({
-      fiveHour: { pct: 92, resetsAt: Date.parse('2026-09-30T12:40:00.123Z') },
-      sevenDay: { pct: 31.5, resetsAt: Date.parse('2026-10-03T08:00:00Z') },
+      fiveHour: w(92, Date.parse('2026-09-30T12:40:00.123Z')),
+      sevenDay: w(31.5, Date.parse('2026-10-03T08:00:00Z')),
       source: 'poll',
       observedAt: NOW,
     });
@@ -53,7 +56,7 @@ describe('parseOAuthUsage', () => {
   test('a null window is absent, not zero', () => {
     const obs = parseOAuthUsage({ five_hour: null, seven_day: { utilization: 5, resets_at: null } }, NOW);
     expect(obs?.fiveHour).toBeNull();
-    expect(obs?.sevenDay).toEqual({ pct: 5, resetsAt: null });
+    expect(obs?.sevenDay).toEqual(w(5, null));
   });
 
   test('a window with no utilization, or none at all, is skipped, not the whole body', () => {
@@ -87,7 +90,7 @@ describe('parseStatuslineSink', () => {
       rate_limits: { five_hour: { used_percentage: 12, resets_at: 1790000000 } },
     });
     expect(obs).toEqual({
-      fiveHour: { pct: 12, resetsAt: 1790000000 * 1000 },
+      fiveHour: w(12, 1790000000 * 1000),
       sevenDay: null,
       source: 'statusline',
       observedAt: NOW,
@@ -102,7 +105,7 @@ describe('parseStatuslineSink', () => {
 describe('mergeUsage', () => {
   test('the newer observation wins, and a window it lacks is kept', () => {
     const merged = mergeUsage(usage({ unavailable: 'error' }), {
-      fiveHour: { pct: 70, resetsAt: NOW + 30 * MIN },
+      fiveHour: w(70, NOW + 30 * MIN, NOW + MIN),
       sevenDay: null,
       source: 'statusline',
       observedAt: NOW + MIN,
@@ -115,13 +118,45 @@ describe('mergeUsage', () => {
 
   test('an older observation changes nothing', () => {
     const prev = usage();
-    const merged = mergeUsage(prev, { fiveHour: { pct: 99, resetsAt: null }, sevenDay: null, source: 'poll', observedAt: NOW - MIN });
+    const merged = mergeUsage(prev, { fiveHour: w(99, null, NOW - MIN), sevenDay: null, source: 'poll', observedAt: NOW - MIN });
     expect(merged).toBe(prev);
+  });
+
+  test('a window the observation lacks keeps its own age; the record takes its newest', () => {
+    const merged = mergeUsage(usage({ sevenDay: w(10, null, NOW - 3 * 60 * MIN) }), {
+      fiveHour: w(50, NOW + 30 * MIN, NOW + MIN), sevenDay: null, source: 'poll', observedAt: NOW + MIN,
+    });
+    expect(merged.sevenDay).toEqual(w(10, null, NOW - 3 * 60 * MIN));
+    expect(merged.observedAt).toBe(NOW + MIN);
+  });
+
+  const sink = (pct: number, resetsAt: number | null) => ({
+    fiveHour: w(pct, resetsAt, NOW + 5 * MIN), sevenDay: null, source: 'statusline' as const, observedAt: NOW + 5 * MIN,
+  });
+
+  test.each([['a reset time', NOW + 60 * MIN], ['no reset time', null]])(
+    'a lower statusline percent in the same window, with %s, is a replay and keeps the reading',
+    (_name, resetsAt) => {
+      const prev = usage({ fiveHour: w(88, resetsAt) });
+      const merged = mergeUsage(prev, sink(30, resetsAt));
+      expect(merged.fiveHour).toEqual(w(88, resetsAt));
+      expect(merged.observedAt).toBe(NOW);
+    },
+  );
+
+  test('a statusline percent that rose, or one in a new window, is taken', () => {
+    expect(mergeUsage(usage({ fiveHour: w(88, NOW + 60 * MIN) }), sink(90, NOW + 60 * MIN)).fiveHour?.pct).toBe(90);
+    expect(mergeUsage(usage({ fiveHour: w(88, NOW + 60 * MIN) }), sink(3, NOW + 6 * 60 * MIN)).fiveHour?.pct).toBe(3);
+  });
+
+  test('a lower poll in the same window is taken, since a poll is a fresh request', () => {
+    const merged = mergeUsage(usage({ fiveHour: w(88, NOW + 60 * MIN) }), { ...sink(30, NOW + 60 * MIN), source: 'poll' });
+    expect(merged.fiveHour).toEqual(w(30, NOW + 60 * MIN, NOW + 5 * MIN));
   });
 
   test('a successful poll clears the unavailable marker', () => {
     const merged = mergeUsage(usage({ unavailable: 'reauth' }), {
-      fiveHour: { pct: 1, resetsAt: null }, sevenDay: null, source: 'poll', observedAt: NOW + 1,
+      fiveHour: w(1, null, NOW + 1), sevenDay: null, source: 'poll', observedAt: NOW + 1,
     });
     expect(merged.unavailable).toBeNull();
   });
@@ -129,26 +164,27 @@ describe('mergeUsage', () => {
 
 describe('thresholds', () => {
   test('over on fresh data at or above the threshold, in either window', () => {
-    expect(isOverThreshold(usage({ sevenDay: { pct: 85, resetsAt: null } }), 85, NOW)).toBe(true);
+    expect(isOverThreshold(usage({ sevenDay: w(85, null) }), 85, NOW)).toBe(true);
     expect(isOverThreshold(usage(), 85, NOW)).toBe(false);
   });
 
   test('no data and stale data are never over', () => {
     expect(isOverThreshold(null, 85, NOW)).toBe(false);
     expect(isOverThreshold(emptyUsage('work'), 85, NOW)).toBe(false);
-    const stale = usage({ fiveHour: { pct: 99, resetsAt: null }, observedAt: NOW - USAGE_STALE_MS - 1 });
+    const stale = usage({ fiveHour: w(99, null), observedAt: NOW - USAGE_STALE_MS - 1 });
     expect(isOverThreshold(stale, 85, NOW)).toBe(false);
   });
 
   test('a window past its reset counts as started over', () => {
-    const reset = usage({ fiveHour: { pct: 99, resetsAt: NOW - 1 } });
+    const reset = usage({ fiveHour: w(99, NOW - 1) });
     expect(isOverThreshold(reset, 85, NOW)).toBe(false);
   });
 
   test('levels: ok, warn, critical, unknown', () => {
+    expect([levelForPct(84, 85), levelForPct(85, 85), levelForPct(100, 85)]).toEqual(['ok', 'warn', 'critical']);
     expect(usageLevel(usage(), 85, NOW)).toBe('ok');
-    expect(usageLevel(usage({ fiveHour: { pct: 90, resetsAt: null } }), 85, NOW)).toBe('warn');
-    expect(usageLevel(usage({ fiveHour: { pct: 100, resetsAt: null } }), 85, NOW)).toBe('critical');
+    expect(usageLevel(usage({ fiveHour: w(90, null) }), 85, NOW)).toBe('warn');
+    expect(usageLevel(usage({ fiveHour: w(100, null) }), 85, NOW)).toBe('critical');
     expect(usageLevel(null, 85, NOW)).toBe('unknown');
   });
 
@@ -163,7 +199,7 @@ describe('thresholds', () => {
 });
 
 describe('ThresholdNotices', () => {
-  const over = (pct: number, resetsAt: number | null) => usage({ fiveHour: { pct, resetsAt } });
+  const over = (pct: number, resetsAt: number | null) => usage({ fiveHour: w(pct, resetsAt) });
 
   test('announces a crossing once per window, however often it is re-read', () => {
     const notices = new ThresholdNotices();

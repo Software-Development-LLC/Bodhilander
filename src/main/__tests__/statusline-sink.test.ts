@@ -17,7 +17,7 @@ import {
   sinkReconciler,
   uninstallStatuslineSink,
 } from '../statusline-sink';
-import { chainEnv, findGitBash, readChainedCommand, recordRateLimits, runStatusline } from '../../hooks/bodhilander-statusline';
+import { chainEnv, readChainedCommand, recordRateLimits, runStatusline } from '../../hooks/bodhilander-statusline';
 
 const SCRIPT = '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js';
 const LAUNCH: SinkLaunch = { scriptPath: SCRIPT, execPath: '/opt/Bodhilander/Bodhilander', platform: 'darwin' };
@@ -51,6 +51,14 @@ describe('installStatuslineSink', () => {
     expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
     expect(settings().statusLine).toEqual({ type: 'command', command: sinkCommand(LAUNCH, dir), padding: 2 });
     expect(readChainedCommand(dir)).toBe('bash ~/.claude/line.sh');
+  });
+
+  test('the user’s other statusLine settings survive', () => {
+    writeSettings({ statusLine: { type: 'command', command: 'echo mine', refreshInterval: 5, hideVimModeIndicator: true } });
+    installStatuslineSink(dir, LAUNCH);
+    expect(settings().statusLine).toEqual({
+      type: 'command', command: sinkCommand(LAUNCH, dir), refreshInterval: 5, hideVimModeIndicator: true,
+    });
   });
 
   test('a second install writes nothing and keeps the chain', () => {
@@ -201,21 +209,6 @@ test('the chained user command does not run in Node mode', () => {
   expect(chainEnv({ ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin' })).toEqual({ PATH: '/usr/bin' });
 });
 
-describe('findGitBash', () => {
-  test('the override the CLI itself honours wins', () => {
-    expect(findGitBash({ CLAUDE_CODE_GIT_BASH_PATH: 'D:/tools/bash.exe' }, () => true)).toBe('D:/tools/bash.exe');
-  });
-
-  test('derives bash from a Git entry on PATH', () => {
-    const found = findGitBash({ PATH: String.raw`C:\Windows;D:\Git\cmd` }, p => p.toLowerCase().startsWith('d:'));
-    expect(found).toBe(String.raw`D:\Git\bin\bash.exe`);
-  });
-
-  test('nothing on disk is null, so the default shell is used', () => {
-    expect(findGitBash({ PATH: '' }, () => false)).toBeNull();
-  });
-});
-
 describe('the sink command', () => {
   test('runs this app’s binary in Node mode, guarded on the script existing', () => {
     expect(sinkCommand(LAUNCH, '/cfg/work')).toBe(
@@ -236,9 +229,26 @@ describe('the sink command', () => {
     expect(command).not.toContain('\\');
   });
 
-  test('a launch needs the script; the binary defaults to this process', () => {
-    expect(sinkLaunchFor(null)).toBeNull();
-    expect(sinkLaunchFor(SCRIPT)).toEqual({ scriptPath: SCRIPT, execPath: process.execPath, platform: process.platform });
+  test('a launch needs the script', () => {
+    const host = { execPath: '/opt/b/Bodhilander', platform: 'darwin' as const, gitBash: () => null };
+    expect(sinkLaunchFor(null, host)).toBeNull();
+    expect(sinkLaunchFor(SCRIPT, host)).toEqual({ scriptPath: SCRIPT, execPath: '/opt/b/Bodhilander', platform: 'darwin' });
+  });
+
+  test('on Windows it needs Git Bash, since the CLI runs statusLine under PowerShell without it', () => {
+    const host = { execPath: String.raw`C:\b\Bodhilander.exe`, platform: 'win32' as const };
+    const bash = String.raw`C:\Program Files\Git\bin\bash.exe`;
+    expect(sinkLaunchFor(SCRIPT, { ...host, gitBash: () => null })).toBeNull();
+    expect(sinkLaunchFor(SCRIPT, { ...host, gitBash: () => bash })).toEqual({ scriptPath: SCRIPT, ...host });
+  });
+
+  test('with no launch, a sink already installed is taken out and the user entry restored', () => {
+    const mine = { type: 'command', command: 'echo mine' };
+    writeSettings({ statusLine: mine });
+    installStatuslineSink(dir, LAUNCH);
+    const launch = sinkLaunchFor(SCRIPT, { execPath: 'x', platform: 'win32', gitBash: () => null });
+    expect(sinkReconciler(launch, () => true)(dir)).toBe('restored');
+    expect(settings().statusLine).toEqual(mine);
   });
 
   test.skipIf(process.platform === 'win32')('quotes survive a path with spaces and a quote, and a missing script is a no-op', () => {

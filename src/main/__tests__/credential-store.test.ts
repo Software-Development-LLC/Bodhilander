@@ -10,7 +10,9 @@ import * as path from 'path';
 
 import {
   credentialStoreFor,
+  CredentialRead,
   fileCredentialStore,
+  hasCredentials,
   keychainAccount,
   keychainCredentialStore,
   keychainService,
@@ -25,11 +27,12 @@ const ROTATED = { accessToken: 'new-access', refreshToken: 'new-refresh', expire
 interface ExecCall { args: string[]; input?: string }
 
 /** A fake `security` holding items by service, speaking the CLI's two verbs. */
-function fakeSecurity(items: Map<string, string>, opts: { writeCode?: number; dropWrites?: boolean } = {}) {
+function fakeSecurity(items: Map<string, string>, opts: { writeCode?: number; dropWrites?: boolean; findCode?: number } = {}) {
   const calls: ExecCall[] = [];
   const exec: SecurityExec = async (args, input) => {
     calls.push({ args, input });
     if (args[0] === 'find-generic-password') {
+      if (opts.findCode !== undefined) return { code: opts.findCode, stdout: '' };
       const secret = items.get(args[args.indexOf('-s') + 1]);
       return secret === undefined ? { code: 44, stdout: '' } : { code: 0, stdout: `${secret}\n` };
     }
@@ -49,6 +52,8 @@ function parseLine(line: string): string[] {
 function item(oauth: Record<string, unknown>, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({ claudeAiOauth: oauth, ...extra });
 }
+
+const accessToken = (read: CredentialRead) => (hasCredentials(read) ? read.accessToken : read);
 
 const OAUTH = { accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 1000, scopes: ['user:inference'], subscriptionType: 'max' };
 
@@ -79,15 +84,23 @@ describe('the Keychain store', () => {
 
   test('a secret printed as hex is decoded', async () => {
     const { exec } = fakeSecurity(new Map([[SERVICE, Buffer.from(item(OAUTH)).toString('hex')]]));
-    expect((await keychainCredentialStore(exec, () => 'alice').read(CONFIG_DIR))?.accessToken).toBe('old-access');
+    expect(accessToken(await keychainCredentialStore(exec, () => 'alice').read(CONFIG_DIR))).toBe('old-access');
   });
 
-  test('no item, or one that is not a credentials document, is null', async () => {
+  test('no item, or one that is not a credentials document, is no Keychain sign-in', async () => {
     const empty = fakeSecurity(new Map());
-    expect(await keychainCredentialStore(empty.exec, () => 'alice').read(CONFIG_DIR)).toBeNull();
+    expect(await keychainCredentialStore(empty.exec, () => 'alice').read(CONFIG_DIR)).toBe('no-keychain-credentials');
     const junk = fakeSecurity(new Map([[SERVICE, 'not json']]));
-    expect(await keychainCredentialStore(junk.exec, () => 'alice').read(CONFIG_DIR)).toBeNull();
+    expect(await keychainCredentialStore(junk.exec, () => 'alice').read(CONFIG_DIR)).toBe('no-keychain-credentials');
   });
+
+  test.each([[36, 'locked'], [51, 'access denied'], [-1, 'security failed to run']])(
+    'exit %d (%s) is an unavailable Keychain, not a missing sign-in',
+    async (code) => {
+      const { exec } = fakeSecurity(new Map([[SERVICE, item(OAUTH)]]), { findCode: code });
+      expect(await keychainCredentialStore(exec, () => 'alice').read(CONFIG_DIR)).toBe('keychain-unavailable');
+    },
+  );
 
   test('a rotation keeps every other field and goes in over stdin, never argv', async () => {
     const items = new Map([[SERVICE, item(OAUTH, { mcpOAuth: { keep: true } })]]);
@@ -101,6 +114,7 @@ describe('the Keychain store', () => {
     const write = calls.find(c => c.args[0] === '-i')!;
     expect(write.args).toEqual(['-i']);
     expect(write.input).toStartWith(`add-generic-password -U -a "alice" -s "${SERVICE}" -X "`);
+    expect(write.input).toEndWith('"\n');
     expect(write.input).not.toContain('new-access');
   });
 
@@ -139,17 +153,16 @@ describe('the store for a platform', () => {
     writeFile();
     const store = credentialStoreFor('linux', exec);
     expect(store).toBe(fileCredentialStore);
-    expect((await store.read(dir))?.accessToken).toBe('old-access');
+    expect(accessToken(await store.read(dir))).toBe('old-access');
     expect(calls).toHaveLength(0);
-    expect(credentialStoreFor('win32', exec).missing).toBe('no-credentials');
+    expect(await credentialStoreFor('win32', exec).read(path.join(dir, 'none'))).toBe('no-credentials');
   });
 
   test('on macOS the Keychain wins, and its item takes the rotation', async () => {
     const items = new Map([[keychainService(dir), item({ ...OAUTH, accessToken: 'keychain-access' })]]);
     writeFile();
     const store = credentialStoreFor('darwin', fakeSecurity(items).exec);
-    expect(store.missing).toBe('no-keychain-credentials');
-    expect((await store.read(dir))?.accessToken).toBe('keychain-access');
+    expect(accessToken(await store.read(dir))).toBe('keychain-access');
     expect(await store.writeRotated(dir, ROTATED)).toBe(true);
     expect(JSON.parse(items.get(keychainService(dir))!).claudeAiOauth.accessToken).toBe('new-access');
     expect(JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).claudeAiOauth.accessToken).toBe('old-access');
@@ -158,8 +171,20 @@ describe('the store for a platform', () => {
   test('on macOS with no Keychain item, a token file is read and written', async () => {
     writeFile();
     const store = credentialStoreFor('darwin', fakeSecurity(new Map()).exec);
-    expect((await store.read(dir))?.accessToken).toBe('old-access');
+    expect(accessToken(await store.read(dir))).toBe('old-access');
     expect(await store.writeRotated(dir, ROTATED)).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).claudeAiOauth.accessToken).toBe('new-access');
+  });
+
+  test('on macOS with neither, the reason is the Keychain’s', async () => {
+    expect(await credentialStoreFor('darwin', fakeSecurity(new Map()).exec).read(dir)).toBe('no-keychain-credentials');
+    const locked = fakeSecurity(new Map(), { findCode: 36 });
+    expect(await credentialStoreFor('darwin', locked.exec).read(dir)).toBe('keychain-unavailable');
+  });
+
+  test('on macOS an unavailable Keychain still falls back to a token file', async () => {
+    writeFile();
+    const store = credentialStoreFor('darwin', fakeSecurity(new Map(), { findCode: 36 }).exec);
+    expect(accessToken(await store.read(dir))).toBe('old-access');
   });
 });

@@ -3,6 +3,7 @@ import * as path from 'path';
 import log from 'electron-log';
 
 import { ClaudeSettingsConfig, getClaudeSettingsPath, writeClaudeSettings } from './claude-settings';
+import { findGitBash } from './git-bash';
 import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
 /**
@@ -54,13 +55,29 @@ export function sinkCommand(launch: SinkLaunch, configDir: string): string {
   return `if [ -f ${script} ]; then ${run}; fi`;
 }
 
-/** The launch for this app, or null when the build carries no sink script. */
-export function sinkLaunchFor(
-  scriptPath: string | null,
-  execPath: string = process.execPath,
-  platform: NodeJS.Platform = process.platform,
-): SinkLaunch | null {
-  return scriptPath ? { scriptPath, execPath, platform } : null;
+export interface SinkHost {
+  execPath: string;
+  platform: NodeJS.Platform;
+  gitBash: () => string | null;
+}
+
+const THIS_HOST: SinkHost = {
+  execPath: process.execPath,
+  platform: process.platform,
+  gitBash: () => findGitBash(process.env),
+};
+
+/**
+ * The launch for this app, or null when the build carries no sink script or,
+ * on Windows, the CLI would run statusLine under PowerShell for want of Git Bash.
+ */
+export function sinkLaunchFor(scriptPath: string | null, host: SinkHost = THIS_HOST): SinkLaunch | null {
+  if (!scriptPath) return null;
+  if (host.platform === 'win32' && !host.gitBash()) {
+    log.warn('[Usage] Git Bash not found, so the CLI runs statusLine under PowerShell; the sink stays off');
+    return null;
+  }
+  return { scriptPath, execPath: host.execPath, platform: host.platform };
 }
 
 function isOurs(entry: StatusLineEntry | undefined): boolean {
@@ -114,8 +131,7 @@ export function installStatuslineSink(configDir: string, launch: SinkLaunch): Si
     action = 'installed';
   }
 
-  const layout = current && 'padding' in current ? { padding: current.padding } : {};
-  settings.statusLine = { ...layout, type: 'command', command };
+  settings.statusLine = { ...current, type: 'command', command };
   if (!writeClaudeSettings(settings, configDir)) return 'error';
   return action;
 }

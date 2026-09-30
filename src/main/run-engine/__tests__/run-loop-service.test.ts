@@ -48,6 +48,16 @@ mock.module('../command-runner', () => ({
     return { code: 0, stdout: '[]', stderr: '' };
   },
 }));
+const launchedWhileRefreshing: boolean[] = [];
+const realGateLauncher = { ...(await import('../gate-launcher')) };
+const { isTokenRefreshing, trackTokenRefresh } = await import('../../token-refresh');
+mock.module('../gate-launcher', () => ({
+  ...realGateLauncher,
+  launchGate: async (launch: { context: { configDir?: string | null } }) => {
+    launchedWhileRefreshing.push(isTokenRefreshing(launch.context.configDir));
+    return { status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 };
+  },
+}));
 mock.module('../permission-inbox', () => ({
   pendingRequests: (_root: string, _runId: string, gate: unknown) => (gate ? pending(gate) : []),
   writeDecision: () => wrote,
@@ -229,4 +239,18 @@ describe('the account an open gate is checked under', () => {
     expect(runs.runningGateConfigDirs(['other'])).toEqual([]);
     expect(runs.runningGateConfigDirs([])).toEqual([]);
   });
+});
+
+test('a gate launch waits for a token refresh in flight on its account', async () => {
+  let finish: (token: string) => void = () => undefined;
+  const refresh = trackTokenRefresh('/cfg/a', new Promise<string>(resolve => { finish = resolve; }));
+  launchedWhileRefreshing.length = 0;
+  const launch = { context: { configDir: '/cfg/a', sessionId: 's' } } as Parameters<typeof service.resilientLaunch>[0];
+  const outcome = service.resilientLaunch(launch);
+  await Bun.sleep(5);
+  expect(launchedWhileRefreshing).toEqual([]);
+  finish('rotated');
+  await refresh;
+  expect(await outcome).toMatchObject({ status: 'launched' });
+  expect(launchedWhileRefreshing).toEqual([false]);
 });

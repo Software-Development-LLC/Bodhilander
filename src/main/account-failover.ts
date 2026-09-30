@@ -13,7 +13,7 @@ import * as accountsRepo from './repositories/accounts';
 import * as groupsRepo from './repositories/groups';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
-import { getUsageThreshold, hasFreshRoom, hasUsageRoom, isSignedOut, isUsagePressured } from './usage-store';
+import { getUsageThreshold, hasFreshRoom, hasUsageRoom, isUnreachable, isUsagePressured } from './usage-store';
 
 /**
  * What happens when an account runs out of quota mid-session.
@@ -75,7 +75,7 @@ export function nextHealthyAccount(excludeId: string | null, now: Date = new Dat
  */
 function preferUnpressured(accounts: ClaudeAccount[], now: Date, threshold: number): ClaudeAccount | undefined {
   return accounts.find(account => hasFreshRoom(account.id, now, threshold))
-    ?? accounts.find(account => !isUsagePressured(account.id, now, threshold) && !isSignedOut(account.id))
+    ?? accounts.find(account => !isUsagePressured(account.id, now, threshold) && !isUnreachable(account.id))
     ?? accounts[0];
 }
 

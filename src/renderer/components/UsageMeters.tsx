@@ -4,7 +4,7 @@ import {
   currentPct,
   formatDuration,
   isUsageStale,
-  UsageLevel,
+  levelForPct,
   USAGE_WINDOWS,
   UsageWindowName,
 } from '../../shared/usage';
@@ -24,13 +24,8 @@ const UNAVAILABLE_TEXT: Record<UsageUnavailableReason, string> = {
   error: 'usage unavailable',
   'no-credentials': 'usage unavailable (no token file for this account)',
   'no-keychain-credentials': 'usage unavailable (no Keychain sign-in for this account)',
+  'keychain-unavailable': 'usage unavailable (Keychain locked or access denied)',
 };
-
-function levelFor(pct: number, threshold: number): UsageLevel {
-  if (pct >= 100) return 'critical';
-  if (pct >= threshold) return 'warn';
-  return 'ok';
-}
 
 function formatAge(ms: number): string {
   return ms < 60_000 ? 'just now' : `${formatDuration(ms)} ago`;
@@ -59,7 +54,7 @@ export const UsageMeters: React.FC<UsageMetersProps> = ({ usage, threshold, now 
       {windows.map(({ name, pct, resetsAt }) => {
         const shown = Math.round(pct);
         return (
-          <div key={name} className={`usage-meter usage-${levelFor(pct, threshold)}`}>
+          <div key={name} className={`usage-meter usage-${levelForPct(pct, threshold)}`}>
             <span className="usage-meter-label">{WINDOW_LABELS[name]}</span>
             <span className="usage-meter-bar" aria-hidden="true">
               <span className="usage-meter-fill" style={{ width: `${Math.min(100, shown)}%` }} />

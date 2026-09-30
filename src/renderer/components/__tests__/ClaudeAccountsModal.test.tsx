@@ -410,8 +410,8 @@ describe('usage meters', () => {
   const noop = () => {};
   const usage = (over: Partial<AccountUsage> = {}): AccountUsage => ({
     accountId: 'a1',
-    fiveHour: { pct: 92, resetsAt: NOW + 40 * MIN },
-    sevenDay: { pct: 31, resetsAt: NOW + 2 * 24 * 60 * MIN },
+    fiveHour: { pct: 92, resetsAt: NOW + 40 * MIN, observedAt: NOW - 3 * MIN },
+    sevenDay: { pct: 31, resetsAt: NOW + 2 * 24 * 60 * MIN, observedAt: NOW - 3 * MIN },
     source: 'poll',
     observedAt: NOW - 3 * MIN,
     unavailable: null,
@@ -483,7 +483,7 @@ describe('usage meters', () => {
       getAccountUsage: async () => ({}),
       refreshAccountUsage: async () => {
         refreshed++;
-        return { a1: usage({ fiveHour: { pct: 92, resetsAt: Date.now() + 40 * MIN }, observedAt: Date.now() }) };
+        return { a1: usage({ fiveHour: { pct: 92, resetsAt: Date.now() + 40 * MIN, observedAt: Date.now() }, observedAt: Date.now() }) };
       },
       onAccountUsageUpdated: () => () => {},
       platform: 'win32',

@@ -8,6 +8,10 @@ import * as os from 'os';
 import * as path from 'path';
 
 const prefs = new Map<string, string>();
+const warnings: string[] = [];
+mock.module('electron-log', () => ({
+  default: { info() {}, error() {}, warn: (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); } },
+}));
 mock.module('../repositories/preferences', () => ({
   getPreference: (key: string) => prefs.get(key) ?? null,
   setPreference: (key: string, value: string) => { prefs.set(key, value); },
@@ -28,7 +32,6 @@ let root: string;
 let accounts: ClaudeAccount[];
 
 const credentials: CredentialStore = {
-  missing: 'no-credentials',
   read: async () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: NOW + 3_600_000, scopes: [] }),
   writeRotated: async () => true,
 };
@@ -114,6 +117,13 @@ describe('the sink follows its preference', () => {
     expect(statusLine(accounts[0])).toBeDefined();
     service.preferenceChanged('usageStatuslineSink');
     for (const acc of accounts) expect(statusLine(acc)).toBeUndefined();
+  });
+
+  test('a sink that cannot be written is logged, naming the dir', async () => {
+    fs.writeFileSync(path.join(accounts[0].configDir, 'settings.json'), '[]');
+    warnings.length = 0;
+    await createUsageService(deps({ listAccounts: () => [accounts[0]] })).poller.pollAll();
+    expect(warnings).toEqual([`[Usage] Could not update the statusline sink in ${accounts[0].configDir}`]);
   });
 
   test('a build without the script installs nothing', async () => {

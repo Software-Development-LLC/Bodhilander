@@ -20,7 +20,7 @@ const usageStore = await import('../usage-store');
 function usageAt(accountId: string, pct: number): void {
   usageStore.setUsage({
     accountId,
-    fiveHour: { pct, resetsAt: Date.now() + 3_600_000 },
+    fiveHour: { pct, resetsAt: Date.now() + 3_600_000, observedAt: Date.now() },
     sevenDay: null,
     source: 'poll',
     observedAt: Date.now(),
@@ -145,7 +145,7 @@ describe('resolveAccountForGroup near the usage limit', () => {
     seedAccount('work', 1);
     seedAccount('spare');
     usageAt('work', 90);
-    usageStore.setUsage({ ...usageStore.getUsage('work')!, accountId: 'spare', fiveHour: { pct: 5, resetsAt: null }, unavailable: 'reauth' });
+    usageStore.setUsage({ ...usageStore.getUsage('work')!, accountId: 'spare', fiveHour: { pct: 5, resetsAt: null, observedAt: Date.now() }, unavailable: 'reauth' });
     expect(resolveAccountForGroup(null)?.id).toBe('work');
   });
 
@@ -153,7 +153,7 @@ describe('resolveAccountForGroup near the usage limit', () => {
     seedAccount('work', 1);
     seedAccount('spare');
     usageStore.setUsage({
-      accountId: 'work', fiveHour: { pct: 99, resetsAt: null }, sevenDay: null,
+      accountId: 'work', fiveHour: { pct: 99, resetsAt: null, observedAt: Date.now() - 60 * 60_000 }, sevenDay: null,
       source: 'poll', observedAt: Date.now() - 60 * 60_000, unavailable: null,
     });
     expect(resolveAccountForGroup(null)?.id).toBe('work');

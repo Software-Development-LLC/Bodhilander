@@ -321,7 +321,7 @@ export function configDirForGate(run: RunRow, gate: { configDir: string | null }
  * at the wiring layer, so neither `gate-spawner` nor the wrapper imports the
  * accounts repository.
  */
-async function resilientLaunch(launch: GateLaunch): Promise<GateOutcome> {
+export async function resilientLaunch(launch: GateLaunch): Promise<GateOutcome> {
   await tokenRefreshSettled(launch.context.configDir);
   return runGateResilient({
     run: () => launchGate(launch),
