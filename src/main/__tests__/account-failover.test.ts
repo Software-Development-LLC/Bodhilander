@@ -649,6 +649,14 @@ describe('routing around an account near its usage limit', () => {
     expect(failover.nextHealthyAccount('primary')?.id).toBe('unknown');
   });
 
+  test('failover takes an account with no reading before one whose Keychain cannot be read', () => {
+    addAccount('primary', 0, true);
+    addAccount('locked', 1);
+    addAccount('unknown', 2);
+    usageStore.setUsage({ ...emptyRecord('locked'), unavailable: 'keychain-unavailable' });
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('unknown');
+  });
+
   test('a new session is not moved onto an account with no reading or a lapsed sign-in', () => {
     addAccount('primary', 0, true);
     addAccount('unknown', 1);
