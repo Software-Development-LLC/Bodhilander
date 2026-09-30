@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 
-import { readClaudeSettings, writeClaudeSettings } from './claude-settings';
+import { getClaudeSettingsPath, readClaudeSettings, writeClaudeSettings } from './claude-settings';
 import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
 /**
@@ -67,7 +67,20 @@ function saveChain(configDir: string, chain: StatusLineEntry | null): boolean {
   }
 }
 
+/** An existing settings.json that is not a JSON object must not be rewritten. */
+function settingsUnreadable(configDir: string): boolean {
+  const file = getClaudeSettingsPath(configDir);
+  if (!fs.existsSync(file)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    return typeof parsed !== 'object' || parsed === null || Array.isArray(parsed);
+  } catch {
+    return true;
+  }
+}
+
 export function installStatuslineSink(configDir: string, scriptPath: string): SinkInstallAction {
+  if (settingsUnreadable(configDir)) return 'error';
   const settings = readClaudeSettings(configDir);
   const current = settings.statusLine as StatusLineEntry | undefined;
   const command = sinkCommand(scriptPath, configDir);

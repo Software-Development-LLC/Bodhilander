@@ -69,6 +69,21 @@ describe('installStatuslineSink', () => {
   });
 });
 
+describe('installStatuslineSink on a settings.json it cannot read', () => {
+  test.each([['torn JSON', '{"model": "opus",'], ['an array', '[]'], ['a string', '"x"']])('%s is left untouched, chain and all', (_name, body) => {
+    fs.writeFileSync(path.join(dir, 'bodhilander-statusline.json'), '{"chain":{"type":"command","command":"mine"}}');
+    fs.writeFileSync(path.join(dir, 'settings.json'), body);
+    expect(installStatuslineSink(dir, SCRIPT)).toBe('error');
+    expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe(body);
+    expect(readChainedCommand(dir)).toBe('mine');
+  });
+
+  test('a missing settings.json is created', () => {
+    expect(installStatuslineSink(dir, SCRIPT)).toBe('installed');
+    expect(settings().statusLine.command).toBe(sinkCommand(SCRIPT, dir));
+  });
+});
+
 describe('the statusline script', () => {
   const turn = JSON.stringify({
     model: { id: 'claude-opus' },
