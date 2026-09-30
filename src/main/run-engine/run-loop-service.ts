@@ -58,7 +58,6 @@ import { provisionRun, resolveProvisionCommands } from './provision';
 import { loadOrchestrationConfig } from '../github/orchestration-config';
 import { fetchProjectBoard } from '../github/board-service';
 import { resolveAccountForGroup } from '../account-resolver';
-import { recordGateConfigDir } from '../gate-accounts';
 import { launchGate, type GateLaunch } from './gate-launcher';
 import type { GateOutcome } from './gate-process';
 import { runGateResilient } from './gate-resilience';
@@ -303,9 +302,12 @@ const spawnDeps: SpawnDeps = {
 
 /** The managed account a run's gates launch under (#327), or null for ambient. */
 export function accountConfigDirFor(run: RunRow): string | null {
-  const configDir = resolveAccountForGroup(run.groupId)?.configDir ?? null;
-  recordGateConfigDir(run.id, configDir);
-  return configDir;
+  return resolveAccountForGroup(run.groupId)?.configDir ?? null;
+}
+
+/** The dir a gate launched under, else the run's current one for a row that predates it. */
+export function configDirForGate(run: RunRow, gate: { configDir: string | null }): string | null {
+  return gate.configDir ?? accountConfigDirFor(run);
 }
 
 /**
@@ -424,7 +426,7 @@ async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, own
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner), resilientLaunch);
+  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner), resilientLaunch, runsRepo.setGateConfigDir);
   return {
     target,
     deps: {
@@ -444,7 +446,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     listActiveRuns: () => runsRepo.listActiveRuns(),
     listOwners: (id) => runsRepo.listOwners(id),
     activeGate: (id, repo) => runsRepo.activeGate(id, repo),
-    look: (run, gate) => lookAtGate(run, gate, attentionDeps(config, accountConfigDirFor(run))),
+    look: (run, gate) => lookAtGate(run, gate, attentionDeps(config, configDirForGate(run, gate))),
     pending: (run, gate) => pendingRequests(config.permissionsRoot, run.id, gate, channelIo).length,
     discoverPr: async (_run, owner) => {
       // `gh` in the owner's worktree, so it reads that repo's remote and auth

@@ -178,17 +178,36 @@ describe('answering one owner\u2019s permission', () => {
   });
 });
 
-describe('the account a run launches gates under', () => {
-  test('is recorded against the run, so it stays owned after routing moves', async () => {
-    const { activeGateConfigDirs, clearGateConfigDirs } = await import('../../gate-accounts');
-    clearGateConfigDirs();
+describe('the account an open gate is checked under', () => {
+  function accounts() {
     db.exec(`CREATE TABLE claude_accounts (
       id TEXT PRIMARY KEY, label TEXT NOT NULL, config_dir TEXT NOT NULL, email TEXT, color TEXT,
       is_default INTEGER DEFAULT 0, created_at TEXT, last_used_at TEXT, fallback_rank INTEGER,
       limited_until TEXT, limited_at TEXT)`);
-    db.exec(`INSERT INTO claude_accounts (id, label, config_dir, is_default) VALUES ('a', 'a', '/cfg/a', 1)`);
+    db.exec(`INSERT INTO claude_accounts (id, label, config_dir, is_default) VALUES ('b', 'b', '/cfg/b', 1)`);
+  }
+
+  test('a gate launched on A is still checked on A after the run resolves to B', () => {
+    accounts();
+    runs.setGateConfigDir('g4-repo-a', '/cfg/a');
     const run = runs.getRun('run-1')!;
-    expect(service.accountConfigDirFor(run)).toBe('/cfg/a');
-    expect(activeGateConfigDirs(['run-1'])).toEqual(['/cfg/a']);
+    const gate = runs.activeGate('run-1', 'repo-a')!;
+    expect(service.accountConfigDirFor(run)).toBe('/cfg/b');
+    expect(service.configDirForGate(run, gate)).toBe('/cfg/a');
+  });
+
+  test('a gate row with no recorded dir falls back to the run’s current account', () => {
+    accounts();
+    const run = runs.getRun('run-1')!;
+    expect(service.configDirForGate(run, runs.activeGate('run-1', 'repo-b')!)).toBe('/cfg/b');
+  });
+
+  test('only running gates of the given runs are counted as holding a dir', () => {
+    runs.setGateConfigDir('g4-repo-a', '/cfg/a');
+    runs.setGateConfigDir('g4-repo-b', '/cfg/b');
+    runs.finishGate('g4-repo-b', 'done', { verdict: 'pass' });
+    expect(runs.runningGateConfigDirs(['run-1'])).toEqual(['/cfg/a']);
+    expect(runs.runningGateConfigDirs(['other'])).toEqual([]);
+    expect(runs.runningGateConfigDirs([])).toEqual([]);
   });
 });

@@ -84,6 +84,8 @@ export const RUN_TABLES_SQL = `
       bg_session_id TEXT DEFAULT NULL,
       claude_session_id TEXT DEFAULT NULL,
       account_id TEXT DEFAULT NULL,
+      -- The CLAUDE_CONFIG_DIR the gate launched under; NULL for ambient login.
+      config_dir TEXT DEFAULT NULL,
       status TEXT NOT NULL DEFAULT 'running',
       verdict_json TEXT DEFAULT NULL,
       receipt_path TEXT DEFAULT NULL,

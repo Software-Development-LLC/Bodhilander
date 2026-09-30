@@ -165,6 +165,8 @@ export function spawnGateFor(
    * don't need the wrapper.
    */
   launch: (launch: GateLaunch) => Promise<GateOutcome> = launchGate,
+  /** Stamps the launch's config dir on its gate row, so later checks read that dir. */
+  recordConfigDir: (gateId: string, configDir: string | null) => void = () => undefined,
 ): ExecutorDeps['spawnGate'] {
   const modeFor = config.modeFor ?? defaultModeFor;
   const taskFor = config.taskFor ?? defaultTaskFor;
@@ -181,6 +183,7 @@ export function spawnGateFor(
       );
     }
     log(`launching gate ${gate} as ${agent} for ${owner.repo}`);
+    recordConfigDir(turn.id, accountConfigDir);
     return launch({
       gate,
       agentName: agent,

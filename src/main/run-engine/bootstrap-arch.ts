@@ -87,6 +87,7 @@ export async function runArchGate(run: RunRow, deps: ArchDeps): Promise<ArchResu
     repo: SCOPE_REPO,
     agent: ARCH_AGENT,
     posture: run.permissionPosture,
+    configDir: deps.accountConfigDir ?? null,
   });
   const turn = deps.activeGate(run.id, SCOPE_REPO);
   if (!turn) return { status: 'inconclusive', reason: 'the arch gate row could not be opened' };

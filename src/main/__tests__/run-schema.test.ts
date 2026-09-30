@@ -292,4 +292,16 @@ describe('the multi-owner migration backfills an in-flight database', () => {
       expect(row.bootstrap_state).toBeNull();
     }
   });
+
+  test('adds run_gates.config_dir, and gates already there read as unknown', () => {
+    const d = oldDb();
+    seed(d);
+    expect(columns(d, 'run_gates')).not.toContain('config_dir');
+    initializeRunTables(asDb(d));
+    expect(columns(d, 'run_gates')).toContain('config_dir');
+    const gates = d.prepare('SELECT config_dir FROM run_gates').all() as { config_dir: string | null }[];
+    expect(gates.length).toBeGreaterThan(0);
+    expect(gates.every(g => g.config_dir === null)).toBe(true);
+    expect(() => initializeRunTables(asDb(d))).not.toThrow();
+  });
 });

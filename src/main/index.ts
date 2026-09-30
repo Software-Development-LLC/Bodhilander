@@ -46,7 +46,6 @@ import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
 import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
-import { activeGateConfigDirs } from './gate-accounts';
 import { installStatuslineSink, nodeOnPath } from './statusline-sink';
 import { ownedAccountIds, runAccountIdsForOwnership, UsageCrossingEvent, UsagePoller } from './usage-poller';
 import { describeCrossing } from './usage-meter';
@@ -456,7 +455,7 @@ function tokenOwnedAccountIds(): Set<string> {
     runAccountIds = runAccountIdsForOwnership(runsRepo.listActiveRuns(), {
       candidate: groupId => candidateAccountForGroup(groupId)?.id ?? null,
       resolved: groupId => resolveAccountForGroup(groupId)?.id ?? null,
-      launchedDirs: activeGateConfigDirs,
+      launchedDirs: runsRepo.runningGateConfigDirs,
       accountIdForDir: dir => accountsRepo.getAccountByConfigDir(dir)?.id ?? null,
     });
   } catch (err) {
