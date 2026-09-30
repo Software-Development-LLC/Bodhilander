@@ -77,11 +77,6 @@ function preferUnpressured(accounts: ClaudeAccount[], now: Date = new Date()): C
 }
 
 /**
- * The account a brand-new session should start on, given the one it would
- * inherit. Only steps aside when the inherited account is over the warning
- * threshold and a healthy account below it exists; otherwise returns null.
- */
-/**
  * Pin a just-created session to a below-threshold account when the one it
  * would inherit is near its limit. Returns the account it was moved to.
  */
@@ -96,6 +91,7 @@ export function routeNewSession(sessionId: string, now: Date = new Date()): { fr
   return { from: inherited, to };
 }
 
+/** A healthy below-threshold account to use instead of a near-limit inherited one, or null. */
 export function newSessionAccountOverride(inherited: ClaudeAccount | null, now: Date = new Date()): ClaudeAccount | null {
   if (!inherited || !isUsagePressured(inherited.id, now)) return null;
   const alternative = accountsRepo.getAccountsInFallbackOrder().find(

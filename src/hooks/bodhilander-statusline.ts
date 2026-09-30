@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * Records the CLI's per-turn `rate_limits` for Bodhilander's usage meters, then
- * prints the output of the user's own statusLine command, if one was chained.
- * Usage: node bodhilander-statusline.js <config-dir>
+ * Usage: node bodhilander-statusline.js <config-dir>. Records per-turn
+ * `rate_limits` for the usage meters, then prints any chained user statusLine.
  */
 
 import * as fs from 'fs';
