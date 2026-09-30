@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
- * Usage: bodhilander-statusline.js <config-dir>, run by the app's own binary
- * in Node mode. Records per-turn `rate_limits` for the usage meters, then
- * prints any chained user statusLine.
+ * Usage: bodhilander-statusline.js <config-dir>, under the app's binary in Node
+ * mode. Records `rate_limits` for the meters, then prints any chained statusLine.
  */
 
 import * as fs from 'fs';

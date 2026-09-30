@@ -13,10 +13,9 @@ import {
 } from './usage-credentials';
 
 /**
- * Where an account's OAuth tokens live: `.credentials.json` in its config dir,
- * or on macOS the login Keychain item the CLI keeps for that dir. The Keychain
- * is reached through `/usr/bin/security`, as the CLI reaches it, so the item's
- * access list already trusts the caller. Nothing here logs what it reads.
+ * Where an account's OAuth tokens live: `.credentials.json`, or on macOS the
+ * CLI's Keychain item for that dir, reached through `/usr/bin/security` as the
+ * CLI reaches it so the item's access list already trusts us. Nothing is logged.
  */
 
 export interface CredentialStore {
