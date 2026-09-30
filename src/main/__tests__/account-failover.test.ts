@@ -670,3 +670,13 @@ describe('routeNewSession', () => {
     expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBeNull();
   });
 });
+
+test('routeNewSession never overrides an account the group chose for itself', () => {
+  addAccount('primary', 0, true);
+  addAccount('fresh', 1);
+  addGroup('g', 'primary');
+  addSession('s1', 'g', null);
+  usageAt('primary', 90);
+  expect(failover.routeNewSession('s1')).toBeNull();
+  expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBeNull();
+});

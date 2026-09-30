@@ -10,6 +10,7 @@ import { resolveAccountForSession } from './account-resolver';
 import { assignSessionAccount } from './account-switch';
 import { describeRateLimitType } from './quota-limit';
 import * as accountsRepo from './repositories/accounts';
+import * as groupsRepo from './repositories/groups';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
 import { isUsagePressured } from './usage-store';
@@ -83,6 +84,8 @@ function preferUnpressured(accounts: ClaudeAccount[], now: Date = new Date()): C
 export function routeNewSession(sessionId: string, now: Date = new Date()): { from: ClaudeAccount; to: ClaudeAccount } | null {
   const session = sessionsRepo.getSession(sessionId);
   if (!session || session.claudeAccountId) return null;
+  const group = session.groupId ? groupsRepo.getAllGroups().find(g => g.id === session.groupId) : undefined;
+  if (group?.claudeAccountId) return null;
   if (session.provider && session.provider !== 'claude') return null;
   const inherited = resolveAccountForSession(sessionId);
   const to = newSessionAccountOverride(inherited, now);

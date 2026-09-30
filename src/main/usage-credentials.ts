@@ -125,7 +125,11 @@ export async function refreshOAuthToken(
  * cannot parse, and replaces it by temp file + rename so the CLI never reads a
  * torn one.
  */
-export function writeRotatedTokens(configDir: string, rotated: RotatedTokens): boolean {
+export function writeRotatedTokens(
+  configDir: string,
+  rotated: RotatedTokens,
+  rename: (from: string, to: string) => void = fs.renameSync,
+): boolean {
   const raw = readRaw(configDir);
   const oauth = raw?.claudeAiOauth;
   if (!raw || typeof oauth !== 'object' || oauth === null) return false;
@@ -141,12 +145,24 @@ export function writeRotatedTokens(configDir: string, rotated: RotatedTokens): b
 
   const file = credentialsPath(configDir);
   const tmp = `${file}.bodhilander.tmp`;
+  const text = JSON.stringify({ ...raw, claudeAiOauth: next });
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ ...raw, claudeAiOauth: next }), { encoding: 'utf-8', mode: 0o600 });
-    fs.renameSync(tmp, file);
+    fs.writeFileSync(tmp, text, { encoding: 'utf-8', mode: 0o600 });
+  } catch {
+    return false;
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      rename(tmp, file);
+      return true;
+    } catch { /* Windows refuses a rename over a file another process has open */ }
+  }
+  try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+  // The old refresh token is already spent, so a torn-read risk beats losing the pair.
+  try {
+    fs.writeFileSync(file, text, { encoding: 'utf-8', mode: 0o600 });
     return true;
   } catch {
-    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
     return false;
   }
 }

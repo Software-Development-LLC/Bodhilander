@@ -138,3 +138,28 @@ describe('writeRotatedTokens', () => {
     expect(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).toBe('torn');
   });
 });
+
+describe('writeRotatedTokens when the rename is refused', () => {
+  const rotated = { accessToken: 'new-access', refreshToken: 'new-refresh', expiresAt: 9, scopes: null, refreshTokenExpiresAt: null };
+
+  test('a transient refusal is retried', () => {
+    writeCreds(baseOauth);
+    let calls = 0;
+    const flaky = (from: string, to: string) => {
+      calls++;
+      if (calls < 2) throw new Error('EPERM');
+      fs.renameSync(from, to);
+    };
+    expect(writeRotatedTokens(dir, rotated, flaky)).toBe(true);
+    expect(calls).toBe(2);
+    expect(readOAuthCredentials(dir)?.refreshToken).toBe('new-refresh');
+  });
+
+  test('a persistent refusal falls back to writing in place, never losing the pair', () => {
+    writeCreds(baseOauth);
+    const refuse = () => { throw new Error('EPERM'); };
+    expect(writeRotatedTokens(dir, rotated, refuse)).toBe(true);
+    expect(readOAuthCredentials(dir)?.refreshToken).toBe('new-refresh');
+    expect(fs.readdirSync(dir)).toEqual(['.credentials.json']);
+  });
+});

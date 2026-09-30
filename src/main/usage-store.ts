@@ -8,7 +8,6 @@ import { getPreference } from './repositories/preferences';
  * exactly as it did before usage was measured.
  */
 
-
 const records = new Map<string, AccountUsage>();
 
 export function getUsage(accountId: string): AccountUsage | null {
