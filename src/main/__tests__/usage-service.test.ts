@@ -32,7 +32,7 @@ let root: string;
 let accounts: ClaudeAccount[];
 
 const credentials: CredentialStore = {
-  read: async () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: NOW + 3_600_000, scopes: [] }),
+  read: async () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: NOW + 3_600_000, scopes: [], source: 'file' as const }),
   writeRotated: async () => true,
 };
 
@@ -152,7 +152,7 @@ describe('where readings go', () => {
     let refreshed = 0;
     const expired: CredentialStore = {
       ...credentials,
-      read: async () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: NOW - 1000, scopes: [] }),
+      read: async () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: NOW - 1000, scopes: [], source: 'file' as const }),
       writeRotated: async () => { refreshed++; return true; },
     };
     const service = createUsageService(deps({

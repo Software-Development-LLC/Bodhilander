@@ -316,21 +316,24 @@ export class UsagePoller extends EventEmitter {
 
   /**
    * Save a held pair to the store it was read from. A store now holding some
-   * other refresh token was signed in again since, and that sign-in stands.
+   * other refresh token, or no sign-in at all, has moved on, and the pair is let go.
    */
   private async saveHeld(account: ClaudeAccount): Promise<boolean> {
     const rotation = this.held.get(account.id);
     if (!rotation) return true;
     const current = await this.deps.credentials.read(rotation.configDir);
-    const superseded = hasCredentials(current)
-      && current.source === rotation.source
-      && current.refreshToken !== rotation.spent;
-    if (superseded || await this.deps.credentials.writeRotated(rotation.configDir, rotation.rotated, rotation.source)) {
-      log.info(`[Usage] ${superseded ? 'Dropped' : 'Saved'} the held token rotation for ${account.label}`);
-      this.release(account.id);
-      return true;
+    const movedOn = hasCredentials(current)
+      ? current.source === rotation.source && current.refreshToken !== rotation.spent
+      : current !== 'keychain-unavailable';
+    if (movedOn) {
+      log.info(`[Usage] Released the held token rotation for ${account.label}; its store has changed since`);
+    } else if (await this.deps.credentials.writeRotated(rotation.configDir, rotation.rotated, rotation.source)) {
+      log.info(`[Usage] Saved the held token rotation for ${account.label}`);
+    } else {
+      return false;
     }
-    return false;
+    this.release(account.id);
+    return true;
   }
 
   private backOff(account: ClaudeAccount, status: number, retryAfter: string | null): void {

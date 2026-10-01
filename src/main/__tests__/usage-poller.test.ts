@@ -478,7 +478,7 @@ describe('a rotation the Keychain will not take', () => {
     return { state, saved, store: credentialStoreFor('darwin', exec) };
   }
 
-  function keychainPoller(acc: ClaudeAccount, fetch: FetchLike, store: ReturnType<typeof credentialStoreFor>) {
+  function storePoller(acc: ClaudeAccount, fetch: FetchLike, store: ReturnType<typeof credentialStoreFor>) {
     return new UsagePoller({
       listAccounts: () => [acc], boundAccountIds: () => new Set(), fetch, credentials: store, now: () => clock,
     });
@@ -497,7 +497,7 @@ describe('a rotation the Keychain will not take', () => {
       if (url === OAUTH_TOKEN_URL) kc.state.findCode = 36;
       return route(url);
     });
-    const p = keychainPoller(work, fetch, kc.store);
+    const p = storePoller(work, fetch, kc.store);
     await p.pollAll();
 
     expect(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).toBe(before);
@@ -520,7 +520,7 @@ describe('a rotation the Keychain will not take', () => {
     const kc = keychain(work);
     kc.state.writeCode = 1;
     const { calls, fetch } = fakeFetch(route);
-    const p = keychainPoller(work, fetch, kc.store);
+    const p = storePoller(work, fetch, kc.store);
     await p.pollAll();
     expect(usageStore.getUsage('work')?.unavailable).toBe('keychain-unavailable');
 
@@ -545,7 +545,7 @@ describe('a rotation the Keychain will not take', () => {
     const kc = keychain(work);
     kc.state.items.clear();
     const { calls, fetch } = fakeFetch(route);
-    await keychainPoller(work, fetch, kc.store).pollAll();
+    await storePoller(work, fetch, kc.store).pollAll();
 
     const saved = JSON.parse(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).claudeAiOauth;
     expect(saved).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh', subscriptionType: 'max' });
@@ -558,7 +558,7 @@ describe('a rotation the Keychain will not take', () => {
     const kc = keychain(work);
     kc.state.writeCode = 1;
     const { calls, fetch } = fakeFetch(route);
-    await keychainPoller(work, fetch, kc.store).pollAll();
+    await storePoller(work, fetch, kc.store).pollAll();
     expect(isTokenRefreshing(work.configDir)).toBe(true);
 
     await tokenRefreshSettled(work.configDir);
@@ -576,7 +576,7 @@ describe('a rotation the Keychain will not take', () => {
     const kc = keychain(work);
     kc.state.writeCode = 1;
     const { fetch } = fakeFetch(route);
-    const p = keychainPoller(work, fetch, kc.store);
+    const p = storePoller(work, fetch, kc.store);
     await p.pollAll();
 
     kc.state.writeCode = 0;
@@ -588,5 +588,57 @@ describe('a rotation the Keychain will not take', () => {
     await p.pollAll();
     expect(kc.saved()).toMatchObject({ accessToken: 'login-access', refreshToken: 'login-refresh' });
     expect(isTokenRefreshing(work.configDir)).toBe(false);
+  });
+
+  test('a sign-out while a pair is held lets the pair go and reads as signed out', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    const p = storePoller(work, fetch, kc.store);
+    await p.pollAll();
+
+    kc.state.items.clear();
+    nextRound();
+    await p.pollAll();
+    expect(usageStore.getUsage('work')?.unavailable).toBe('no-keychain-credentials');
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+  });
+
+  test('a removed account takes its held pair with it', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const accounts = [work];
+    const { fetch } = fakeFetch(route);
+    const p = new UsagePoller({
+      listAccounts: () => accounts, boundAccountIds: () => new Set(), fetch, credentials: kc.store, now: () => clock,
+    });
+    await p.pollAll();
+    expect(isTokenRefreshing(work.configDir)).toBe(true);
+    accounts.length = 0;
+    await p.pollAll();
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+  });
+
+  test('a token file that refuses the pair holds it too, as an error rather than a sign-out', async () => {
+    const work = account('work');
+    writeCreds(work, NOW - 1000);
+    let refuse = true;
+    const store = {
+      ...fileCredentialStore,
+      writeRotated: async (...args: Parameters<typeof fileCredentialStore.writeRotated>) => !refuse && fileCredentialStore.writeRotated(...args),
+    };
+    const { calls, fetch } = fakeFetch(route);
+    const p = storePoller(work, fetch, store);
+    await p.pollAll();
+    expect(usageStore.getUsage('work')?.unavailable).toBe('error');
+
+    refuse = false;
+    nextRound();
+    await p.pollAll();
+    const saved = JSON.parse(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).claudeAiOauth;
+    expect(saved).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' });
+    expect(calls.map(c => c.url)).toEqual([OAUTH_TOKEN_URL, USAGE_URL]);
   });
 });
