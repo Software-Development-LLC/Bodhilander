@@ -18,12 +18,20 @@ describe('held rotations', () => {
 
   test('two launches on a held dir share one save', async () => {
     let saves = 0;
-    holdRotation('/cfg/a', async () => {
+    let finish: () => void = () => undefined;
+    holdRotation('/cfg/a', () => {
       saves++;
-      releaseRotation('/cfg/a');
-      return true;
+      return new Promise<boolean>(resolve => {
+        finish = () => {
+          releaseRotation('/cfg/a');
+          resolve(true);
+        };
+      });
     });
-    await Promise.all([tokenRefreshSettled('/cfg/a'), tokenRefreshSettled('/cfg/a')]);
+    const launches = Promise.all([tokenRefreshSettled('/cfg/a'), tokenRefreshSettled('/cfg/a')]);
+    await Bun.sleep(5);
+    finish();
+    await launches;
     expect(saves).toBe(1);
     expect(warned).toEqual([]);
   });

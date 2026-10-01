@@ -13,7 +13,15 @@ import * as accountsRepo from './repositories/accounts';
 import * as groupsRepo from './repositories/groups';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
-import { getUsageThreshold, hasFreshRoom, hasUsageRoom, isUnreachable, isUsagePressured, needsRelief } from './usage-store';
+import {
+  getUsageThreshold,
+  hasFreshRoom,
+  hasHeldRotation,
+  hasUsageRoom,
+  isUnreachable,
+  isUsagePressured,
+  needsRelief,
+} from './usage-store';
 
 /**
  * What happens when an account runs out of quota mid-session.
@@ -259,7 +267,7 @@ export function failbackCandidates(now: Date = new Date()): FailbackCandidate[] 
     // The cooldown has run out. Drop it now so the account is a legitimate
     // failover target again even if this particular session never moves back.
     accountsRepo.clearAccountLimit(home.id);
-    if (!hasUsageRoom(home.id, now, threshold)) continue;
+    if (!hasUsageRoom(home.id, now, threshold) || hasHeldRotation(home.id)) continue;
     candidates.push({ sessionId: session.id, home });
   }
 

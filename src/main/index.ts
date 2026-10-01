@@ -49,6 +49,7 @@ import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from '
 import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
 import { credentialStoreFor } from './credential-store';
 import { saveHeldRotations } from './token-refresh';
+import { QUIT_CLEANUP_BUDGET_MS, runQuitCleanup } from './quit-cleanup';
 import { sinkLaunchFor } from './statusline-sink';
 import { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } from './session-routing';
 import { createUsageService, UsageService } from './usage-service';
@@ -1781,16 +1782,12 @@ let shuttingDown = false;
 // so macOS auto-updates downloaded but never installed (issue #133). The
 // teardown below can hang on a wedged native worker, so it MUST NOT gate the
 // process exit — runGuardedShutdown force-exits within the budget regardless.
-// Comfortably inside ShipIt's tolerance; better-sqlite3 WAL is crash-safe.
-const QUIT_CLEANUP_BUDGET_MS = 2000;
+// The budget lives in ./quit-cleanup; better-sqlite3 WAL is crash-safe.
 
 // After arming a pending macOS update install on quit, give electron-updater /
 // Squirrel this long to take over the process exit before we hard-exit anyway,
 // so a wedged install handoff can never strand the app running.
 const UPDATE_INSTALL_FALLBACK_MS = 3000;
-
-// A token pair the store refused is lost on exit, so it gets one save; keep this under QUIT_CLEANUP_BUDGET_MS.
-const HELD_ROTATION_SAVE_MS = 1500;
 
 app.on('before-quit', (event) => {
   if (shuttingDown) return;
@@ -1831,25 +1828,22 @@ app.on('before-quit', (event) => {
       }
       app.exit(0);
     },
-    cleanup: async () => {
-      const savingHeldRotations = saveHeldRotations(HELD_ROTATION_SAVE_MS);
-      try {
-        await ptyManager.killAll();
-      } catch (e) {
-        log.error('Error killing PTYs on quit:', e);
-      }
-
-      trayManager.destroy();
-      stateMonitor?.stop();
-      try {
-        getRelayClient().stop();
-      } catch (e) {
-        log.error('Error stopping relay client on quit:', e);
-      }
-      stopBoardWatcherService();
-      stopRunLoopService();
-      await savingHeldRotations;
-      closeDatabase();
-    },
+    cleanup: () => runQuitCleanup({
+      saveHeldRotations,
+      killPtys: () => ptyManager.killAll(),
+      stopServices: () => {
+        trayManager.destroy();
+        stateMonitor?.stop();
+        try {
+          getRelayClient().stop();
+        } catch (e) {
+          log.error('Error stopping relay client on quit:', e);
+        }
+        stopBoardWatcherService();
+        stopRunLoopService();
+      },
+      closeDatabase,
+      logError: (message, err) => log.error(message, err),
+    }),
   });
 });

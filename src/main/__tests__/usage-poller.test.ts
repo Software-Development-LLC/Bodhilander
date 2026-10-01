@@ -22,7 +22,7 @@ mock.module('../repositories/preferences', () => ({
 const { ownedAccountIds, runAccountIdsForOwnership, UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
 const { OAUTH_TOKEN_URL } = await import('../usage-credentials');
 const { credentialStoreFor, fileCredentialStore, keychainService } = await import('../credential-store');
-const { isTokenRefreshing, saveHeldRotations, tokenRefreshSettled } = await import('../token-refresh');
+const { isTokenRefreshing, resetTokenRefresh, saveHeldRotations, tokenRefreshSettled } = await import('../token-refresh');
 const usageStore = await import('../usage-store');
 import type { ClaudeAccount } from '../../shared/types';
 import type { FetchLike } from '../usage-credentials';
@@ -88,6 +88,7 @@ beforeEach(() => {
   clock = NOW;
   prefs.clear();
   usageStore.clearAllUsage();
+  resetTokenRefresh();
 });
 
 afterEach(() => {
@@ -759,7 +760,9 @@ describe('a rotation the Keychain will not take', () => {
 
     kcWork.state.writeCode = 0;
     kcHome.state.writeCode = 0;
+    const started = Date.now();
     await saveHeldRotations(1_000);
+    expect(Date.now() - started).toBeLessThan(500);
     expect(kcWork.saved().refreshToken).toBe('fresh-refresh');
     expect(kcHome.saved().refreshToken).toBe('fresh-refresh');
     expect(isTokenRefreshing(work.configDir) || isTokenRefreshing(home.configDir)).toBe(false);

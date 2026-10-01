@@ -32,6 +32,13 @@ export function releaseRotation(configDir: string): void {
   held.delete(configDir);
 }
 
+/** Forget every refresh, held rotation and save. For specs, which share this module. */
+export function resetTokenRefresh(): void {
+  pending.clear();
+  held.clear();
+  saving.clear();
+}
+
 export function isTokenRefreshing(configDir: string | null | undefined): boolean {
   return configDir ? pending.has(configDir) || held.has(configDir) : false;
 }

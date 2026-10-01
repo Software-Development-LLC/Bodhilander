@@ -238,6 +238,12 @@ describe('the store for a platform', () => {
     expect(sourceOf(await fileCredentialStore.readFrom(dir, 'file'))).toBe('file');
   });
 
+  test('a token file that cannot be reached for another reason is unreadable, not gone', async () => {
+    writeFile();
+    const underAFile = path.join(dir, '.credentials.json', 'nested');
+    expect(await fileCredentialStore.readFrom(underAFile, 'file')).toBe('credentials-unreadable');
+  });
+
   test('on macOS an unavailable Keychain still falls back to a token file', async () => {
     writeFile();
     const { calls, exec } = fakeSecurity(new Map(), { findCode: 36 });

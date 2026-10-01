@@ -714,6 +714,20 @@ describe('routing around an account holding its token pair in memory', () => {
     expect(sessionsRepo.getSession('s2')!.claudeAccountId).toBeNull();
   });
 
+  test('a session routed off a held account does not go home until the pair is saved', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null, 'stopped');
+    usageAt('primary', 10);
+    usageAt('fresh', 10);
+    usageStore.markRotationHeld('primary');
+    expect(failover.routeNewSession('s1')?.to.id).toBe('fresh');
+    expect(failover.failbackCandidates()).toEqual([]);
+    usageStore.clearRotationHeld('primary');
+    expect(failover.failbackCandidates().map(c => c.sessionId)).toEqual(['s1']);
+  });
+
   test('failover takes an account with no reading before a held one', () => {
     addAccount('primary', 0, true);
     addAccount('held', 1);
