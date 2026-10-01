@@ -13,7 +13,7 @@ import * as accountsRepo from './repositories/accounts';
 import * as groupsRepo from './repositories/groups';
 import { getPreference } from './repositories/preferences';
 import * as sessionsRepo from './repositories/sessions';
-import { getUsageThreshold, hasFreshRoom, hasUsageRoom, isUnreachable, isUsagePressured } from './usage-store';
+import { getUsageThreshold, hasFreshRoom, hasUsageRoom, isUnreachable, isUsagePressured, needsRelief } from './usage-store';
 
 /**
  * What happens when an account runs out of quota mid-session.
@@ -101,10 +101,10 @@ export function routeNewSession(sessionId: string, now: Date = new Date()): { fr
   return { from: inherited, to };
 }
 
-/** A healthy account with known room to use instead of a near-limit inherited one, or null. */
+/** A healthy account with known room to use instead of a near-limit or held inherited one, or null. */
 export function newSessionAccountOverride(inherited: ClaudeAccount | null, now: Date = new Date()): ClaudeAccount | null {
   const threshold = getUsageThreshold();
-  if (!inherited || !isUsagePressured(inherited.id, now, threshold)) return null;
+  if (!inherited || !needsRelief(inherited.id, now, threshold)) return null;
   const alternative = accountsRepo.getAccountsInFallbackOrder().find(
     account => account.id !== inherited.id
       && accountsRepo.isAccountHealthy(account, now)

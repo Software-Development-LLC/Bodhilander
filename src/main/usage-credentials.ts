@@ -71,13 +71,18 @@ export function readOAuthCredentials(configDir: string): OAuthCredentials | null
   return oauthFromDocument(readRaw(configDir));
 }
 
-/** The document with the rotated pair folded in and every other field kept, or null without one. */
+/**
+ * The document with the rotated pair folded in and every other field kept, or
+ * null without one, or when it no longer holds the refresh token the pair replaced.
+ */
 export function withRotatedTokens(
   doc: Record<string, unknown> | null,
   rotated: RotatedTokens,
+  spent: string | null,
 ): Record<string, unknown> | null {
   const oauth = doc?.claudeAiOauth;
   if (!doc || typeof oauth !== 'object' || oauth === null) return null;
+  if (oauthFromDocument(doc)?.refreshToken !== spent) return null;
   const next: Record<string, unknown> = {
     ...(oauth as Record<string, unknown>),
     accessToken: rotated.accessToken,
@@ -161,9 +166,10 @@ export async function refreshOAuthToken(
 export function writeRotatedTokens(
   configDir: string,
   rotated: RotatedTokens,
+  spent: string | null,
   rename: (from: string, to: string) => void = fs.renameSync,
 ): boolean {
-  const doc = withRotatedTokens(readRaw(configDir), rotated);
+  const doc = withRotatedTokens(readRaw(configDir), rotated, spent);
   if (!doc) return false;
 
   const file = credentialsPath(configDir);

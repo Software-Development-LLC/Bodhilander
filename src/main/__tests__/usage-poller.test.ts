@@ -2,7 +2,8 @@
  * The usage poller: what it polls, when it may refresh a token (never one a
  * running CLI owns), and what a failure becomes. Run with: bun test <this file>
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import log from 'electron-log';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -21,7 +22,7 @@ mock.module('../repositories/preferences', () => ({
 const { ownedAccountIds, runAccountIdsForOwnership, UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
 const { OAUTH_TOKEN_URL } = await import('../usage-credentials');
 const { credentialStoreFor, fileCredentialStore, keychainService } = await import('../credential-store');
-const { isTokenRefreshing, tokenRefreshSettled } = await import('../token-refresh');
+const { isTokenRefreshing, saveHeldRotations, tokenRefreshSettled } = await import('../token-refresh');
 const usageStore = await import('../usage-store');
 import type { ClaudeAccount } from '../../shared/types';
 import type { FetchLike } from '../usage-credentials';
@@ -459,11 +460,12 @@ describe('a rotation the Keychain will not take', () => {
   /** A fake `security` over one item; `findCode` and `writeCode` fail its reads and writes on demand. */
   function keychain(acc: ClaudeAccount) {
     const service = keychainService(acc.configDir);
-    const state = { findCode: 0, writeCode: 0, writes: 0, items: new Map<string, string>() };
+    const state = { findCode: 0, writeCode: 0, writes: 0, hang: false, items: new Map<string, string>() };
     state.items.set(service, JSON.stringify({
       claudeAiOauth: { accessToken: 'work-access', refreshToken: 'work-refresh', expiresAt: NOW - 1000, scopes: ['user:inference'] },
     }));
     const exec: SecurityExec = async (args, input) => {
+      if (state.hang) return new Promise(() => undefined);
       if (args[0] === 'find-generic-password') {
         const secret = state.items.get(service);
         if (state.findCode !== 0) return { code: state.findCode, stdout: '' };
@@ -625,6 +627,151 @@ describe('a rotation the Keychain will not take', () => {
     expect(calls.map(c => c.auth ?? c.url)).toEqual([OAUTH_TOKEN_URL, 'Bearer work-access']);
   });
 
+  /** A store that refuses every rotation until `refuse` is cleared. */
+  function refusing(store: ReturnType<typeof credentialStoreFor>) {
+    const gate = { refuse: true };
+    return { gate, store: { ...store, writeRotated: (async (...args) => !gate.refuse && store.writeRotated(...args)) as typeof store.writeRotated } };
+  }
+
+  test('a held pair for a token file that is gone is let go', async () => {
+    const work = account('work');
+    writeCreds(work, NOW - 1000);
+    const { store } = refusing(fileCredentialStore);
+    const { fetch } = fakeFetch(route);
+    const p = storePoller(work, fetch, store);
+    await p.pollAll();
+    expect(usageStore.hasHeldRotation('work')).toBe(true);
+
+    fs.rmSync(path.join(work.configDir, '.credentials.json'));
+    nextRound();
+    await p.pollAll();
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+    expect(usageStore.hasHeldRotation('work')).toBe(false);
+    expect(usageStore.getUsage('work')?.unavailable).toBe('no-credentials');
+  });
+
+  test('a Keychain sign-in replaces a pair held for the token file, and is polled with', async () => {
+    const work = account('work');
+    writeCreds(work, NOW - 1000);
+    const kc = keychain(work);
+    kc.state.items.clear();
+    const { store } = refusing(kc.store);
+    const { calls, fetch } = fakeFetch(route);
+    const p = storePoller(work, fetch, store);
+    await p.pollAll();
+
+    kc.state.items.set(keychainService(work.configDir), JSON.stringify({
+      claudeAiOauth: { accessToken: 'login-access', refreshToken: 'login-refresh', expiresAt: NOW + 3_600_000, scopes: [] },
+    }));
+    nextRound();
+    await p.pollAll();
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+    expect(calls.map(c => c.auth ?? c.url)).toEqual([OAUTH_TOKEN_URL, 'Bearer login-access']);
+  });
+
+  test('a pair that landed without reading back is counted as saved, not written again', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    const p = storePoller(work, fetch, kc.store);
+    await p.pollAll();
+
+    kc.state.writeCode = 0;
+    kc.state.items.set(keychainService(work.configDir), JSON.stringify({
+      claudeAiOauth: { accessToken: 'fresh-access', refreshToken: 'fresh-refresh', expiresAt: NOW + 28_800_000, scopes: [] },
+    }));
+    const writes = kc.state.writes;
+    const info = spyOn(log, 'info');
+    nextRound();
+    await p.pollAll();
+    const lines = info.mock.calls.map(call => String(call[0]));
+    info.mockRestore();
+    expect(kc.state.writes).toBe(writes);
+    expect(lines).toContain('[Usage] Let go of the held token rotation for work: it is saved');
+  });
+
+  test('a save that keeps failing the same way is warned about once', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    const p = storePoller(work, fetch, kc.store);
+    await p.pollAll();
+
+    const warn = spyOn(log, 'warn');
+    const debug = spyOn(log, 'debug');
+    nextRound();
+    await p.pollAll();
+    kc.state.findCode = 36;
+    nextRound();
+    await p.pollAll();
+    nextRound();
+    await p.pollAll();
+    const warned = warn.mock.calls.map(call => String(call[0]));
+    const debugged = debug.mock.calls.map(call => String(call[0]));
+    warn.mockRestore();
+    debug.mockRestore();
+    expect(warned).toEqual(['[Usage] Could not save the held token rotation for work (keychain-unavailable)']);
+    expect(debugged).toEqual([
+      '[Usage] Could not save the held token rotation for work (write refused)',
+      '[Usage] Could not save the held token rotation for work (keychain-unavailable)',
+    ]);
+  });
+
+  test('a launch waits a bounded time on a hung Keychain, then goes ahead', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    await storePoller(work, fetch, kc.store).pollAll();
+
+    kc.state.hang = true;
+    let settled = false;
+    const waiting = tokenRefreshSettled(work.configDir, 40).then(() => { settled = true; });
+    await Bun.sleep(5);
+    expect(settled).toBe(false);
+    await Bun.sleep(80);
+    expect(settled).toBe(true);
+    await waiting;
+  });
+
+  test('on the way out every held pair gets one save, within the budget', async () => {
+    const work = account('work');
+    const home = account('home');
+    const kcWork = keychain(work);
+    const kcHome = keychain(home);
+    kcWork.state.writeCode = 1;
+    kcHome.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    await storePoller(work, fetch, kcWork.store).pollAll();
+    await storePoller(home, fetch, kcHome.store).pollAll();
+
+    kcWork.state.writeCode = 0;
+    kcHome.state.writeCode = 0;
+    await saveHeldRotations(1_000);
+    expect(kcWork.saved().refreshToken).toBe('fresh-refresh');
+    expect(kcHome.saved().refreshToken).toBe('fresh-refresh');
+    expect(isTokenRefreshing(work.configDir) || isTokenRefreshing(home.configDir)).toBe(false);
+  });
+
+  test('a hung save on the way out does not hold up the quit', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    await storePoller(work, fetch, kc.store).pollAll();
+
+    kc.state.hang = true;
+    let done = false;
+    const quitting = saveHeldRotations(40).then(() => { done = true; });
+    await Bun.sleep(5);
+    expect(done).toBe(false);
+    await Bun.sleep(80);
+    expect(done).toBe(true);
+    await quitting;
+  });
+
   test('a removed account takes its held pair with it', async () => {
     const work = account('work');
     const kc = keychain(work);
@@ -656,7 +803,7 @@ describe('a rotation the Keychain will not take', () => {
 
     const file = path.join(work.configDir, '.credentials.json');
     const spent = fs.readFileSync(file, 'utf-8');
-    fs.rmSync(file);
+    fs.writeFileSync(file, '{"claudeAiOauth":');
     nextRound();
     await p.pollAll();
     expect(isTokenRefreshing(work.configDir)).toBe(true);

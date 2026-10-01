@@ -9,6 +9,8 @@ import { getPreference } from './repositories/preferences';
  */
 
 const records = new Map<string, AccountUsage>();
+/** Accounts holding a refreshed pair their store has not taken yet. */
+const heldRotations = new Set<string>();
 
 export function getUsage(accountId: string): AccountUsage | null {
   return records.get(accountId) ?? null;
@@ -26,8 +28,21 @@ export function allUsage(): AccountUsageMap {
   return Object.fromEntries(records);
 }
 
+export function markRotationHeld(accountId: string): void {
+  heldRotations.add(accountId);
+}
+
+export function clearRotationHeld(accountId: string): void {
+  heldRotations.delete(accountId);
+}
+
+export function hasHeldRotation(accountId: string): boolean {
+  return heldRotations.has(accountId);
+}
+
 export function clearAllUsage(): void {
   records.clear();
+  heldRotations.clear();
 }
 
 export function getUsageThreshold(): number {
@@ -69,9 +84,18 @@ export function isSignedOut(accountId: string): boolean {
   return reason != null && SIGNED_OUT.has(reason);
 }
 
-/** Signed out, or its Keychain item could not be read: either way its tokens are out of reach. */
+/** Signed out, its Keychain item unreadable, or its live tokens only in memory: out of reach either way. */
 export function isUnreachable(accountId: string): boolean {
-  return isSignedOut(accountId) || getUsage(accountId)?.unavailable === 'keychain-unavailable';
+  return isSignedOut(accountId) || getUsage(accountId)?.unavailable === 'keychain-unavailable' || hasHeldRotation(accountId);
+}
+
+/** Near its limit, or its live tokens only in memory: new work goes elsewhere when it can. */
+export function needsRelief(
+  accountId: string,
+  now: Date = new Date(),
+  threshold: number = getUsageThreshold(),
+): boolean {
+  return isUsagePressured(accountId, now, threshold) || hasHeldRotation(accountId);
 }
 
 /**

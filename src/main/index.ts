@@ -48,6 +48,7 @@ import { teamsNotifier } from './teams/teams-notifier';
 import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
 import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
 import { credentialStoreFor } from './credential-store';
+import { saveHeldRotations } from './token-refresh';
 import { sinkLaunchFor } from './statusline-sink';
 import { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } from './session-routing';
 import { createUsageService, UsageService } from './usage-service';
@@ -1788,6 +1789,9 @@ const QUIT_CLEANUP_BUDGET_MS = 2000;
 // so a wedged install handoff can never strand the app running.
 const UPDATE_INSTALL_FALLBACK_MS = 3000;
 
+// A token pair the store refused is lost on exit, so it gets one save inside the cleanup budget.
+const HELD_ROTATION_SAVE_MS = 1500;
+
 app.on('before-quit', (event) => {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -1828,6 +1832,7 @@ app.on('before-quit', (event) => {
       app.exit(0);
     },
     cleanup: async () => {
+      const savingHeldRotations = saveHeldRotations(HELD_ROTATION_SAVE_MS);
       try {
         await ptyManager.killAll();
       } catch (e) {
@@ -1843,6 +1848,7 @@ app.on('before-quit', (event) => {
       }
       stopBoardWatcherService();
       stopRunLoopService();
+      await savingHeldRotations;
       closeDatabase();
     },
   });

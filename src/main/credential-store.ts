@@ -1,12 +1,15 @@
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
+import * as fs from 'fs';
 import * as os from 'os';
 
 import { UsageUnavailableReason } from '../shared/types';
 import {
+  credentialsPath,
   oauthFromDocument,
   OAuthCredentials,
   readOAuthCredentials,
+  readRaw,
   RotatedTokens,
   withRotatedTokens,
   writeRotatedTokens,
@@ -28,14 +31,23 @@ export interface StoredCredentials extends OAuthCredentials {
 /** The account's tokens, or why there are none to use. */
 export type CredentialRead = StoredCredentials | UsageUnavailableReason;
 
+/** One store's own reading, which can tell a token file that is there but unreadable from one that is gone. */
+export type StoreRead = CredentialRead | 'credentials-unreadable';
+
+/** Where a rotation goes, and the refresh token it replaced, which that store must still hold. */
+export interface WriteTarget {
+  source: CredentialSource;
+  spent: string | null;
+}
+
 export interface CredentialStore {
   read(configDir: string): Promise<CredentialRead>;
   /** What one store alone holds, with no fallback to the other. */
-  readFrom(configDir: string, source: CredentialSource): Promise<CredentialRead>;
-  writeRotated(configDir: string, rotated: RotatedTokens, source: CredentialSource): Promise<boolean>;
+  readFrom(configDir: string, source: CredentialSource): Promise<StoreRead>;
+  writeRotated(configDir: string, rotated: RotatedTokens, target: WriteTarget): Promise<boolean>;
 }
 
-export function hasCredentials(read: CredentialRead): read is StoredCredentials {
+export function hasCredentials(read: StoreRead): read is StoredCredentials {
   return typeof read !== 'string';
 }
 
@@ -53,13 +65,24 @@ function withSource(creds: OAuthCredentials | null, source: CredentialSource): S
   return creds ? { ...creds, source } : null;
 }
 
-const readFile = async (configDir: string): Promise<CredentialRead> =>
-  withSource(readOAuthCredentials(configDir), 'file') ?? 'no-credentials';
+function isAbsent(file: string): boolean {
+  try {
+    fs.statSync(file);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
 
 export const fileCredentialStore: CredentialStore = {
-  read: readFile,
-  readFrom: readFile,
-  writeRotated: async (configDir, rotated) => writeRotatedTokens(configDir, rotated),
+  read: async configDir => withSource(readOAuthCredentials(configDir), 'file') ?? 'no-credentials',
+  readFrom: async configDir => {
+    const doc = readRaw(configDir);
+    const creds = withSource(oauthFromDocument(doc), 'file');
+    if (creds) return creds;
+    return doc || isAbsent(credentialsPath(configDir)) ? 'no-credentials' : 'credentials-unreadable';
+  },
+  writeRotated: async (configDir, rotated, { spent }) => writeRotatedTokens(configDir, rotated, spent),
 };
 
 /** The CLI's Keychain service for a CLAUDE_CONFIG_DIR. */
@@ -134,8 +157,8 @@ export function keychainCredentialStore(
   return {
     read,
     readFrom: read,
-    writeRotated: async (configDir, rotated) => {
-      const doc = withRotatedTokens(await readDocument(configDir), rotated);
+    writeRotated: async (configDir, rotated, { spent }) => {
+      const doc = withRotatedTokens(await readDocument(configDir), rotated, spent);
       if (!doc) return false;
       const hex = Buffer.from(JSON.stringify(doc), 'utf-8').toString('hex');
       const acct = account();
@@ -167,7 +190,7 @@ export function credentialStoreFor(platform: NodeJS.Platform, exec: SecurityExec
       return hasCredentials(fromFile) ? fromFile : fromKeychain;
     },
     readFrom: (configDir, source) => (source === 'keychain' ? keychain : fileCredentialStore).readFrom(configDir, source),
-    writeRotated: (configDir, rotated, source) => (source === 'keychain' ? keychain : fileCredentialStore)
-      .writeRotated(configDir, rotated, source),
+    writeRotated: (configDir, rotated, target) => (target.source === 'keychain' ? keychain : fileCredentialStore)
+      .writeRotated(configDir, rotated, target),
   };
 }
