@@ -605,6 +605,23 @@ describe('a rotation the Keychain will not take', () => {
     expect(isTokenRefreshing(work.configDir)).toBe(false);
   });
 
+  test('a Keychain sign-out beside an old token file lets the pair go too', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { calls, fetch } = fakeFetch(route);
+    const p = storePoller(work, fetch, kc.store);
+    await p.pollAll();
+
+    kc.state.items.clear();
+    writeCreds(work, NOW + 3_600_000);
+    nextRound();
+    await p.pollAll();
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+    expect(kc.state.items.size).toBe(0);
+    expect(calls.map(c => c.auth ?? c.url)).toEqual([OAUTH_TOKEN_URL, 'Bearer work-access']);
+  });
+
   test('a removed account takes its held pair with it', async () => {
     const work = account('work');
     const kc = keychain(work);

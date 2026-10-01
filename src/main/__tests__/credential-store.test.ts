@@ -208,6 +208,16 @@ describe('the store for a platform', () => {
     expect(await credentialStoreFor('darwin', locked.exec).read(dir)).toBe('keychain-unavailable');
   });
 
+  test('reading from one store never falls back to the other', async () => {
+    writeFile();
+    const locked = credentialStoreFor('darwin', fakeSecurity(new Map(), { findCode: 36 }).exec);
+    expect(await locked.readFrom(dir, 'keychain')).toBe('keychain-unavailable');
+    const items = new Map([[keychainService(dir), item({ ...OAUTH, accessToken: 'keychain-access' })]]);
+    const both = credentialStoreFor('darwin', fakeSecurity(items).exec);
+    expect(accessToken(await both.readFrom(dir, 'file'))).toBe('old-access');
+    expect(accessToken(await both.readFrom(dir, 'keychain'))).toBe('keychain-access');
+  });
+
   test('on macOS an unavailable Keychain still falls back to a token file', async () => {
     writeFile();
     const { calls, exec } = fakeSecurity(new Map(), { findCode: 36 });

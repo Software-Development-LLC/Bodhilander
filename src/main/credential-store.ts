@@ -30,6 +30,8 @@ export type CredentialRead = StoredCredentials | UsageUnavailableReason;
 
 export interface CredentialStore {
   read(configDir: string): Promise<CredentialRead>;
+  /** What one store alone holds, with no fallback to the other. */
+  readFrom(configDir: string, source: CredentialSource): Promise<CredentialRead>;
   writeRotated(configDir: string, rotated: RotatedTokens, source: CredentialSource): Promise<boolean>;
 }
 
@@ -51,8 +53,12 @@ function withSource(creds: OAuthCredentials | null, source: CredentialSource): S
   return creds ? { ...creds, source } : null;
 }
 
+const readFile = async (configDir: string): Promise<CredentialRead> =>
+  withSource(readOAuthCredentials(configDir), 'file') ?? 'no-credentials';
+
 export const fileCredentialStore: CredentialStore = {
-  read: async configDir => withSource(readOAuthCredentials(configDir), 'file') ?? 'no-credentials',
+  read: readFile,
+  readFrom: readFile,
   writeRotated: async (configDir, rotated) => writeRotatedTokens(configDir, rotated),
 };
 
@@ -119,12 +125,15 @@ export function keychainCredentialStore(
   };
   const readDocument = async (configDir: string) => (await readItem(configDir)).doc;
 
+  const read = async (configDir: string): Promise<CredentialRead> => {
+    const { code, doc } = await readItem(configDir);
+    if (code !== 0 && code !== SECURITY_ITEM_NOT_FOUND) return 'keychain-unavailable';
+    return withSource(oauthFromDocument(doc), 'keychain') ?? 'no-keychain-credentials';
+  };
+
   return {
-    read: async configDir => {
-      const { code, doc } = await readItem(configDir);
-      if (code !== 0 && code !== SECURITY_ITEM_NOT_FOUND) return 'keychain-unavailable';
-      return withSource(oauthFromDocument(doc), 'keychain') ?? 'no-keychain-credentials';
-    },
+    read,
+    readFrom: read,
     writeRotated: async (configDir, rotated) => {
       const doc = withRotatedTokens(await readDocument(configDir), rotated);
       if (!doc) return false;
@@ -157,6 +166,7 @@ export function credentialStoreFor(platform: NodeJS.Platform, exec: SecurityExec
       const fromFile = await fileCredentialStore.read(configDir);
       return hasCredentials(fromFile) ? fromFile : fromKeychain;
     },
+    readFrom: (configDir, source) => (source === 'keychain' ? keychain : fileCredentialStore).readFrom(configDir, source),
     writeRotated: (configDir, rotated, source) => (source === 'keychain' ? keychain : fileCredentialStore)
       .writeRotated(configDir, rotated, source),
   };

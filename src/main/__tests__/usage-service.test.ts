@@ -33,6 +33,7 @@ let accounts: ClaudeAccount[];
 
 const credentials: CredentialStore = {
   read: async () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: NOW + 3_600_000, scopes: [], source: 'file' as const }),
+  readFrom: async () => 'no-credentials',
   writeRotated: async () => true,
 };
 

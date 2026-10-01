@@ -16,7 +16,7 @@ import {
   UsageObservation,
 } from './usage-meter';
 import { sinkFilePath } from './statusline-sink';
-import { holdRotation, releaseRotation, trackTokenRefresh } from './token-refresh';
+import { holdRotation, releaseRotation, tokenRefreshSettled, trackTokenRefresh } from './token-refresh';
 import * as usageStore from './usage-store';
 
 /**
@@ -204,7 +204,8 @@ export class UsagePoller extends EventEmitter {
     if ((this.retryAt.get(account.id) ?? 0) > now) return;
     this.lastAttempt.set(account.id, now);
     // Refreshing again would spend a token the held pair already replaced.
-    if (this.held.has(account.id) && !(await trackTokenRefresh(account.configDir, this.saveHeld(account)))) return;
+    if (this.held.has(account.id)) await tokenRefreshSettled(account.configDir);
+    if (this.held.has(account.id)) return;
 
     const creds = await this.deps.credentials.read(account.configDir);
     if (!hasCredentials(creds)) {
@@ -321,15 +322,16 @@ export class UsagePoller extends EventEmitter {
   private async saveHeld(account: ClaudeAccount): Promise<boolean> {
     const rotation = this.held.get(account.id);
     if (!rotation) return true;
-    const current = await this.deps.credentials.read(rotation.configDir);
+    const current = await this.deps.credentials.readFrom(rotation.configDir, rotation.source);
     const movedOn = hasCredentials(current)
-      ? current.source === rotation.source && current.refreshToken !== rotation.spent
+      ? current.refreshToken !== rotation.spent
       : current !== 'keychain-unavailable';
     if (movedOn) {
       log.info(`[Usage] Released the held token rotation for ${account.label}; its store has changed since`);
     } else if (await this.deps.credentials.writeRotated(rotation.configDir, rotation.rotated, rotation.source)) {
       log.info(`[Usage] Saved the held token rotation for ${account.label}`);
     } else {
+      log.warn(`[Usage] Could not save the held token rotation for ${account.label}; its store still has the spent token`);
       return false;
     }
     this.release(account.id);
