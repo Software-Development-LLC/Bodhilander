@@ -354,7 +354,7 @@ export class UsagePoller extends EventEmitter {
   private async keychainOutcome(rotation: HeldRotation): Promise<HeldOutcome | null> {
     if (rotation.source !== 'file') return null;
     const live = await this.deps.credentials.read(rotation.configDir);
-    return hasCredentials(live) && live.source === 'keychain' && live.refreshToken !== rotation.spent ? 'replaced' : null;
+    return hasCredentials(live) && live.refreshToken !== rotation.spent ? 'replaced' : null;
   }
 
   private noteSaveFailure(account: ClaudeAccount, rotation: HeldRotation, failure: string): void {

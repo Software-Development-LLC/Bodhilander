@@ -734,6 +734,12 @@ describe('a rotation the Keychain will not take', () => {
     await Bun.sleep(80);
     expect(settled).toBe(true);
     await waiting;
+
+    let second = false;
+    const behind = tokenRefreshSettled(work.configDir, 40).then(() => { second = true; });
+    await Bun.sleep(80);
+    expect(second).toBe(true);
+    await behind;
   });
 
   test('on the way out every held pair gets one save, within the budget', async () => {
