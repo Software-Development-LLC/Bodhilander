@@ -696,7 +696,7 @@ describe('a rotation the Keychain will not take', () => {
     const work = account('work');
     const kc = keychain(work);
     kc.state.writeCode = 1;
-    const { fetch } = fakeFetch(url => (url === OAUTH_TOKEN_URL
+    const { calls, fetch } = fakeFetch(url => (url === OAUTH_TOKEN_URL
       ? { status: 200, body: { access_token: 'fresh-access', expires_in: 28_800 } }
       : { status: 200, body: USAGE_BODY }));
     const p = storePoller(work, fetch, kc.store);
@@ -706,6 +706,7 @@ describe('a rotation the Keychain will not take', () => {
     nextRound();
     await p.pollAll();
     expect(kc.saved()).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'work-refresh' });
+    expect(calls.map(c => c.url)).toEqual([OAUTH_TOKEN_URL, USAGE_URL]);
   });
 
   test('a save that keeps failing the same way is warned about once', async () => {
