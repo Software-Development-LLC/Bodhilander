@@ -765,6 +765,23 @@ describe('a rotation the Keychain will not take', () => {
     expect(isTokenRefreshing(work.configDir) || isTokenRefreshing(home.configDir)).toBe(false);
   });
 
+  test('a launch that starts as the refresh is holding the pair still makes its save attempt', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    let launched: Promise<void> | null = null;
+    const marking = spyOn(usageStore, 'markRotationHeld').mockImplementation(() => {
+      kc.state.writeCode = 0;
+      launched = tokenRefreshSettled(work.configDir);
+    });
+    await storePoller(work, fetch, kc.store).pollAll();
+    marking.mockRestore();
+    await launched;
+    expect(kc.saved().refreshToken).toBe('fresh-refresh');
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+  });
+
   test('a hung save on the way out does not hold up the quit', async () => {
     const work = account('work');
     const kc = keychain(work);

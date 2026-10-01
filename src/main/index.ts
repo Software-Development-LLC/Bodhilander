@@ -1789,7 +1789,7 @@ const QUIT_CLEANUP_BUDGET_MS = 2000;
 // so a wedged install handoff can never strand the app running.
 const UPDATE_INSTALL_FALLBACK_MS = 3000;
 
-// A token pair the store refused is lost on exit, so it gets one save inside the cleanup budget.
+// A token pair the store refused is lost on exit, so it gets one save; keep this under QUIT_CLEANUP_BUDGET_MS.
 const HELD_ROTATION_SAVE_MS = 1500;
 
 app.on('before-quit', (event) => {

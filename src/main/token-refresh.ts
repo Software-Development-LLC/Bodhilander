@@ -9,6 +9,7 @@ import log from 'electron-log';
 const pending = new Map<string, Promise<unknown>>();
 /** Rotations refreshed but not yet saved, by config dir: one attempt to save each. */
 const held = new Map<string, () => Promise<boolean>>();
+const saving = new Map<string, Promise<unknown>>();
 
 /** How long a launch waits on a held save before it goes ahead. */
 export const LAUNCH_SAVE_BUDGET_MS = 3_000;
@@ -39,7 +40,13 @@ export function isTokenRefreshing(configDir: string | null | undefined): boolean
 function saveHeld(configDir: string): Promise<unknown> {
   const save = held.get(configDir);
   if (!save) return Promise.resolve();
-  return (pending.get(configDir) ?? trackTokenRefresh(configDir, save())).catch(() => undefined);
+  const running = saving.get(configDir);
+  if (running) return running;
+  const work: Promise<unknown> = trackTokenRefresh(configDir, save()).catch(() => undefined).finally(() => {
+    if (saving.get(configDir) === work) saving.delete(configDir);
+  });
+  saving.set(configDir, work);
+  return work;
 }
 
 async function within(work: Promise<unknown>, budgetMs: number): Promise<void> {
