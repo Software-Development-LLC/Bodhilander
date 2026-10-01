@@ -50,6 +50,16 @@ describe('runQuitCleanup', () => {
     ]);
   });
 
+  test('a service that throws while stopping still lets the save finish and the database close', async () => {
+    const { order, steps, finishSave } = recorder();
+    steps.stopServices = () => { throw new Error('relay wedged'); };
+    const cleanup = runQuitCleanup(steps);
+    await Bun.sleep(5);
+    finishSave();
+    await cleanup;
+    expect(order.slice(2)).toEqual(['Error stopping services on quit:', 'save finished', 'database closed']);
+  });
+
   test('the held save fits inside the guarded cleanup budget', () => {
     expect(HELD_ROTATION_SAVE_MS).toBeLessThan(QUIT_CLEANUP_BUDGET_MS);
   });

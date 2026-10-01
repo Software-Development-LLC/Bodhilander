@@ -148,15 +148,20 @@ export function keychainCredentialStore(
   };
   const readDocument = async (configDir: string) => (await readItem(configDir)).doc;
 
-  const read = async (configDir: string): Promise<CredentialRead> => {
-    const { code, doc } = await readItem(configDir);
+  const fromItem = (code: number, doc: Record<string, unknown> | null): CredentialRead => {
     if (code !== 0 && code !== SECURITY_ITEM_NOT_FOUND) return 'keychain-unavailable';
     return withSource(oauthFromDocument(doc), 'keychain') ?? 'no-keychain-credentials';
   };
 
   return {
-    read,
-    readFrom: read,
+    read: async configDir => {
+      const { code, doc } = await readItem(configDir);
+      return fromItem(code, doc);
+    },
+    readFrom: async configDir => {
+      const { code, doc } = await readItem(configDir);
+      return code === 0 && doc === null ? 'credentials-unreadable' : fromItem(code, doc);
+    },
     writeRotated: async (configDir, rotated, { spent }) => {
       const doc = withRotatedTokens(await readDocument(configDir), rotated, spent);
       if (!doc) return false;

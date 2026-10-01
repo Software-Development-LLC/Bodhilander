@@ -144,6 +144,14 @@ describe('the Keychain store', () => {
     expect(calls.map(c => c.args[0])).toEqual(['find-generic-password']);
   });
 
+  test('an item that will not parse is unreadable to the store alone, and no sign-in to a plain read', async () => {
+    const store = keychainCredentialStore(fakeSecurity(new Map([[SERVICE, 'not json']])).exec, () => 'alice');
+    expect(await store.readFrom(CONFIG_DIR, 'keychain')).toBe('credentials-unreadable');
+    expect(await store.read(CONFIG_DIR)).toBe('no-keychain-credentials');
+    const empty = keychainCredentialStore(fakeSecurity(new Map()).exec, () => 'alice');
+    expect(await empty.readFrom(CONFIG_DIR, 'keychain')).toBe('no-keychain-credentials');
+  });
+
   test('no item means nothing is written', async () => {
     const { calls, exec } = fakeSecurity(new Map());
     expect(await keychainCredentialStore(exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED, { source: 'keychain', spent: 'old-refresh' })).toBe(false);

@@ -24,7 +24,11 @@ export async function runQuitCleanup(steps: QuitCleanupSteps): Promise<void> {
   } catch (e) {
     steps.logError('Error killing PTYs on quit:', e);
   }
-  steps.stopServices();
+  try {
+    steps.stopServices();
+  } catch (e) {
+    steps.logError('Error stopping services on quit:', e);
+  }
   await savingHeldRotations;
   steps.closeDatabase();
 }
