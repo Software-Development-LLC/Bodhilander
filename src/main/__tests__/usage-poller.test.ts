@@ -459,7 +459,7 @@ describe('a rotation the Keychain will not take', () => {
   /** A fake `security` over one item; `findCode` and `writeCode` fail its reads and writes on demand. */
   function keychain(acc: ClaudeAccount) {
     const service = keychainService(acc.configDir);
-    const state = { findCode: 0, writeCode: 0, items: new Map<string, string>() };
+    const state = { findCode: 0, writeCode: 0, writes: 0, items: new Map<string, string>() };
     state.items.set(service, JSON.stringify({
       claudeAiOauth: { accessToken: 'work-access', refreshToken: 'work-refresh', expiresAt: NOW - 1000, scopes: ['user:inference'] },
     }));
@@ -469,6 +469,7 @@ describe('a rotation the Keychain will not take', () => {
         if (state.findCode !== 0) return { code: state.findCode, stdout: '' };
         return secret === undefined ? { code: 44, stdout: '' } : { code: 0, stdout: secret };
       }
+      state.writes++;
       if (state.writeCode !== 0) return { code: state.writeCode, stdout: '' };
       const hex = /-X "([0-9a-f]+)"/.exec(input ?? '')![1];
       state.items.set(service, Buffer.from(hex, 'hex').toString('utf-8'));
@@ -565,7 +566,9 @@ describe('a rotation the Keychain will not take', () => {
     expect(kc.saved().refreshToken).toBe('work-refresh');
 
     kc.state.writeCode = 0;
-    await tokenRefreshSettled(work.configDir);
+    const writesBefore = kc.state.writes;
+    await Promise.all([tokenRefreshSettled(work.configDir), tokenRefreshSettled(work.configDir)]);
+    expect(kc.state.writes - writesBefore).toBe(1);
     expect(kc.saved()).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' });
     expect(isTokenRefreshing(work.configDir)).toBe(false);
     expect(calls.map(c => c.url)).toEqual([OAUTH_TOKEN_URL]);
@@ -651,6 +654,14 @@ describe('a rotation the Keychain will not take', () => {
     await p.pollAll();
     expect(usageStore.getUsage('work')?.unavailable).toBe('error');
 
+    const file = path.join(work.configDir, '.credentials.json');
+    const spent = fs.readFileSync(file, 'utf-8');
+    fs.rmSync(file);
+    nextRound();
+    await p.pollAll();
+    expect(isTokenRefreshing(work.configDir)).toBe(true);
+
+    fs.writeFileSync(file, spent);
     refuse = false;
     nextRound();
     await p.pollAll();

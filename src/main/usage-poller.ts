@@ -317,7 +317,8 @@ export class UsagePoller extends EventEmitter {
 
   /**
    * Save a held pair to the store it was read from. A store now holding some
-   * other refresh token, or no sign-in at all, has moved on, and the pair is let go.
+   * other refresh token, or a Keychain with no item, has moved on, and the pair
+   * is let go. A token file that reads as nothing may only be unreadable.
    */
   private async saveHeld(account: ClaudeAccount): Promise<boolean> {
     const rotation = this.held.get(account.id);
@@ -325,9 +326,9 @@ export class UsagePoller extends EventEmitter {
     const current = await this.deps.credentials.readFrom(rotation.configDir, rotation.source);
     const movedOn = hasCredentials(current)
       ? current.refreshToken !== rotation.spent
-      : current !== 'keychain-unavailable';
+      : current === 'no-keychain-credentials';
     if (movedOn) {
-      log.info(`[Usage] Released the held token rotation for ${account.label}; its store has changed since`);
+      log.info(`[Usage] Released the held token rotation for ${account.label}; its store now holds ${hasCredentials(current) ? 'another sign-in' : 'none'}`);
     } else if (await this.deps.credentials.writeRotated(rotation.configDir, rotation.rotated, rotation.source)) {
       log.info(`[Usage] Saved the held token rotation for ${account.label}`);
     } else {

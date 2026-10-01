@@ -35,5 +35,5 @@ export async function tokenRefreshSettled(configDir: string | null | undefined):
   if (!configDir) return;
   await pending.get(configDir)?.catch(() => undefined);
   const save = held.get(configDir);
-  if (save) await trackTokenRefresh(configDir, save()).catch(() => undefined);
+  if (save) await (pending.get(configDir) ?? trackTokenRefresh(configDir, save())).catch(() => undefined);
 }
