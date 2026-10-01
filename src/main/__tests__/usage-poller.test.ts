@@ -495,13 +495,22 @@ describe('a rotation the Keychain will not take', () => {
       if (url === OAUTH_TOKEN_URL) kc.state.findCode = 36;
       return route(url);
     });
-    await keychainPoller(work, fetch, kc.store).pollAll();
+    const p = keychainPoller(work, fetch, kc.store);
+    await p.pollAll();
 
     expect(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).toBe(before);
     expect(kc.saved().refreshToken).toBe('work-refresh');
     expect(usageStore.getUsage('work')?.unavailable).toBe('keychain-unavailable');
     expect(usageStore.isUnreachable('work')).toBe(true);
     expect(usageStore.isSignedOut('work')).toBe(false);
+
+    nextRound();
+    await p.pollAll();
+    kc.state.findCode = 0;
+    nextRound();
+    await p.pollAll();
+    expect(kc.saved()).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' });
+    expect(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).toBe(before);
   });
 
   test('a refused write is retried on later polls, and the spent token is never refreshed again', async () => {

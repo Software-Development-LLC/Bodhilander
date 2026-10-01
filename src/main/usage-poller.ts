@@ -330,7 +330,6 @@ export class UsagePoller extends EventEmitter {
       this.release(account.id);
       return true;
     }
-    this.markUnavailable(account.id, unsavedReason(rotation.source));
     return false;
   }
 
