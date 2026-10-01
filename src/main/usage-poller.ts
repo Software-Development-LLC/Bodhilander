@@ -4,8 +4,15 @@ import log from 'electron-log';
 
 import { AccountUsage, ClaudeAccount, LiveAccountBindings, UsageUnavailableReason } from '../shared/types';
 import { USAGE_STALE_MS } from '../shared/usage';
-import { CredentialStore, hasCredentials } from './credential-store';
-import { FetchLike, isTokenExpired, OAuthCredentials, refreshOAuthToken } from './usage-credentials';
+import {
+  CredentialSource,
+  CredentialStore,
+  hasCredentials,
+  StoredCredentials,
+  StoreRead,
+  WriteTarget,
+} from './credential-store';
+import { FetchLike, isTokenExpired, refreshOAuthToken, RotatedTokens } from './usage-credentials';
 import {
   emptyUsage,
   mergeUsage,
@@ -16,7 +23,7 @@ import {
   UsageObservation,
 } from './usage-meter';
 import { sinkFilePath } from './statusline-sink';
-import { trackTokenRefresh } from './token-refresh';
+import { holdRotation, releaseRotation, settleHeldRotation, trackTokenRefresh } from './token-refresh';
 import * as usageStore from './usage-store';
 
 /**
@@ -82,6 +89,22 @@ export function runAccountIdsForOwnership(
   return ids;
 }
 
+/** A refreshed pair its store would not take. Its refresh token is the only live one. */
+interface HeldRotation extends WriteTarget {
+  configDir: string;
+  rotated: RotatedTokens;
+  /** Why the last save failed, so the same failure is not warned about twice. */
+  failure: string;
+}
+
+type HeldOutcome = 'saved' | 'replaced' | 'gone';
+
+const HELD_OUTCOME_LOG: Record<HeldOutcome, string> = {
+  saved: 'it is saved',
+  replaced: 'another sign-in replaced it',
+  gone: 'its store holds no sign-in',
+};
+
 export interface UsageCrossingEvent {
   account: ClaudeAccount;
   crossing: ThresholdCrossing;
@@ -94,6 +117,7 @@ export class UsagePoller extends EventEmitter {
   private readonly failures = new Map<string, number>();
   private readonly lastAttempt = new Map<string, number>();
   private readonly watched = new Map<string, string>();
+  private readonly held = new Map<string, HeldRotation>();
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
 
@@ -154,6 +178,9 @@ export class UsagePoller extends EventEmitter {
     for (const id of Object.keys(usageStore.allUsage())) {
       if (!ids.has(id)) usageStore.forgetUsage(id);
     }
+    for (const id of this.held.keys()) {
+      if (!ids.has(id)) this.release(id);
+    }
     for (const account of accounts) {
       try {
         this.deps.ensureSink?.(account);
@@ -191,6 +218,9 @@ export class UsagePoller extends EventEmitter {
     const now = this.now();
     if ((this.retryAt.get(account.id) ?? 0) > now) return;
     this.lastAttempt.set(account.id, now);
+    // Refreshing again would spend a token the held pair already replaced.
+    if (this.held.has(account.id)) await settleHeldRotation(account.configDir);
+    if (this.held.has(account.id)) return;
 
     const creds = await this.deps.credentials.read(account.configDir);
     if (!hasCredentials(creds)) {
@@ -228,7 +258,7 @@ export class UsagePoller extends EventEmitter {
    */
   private async authorisedUsage(
     account: ClaudeAccount,
-    creds: OAuthCredentials,
+    creds: StoredCredentials,
     now: number,
   ): Promise<FetchResponse | null> {
     const owned = this.deps.boundAccountIds().has(account.id);
@@ -258,24 +288,25 @@ export class UsagePoller extends EventEmitter {
     });
   }
 
-  private refreshToken(account: ClaudeAccount, creds: OAuthCredentials): Promise<string | null> {
+  private refreshToken(account: ClaudeAccount, creds: StoredCredentials): Promise<string | null> {
     return trackTokenRefresh(account.configDir, this.rotateToken(account, creds));
   }
 
   private async rotateToken(
     account: ClaudeAccount,
-    creds: OAuthCredentials,
+    creds: StoredCredentials,
   ): Promise<string | null> {
     try {
       const rotated = await refreshOAuthToken(creds, this.deps.fetch, this.now);
       // The old refresh token is spent once this returns, so the rotation is
-      // saved even if a CLI bound to the account during the request.
+      // saved even if a CLI bound to the account, unless that CLI has replaced the pair.
       if (this.deps.boundAccountIds().has(account.id)) {
-        log.warn(`[Usage] ${account.label} was bound during a token refresh; saving the rotation anyway`);
+        log.warn(`[Usage] ${account.label} was bound during a token refresh; saving the rotation unless the CLI replaced it`);
       }
-      if (!(await this.deps.credentials.writeRotated(account.configDir, rotated))) {
-        log.warn(`[Usage] Refreshed ${account.label}'s token but could not save it`);
-        this.markUnavailable(account.id, 'reauth');
+      const target: WriteTarget = { source: creds.source, spent: creds.refreshToken };
+      if (!(await this.deps.credentials.writeRotated(account.configDir, rotated, target))) {
+        log.warn(`[Usage] Refreshed ${account.label}'s token but could not save it; retrying on the next poll`);
+        this.hold(account, { ...target, configDir: account.configDir, rotated, failure: 'write refused' });
         return null;
       }
       log.info(`[Usage] Refreshed the token for ${account.label}`);
@@ -285,6 +316,52 @@ export class UsagePoller extends EventEmitter {
       this.markUnavailable(account.id, 'reauth');
       return null;
     }
+  }
+
+  private hold(account: ClaudeAccount, rotation: HeldRotation): void {
+    this.held.set(account.id, rotation);
+    holdRotation(rotation.configDir, () => this.saveHeld(account));
+    usageStore.markRotationHeld(account.id);
+    this.markUnavailable(account.id, unsavedReason(rotation.source));
+  }
+
+  private release(accountId: string): void {
+    const rotation = this.held.get(accountId);
+    if (!rotation) return;
+    this.held.delete(accountId);
+    releaseRotation(rotation.configDir);
+    usageStore.clearRotationHeld(accountId);
+  }
+
+  /** Save a held pair to the store it was read from, unless that store has moved on without it. */
+  private async saveHeld(account: ClaudeAccount): Promise<boolean> {
+    const rotation = this.held.get(account.id);
+    if (!rotation) return true;
+    const own = await this.deps.credentials.readFrom(rotation.configDir, rotation.source);
+    const outcome = heldOutcome(own, rotation)
+      ?? await this.keychainOutcome(rotation)
+      ?? (await this.deps.credentials.writeRotated(rotation.configDir, rotation.rotated, rotation) ? 'saved' : null);
+    if (!outcome) {
+      this.noteSaveFailure(account, rotation, hasCredentials(own) ? 'write refused' : own);
+      return false;
+    }
+    log.info(`[Usage] Let go of the held token rotation for ${account.label}: ${HELD_OUTCOME_LOG[outcome]}`);
+    this.release(account.id);
+    return true;
+  }
+
+  /** A Keychain sign-in replaces a pair held for the token file, which the CLI then stops reading. */
+  private async keychainOutcome(rotation: HeldRotation): Promise<HeldOutcome | null> {
+    if (rotation.source !== 'file') return null;
+    const live = await this.deps.credentials.read(rotation.configDir);
+    return hasCredentials(live) && live.refreshToken !== rotation.spent ? 'replaced' : null;
+  }
+
+  private noteSaveFailure(account: ClaudeAccount, rotation: HeldRotation, failure: string): void {
+    const message = `[Usage] Could not save the held token rotation for ${account.label} (${failure})`;
+    if (failure === rotation.failure) log.debug(message);
+    else log.warn(message);
+    rotation.failure = failure;
   }
 
   private backOff(account: ClaudeAccount, status: number, retryAfter: string | null): void {
@@ -328,6 +405,18 @@ export class UsagePoller extends EventEmitter {
 }
 
 type FetchResponse = Awaited<ReturnType<FetchLike>>;
+
+/** What one store's reading says has become of a held pair, or null while it still waits to be saved. */
+function heldOutcome(read: StoreRead, rotation: HeldRotation): HeldOutcome | null {
+  if (!hasCredentials(read)) return read === 'no-credentials' || read === 'no-keychain-credentials' ? 'gone' : null;
+  if (read.accessToken === rotation.rotated.accessToken) return 'saved';
+  return read.refreshToken === rotation.spent ? null : 'replaced';
+}
+
+/** A Keychain that will not take the pair is out of reach for now; the account is not signed out. */
+function unsavedReason(source: CredentialSource): UsageUnavailableReason {
+  return source === 'keychain' ? 'keychain-unavailable' : 'error';
+}
 
 function isAuthRejection(status: number): boolean {
   return status === 401 || status === 403;

@@ -1,3 +1,5 @@
+import log from 'electron-log';
+
 /**
  * Token refreshes in flight, by config dir. A CLI launched mid-refresh would
  * read the old pair and spend a refresh token the refresh just rotated, so
@@ -5,6 +7,12 @@
  */
 
 const pending = new Map<string, Promise<unknown>>();
+/** Rotations refreshed but not yet saved, by config dir: one attempt to save each. */
+const held = new Map<string, () => Promise<boolean>>();
+const saving = new Map<string, Promise<unknown>>();
+
+/** How long a launch waits on a held save before it goes ahead. */
+export const LAUNCH_SAVE_BUDGET_MS = 3_000;
 
 export function trackTokenRefresh<T>(configDir: string, work: Promise<T>): Promise<T> {
   pending.set(configDir, work);
@@ -15,12 +23,70 @@ export function trackTokenRefresh<T>(configDir: string, work: Promise<T>): Promi
   return work;
 }
 
-export function isTokenRefreshing(configDir: string | null | undefined): boolean {
-  return configDir ? pending.has(configDir) : false;
+/** A rotation the store refused; a launch on the dir tries the save once before the CLI reads the spent pair. */
+export function holdRotation(configDir: string, save: () => Promise<boolean>): void {
+  held.set(configDir, save);
 }
 
-/** Resolves once no refresh is running for this config dir. Never rejects. */
-export async function tokenRefreshSettled(configDir: string | null | undefined): Promise<void> {
-  const work = configDir ? pending.get(configDir) : undefined;
-  if (work) await work.catch(() => undefined);
+export function releaseRotation(configDir: string): void {
+  held.delete(configDir);
+}
+
+/** Forget every refresh, held rotation and save. For specs, which share this module. */
+export function resetTokenRefresh(): void {
+  pending.clear();
+  held.clear();
+  saving.clear();
+}
+
+export function isTokenRefreshing(configDir: string | null | undefined): boolean {
+  return configDir ? pending.has(configDir) || held.has(configDir) : false;
+}
+
+/** One save of a held rotation, shared with any save already running for the dir. */
+function saveHeld(configDir: string): Promise<unknown> {
+  const save = held.get(configDir);
+  if (!save) return Promise.resolve();
+  const running = saving.get(configDir);
+  if (running) return running;
+  const work: Promise<unknown> = trackTokenRefresh(configDir, save()).catch(() => undefined).finally(() => {
+    if (saving.get(configDir) === work) saving.delete(configDir);
+  });
+  saving.set(configDir, work);
+  return work;
+}
+
+async function within(work: Promise<unknown>, budgetMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>(resolve => {
+    timer = setTimeout(resolve, budgetMs);
+    timer.unref?.();
+  });
+  await Promise.race([work, timeout]);
+  clearTimeout(timer);
+}
+
+/** One save of the dir's held rotation, if it has one, for at most `budgetMs`. Never rejects. */
+export async function settleHeldRotation(configDir: string, budgetMs: number = LAUNCH_SAVE_BUDGET_MS): Promise<void> {
+  if (held.has(configDir)) await within(saveHeld(configDir), budgetMs);
+}
+
+/**
+ * Resolves once no refresh is running for this config dir, and a held rotation
+ * has had one save, for at most `saveBudgetMs`. Never rejects.
+ */
+export async function tokenRefreshSettled(
+  configDir: string | null | undefined,
+  saveBudgetMs: number = LAUNCH_SAVE_BUDGET_MS,
+): Promise<void> {
+  if (!configDir) return;
+  if (!held.has(configDir)) await pending.get(configDir)?.catch(() => undefined);
+  await settleHeldRotation(configDir, saveBudgetMs);
+  if (held.has(configDir)) log.warn(`[Usage] Launching under ${configDir} before its refreshed token pair was saved`);
+}
+
+/** One save of every held rotation, all within `budgetMs`, for the way out. Never rejects. */
+export async function saveHeldRotations(budgetMs: number): Promise<void> {
+  await within(Promise.all([...held.keys()].map(saveHeld)), budgetMs);
+  if (held.size > 0) log.warn(`[Usage] Quitting with ${held.size} refreshed token pair(s) unsaved; those accounts will need a sign-in`);
 }

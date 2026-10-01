@@ -149,6 +149,16 @@ describe('resolveAccountForGroup near the usage limit', () => {
     expect(resolveAccountForGroup(null)?.id).toBe('work');
   });
 
+  test('steps aside from an account holding its token pair in memory, unless nothing has room', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 10);
+    usageStore.markRotationHeld('work');
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
+    usageAt('spare', 10);
+    expect(resolveAccountForGroup(null)?.id).toBe('spare');
+  });
+
   test('stale readings do not steer', () => {
     seedAccount('work', 1);
     seedAccount('spare');
@@ -170,6 +180,15 @@ describe('resolveAccountForGroup and a group that chose its account', () => {
     seedAccount('spare', 1);
     groupOn('g', 'work');
     usageAt('work', 95);
+    expect(resolveAccountForGroup('g')?.id).toBe('work');
+  });
+
+  test('keeps the group’s account while it holds a token pair in memory', () => {
+    seedAccount('work');
+    seedAccount('spare', 1);
+    groupOn('g', 'work');
+    usageAt('spare', 10);
+    usageStore.markRotationHeld('work');
     expect(resolveAccountForGroup('g')?.id).toBe('work');
   });
 

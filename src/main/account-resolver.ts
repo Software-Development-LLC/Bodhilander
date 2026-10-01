@@ -2,7 +2,7 @@ import { ClaudeAccount } from '../shared/types';
 import { getDatabase } from './database';
 import { mapAccountRow } from './repositories/account-row';
 import { getAccountsInFallbackOrder, isAccountHealthy } from './repositories/accounts';
-import { getUsageThreshold, hasFreshRoom, isUsagePressured } from './usage-store';
+import { getUsageThreshold, hasFreshRoom, needsRelief } from './usage-store';
 
 /**
  * Resolve which Claude account a given session should launch under (BDHLNDR-31).
@@ -89,7 +89,7 @@ export function resolveAccountForGroup(groupId: string | null, now: Date = new D
     const steerByUsage = chosen.id !== groupAccountId(groupId);
     const threshold = getUsageThreshold();
     const chosenHealthy = isAccountHealthy(chosen, now);
-    if (chosenHealthy && !(steerByUsage && isUsagePressured(chosen.id, now, threshold))) return chosen;
+    if (chosenHealthy && !(steerByUsage && needsRelief(chosen.id, now, threshold))) return chosen;
     const others = getAccountsInFallbackOrder().filter(
       (a) => a.id !== chosen.id && isAccountHealthy(a, now),
     );

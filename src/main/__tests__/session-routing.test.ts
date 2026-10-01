@@ -4,13 +4,15 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 
 let route: (id: string) => unknown = () => null;
-mock.module('electron-log', () => ({ default: { info() {}, warn() {}, error() {} } }));
+const infos: string[] = [];
+mock.module('electron-log', () => ({ default: { info: (line: string) => { infos.push(line); }, warn() {}, error() {} } }));
 mock.module('../account-failover', () => ({ routeNewSession: (id: string) => route(id) }));
 let resolve: (id: string) => { configDir: string } | null = () => null;
 mock.module('../account-resolver', () => ({ resolveAccountForSession: (id: string) => resolve(id) }));
 
 const { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } = await import('../session-routing');
 const { trackTokenRefresh } = await import('../token-refresh');
+const usageStore = await import('../usage-store');
 
 afterEach(() => {
   setSessionRoutedListener(null);
@@ -24,6 +26,19 @@ describe('routeNewSessionByUsage', () => {
     route = () => ({ from: { label: 'Home' }, to: { label: 'Spare' } });
     routeNewSessionByUsage('s1');
     expect(told).toEqual(['s1']);
+  });
+
+  test('says why a session moved: a near-limit account, or one holding an unsaved token pair', () => {
+    infos.length = 0;
+    route = () => ({ from: { id: 'home', label: 'Home' }, to: { label: 'Spare' } });
+    routeNewSessionByUsage('s1');
+    usageStore.markRotationHeld('home');
+    routeNewSessionByUsage('s2');
+    usageStore.clearRotationHeld('home');
+    expect(infos).toEqual([
+      '[Usage] New session started on Spare; Home is near its usage limit',
+      '[Usage] New session started on Spare; Home has a refreshed token pair not yet saved',
+    ]);
   });
 
   test('a session left where it was is not reported', () => {

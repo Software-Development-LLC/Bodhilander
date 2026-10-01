@@ -69,3 +69,14 @@ describe('signed out', () => {
     expect(markedAs('error')).toEqual([false, false]);
   });
 });
+
+describe('a held token rotation', () => {
+  test('fresh room on an account holding its pair in memory is not room, and asks for relief', () => {
+    usageStore.setUsage(observe(emptyUsage('work'), 'poll', NOW, { fiveHour: w(30, RESET, NOW) }));
+    usageStore.markRotationHeld('work');
+    expect([usageStore.hasFreshRoom('work', at, 85), usageStore.isSignedOut('work'), usageStore.needsRelief('work', at, 85)])
+      .toEqual([false, false, true]);
+    usageStore.clearRotationHeld('work');
+    expect([usageStore.hasFreshRoom('work', at, 85), usageStore.needsRelief('work', at, 85)]).toEqual([true, false]);
+  });
+});

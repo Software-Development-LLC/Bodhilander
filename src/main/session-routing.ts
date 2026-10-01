@@ -2,6 +2,7 @@ import log from 'electron-log';
 import { routeNewSession } from './account-failover';
 import { resolveAccountForSession } from './account-resolver';
 import { isTokenRefreshing, tokenRefreshSettled } from './token-refresh';
+import { hasHeldRotation } from './usage-store';
 
 type RoutedListener = (sessionId: string) => void;
 
@@ -20,7 +21,8 @@ export function routeNewSessionByUsage(sessionId: string): void {
   try {
     const moved = routeNewSession(sessionId);
     if (!moved) return;
-    log.info(`[Usage] New session started on ${moved.to.label}; ${moved.from.label} is near its usage limit`);
+    const why = hasHeldRotation(moved.from.id) ? 'has a refreshed token pair not yet saved' : 'is near its usage limit';
+    log.info(`[Usage] New session started on ${moved.to.label}; ${moved.from.label} ${why}`);
     routedListener?.(sessionId);
   } catch (err) {
     log.warn('[Usage] Could not route a new session by usage:', err);

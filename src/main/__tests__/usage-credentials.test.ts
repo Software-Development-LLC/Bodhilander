@@ -128,7 +128,7 @@ describe('writeRotatedTokens', () => {
     writeCreds(baseOauth, { mcpOAuth: { server: { token: 'keep' } } });
     expect(writeRotatedTokens(dir, {
       accessToken: 'new-access', refreshToken: 'new-refresh', expiresAt: 9999, scopes: ['user:inference'], refreshTokenExpiresAt: 7777,
-    })).toBe(true);
+    }, 'old-refresh')).toBe(true);
     const saved = JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8'));
     expect(saved).toEqual({
       claudeAiOauth: {
@@ -140,9 +140,16 @@ describe('writeRotatedTokens', () => {
     expect(fs.readdirSync(dir)).toEqual(['.credentials.json']);
   });
 
+  test('refuses a file no longer holding the replaced refresh token, leaving it untouched', () => {
+    writeCreds({ ...baseOauth, refreshToken: 'login-refresh' });
+    const before = fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8');
+    expect(writeRotatedTokens(dir, { accessToken: 'a', refreshToken: 'r', expiresAt: 1, scopes: null, refreshTokenExpiresAt: null }, 'old-refresh')).toBe(false);
+    expect(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).toBe(before);
+  });
+
   test('refuses a file it cannot parse, leaving it untouched', () => {
     fs.writeFileSync(path.join(dir, '.credentials.json'), 'torn');
-    expect(writeRotatedTokens(dir, { accessToken: 'a', refreshToken: 'r', expiresAt: 1, scopes: null, refreshTokenExpiresAt: null })).toBe(false);
+    expect(writeRotatedTokens(dir, { accessToken: 'a', refreshToken: 'r', expiresAt: 1, scopes: null, refreshTokenExpiresAt: null }, 'old-refresh')).toBe(false);
     expect(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).toBe('torn');
   });
 });
@@ -158,7 +165,7 @@ describe('writeRotatedTokens when the rename is refused', () => {
       if (calls < 2) throw new Error('EPERM');
       fs.renameSync(from, to);
     };
-    expect(writeRotatedTokens(dir, rotated, flaky)).toBe(true);
+    expect(writeRotatedTokens(dir, rotated, 'old-refresh', flaky)).toBe(true);
     expect(calls).toBe(2);
     expect(readOAuthCredentials(dir)?.refreshToken).toBe('new-refresh');
   });
@@ -166,7 +173,7 @@ describe('writeRotatedTokens when the rename is refused', () => {
   test('a persistent refusal falls back to writing in place, never losing the pair', () => {
     writeCreds(baseOauth);
     const refuse = () => { throw new Error('EPERM'); };
-    expect(writeRotatedTokens(dir, rotated, refuse)).toBe(true);
+    expect(writeRotatedTokens(dir, rotated, 'old-refresh', refuse)).toBe(true);
     expect(readOAuthCredentials(dir)?.refreshToken).toBe('new-refresh');
     expect(fs.readdirSync(dir)).toEqual(['.credentials.json']);
   });

@@ -687,6 +687,57 @@ describe('routing around an account near its usage limit', () => {
   });
 });
 
+describe('routing around an account holding its token pair in memory', () => {
+  test('a new session steps off a held inherited account onto known room', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null);
+    usageAt('primary', 10);
+    usageAt('fresh', 10);
+    usageStore.markRotationHeld('primary');
+    expect(failover.routeNewSession('s1')?.to.id).toBe('fresh');
+  });
+
+  test('with nowhere else to go, or a group that chose it, the session stays on the held account', () => {
+    addAccount('primary', 0, true);
+    addAccount('unknown', 1);
+    addGroup('g');
+    addGroup('pinned', 'primary');
+    addSession('s1', 'g', null);
+    usageAt('primary', 10);
+    usageStore.markRotationHeld('primary');
+    expect(failover.routeNewSession('s1')).toBeNull();
+    usageAt('unknown', 10);
+    addSession('s2', 'pinned', null);
+    expect(failover.routeNewSession('s2')).toBeNull();
+    expect(sessionsRepo.getSession('s2')!.claudeAccountId).toBeNull();
+  });
+
+  test('a session routed off a held account does not go home until the pair is saved', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null, 'stopped');
+    usageAt('primary', 10);
+    usageAt('fresh', 10);
+    usageStore.markRotationHeld('primary');
+    expect(failover.routeNewSession('s1')?.to.id).toBe('fresh');
+    expect(failover.failbackCandidates()).toEqual([]);
+    usageStore.clearRotationHeld('primary');
+    expect(failover.failbackCandidates().map(c => c.sessionId)).toEqual(['s1']);
+  });
+
+  test('failover takes an account with no reading before a held one', () => {
+    addAccount('primary', 0, true);
+    addAccount('held', 1);
+    addAccount('unknown', 2);
+    usageAt('held', 5);
+    usageStore.markRotationHeld('held');
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('unknown');
+  });
+});
+
 describe('routeNewSession', () => {
   test('pins a new session that would inherit a near-limit account', () => {
     addAccount('primary', 0, true);
