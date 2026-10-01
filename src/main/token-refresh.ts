@@ -67,7 +67,6 @@ export async function tokenRefreshSettled(
 ): Promise<void> {
   if (!configDir) return;
   if (!held.has(configDir)) await pending.get(configDir)?.catch(() => undefined);
-  if (!held.has(configDir)) return;
   await settleHeldRotation(configDir, saveBudgetMs);
   if (held.has(configDir)) log.warn(`[Usage] Launching under ${configDir} before its refreshed token pair was saved`);
 }
