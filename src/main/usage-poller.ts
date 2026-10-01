@@ -299,9 +299,9 @@ export class UsagePoller extends EventEmitter {
     try {
       const rotated = await refreshOAuthToken(creds, this.deps.fetch, this.now);
       // The old refresh token is spent once this returns, so the rotation is
-      // saved even if a CLI bound to the account during the request.
+      // saved even if a CLI bound to the account, unless that CLI has replaced the pair.
       if (this.deps.boundAccountIds().has(account.id)) {
-        log.warn(`[Usage] ${account.label} was bound during a token refresh; saving the rotation anyway`);
+        log.warn(`[Usage] ${account.label} was bound during a token refresh; saving the rotation unless the CLI replaced it`);
       }
       const target: WriteTarget = { source: creds.source, spent: creds.refreshToken };
       if (!(await this.deps.credentials.writeRotated(account.configDir, rotated, target))) {
@@ -409,7 +409,7 @@ type FetchResponse = Awaited<ReturnType<FetchLike>>;
 /** What one store's reading says has become of a held pair, or null while it still waits to be saved. */
 function heldOutcome(read: StoreRead, rotation: HeldRotation): HeldOutcome | null {
   if (!hasCredentials(read)) return read === 'no-credentials' || read === 'no-keychain-credentials' ? 'gone' : null;
-  if (read.refreshToken === rotation.rotated.refreshToken) return 'saved';
+  if (read.accessToken === rotation.rotated.accessToken) return 'saved';
   return read.refreshToken === rotation.spent ? null : 'replaced';
 }
 

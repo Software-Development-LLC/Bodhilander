@@ -692,6 +692,22 @@ describe('a rotation the Keychain will not take', () => {
     expect(lines).toContain('[Usage] Let go of the held token rotation for work: it is saved');
   });
 
+  test('a held pair that kept its refresh token is still written, not taken as saved', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(url => (url === OAUTH_TOKEN_URL
+      ? { status: 200, body: { access_token: 'fresh-access', expires_in: 28_800 } }
+      : { status: 200, body: USAGE_BODY }));
+    const p = storePoller(work, fetch, kc.store);
+    await p.pollAll();
+
+    kc.state.writeCode = 0;
+    nextRound();
+    await p.pollAll();
+    expect(kc.saved()).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'work-refresh' });
+  });
+
   test('a save that keeps failing the same way is warned about once', async () => {
     const work = account('work');
     const kc = keychain(work);
