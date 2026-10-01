@@ -4,8 +4,8 @@ import log from 'electron-log';
 
 import { AccountUsage, ClaudeAccount, LiveAccountBindings, UsageUnavailableReason } from '../shared/types';
 import { USAGE_STALE_MS } from '../shared/usage';
-import { CredentialStore, hasCredentials } from './credential-store';
-import { FetchLike, isTokenExpired, OAuthCredentials, refreshOAuthToken } from './usage-credentials';
+import { CredentialSource, CredentialStore, hasCredentials, StoredCredentials } from './credential-store';
+import { FetchLike, isTokenExpired, refreshOAuthToken, RotatedTokens } from './usage-credentials';
 import {
   emptyUsage,
   mergeUsage,
@@ -16,7 +16,7 @@ import {
   UsageObservation,
 } from './usage-meter';
 import { sinkFilePath } from './statusline-sink';
-import { trackTokenRefresh } from './token-refresh';
+import { holdRotation, releaseRotation, trackTokenRefresh } from './token-refresh';
 import * as usageStore from './usage-store';
 
 /**
@@ -82,6 +82,14 @@ export function runAccountIdsForOwnership(
   return ids;
 }
 
+/** A refreshed pair its store would not take. Its refresh token is the only live one. */
+interface HeldRotation {
+  configDir: string;
+  rotated: RotatedTokens;
+  source: CredentialSource;
+  spent: string | null;
+}
+
 export interface UsageCrossingEvent {
   account: ClaudeAccount;
   crossing: ThresholdCrossing;
@@ -94,6 +102,7 @@ export class UsagePoller extends EventEmitter {
   private readonly failures = new Map<string, number>();
   private readonly lastAttempt = new Map<string, number>();
   private readonly watched = new Map<string, string>();
+  private readonly held = new Map<string, HeldRotation>();
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
 
@@ -154,6 +163,9 @@ export class UsagePoller extends EventEmitter {
     for (const id of Object.keys(usageStore.allUsage())) {
       if (!ids.has(id)) usageStore.forgetUsage(id);
     }
+    for (const id of this.held.keys()) {
+      if (!ids.has(id)) this.release(id);
+    }
     for (const account of accounts) {
       try {
         this.deps.ensureSink?.(account);
@@ -191,6 +203,8 @@ export class UsagePoller extends EventEmitter {
     const now = this.now();
     if ((this.retryAt.get(account.id) ?? 0) > now) return;
     this.lastAttempt.set(account.id, now);
+    // Refreshing again would spend a token the held pair already replaced.
+    if (this.held.has(account.id) && !(await trackTokenRefresh(account.configDir, this.saveHeld(account)))) return;
 
     const creds = await this.deps.credentials.read(account.configDir);
     if (!hasCredentials(creds)) {
@@ -228,7 +242,7 @@ export class UsagePoller extends EventEmitter {
    */
   private async authorisedUsage(
     account: ClaudeAccount,
-    creds: OAuthCredentials,
+    creds: StoredCredentials,
     now: number,
   ): Promise<FetchResponse | null> {
     const owned = this.deps.boundAccountIds().has(account.id);
@@ -258,13 +272,13 @@ export class UsagePoller extends EventEmitter {
     });
   }
 
-  private refreshToken(account: ClaudeAccount, creds: OAuthCredentials): Promise<string | null> {
+  private refreshToken(account: ClaudeAccount, creds: StoredCredentials): Promise<string | null> {
     return trackTokenRefresh(account.configDir, this.rotateToken(account, creds));
   }
 
   private async rotateToken(
     account: ClaudeAccount,
-    creds: OAuthCredentials,
+    creds: StoredCredentials,
   ): Promise<string | null> {
     try {
       const rotated = await refreshOAuthToken(creds, this.deps.fetch, this.now);
@@ -273,9 +287,9 @@ export class UsagePoller extends EventEmitter {
       if (this.deps.boundAccountIds().has(account.id)) {
         log.warn(`[Usage] ${account.label} was bound during a token refresh; saving the rotation anyway`);
       }
-      if (!(await this.deps.credentials.writeRotated(account.configDir, rotated))) {
-        log.warn(`[Usage] Refreshed ${account.label}'s token but could not save it`);
-        this.markUnavailable(account.id, 'reauth');
+      if (!(await this.deps.credentials.writeRotated(account.configDir, rotated, creds.source))) {
+        log.warn(`[Usage] Refreshed ${account.label}'s token but could not save it; retrying on the next poll`);
+        this.hold(account, { configDir: account.configDir, rotated, source: creds.source, spent: creds.refreshToken });
         return null;
       }
       log.info(`[Usage] Refreshed the token for ${account.label}`);
@@ -285,6 +299,39 @@ export class UsagePoller extends EventEmitter {
       this.markUnavailable(account.id, 'reauth');
       return null;
     }
+  }
+
+  private hold(account: ClaudeAccount, rotation: HeldRotation): void {
+    this.held.set(account.id, rotation);
+    holdRotation(rotation.configDir, () => this.saveHeld(account));
+    this.markUnavailable(account.id, unsavedReason(rotation.source));
+  }
+
+  private release(accountId: string): void {
+    const rotation = this.held.get(accountId);
+    if (!rotation) return;
+    this.held.delete(accountId);
+    releaseRotation(rotation.configDir);
+  }
+
+  /**
+   * Save a held pair to the store it was read from. A store now holding some
+   * other refresh token was signed in again since, and that sign-in stands.
+   */
+  private async saveHeld(account: ClaudeAccount): Promise<boolean> {
+    const rotation = this.held.get(account.id);
+    if (!rotation) return true;
+    const current = await this.deps.credentials.read(rotation.configDir);
+    const superseded = hasCredentials(current)
+      && current.source === rotation.source
+      && current.refreshToken !== rotation.spent;
+    if (superseded || await this.deps.credentials.writeRotated(rotation.configDir, rotation.rotated, rotation.source)) {
+      log.info(`[Usage] ${superseded ? 'Dropped' : 'Saved'} the held token rotation for ${account.label}`);
+      this.release(account.id);
+      return true;
+    }
+    this.markUnavailable(account.id, unsavedReason(rotation.source));
+    return false;
   }
 
   private backOff(account: ClaudeAccount, status: number, retryAfter: string | null): void {
@@ -328,6 +375,11 @@ export class UsagePoller extends EventEmitter {
 }
 
 type FetchResponse = Awaited<ReturnType<FetchLike>>;
+
+/** A Keychain that will not take the pair is out of reach for now; the account is not signed out. */
+function unsavedReason(source: CredentialSource): UsageUnavailableReason {
+  return source === 'keychain' ? 'keychain-unavailable' : 'error';
+}
 
 function isAuthRejection(status: number): boolean {
   return status === 401 || status === 403;

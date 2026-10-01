@@ -18,15 +18,22 @@ import {
  * CLI reaches it so the item's access list already trusts us. Nothing is logged.
  */
 
+export type CredentialSource = 'file' | 'keychain';
+
+/** Tokens, and the store they came from, which is the one a rotation of them goes back to. */
+export interface StoredCredentials extends OAuthCredentials {
+  source: CredentialSource;
+}
+
 /** The account's tokens, or why there are none to use. */
-export type CredentialRead = OAuthCredentials | UsageUnavailableReason;
+export type CredentialRead = StoredCredentials | UsageUnavailableReason;
 
 export interface CredentialStore {
   read(configDir: string): Promise<CredentialRead>;
-  writeRotated(configDir: string, rotated: RotatedTokens): Promise<boolean>;
+  writeRotated(configDir: string, rotated: RotatedTokens, source: CredentialSource): Promise<boolean>;
 }
 
-export function hasCredentials(read: CredentialRead): read is OAuthCredentials {
+export function hasCredentials(read: CredentialRead): read is StoredCredentials {
   return typeof read !== 'string';
 }
 
@@ -40,8 +47,12 @@ const SECURITY_STDIN_LIMIT = 4032;
 const SECURITY_ITEM_NOT_FOUND = 44;
 const FALLBACK_KEYCHAIN_ACCOUNT = 'claude-code-user';
 
+function withSource(creds: OAuthCredentials | null, source: CredentialSource): StoredCredentials | null {
+  return creds ? { ...creds, source } : null;
+}
+
 export const fileCredentialStore: CredentialStore = {
-  read: async configDir => readOAuthCredentials(configDir) ?? 'no-credentials',
+  read: async configDir => withSource(readOAuthCredentials(configDir), 'file') ?? 'no-credentials',
   writeRotated: async (configDir, rotated) => writeRotatedTokens(configDir, rotated),
 };
 
@@ -112,7 +123,7 @@ export function keychainCredentialStore(
     read: async configDir => {
       const { code, doc } = await readItem(configDir);
       if (code !== 0 && code !== SECURITY_ITEM_NOT_FOUND) return 'keychain-unavailable';
-      return oauthFromDocument(doc) ?? 'no-keychain-credentials';
+      return withSource(oauthFromDocument(doc), 'keychain') ?? 'no-keychain-credentials';
     },
     writeRotated: async (configDir, rotated) => {
       const doc = withRotatedTokens(await readDocument(configDir), rotated);
@@ -133,7 +144,8 @@ export function keychainCredentialStore(
 /**
  * The store for this platform. On macOS the Keychain comes first, and a token
  * file is used only when the Keychain yields nothing for the account; with no
- * file either, the reason given is the Keychain's.
+ * file either, the reason given is the Keychain's. A rotation goes back to the
+ * store its tokens were read from, never to the other one.
  */
 export function credentialStoreFor(platform: NodeJS.Platform, exec: SecurityExec = runSecurity): CredentialStore {
   if (platform !== 'darwin') return fileCredentialStore;
@@ -145,8 +157,7 @@ export function credentialStoreFor(platform: NodeJS.Platform, exec: SecurityExec
       const fromFile = await fileCredentialStore.read(configDir);
       return hasCredentials(fromFile) ? fromFile : fromKeychain;
     },
-    writeRotated: async (configDir, rotated) => (hasCredentials(await keychain.read(configDir))
-      ? keychain.writeRotated(configDir, rotated)
-      : fileCredentialStore.writeRotated(configDir, rotated)),
+    writeRotated: (configDir, rotated, source) => (source === 'keychain' ? keychain : fileCredentialStore)
+      .writeRotated(configDir, rotated, source),
   };
 }

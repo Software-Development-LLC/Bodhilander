@@ -78,7 +78,7 @@ describe('the Keychain store', () => {
   test('reads the item for the account’s config dir', async () => {
     const { calls, exec } = fakeSecurity(new Map([[SERVICE, item(OAUTH)]]));
     const creds = await keychainCredentialStore(exec, () => 'alice').read(CONFIG_DIR);
-    expect(creds).toEqual({ accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 1000, scopes: ['user:inference'] });
+    expect(creds).toEqual({ accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 1000, scopes: ['user:inference'], source: 'keychain' });
     expect(calls[0].args).toEqual(['find-generic-password', '-a', 'alice', '-w', '-s', SERVICE]);
   });
 
@@ -105,7 +105,7 @@ describe('the Keychain store', () => {
   test('a rotation keeps every other field and goes in over stdin, never argv', async () => {
     const items = new Map([[SERVICE, item(OAUTH, { mcpOAuth: { keep: true } })]]);
     const { calls, exec } = fakeSecurity(items);
-    expect(await keychainCredentialStore(exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED)).toBe(true);
+    expect(await keychainCredentialStore(exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED, 'keychain')).toBe(true);
 
     expect(JSON.parse(items.get(SERVICE)!)).toEqual({
       claudeAiOauth: { ...OAUTH, accessToken: 'new-access', refreshToken: 'new-refresh', expiresAt: 9999 },
@@ -121,7 +121,7 @@ describe('the Keychain store', () => {
   test('an item too long for one stdin line is written on argv, as the CLI does', async () => {
     const items = new Map([[SERVICE, item(OAUTH, { padding: 'x'.repeat(3000) })]]);
     const { calls, exec } = fakeSecurity(items);
-    expect(await keychainCredentialStore(exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED)).toBe(true);
+    expect(await keychainCredentialStore(exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED, 'keychain')).toBe(true);
     expect(calls.some(c => c.args[0] === '-i')).toBe(false);
     expect(calls.find(c => c.args[0] === 'add-generic-password')?.args.slice(0, 6))
       .toEqual(['add-generic-password', '-U', '-a', 'alice', '-s', SERVICE]);
@@ -129,14 +129,14 @@ describe('the Keychain store', () => {
 
   test('a failed write, or one that does not read back, is not saved', async () => {
     const failed = fakeSecurity(new Map([[SERVICE, item(OAUTH)]]), { writeCode: 1 });
-    expect(await keychainCredentialStore(failed.exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED)).toBe(false);
+    expect(await keychainCredentialStore(failed.exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED, 'keychain')).toBe(false);
     const dropped = fakeSecurity(new Map([[SERVICE, item(OAUTH)]]), { dropWrites: true });
-    expect(await keychainCredentialStore(dropped.exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED)).toBe(false);
+    expect(await keychainCredentialStore(dropped.exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED, 'keychain')).toBe(false);
   });
 
   test('no item means nothing is written', async () => {
     const { calls, exec } = fakeSecurity(new Map());
-    expect(await keychainCredentialStore(exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED)).toBe(false);
+    expect(await keychainCredentialStore(exec, () => 'alice').writeRotated(CONFIG_DIR, ROTATED, 'keychain')).toBe(false);
     expect(calls.map(c => c.args[0])).toEqual(['find-generic-password']);
   });
 });
@@ -158,22 +158,48 @@ describe('the store for a platform', () => {
     expect(await credentialStoreFor('win32', exec).read(path.join(dir, 'none'))).toBe('no-credentials');
   });
 
+  const readFile = () => JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).claudeAiOauth;
+  const sourceOf = (read: CredentialRead) => (hasCredentials(read) ? read.source : read);
+
   test('on macOS the Keychain wins, and its item takes the rotation', async () => {
     const items = new Map([[keychainService(dir), item({ ...OAUTH, accessToken: 'keychain-access' })]]);
     writeFile();
     const store = credentialStoreFor('darwin', fakeSecurity(items).exec);
-    expect(accessToken(await store.read(dir))).toBe('keychain-access');
-    expect(await store.writeRotated(dir, ROTATED)).toBe(true);
+    const read = await store.read(dir);
+    expect(accessToken(read)).toBe('keychain-access');
+    expect(sourceOf(read)).toBe('keychain');
+    expect(await store.writeRotated(dir, ROTATED, 'keychain')).toBe(true);
     expect(JSON.parse(items.get(keychainService(dir))!).claudeAiOauth.accessToken).toBe('new-access');
     expect(JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).claudeAiOauth.accessToken).toBe('old-access');
   });
 
   test('on macOS with no Keychain item, a token file is read and written', async () => {
     writeFile();
-    const store = credentialStoreFor('darwin', fakeSecurity(new Map()).exec);
-    expect(accessToken(await store.read(dir))).toBe('old-access');
-    expect(await store.writeRotated(dir, ROTATED)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf-8')).claudeAiOauth.accessToken).toBe('new-access');
+    const { calls, exec } = fakeSecurity(new Map());
+    const store = credentialStoreFor('darwin', exec);
+    const read = await store.read(dir);
+    expect(sourceOf(read)).toBe('file');
+    expect(await store.writeRotated(dir, ROTATED, 'file')).toBe(true);
+    expect(readFile().accessToken).toBe('new-access');
+    expect(calls.map(c => c.args[0])).toEqual(['find-generic-password']);
+  });
+
+  test('a Keychain read that fails at write time leaves the token file alone', async () => {
+    const service = keychainService(dir);
+    const items = new Map([[service, item(OAUTH)]]);
+    writeFile();
+    const { calls, exec: healthy } = fakeSecurity(items);
+    const locked = fakeSecurity(items, { findCode: 36 });
+    let exec = healthy;
+    const store = credentialStoreFor('darwin', (args, input) => exec(args, input));
+    const read = await store.read(dir);
+    expect(sourceOf(read)).toBe('keychain');
+    exec = locked.exec;
+
+    expect(await store.writeRotated(dir, ROTATED, 'keychain')).toBe(false);
+    expect(readFile().accessToken).toBe('old-access');
+    expect(JSON.parse(items.get(service)!).claudeAiOauth.accessToken).toBe('old-access');
+    expect([...calls, ...locked.calls].map(c => c.args[0])).toEqual(['find-generic-password', 'find-generic-password']);
   });
 
   test('on macOS with neither, the reason is the Keychain’s', async () => {
@@ -184,7 +210,12 @@ describe('the store for a platform', () => {
 
   test('on macOS an unavailable Keychain still falls back to a token file', async () => {
     writeFile();
-    const store = credentialStoreFor('darwin', fakeSecurity(new Map(), { findCode: 36 }).exec);
-    expect(accessToken(await store.read(dir))).toBe('old-access');
+    const { calls, exec } = fakeSecurity(new Map(), { findCode: 36 });
+    const store = credentialStoreFor('darwin', exec);
+    const read = await store.read(dir);
+    expect(sourceOf(read)).toBe('file');
+    expect(await store.writeRotated(dir, ROTATED, 'file')).toBe(true);
+    expect(readFile().accessToken).toBe('new-access');
+    expect(calls.map(c => c.args[0])).toEqual(['find-generic-password']);
   });
 });

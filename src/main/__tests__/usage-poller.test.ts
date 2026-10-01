@@ -20,11 +20,12 @@ mock.module('../repositories/preferences', () => ({
 
 const { ownedAccountIds, runAccountIdsForOwnership, UsagePoller, USAGE_URL, USAGE_POLL_MS } = await import('../usage-poller');
 const { OAUTH_TOKEN_URL } = await import('../usage-credentials');
-const { fileCredentialStore } = await import('../credential-store');
-const { tokenRefreshSettled } = await import('../token-refresh');
+const { credentialStoreFor, fileCredentialStore, keychainService } = await import('../credential-store');
+const { isTokenRefreshing, tokenRefreshSettled } = await import('../token-refresh');
 const usageStore = await import('../usage-store');
 import type { ClaudeAccount } from '../../shared/types';
 import type { FetchLike } from '../usage-credentials';
+import type { SecurityExec } from '../credential-store';
 
 const NOW = Date.parse('2026-09-30T12:00:00Z');
 let root: string;
@@ -449,4 +450,132 @@ test('a token expired under a gate still running on it is not refreshed', async 
   const { calls, fetch } = fakeFetch(() => ({ status: 200, body: {} }));
   await poller([gateAccount], fetch, [...owned]).pollAll();
   expect(calls).toHaveLength(0);
+});
+
+describe('a rotation the Keychain will not take', () => {
+  const FRESH = { status: 200, body: { access_token: 'fresh-access', refresh_token: 'fresh-refresh', expires_in: 28_800 } };
+  const route = (url: string) => (url === OAUTH_TOKEN_URL ? FRESH : { status: 200, body: USAGE_BODY });
+
+  /** A fake `security` over one item; `findCode` and `writeCode` fail its reads and writes on demand. */
+  function keychain(acc: ClaudeAccount) {
+    const service = keychainService(acc.configDir);
+    const state = { findCode: 0, writeCode: 0, items: new Map<string, string>() };
+    state.items.set(service, JSON.stringify({
+      claudeAiOauth: { accessToken: 'work-access', refreshToken: 'work-refresh', expiresAt: NOW - 1000, scopes: ['user:inference'] },
+    }));
+    const exec: SecurityExec = async (args, input) => {
+      if (args[0] === 'find-generic-password') {
+        const secret = state.items.get(service);
+        if (state.findCode !== 0) return { code: state.findCode, stdout: '' };
+        return secret === undefined ? { code: 44, stdout: '' } : { code: 0, stdout: secret };
+      }
+      if (state.writeCode !== 0) return { code: state.writeCode, stdout: '' };
+      const hex = /-X "([0-9a-f]+)"/.exec(input ?? '')![1];
+      state.items.set(service, Buffer.from(hex, 'hex').toString('utf-8'));
+      return { code: 0, stdout: '' };
+    };
+    const saved = () => JSON.parse(state.items.get(service)!).claudeAiOauth;
+    return { state, saved, store: credentialStoreFor('darwin', exec) };
+  }
+
+  function keychainPoller(acc: ClaudeAccount, fetch: FetchLike, store: ReturnType<typeof credentialStoreFor>) {
+    return new UsagePoller({
+      listAccounts: () => [acc], boundAccountIds: () => new Set(), fetch, credentials: store, now: () => clock,
+    });
+  }
+
+  const nextRound = () => { clock += USAGE_POLL_MS; };
+
+  test('a Keychain locked at write time sends nothing to the token file', async () => {
+    const work = account('work');
+    writeCreds(work, NOW - 1000);
+    const before = fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8');
+    const kc = keychain(work);
+    const { fetch } = fakeFetch(url => {
+      if (url === OAUTH_TOKEN_URL) kc.state.findCode = 36;
+      return route(url);
+    });
+    await keychainPoller(work, fetch, kc.store).pollAll();
+
+    expect(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).toBe(before);
+    expect(kc.saved().refreshToken).toBe('work-refresh');
+    expect(usageStore.getUsage('work')?.unavailable).toBe('keychain-unavailable');
+    expect(usageStore.isUnreachable('work')).toBe(true);
+    expect(usageStore.isSignedOut('work')).toBe(false);
+  });
+
+  test('a refused write is retried on later polls, and the spent token is never refreshed again', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { calls, fetch } = fakeFetch(route);
+    const p = keychainPoller(work, fetch, kc.store);
+    await p.pollAll();
+    expect(usageStore.getUsage('work')?.unavailable).toBe('keychain-unavailable');
+
+    nextRound();
+    await p.pollAll();
+    expect(calls.map(c => c.url)).toEqual([OAUTH_TOKEN_URL]);
+    expect(usageStore.getUsage('work')?.unavailable).toBe('keychain-unavailable');
+
+    kc.state.writeCode = 0;
+    nextRound();
+    await p.pollAll();
+    expect(kc.saved()).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' });
+    expect(calls.map(c => c.url)).toEqual([OAUTH_TOKEN_URL, USAGE_URL]);
+    expect(calls[1].auth).toBe('Bearer fresh-access');
+    expect(usageStore.getUsage('work')).toMatchObject({ unavailable: null, fiveHour: { pct: 42 } });
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+  });
+
+  test('a token file read is rotated back into the token file', async () => {
+    const work = account('work');
+    writeCreds(work, NOW - 1000);
+    const kc = keychain(work);
+    kc.state.items.clear();
+    const { calls, fetch } = fakeFetch(route);
+    await keychainPoller(work, fetch, kc.store).pollAll();
+
+    const saved = JSON.parse(fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8')).claudeAiOauth;
+    expect(saved).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh', subscriptionType: 'max' });
+    expect(kc.state.items.size).toBe(0);
+    expect(calls.map(c => c.url)).toEqual([OAUTH_TOKEN_URL, USAGE_URL]);
+  });
+
+  test('a launch on the account makes one save attempt before the CLI reads the Keychain', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { calls, fetch } = fakeFetch(route);
+    await keychainPoller(work, fetch, kc.store).pollAll();
+    expect(isTokenRefreshing(work.configDir)).toBe(true);
+
+    await tokenRefreshSettled(work.configDir);
+    expect(kc.saved().refreshToken).toBe('work-refresh');
+
+    kc.state.writeCode = 0;
+    await tokenRefreshSettled(work.configDir);
+    expect(kc.saved()).toMatchObject({ accessToken: 'fresh-access', refreshToken: 'fresh-refresh' });
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+    expect(calls.map(c => c.url)).toEqual([OAUTH_TOKEN_URL]);
+  });
+
+  test('a sign-in made while a pair is held is not overwritten by it', async () => {
+    const work = account('work');
+    const kc = keychain(work);
+    kc.state.writeCode = 1;
+    const { fetch } = fakeFetch(route);
+    const p = keychainPoller(work, fetch, kc.store);
+    await p.pollAll();
+
+    kc.state.writeCode = 0;
+    const service = keychainService(work.configDir);
+    kc.state.items.set(service, JSON.stringify({
+      claudeAiOauth: { accessToken: 'login-access', refreshToken: 'login-refresh', expiresAt: NOW + 3_600_000, scopes: [] },
+    }));
+    nextRound();
+    await p.pollAll();
+    expect(kc.saved()).toMatchObject({ accessToken: 'login-access', refreshToken: 'login-refresh' });
+    expect(isTokenRefreshing(work.configDir)).toBe(false);
+  });
 });
