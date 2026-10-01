@@ -3,7 +3,7 @@
  * CLI's Keychain item on macOS. `security` is always a fake here; no spec
  * touches a real Keychain. Run with: bun test <this file>
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -247,9 +247,13 @@ describe('the store for a platform', () => {
   });
 
   test('a token file that cannot be reached for another reason is unreadable, not gone', async () => {
-    writeFile();
-    const underAFile = path.join(dir, '.credentials.json', 'nested');
-    expect(await fileCredentialStore.readFrom(underAFile, 'file')).toBe('credentials-unreadable');
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    const stat = spyOn(fs, 'statSync').mockImplementation(() => { throw denied; });
+    try {
+      expect(await fileCredentialStore.readFrom(dir, 'file')).toBe('credentials-unreadable');
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   test('on macOS an unavailable Keychain still falls back to a token file', async () => {
