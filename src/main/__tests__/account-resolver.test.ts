@@ -14,6 +14,19 @@ let db: Database;
 mock.module('../database', () => ({ getDatabase: () => db }));
 
 const { resolveAccountForGroup } = await import('../account-resolver');
+const usageStore = await import('../usage-store');
+
+/** A fresh usage reading at `pct` in the 5-hour window. */
+function usageAt(accountId: string, pct: number): void {
+  usageStore.setUsage({
+    accountId,
+    fiveHour: { pct, resetsAt: Date.now() + 3_600_000, observedAt: Date.now() },
+    sevenDay: null,
+    source: 'poll',
+    observedAt: Date.now(),
+    unavailable: null,
+  });
+}
 
 function freshDb(): Database {
   const d = new Database(':memory:');
@@ -35,7 +48,7 @@ function seedAccount(id: string, isDefault = 0) {
   ).run(id, id, `/cfg/${id}/.claude`, isDefault);
 }
 
-beforeEach(() => { db = freshDb(); });
+beforeEach(() => { db = freshDb(); usageStore.clearAllUsage(); });
 
 describe('resolveAccountForGroup', () => {
   test('a group with an account resolves to that account', () => {
@@ -101,5 +114,70 @@ describe('health-aware step-aside (CO-722 R1)', () => {
     seedAccount('def', 1); // healthy
     seedLimited('other', 0, FUTURE);
     expect(resolveAccountForGroup(null)?.id).toBe('def');
+  });
+});
+
+describe('resolveAccountForGroup near the usage limit', () => {
+  test('steps aside from an account over the threshold when one below it exists', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 92);
+    usageAt('spare', 10);
+    expect(resolveAccountForGroup(null)?.id).toBe('spare');
+  });
+
+  test('when every account is over, keeps the chosen one as today', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 92);
+    usageAt('spare', 95);
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
+  });
+
+  test('an account with no reading is not somewhere to move to', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 92);
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
+  });
+
+  test('a default at 90% keeps a run’s gates when the secondary is signed out', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageAt('work', 90);
+    usageStore.setUsage({ ...usageStore.getUsage('work')!, accountId: 'spare', fiveHour: { pct: 5, resetsAt: null, observedAt: Date.now() }, unavailable: 'reauth' });
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
+  });
+
+  test('stale readings do not steer', () => {
+    seedAccount('work', 1);
+    seedAccount('spare');
+    usageStore.setUsage({
+      accountId: 'work', fiveHour: { pct: 99, resetsAt: null, observedAt: Date.now() - 60 * 60_000 }, sevenDay: null,
+      source: 'poll', observedAt: Date.now() - 60 * 60_000, unavailable: null,
+    });
+    expect(resolveAccountForGroup(null)?.id).toBe('work');
+  });
+});
+
+describe('resolveAccountForGroup and a group that chose its account', () => {
+  function groupOn(id: string, accountId: string) {
+    db.prepare('INSERT INTO groups (id, claude_account_id) VALUES (?, ?)').run(id, accountId);
+  }
+
+  test('keeps the group’s account under usage pressure', () => {
+    seedAccount('work');
+    seedAccount('spare', 1);
+    groupOn('g', 'work');
+    usageAt('work', 95);
+    expect(resolveAccountForGroup('g')?.id).toBe('work');
+  });
+
+  test('still steps aside when that account is rate-limited', () => {
+    seedAccount('work');
+    seedAccount('spare', 1);
+    groupOn('g', 'work');
+    db.prepare('UPDATE claude_accounts SET limited_until = ? WHERE id = ?').run(new Date(Date.now() + 3_600_000).toISOString(), 'work');
+    expect(resolveAccountForGroup('g')?.id).toBe('spare');
   });
 });

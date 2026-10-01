@@ -589,6 +589,8 @@ export interface RunGateRow {
   /** What `claude attach` takes. Null until a background gate reports one. */
   bgSessionId: string | null;
   claudeSessionId: string | null;
+  /** The CLAUDE_CONFIG_DIR it launched under. Null for ambient login or pre-migration rows. */
+  configDir: string | null;
   status: string;
   verdictJson: string | null;
   posture: PermissionPosture;
@@ -606,6 +608,7 @@ export interface StartGateInput {
   posture: PermissionPosture;
   claudeSessionId?: string | null;
   bgSessionId?: string | null;
+  configDir?: string | null;
 }
 
 /**
@@ -631,14 +634,14 @@ export function startGate(input: StartGateInput): void {
   getDatabase()
     .prepare(
       `INSERT INTO run_gates (id, run_id, gate, repo, agent, attempt, bg_session_id,
-                              claude_session_id, status, posture)
+                              claude_session_id, status, posture, config_dir)
        SELECT ?, ?, ?, ?, ?,
               -- Counted per OWNER too (CO-722): two repos both at gate 4 share
               -- the verifier role, and B's first verifier is not A's retry.
               (SELECT COUNT(*) + 1 FROM run_gates
                 WHERE run_id = ? AND gate = ? AND agent = ?
                   AND IFNULL(repo, '') = IFNULL(?, '')),
-              ?, ?, 'running', ?`,
+              ?, ?, 'running', ?, ?`,
     )
     .run(
       input.id,
@@ -653,7 +656,25 @@ export function startGate(input: StartGateInput): void {
       input.bgSessionId ?? null,
       input.claudeSessionId ?? null,
       input.posture,
+      input.configDir ?? null,
     );
+}
+
+export function setGateConfigDir(id: string, configDir: string | null): void {
+  getDatabase().prepare('UPDATE run_gates SET config_dir = ? WHERE id = ?').run(configDir, id);
+}
+
+/** The config dirs of gates still running for the given runs. */
+export function runningGateConfigDirs(runIds: string[]): string[] {
+  if (runIds.length === 0) return [];
+  const rows = getDatabase()
+    .prepare(
+      `SELECT DISTINCT config_dir FROM run_gates
+        WHERE status = 'running' AND config_dir IS NOT NULL
+          AND run_id IN (${runIds.map(() => '?').join(', ')})`,
+    )
+    .all(...runIds) as { config_dir: string }[];
+  return rows.map(row => row.config_dir);
 }
 
 /**
@@ -717,6 +738,7 @@ function toGateRow(row: {
   attempt: number;
   bg_session_id: string | null;
   claude_session_id: string | null;
+  config_dir?: string | null;
   status: string;
   verdict_json: string | null;
   posture: string;
@@ -731,6 +753,7 @@ function toGateRow(row: {
     attempt: row.attempt,
     bgSessionId: row.bg_session_id,
     claudeSessionId: row.claude_session_id,
+    configDir: row.config_dir ?? null,
     status: row.status,
     verdictJson: row.verdict_json,
     posture: row.posture as PermissionPosture,

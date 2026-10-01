@@ -40,6 +40,7 @@ import { advance, startOwnerGate } from './driver';
 import { processDeps, runCommand } from './command-runner';
 import { agentsForOwner, spawnGateFor, targetFor, type SpawnConfig } from './gate-spawner';
 import { lookAtGate, type AttentionDeps } from './attention-pass';
+import { tokenRefreshSettled } from '../token-refresh';
 import { discoverPrArgv, readDiscoveredPr } from './pr-discovery';
 import { reconcileOnce, expectedChecksLookup, type ChecksLookup, type CommandResult } from './reconcile';
 import { createRunLoop, type LoopDeps, type RunLoop } from './run-loop';
@@ -301,8 +302,13 @@ const spawnDeps: SpawnDeps = {
 };
 
 /** The managed account a run's gates launch under (#327), or null for ambient. */
-function accountConfigDirFor(run: RunRow): string | null {
+export function accountConfigDirFor(run: RunRow): string | null {
   return resolveAccountForGroup(run.groupId)?.configDir ?? null;
+}
+
+/** The dir a gate launched under, else the run's current one for a row that predates it. */
+export function configDirForGate(run: RunRow, gate: { configDir: string | null }): string | null {
+  return gate.configDir ?? accountConfigDirFor(run);
 }
 
 /**
@@ -315,7 +321,8 @@ function accountConfigDirFor(run: RunRow): string | null {
  * at the wiring layer, so neither `gate-spawner` nor the wrapper imports the
  * accounts repository.
  */
-function resilientLaunch(launch: GateLaunch): Promise<GateOutcome> {
+export async function resilientLaunch(launch: GateLaunch): Promise<GateOutcome> {
+  await tokenRefreshSettled(launch.context.configDir);
   return runGateResilient({
     run: () => launchGate(launch),
     configDir: launch.context.configDir ?? null,
@@ -421,7 +428,7 @@ async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, own
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner), resilientLaunch);
+  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner), resilientLaunch, runsRepo.setGateConfigDir);
   return {
     target,
     deps: {
@@ -441,7 +448,7 @@ export function loopDeps(config: SpawnConfig, ghPath: string): LoopDeps {
     listActiveRuns: () => runsRepo.listActiveRuns(),
     listOwners: (id) => runsRepo.listOwners(id),
     activeGate: (id, repo) => runsRepo.activeGate(id, repo),
-    look: (run, gate) => lookAtGate(run, gate, attentionDeps(config, accountConfigDirFor(run))),
+    look: (run, gate) => lookAtGate(run, gate, attentionDeps(config, configDirForGate(run, gate))),
     pending: (run, gate) => pendingRequests(config.permissionsRoot, run.id, gate, channelIo).length,
     discoverPr: async (_run, owner) => {
       // `gh` in the owner's worktree, so it reads that repo's remote and auth

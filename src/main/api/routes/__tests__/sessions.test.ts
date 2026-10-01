@@ -30,6 +30,16 @@ mock.module('../../../repositories/preferences', () => ({
   setPreference: () => {},
   deletePreference: () => {},
 }));
+const routedIds: string[] = [];
+let onRoute: (id: string) => void = () => {};
+let refreshSettled: (id: string) => Promise<void> = async () => {};
+mock.module('../../../session-routing', () => ({
+  routeNewSessionByUsage: (id: string) => {
+    routedIds.push(id);
+    onRoute(id);
+  },
+  sessionTokenRefreshSettled: (id: string) => refreshSettled(id),
+}));
 // Keeps node-pty's native binding out of the test process; nothing here spawns.
 mock.module('node-pty', () => ({
   spawn: () => { throw new Error('no pty spawns in these tests'); },
@@ -66,7 +76,9 @@ function freshDb(): Database {
       ended_at TEXT DEFAULT NULL,
       duration_seconds REAL DEFAULT 0,
       claude_account_id TEXT DEFAULT NULL,
-      provider TEXT NOT NULL DEFAULT 'claude'
+      provider TEXT NOT NULL DEFAULT 'claude',
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     )
   `);
   return d;
@@ -132,12 +144,42 @@ afterAll(() => {
 
 beforeEach(() => {
   db = freshDb();
+  routedIds.length = 0;
+  onRoute = () => {};
 });
 
 afterEach(() => {
   delete patchable.getSession;
   delete patchable.kill;
   delete patchable.createSession;
+  refreshSettled = async () => {};
+});
+
+describe('POST /sessions', () => {
+  const groupId = randomUUID();
+
+  test('routes the new session by usage before its pty spawns, and answers with the routed row', async () => {
+    const spawnedWhenRouted: boolean[] = [];
+    let spawned = false;
+    patchable.createSession = () => { spawned = true; };
+    onRoute = (id) => {
+      spawnedWhenRouted.push(spawned);
+      db.prepare('UPDATE sessions SET claude_account_id = ? WHERE id = ?').run('acct-relief', id);
+    };
+
+    const res = await fetch(`${baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId, name: 'routed', workingDir: PRESENT_DIR, launchClaude: true }),
+    });
+    const body = await res.json() as { session: { id: string; claudeAccountId: string | null } };
+
+    expect(res.status).toBe(201);
+    expect(routedIds).toEqual([body.session.id]);
+    expect(spawnedWhenRouted).toEqual([false]);
+    expect(spawned).toBe(true);
+    expect(body.session.claudeAccountId).toBe('acct-relief');
+  });
 });
 
 describe('POST /sessions/:id/stop', () => {
@@ -242,6 +284,36 @@ describe('DELETE /sessions/:id', () => {
     const retry = await fetch(`${baseUrl}/sessions/${id}`, { method: 'DELETE' });
     expect(retry.status).toBe(200);
     expect(sessionRowCount(id)).toBe(0);
+  });
+});
+
+describe('launching waits for a token refresh on the session’s account', () => {
+  async function spawnOrder(request: (id: string) => Promise<Response>, id: string): Promise<string[]> {
+    const order: string[] = [];
+    patchable.createSession = () => { order.push('spawn'); };
+    refreshSettled = async () => {
+      await Bun.sleep(5);
+      order.push('settled');
+    };
+    await request(id);
+    return order;
+  }
+
+  test('POST /sessions', async () => {
+    const order = await spawnOrder(() => fetch(`${baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: randomUUID(), name: 'waits', workingDir: PRESENT_DIR, launchClaude: true }),
+    }), '');
+    expect(order).toEqual(['settled', 'spawn']);
+  });
+
+  test('POST /sessions/:id/start', async () => {
+    const id = randomUUID();
+    insertSession(id, PRESENT_DIR);
+    patchable.getSession = () => undefined;
+    const order = await spawnOrder(sid => fetch(`${baseUrl}/sessions/${sid}/start`, { method: 'POST' }), id);
+    expect(order).toEqual(['settled', 'spawn']);
   });
 });
 

@@ -42,9 +42,16 @@ import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
 import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/types';
+import { USAGE_SINK_PREF, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
-import { registerHooks, cleanupLegacyMcpServer } from './mcp-config';
+import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
+import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
+import { credentialStoreFor } from './credential-store';
+import { sinkLaunchFor } from './statusline-sink';
+import { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } from './session-routing';
+import { createUsageService, UsageService } from './usage-service';
+import * as usageStore from './usage-store';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
@@ -444,6 +451,34 @@ function registerFailoverWiring(): void {
   app.on('will-quit', () => clearInterval(failbackTimer));
 }
 
+let usageService: UsageService | null = null;
+
+function startUsagePolling(): void {
+  if (usageService) return;
+  const service = createUsageService({
+    listAccounts: () => accountsRepo.getAllAccounts(),
+    getPreference: key => prefsRepo.getPreference(key),
+    liveAccounts: () => ptyManager.getLiveAccounts(),
+    activeRuns: () => runsRepo.listActiveRuns(),
+    ownership: {
+      candidate: groupId => candidateAccountForGroup(groupId)?.id ?? null,
+      resolved: groupId => resolveAccountForGroup(groupId)?.id ?? null,
+      launchedDirs: runsRepo.runningGateConfigDirs,
+      accountIdForDir: dir => accountsRepo.getAccountByConfigDir(dir)?.id ?? null,
+    },
+    fetch: (url, init) => fetch(url, init),
+    credentials: credentialStoreFor(process.platform),
+    sink: sinkLaunchFor(getStatuslineScriptPath()),
+    publish: usage => mainWindow?.webContents.send('usage:updated', usage),
+    notify: (title, body) => notificationManager.showAccountNotification({ title, body }),
+  });
+  usageService = service;
+  service.start();
+  app.on('will-quit', () => service.stop());
+}
+
+setSessionRoutedListener(() => mainWindow?.webContents.send('sessions:refresh'));
+
 function createWindow(): void {
   // BDHLNDR-44: never construct a BrowserWindow before app 'ready' — defends
   // the rapid-relaunch race that produced "Cannot create BrowserWindow before
@@ -730,6 +765,7 @@ function createWindow(): void {
   });
 
   registerFailoverWiring();
+  startUsagePolling();
 
   // PTY state detection forwarding
   ptyManager.on('stateChange', (event) => {
@@ -844,6 +880,7 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     // the process/PTY limit momentarily hit under load) is ridden out rather
     // than surfaced as a failed "new session". createSession throws before it
     // registers the pty in its map, so a retry starts from a clean slate.
+    await sessionTokenRefreshSettled(id);
     await withSpawnRetry(() =>
       ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId)),
     );
@@ -988,6 +1025,7 @@ safeHandle('db:sessions:getAll', () => {
 
 safeHandle('db:sessions:create', (session: Session) => {
   sessionsRepo.createSession(session);
+  routeNewSessionByUsage(session.id);
   // Log session start event (BDHLNDR-17)
   try {
     sessionEventsRepo.createEvent(session.id, 'session_start', null);
@@ -1078,6 +1116,15 @@ safeHandle('accounts:clearLimit', (id: string) => {
   accountsRepo.clearAccountLimit(id);
 });
 
+// Usage meters: the merged record per account, and an immediate poll for the
+// accounts panel opening. Pushed updates arrive on 'usage:updated'.
+safeHandle('usage:list', () => usageStore.allUsage());
+
+safeHandle('usage:refresh', async () => {
+  await usageService?.poller.refreshNow();
+  return usageStore.allUsage();
+});
+
 /** Which account failover would pick next, for the accounts panel to show. */
 safeHandle('accounts:nextInLine', (excludeId: string | null) => {
   return accountFailover.nextHealthyAccount(excludeId ?? null);
@@ -1163,6 +1210,7 @@ safeHandle('prefs:get', (key: string) => {
 
 safeHandle('prefs:set', (key: string, value: string) => {
   prefsRepo.setPreference(key, value);
+  usageService?.preferenceChanged(key);
 });
 
 safeHandle('prefs:getAll', () => {
@@ -1185,6 +1233,10 @@ safeHandle('prefs:getAll', () => {
     soundStartCustomPath: prefsRepo.getPreference('soundStartCustomPath') ?? '',
     soundCompleteEnabled: prefsRepo.getPreference('soundCompleteEnabled') ?? 'true',
     soundCompleteCustomPath: prefsRepo.getPreference('soundCompleteCustomPath') ?? '',
+    accountFailoverEnabled: prefsRepo.getPreference('accountFailoverEnabled') ?? 'true',
+    accountFailbackEnabled: prefsRepo.getPreference('accountFailbackEnabled') ?? 'true',
+    [USAGE_THRESHOLD_PREF]: prefsRepo.getPreference(USAGE_THRESHOLD_PREF) ?? '',
+    [USAGE_SINK_PREF]: prefsRepo.getPreference(USAGE_SINK_PREF) ?? 'true',
   };
   return settings;
 });

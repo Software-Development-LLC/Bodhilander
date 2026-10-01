@@ -24,7 +24,7 @@
     "build:console": "esbuild scripts/run-console.ts --bundle --platform=node --target=node18 --outfile=dist/run-console.js --format=cjs --external:electron --external:better-sqlite3",
     "console": "bun run build:console && electron dist/run-console.js",
     "build:main": "tsc -p tsconfig.main.json",
-    "build:hooks": "esbuild src/hooks/bodhilander-hook.ts --bundle --platform=node --target=node18 --outfile=dist/hooks/bodhilander-hook.js --sourcemap --format=cjs",
+    "build:hooks": "esbuild src/hooks/bodhilander-hook.ts --bundle --platform=node --target=node18 --outfile=dist/hooks/bodhilander-hook.js --sourcemap --format=cjs && esbuild src/hooks/bodhilander-statusline.ts --bundle --platform=node --target=node18 --outfile=dist/hooks/bodhilander-statusline.js --format=cjs",
     "build:broker": "esbuild scripts/permission-broker.js --bundle --platform=node --target=node18 --outfile=dist/scripts/permission-broker.js --format=cjs",
     "build:renderer": "webpack --mode production",
     "build:pwa": "vite build --config src/pwa/vite.config.ts",

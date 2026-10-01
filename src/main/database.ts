@@ -635,6 +635,7 @@ export function initializeRunTables(database: Database.Database): void {
   addColumn('run_owners', 'blocked_reason', 'blocked_reason TEXT DEFAULT NULL');
   addColumn('run_owners', 'merge_order', 'merge_order INTEGER DEFAULT NULL');
   addColumn('run_gates', 'repo', 'repo TEXT DEFAULT NULL');
+  addColumn('run_gates', 'config_dir', 'config_dir TEXT DEFAULT NULL');
 
   // Migration: in-app cross-repo bootstrap (CO-722). A multi run is created with
   // no owners and driven through bootstrap_state before the per-owner machine

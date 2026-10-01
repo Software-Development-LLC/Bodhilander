@@ -181,6 +181,8 @@ const PORTABLE_PREFERENCE_KEYS = new Set([
   // accounts, not a fact about this machine.
   'accountFailoverEnabled',
   'accountFailbackEnabled',
+  'usageWarnThreshold',
+  'usageStatuslineSink',
 ]);
 
 /**

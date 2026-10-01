@@ -188,3 +188,22 @@ describe('the import/export bridge', () => {
     expect(lastInvocation().args).toEqual(['s1', { workingDir: '/moved/here', state: 'stopped' }]);
   });
 });
+
+describe('the usage bridge', () => {
+  test('reads and refreshes on the channels index.ts registers', async () => {
+    await call('getAccountUsage');
+    expect(lastInvocation().channel).toBe('usage:list');
+    await call('refreshAccountUsage');
+    expect(lastInvocation().channel).toBe('usage:refresh');
+  });
+
+  test('pushed updates arrive whole, and unsubscribing detaches', () => {
+    const seen: unknown[] = [];
+    const off = call('onAccountUsageUpdated', (usage: unknown) => seen.push(usage)) as () => void;
+    const payload = { a1: { accountId: 'a1', fiveHour: { pct: 40, resetsAt: 1, observedAt: 2 }, sevenDay: null, source: 'poll', observedAt: 2, unavailable: null } };
+    emit('usage:updated', payload);
+    off();
+    emit('usage:updated', {});
+    expect(seen).toEqual([payload]);
+  });
+});

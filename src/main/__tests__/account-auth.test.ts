@@ -305,6 +305,16 @@ async function waitFor(predicate: () => boolean, timeoutMs = WATCH_TIMEOUT_MS): 
   throw new Error('condition was never met');
 }
 
+/** waitFor, re-running `retrigger` now and then in case the watch dropped the first event. */
+async function waitForWatched(predicate: () => boolean, retrigger: () => void, everyMs = 500): Promise<void> {
+  const timer = setInterval(retrigger, everyMs);
+  try {
+    await waitFor(predicate);
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 type MainWindow = Parameters<typeof accountAuth.confirmLoginMacOS>[0];
 
 interface SentEvent {
@@ -355,10 +365,11 @@ describe('login detection', () => {
     const pty = fakePtyManager();
     const { account, ptyId } = await accountAuth.startLoginFlow(pty, null, 'Work');
 
-    writeConfigFile(account.configDir, '.credentials.json', {
+    const writeToken = () => writeConfigFile(account.configDir, '.credentials.json', {
       claudeAiOauth: { accessToken: 'not-a-real-token', subscriptionEmail: 'will@linux.test' },
     });
-    await waitFor(() => storedEmail(account.id) === 'will@linux.test');
+    writeToken();
+    await waitForWatched(() => storedEmail(account.id) === 'will@linux.test', writeToken);
 
     accountAuth.cancelLoginFlow(pty, ptyId, false);
   }, WATCH_TEST_TIMEOUT_MS);

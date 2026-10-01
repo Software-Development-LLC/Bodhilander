@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -456,6 +456,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_: Electron.IpcRendererEvent, event: AccountFailoverEvent) => callback(event);
     ipcRenderer.on('accounts:failover', listener);
     return () => ipcRenderer.removeListener('accounts:failover', listener);
+  },
+
+  // Usage meters: the merged record per account, keyed by account id.
+  getAccountUsage: (): Promise<AccountUsageMap> =>
+    ipcRenderer.invoke('usage:list'),
+  refreshAccountUsage: (): Promise<AccountUsageMap> =>
+    ipcRenderer.invoke('usage:refresh'),
+  onAccountUsageUpdated: (callback: (usage: AccountUsageMap) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, usage: AccountUsageMap) => callback(usage);
+    ipcRenderer.on('usage:updated', listener);
+    return () => ipcRenderer.removeListener('usage:updated', listener);
   },
 
   // Update channel (BDHLNDR-32) — opt-in beta builds

@@ -123,3 +123,24 @@ describe('AccountChip', () => {
     expect(chip().getAttribute('draggable')).toBe('false');
   });
 });
+
+describe('AccountChip usage indicator', () => {
+  test.each([
+    ['ok', 'usage below the warning threshold'],
+    ['warn', 'usage near its limit'],
+    ['critical', 'usage limit reached'],
+  ] as const)('%s renders its dot and says so in words', (level, words) => {
+    render(<AccountChip account={account()} usageLevel={level} />);
+    expect(document.querySelector(`.account-chip-usage-${level}`)).toBeTruthy();
+    expect(chip().title).toContain(words);
+    expect(chip().textContent).toContain(words);
+  });
+
+  test('unknown or absent usage renders no dot', () => {
+    render(<AccountChip account={account()} usageLevel="unknown" />);
+    expect(document.querySelector('.account-chip-usage')).toBeNull();
+    cleanup();
+    render(<AccountChip account={account()} />);
+    expect(document.querySelector('.account-chip-usage')).toBeNull();
+  });
+});

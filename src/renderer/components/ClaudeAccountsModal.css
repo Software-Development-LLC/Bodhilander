@@ -62,6 +62,7 @@
 
 .claude-accounts-panel .account-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
@@ -361,4 +362,59 @@
 .move-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+.usage-meters {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding-left: 26px;
+  font-size: 11px;
+  color: var(--text-secondary, #9d9d9d);
+}
+
+.usage-meters-empty {
+  font-style: italic;
+}
+
+.usage-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-meter-bar {
+  position: relative;
+  width: 80px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary, #3c3c3c);
+  overflow: hidden;
+}
+
+.usage-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #3fb950;
+}
+
+.usage-warn .usage-meter-fill { background: #d29922; }
+.usage-critical .usage-meter-fill { background: #f85149; }
+.usage-meters-stale .usage-meter-fill { opacity: 0.5; }
+
+.usage-meta {
+  display: flex;
+  gap: 8px;
+}
+
+.usage-stale-tag,
+.usage-unavailable {
+  color: var(--warning-color, #d79c40);
+}
+
+.usage-threshold input {
+  width: 56px;
+  margin: 0 4px;
 }

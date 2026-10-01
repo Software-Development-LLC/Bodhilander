@@ -16,8 +16,17 @@
 import React from 'react';
 import { describe, expect, test, afterEach } from 'bun:test';
 import { act, render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { AccountRow, ClaudeAccountsPanel, LoginBanner, LoginHint, removalWarning, runningWarning } from '../ClaudeAccountsModal';
-import { ClaudeAccount } from '../../../shared/types';
+import {
+  AccountRow,
+  ClaudeAccountsPanel,
+  FailoverSettings,
+  LoginBanner,
+  LoginHint,
+  removalWarning,
+  runningWarning,
+  THRESHOLD_SAVE_DEBOUNCE_MS,
+} from '../ClaudeAccountsModal';
+import { AccountUsage, ClaudeAccount } from '../../../shared/types';
 
 afterEach(cleanup);
 
@@ -160,6 +169,9 @@ describe('ClaudeAccountsPanel delete confirmation', () => {
       setPreference: async () => {},
       setAccountFallbackOrder: async () => {},
       clearAccountLimit: async () => {},
+      getAccountUsage: async () => ({}),
+      refreshAccountUsage: async () => ({}),
+      onAccountUsageUpdated: () => () => {},
       platform: 'darwin',
       homedir: '/home',
     };
@@ -389,5 +401,149 @@ describe('runningWarning', () => {
     const text = runningWarning(2);
     expect(text).toContain('2 sessions are using it right now');
     expect(text).toContain('They keep running, but their account directory goes away underneath them');
+  });
+});
+
+describe('usage meters', () => {
+  const NOW = Date.parse('2026-09-30T12:00:00Z');
+  const MIN = 60_000;
+  const noop = () => {};
+  const usage = (over: Partial<AccountUsage> = {}): AccountUsage => ({
+    accountId: 'a1',
+    fiveHour: { pct: 92, resetsAt: NOW + 40 * MIN, observedAt: NOW - 3 * MIN },
+    sevenDay: { pct: 31, resetsAt: NOW + 2 * 24 * 60 * MIN, observedAt: NOW - 3 * MIN },
+    source: 'poll',
+    observedAt: NOW - 3 * MIN,
+    unavailable: null,
+    ...over,
+  });
+
+  function row(value: AccountUsage | null) {
+    render(
+      <AccountRow
+        account={account({ id: 'a1', label: 'Work' })}
+        runningSessions={0}
+        usage={value}
+        usageThreshold={85}
+        now={NOW}
+        position={1}
+        canMoveUp={false}
+        canMoveDown={false}
+        onMoveUp={noop}
+        onMoveDown={noop}
+        onClearLimit={noop}
+        onMakeDefault={noop}
+        onDelete={noop}
+      />,
+    );
+  }
+
+  test('shows both windows, their resets and the reading age', () => {
+    row(usage());
+    const text = document.querySelector('.usage-meters')!.textContent!;
+    expect(text).toContain('5h');
+    expect(text).toContain('92%');
+    expect(text).toContain('resets in 40m');
+    expect(text).toContain('7d');
+    expect(text).toContain('31%');
+    expect(text).toContain('resets in 2d');
+    expect(text).toContain('as of 3m ago');
+    expect(text).not.toContain('stale');
+    expect(document.querySelector('.usage-meter.usage-warn')).toBeTruthy();
+    expect(document.querySelector('.account-chip-usage-warn')).toBeTruthy();
+  });
+
+  test('an old reading is marked stale and the chip shows no colour', () => {
+    row(usage({ observedAt: NOW - 20 * MIN }));
+    expect(document.querySelector('.usage-stale-tag')).toBeTruthy();
+    expect(document.querySelector('.account-chip-usage')).toBeNull();
+  });
+
+  test('a failed refresh reads as re-auth needed, never as 0%', () => {
+    row(usage({ fiveHour: null, sevenDay: null, observedAt: null, unavailable: 'reauth' }));
+    const text = document.querySelector('.usage-meters')!.textContent!;
+    expect(text).toBe('usage unavailable (re-auth needed)');
+    expect(text).not.toContain('0%');
+  });
+
+  test('no reading yet says so', () => {
+    row(null);
+    expect(document.querySelector('.usage-meters')!.textContent).toBe('usage: no reading yet');
+  });
+
+  test('opening the panel asks for an immediate poll and renders what comes back', async () => {
+    let refreshed = 0;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      listAccounts: async () => [account({ id: 'a1', label: 'Work' })],
+      getLiveAccounts: async () => ({}),
+      onPtyLiveAccount: () => () => {},
+      onAccountLoginCompleted: () => () => {},
+      getAllPreferences: async () => ({}),
+      setPreference: async () => {},
+      getAccountUsage: async () => ({}),
+      refreshAccountUsage: async () => {
+        refreshed++;
+        return { a1: usage({ fiveHour: { pct: 92, resetsAt: Date.now() + 40 * MIN, observedAt: Date.now() }, observedAt: Date.now() }) };
+      },
+      onAccountUsageUpdated: () => () => {},
+      platform: 'win32',
+      homedir: '/home',
+    };
+    await act(async () => { render(<ClaudeAccountsPanel />); });
+    expect(refreshed).toBe(1);
+    expect(document.querySelector('.usage-meters')!.textContent).toContain('92%');
+  });
+});
+
+describe('FailoverSettings', () => {
+  let writes: [string, string][];
+
+  async function mount(prefs: Record<string, string> = {}) {
+    writes = [];
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      getAllPreferences: async () => prefs,
+      setPreference: async (key: string, value: string) => { writes.push([key, value]); },
+    };
+    await act(async () => { render(<FailoverSettings threshold={85} onThresholdChange={() => {}} />); });
+  }
+
+  const sinkBox = () => screen.getByText('Read usage from the Claude status line.').closest('label')!.querySelector('input')!;
+  const thresholdBox = () => screen.getByLabelText('Usage warning threshold, percent');
+  const afterDebounce = () => act(() => new Promise<void>(r => setTimeout(r, THRESHOLD_SAVE_DEBOUNCE_MS + 100)));
+
+  test('the status line switch starts on, reads a saved off, and saves each flip', async () => {
+    await mount({ usageStatuslineSink: 'false' });
+    expect(sinkBox().checked).toBe(false);
+    fireEvent.click(sinkBox());
+    expect(sinkBox().checked).toBe(true);
+    fireEvent.click(sinkBox());
+    expect(writes).toEqual([['usageStatuslineSink', 'true'], ['usageStatuslineSink', 'false']]);
+    cleanup();
+    await mount();
+    expect(sinkBox().checked).toBe(true);
+  });
+
+  test('typing saves the threshold once it settles, without waiting for blur', async () => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value: '7' } });
+    fireEvent.change(thresholdBox(), { target: { value: '70' } });
+    expect(writes).toEqual([]);
+    await afterDebounce();
+    expect(writes).toEqual([['usageWarnThreshold', '70']]);
+  });
+
+  test('a blur saves at once and the pending save does not repeat it', async () => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value: '60' } });
+    fireEvent.blur(thresholdBox());
+    await afterDebounce();
+    expect(writes).toEqual([['usageWarnThreshold', '60']]);
+  });
+
+  test.each([[''], ['150'], ['0']])('typing %p waits for blur rather than saving the default', async (value) => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value } });
+    await afterDebounce();
+    expect(writes).toEqual([]);
   });
 });

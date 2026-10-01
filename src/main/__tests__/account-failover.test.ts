@@ -49,6 +49,7 @@ const realAssignSessionAccount = realAccountSwitch.assignSessionAccount;
 const failover = await import('../account-failover');
 const accountsRepo = await import('../repositories/accounts');
 const sessionsRepo = await import('../repositories/sessions');
+const usageStore = await import('../usage-store');
 
 const HOUR = 60 * 60 * 1000;
 
@@ -135,6 +136,7 @@ function live(bindings: Record<string, string>): Record<string, any> {
 
 beforeEach(() => {
   db = freshDb();
+  usageStore.clearAllUsage();
   mock.module('../repositories/preferences', prefsModule);
   prefs.clear();
   // Failover is opt-in. These tests are about what it does once
@@ -560,4 +562,206 @@ describe('a session that cannot be moved', () => {
       mock.module('../account-switch', () => ({ assignSessionAccount: realAssignSessionAccount }));
     }
   });
+});
+
+/** A reading at `pct` in the 5-hour window, taken `ageMs` ago. */
+function usageAt(accountId: string, pct: number, ageMs = 0, resetsInMs = HOUR): void {
+  usageStore.setUsage({
+    accountId,
+    fiveHour: { pct, resetsAt: Date.now() + resetsInMs, observedAt: Date.now() - ageMs },
+    sevenDay: null,
+    source: 'poll',
+    observedAt: Date.now() - ageMs,
+    unavailable: null,
+  });
+}
+
+function emptyRecord(accountId: string) {
+  return { accountId, fiveHour: null, sevenDay: null, source: null, observedAt: null, unavailable: null };
+}
+
+describe('routing around an account near its usage limit', () => {
+  test('failover skips a target over the threshold when one below it exists', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('fresh', 2);
+    usageAt('nearly', 91);
+    usageAt('fresh', 20);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('fresh');
+  });
+
+  test('when every target is over, the order is unchanged', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('also', 2);
+    usageAt('nearly', 91);
+    usageAt('also', 99);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('with no readings at all, the order is unchanged', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('fresh', 2);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('the threshold is the preference, not a constant', () => {
+    addAccount('primary', 0, true);
+    addAccount('nearly', 1);
+    addAccount('fresh', 2);
+    usageAt('nearly', 91);
+    prefs.set('usageWarnThreshold', '95');
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('a limited account is still skipped even when below the threshold', () => {
+    addAccount('primary', 0, true);
+    addAccount('limited', 1);
+    addAccount('nearly', 2);
+    accountsRepo.markAccountLimited('limited', new Date(Date.now() + HOUR));
+    usageAt('nearly', 90);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('nearly');
+  });
+
+  test('a new session steps off an inherited account over the threshold', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    usageAt('primary', 88);
+    usageAt('fresh', 10);
+    const inherited = accountsRepo.getAccount('primary');
+    expect(failover.newSessionAccountOverride(inherited)?.id).toBe('fresh');
+  });
+
+  test('failover prefers known room over an account with no reading', () => {
+    addAccount('primary', 0, true);
+    addAccount('unknown', 1);
+    addAccount('fresh', 2);
+    usageAt('fresh', 20);
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('fresh');
+  });
+
+  test('failover takes an account with no reading before a signed-out one', () => {
+    addAccount('primary', 0, true);
+    addAccount('signedOut', 1);
+    addAccount('unknown', 2);
+    usageStore.setUsage({ ...usageStore.getUsage('primary') ?? emptyRecord('signedOut'), accountId: 'signedOut', unavailable: 'reauth' });
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('unknown');
+  });
+
+  test('failover takes an account with no reading before one whose Keychain cannot be read', () => {
+    addAccount('primary', 0, true);
+    addAccount('locked', 1);
+    addAccount('unknown', 2);
+    usageStore.setUsage({ ...emptyRecord('locked'), unavailable: 'keychain-unavailable' });
+    expect(failover.nextHealthyAccount('primary')?.id).toBe('unknown');
+  });
+
+  test('a new session is not moved onto an account with no reading or a lapsed sign-in', () => {
+    addAccount('primary', 0, true);
+    addAccount('unknown', 1);
+    addAccount('signedOut', 2);
+    usageAt('primary', 90);
+    usageAt('signedOut', 5);
+    usageStore.setUsage({ ...usageStore.getUsage('signedOut')!, unavailable: 'reauth' });
+    expect(failover.newSessionAccountOverride(accountsRepo.getAccount('primary'))).toBeNull();
+  });
+
+  test('a new session is not moved on a stale reading of room', () => {
+    addAccount('primary', 0, true);
+    addAccount('spare', 1);
+    usageAt('primary', 90);
+    usageAt('spare', 5, 20 * 60_000);
+    expect(failover.newSessionAccountOverride(accountsRepo.getAccount('primary'))).toBeNull();
+  });
+
+  test('a new session stays put when nothing better exists or nothing is wrong', () => {
+    addAccount('primary', 0, true);
+    addAccount('also', 1);
+    const inherited = accountsRepo.getAccount('primary');
+    expect(failover.newSessionAccountOverride(inherited)).toBeNull();
+    usageAt('primary', 88);
+    usageAt('also', 97);
+    expect(failover.newSessionAccountOverride(inherited)).toBeNull();
+    expect(failover.newSessionAccountOverride(null)).toBeNull();
+  });
+});
+
+describe('routeNewSession', () => {
+  test('pins a new session that would inherit a near-limit account', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null);
+    usageAt('primary', 90);
+    usageAt('fresh', 10);
+    expect(failover.routeNewSession('s1')?.to.id).toBe('fresh');
+    expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('fresh');
+  });
+
+  test('records the move as a failover, not as a chosen account', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null);
+    usageAt('primary', 90);
+    usageAt('fresh', 10);
+    failover.routeNewSession('s1');
+    const session = sessionsRepo.getSession('s1')!;
+    expect(session.failoverFromAccountId).toBe('primary');
+    expect(session.failoverPrevAccountId).toBeNull();
+  });
+
+  test('goes home to the inherited account once it is back under the threshold', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null, 'stopped');
+    usageAt('primary', 90);
+    usageAt('fresh', 10);
+    failover.routeNewSession('s1');
+
+    expect(failover.failbackCandidates()).toEqual([]);
+    usageAt('primary', 40);
+    expect(failover.failbackCandidates().map(c => c.sessionId)).toEqual(['s1']);
+
+    usageAt('primary', 90, HOUR);
+    expect(failover.failbackCandidates()).toEqual([]);
+    usageAt('primary', 90, HOUR, -1);
+    expect(failover.failbackCandidates().map(c => c.sessionId)).toEqual(['s1']);
+
+    expect(failover.failBackSession('s1')!.to!.id).toBe('primary');
+    const session = sessionsRepo.getSession('s1')!;
+    expect(session.claudeAccountId).toBeNull();
+    expect(session.failoverFromAccountId).toBeNull();
+  });
+
+  test('never overrides an account the session was given explicitly', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', 'primary');
+    usageAt('primary', 90);
+    expect(failover.routeNewSession('s1')).toBeNull();
+    expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBe('primary');
+  });
+
+  test('leaves the inheritance alone when nothing is near the limit', () => {
+    addAccount('primary', 0, true);
+    addAccount('fresh', 1);
+    addGroup('g');
+    addSession('s1', 'g', null);
+    expect(failover.routeNewSession('s1')).toBeNull();
+    expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBeNull();
+  });
+});
+
+test('routeNewSession never overrides an account the group chose for itself', () => {
+  addAccount('primary', 0, true);
+  addAccount('fresh', 1);
+  addGroup('g', 'primary');
+  addSession('s1', 'g', null);
+  usageAt('primary', 90);
+  expect(failover.routeNewSession('s1')).toBeNull();
+  expect(sessionsRepo.getSession('s1')!.claudeAccountId).toBeNull();
 });

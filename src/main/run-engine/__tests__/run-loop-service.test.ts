@@ -39,6 +39,25 @@ mock.module('../gate-spawner', () => ({
   channelKeyFor: (runId: string, repo: string, gate: number, agent: string, attempt: number) =>
     `${runId}-${repo}-g${gate}-${agent}-a${attempt}`,
 }));
+const probes: { argv: readonly string[]; env?: Record<string, string> }[] = [];
+const realCommandRunner = { ...(await import('../command-runner')) };
+mock.module('../command-runner', () => ({
+  ...realCommandRunner,
+  runCommand: async (_exe: string, argv: readonly string[], opts: { env?: Record<string, string> }) => {
+    probes.push({ argv, env: opts.env });
+    return { code: 0, stdout: '[]', stderr: '' };
+  },
+}));
+const launchedWhileRefreshing: boolean[] = [];
+const realGateLauncher = { ...(await import('../gate-launcher')) };
+const { isTokenRefreshing, trackTokenRefresh } = await import('../../token-refresh');
+mock.module('../gate-launcher', () => ({
+  ...realGateLauncher,
+  launchGate: async (launch: { context: { configDir?: string | null } }) => {
+    launchedWhileRefreshing.push(isTokenRefreshing(launch.context.configDir));
+    return { status: 'launched', backgroundId: '1', sessionId: 's', durationMs: 1 };
+  },
+}));
 mock.module('../permission-inbox', () => ({
   pendingRequests: (_root: string, _runId: string, gate: unknown) => (gate ? pending(gate) : []),
   writeDecision: () => wrote,
@@ -176,4 +195,62 @@ describe('answering one owner\u2019s permission', () => {
     await service.answerRunPermission('C:/ud', 'run-1', 'repo-a', 't1', 'allow', '');
     expect(advanceCalls).toEqual([]);
   });
+});
+
+describe('the account an open gate is checked under', () => {
+  function accounts() {
+    db.exec(`CREATE TABLE claude_accounts (
+      id TEXT PRIMARY KEY, label TEXT NOT NULL, config_dir TEXT NOT NULL, email TEXT, color TEXT,
+      is_default INTEGER DEFAULT 0, created_at TEXT, last_used_at TEXT, fallback_rank INTEGER,
+      limited_until TEXT, limited_at TEXT)`);
+    db.exec(`INSERT INTO claude_accounts (id, label, config_dir, is_default) VALUES ('b', 'b', '/cfg/b', 1)`);
+  }
+
+  test('a gate launched on A is still checked on A after the run resolves to B', () => {
+    accounts();
+    runs.setGateConfigDir('g4-repo-a', '/cfg/a');
+    const run = runs.getRun('run-1')!;
+    const gate = runs.activeGate('run-1', 'repo-a')!;
+    expect(service.accountConfigDirFor(run)).toBe('/cfg/b');
+    expect(service.configDirForGate(run, gate)).toBe('/cfg/a');
+  });
+
+  test('the loop probes a gate under the dir it launched with, not the run’s current one', async () => {
+    accounts();
+    runs.setGateConfigDir('g4-repo-a', '/cfg/a');
+    db.prepare('UPDATE run_gates SET bg_session_id = ? WHERE id = ?').run('bg-a', 'g4-repo-a');
+    probes.length = 0;
+    const config = { claudePath: 'claude', permissionsRoot: 'C:/perm' } as Parameters<typeof service.loopDeps>[0];
+    await service.loopDeps(config, 'gh').look(runs.getRun('run-1')!, runs.activeGate('run-1', 'repo-a')!);
+    expect(probes).toEqual([{ argv: ['agents', '--json'], env: { CLAUDE_CONFIG_DIR: '/cfg/a' } }]);
+  });
+
+  test('a gate row with no recorded dir falls back to the run’s current account', () => {
+    accounts();
+    const run = runs.getRun('run-1')!;
+    expect(service.configDirForGate(run, runs.activeGate('run-1', 'repo-b')!)).toBe('/cfg/b');
+  });
+
+  test('only running gates of the given runs are counted as holding a dir', () => {
+    runs.setGateConfigDir('g4-repo-a', '/cfg/a');
+    runs.setGateConfigDir('g4-repo-b', '/cfg/b');
+    runs.finishGate('g4-repo-b', 'done', { verdict: 'pass' });
+    expect(runs.runningGateConfigDirs(['run-1'])).toEqual(['/cfg/a']);
+    expect(runs.runningGateConfigDirs(['other'])).toEqual([]);
+    expect(runs.runningGateConfigDirs([])).toEqual([]);
+  });
+});
+
+test('a gate launch waits for a token refresh in flight on its account', async () => {
+  let finish: (token: string) => void = () => undefined;
+  const refresh = trackTokenRefresh('/cfg/a', new Promise<string>(resolve => { finish = resolve; }));
+  launchedWhileRefreshing.length = 0;
+  const launch = { context: { configDir: '/cfg/a', sessionId: 's' } } as Parameters<typeof service.resilientLaunch>[0];
+  const outcome = service.resilientLaunch(launch);
+  await Bun.sleep(5);
+  expect(launchedWhileRefreshing).toEqual([]);
+  finish('rotated');
+  await refresh;
+  expect(await outcome).toMatchObject({ status: 'launched' });
+  expect(launchedWhileRefreshing).toEqual([false]);
 });

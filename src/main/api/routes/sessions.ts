@@ -10,6 +10,7 @@ import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as chatEventsRepo from '../../repositories/chat-events';
 import { ptyManager } from '../../pty-manager';
+import { routeNewSessionByUsage, sessionTokenRefreshSettled } from '../../session-routing';
 import { requireControlPermission, requireModifyPermission } from '../middleware/auth';
 import {
   validateIdParam,
@@ -173,7 +174,7 @@ export function createSessionsRouter(): Router {
     '/',
     requireModifyPermission,
     validateCreateSession,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const { groupId, name, workingDir, launchClaude } = req.body;
 
@@ -202,6 +203,7 @@ export function createSessionsRouter(): Router {
         };
 
         sessionsRepo.createSession(session);
+        routeNewSessionByUsage(id);
 
         // Log session start event (BDHLNDR-17)
         try {
@@ -212,11 +214,12 @@ export function createSessionsRouter(): Router {
 
         // Start PTY if requested
         if (launchClaude) {
+          await sessionTokenRefreshSettled(id);
           ptyManager.createSession(id, session.workingDir, true, session.provider);
         }
 
         log.info(`[SessionsAPI] Created session: ${id}`);
-        res.status(201).json({ session });
+        res.status(201).json({ session: sessionsRepo.getSession(id) ?? session });
       } catch (error) {
         log.error('[SessionsAPI] Error creating session:', error);
         res.status(500).json({ error: 'Failed to create session' });
@@ -293,7 +296,7 @@ export function createSessionsRouter(): Router {
     '/:id/start',
     requireControlPermission,
     validateIdParam,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const id = getStringParam(req.params.id);
         // A POST with no JSON body leaves req.body undefined; destructuring it
@@ -322,6 +325,7 @@ export function createSessionsRouter(): Router {
           return;
         }
 
+        await sessionTokenRefreshSettled(id);
         ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.provider);
 
         log.info(`[SessionsAPI] Started session: ${id}`);

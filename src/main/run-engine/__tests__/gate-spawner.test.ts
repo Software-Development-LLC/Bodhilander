@@ -71,7 +71,7 @@ describe('the run as the executor’s target', () => {
 describe('the spawner’s one refusal', () => {
   test('a spawn whose open row is not the one the driver opened is refused, naming both', async () => {
     const other: RunGateRow = {
-      id: 'x', runId: 'run-1', repo: 'Bodhilander', gate: 3, agent: 'reviewer', attempt: 1, bgSessionId: null, claudeSessionId: null,
+      id: 'x', runId: 'run-1', repo: 'Bodhilander', gate: 3, agent: 'reviewer', attempt: 1, bgSessionId: null, claudeSessionId: null, configDir: null,
       status: 'running', verdictJson: null, posture: 'manual', startedAt: '2026-09-15 00:00:00',
     };
     const spawn = spawnGateFor(run('C:/h'), OWNER, {
@@ -85,6 +85,27 @@ describe('the spawner’s one refusal', () => {
       claudePath: 'claude', promptFileDir: 'C:/p', permissionsRoot: 'C:/perm', brokerPath: 'C:/b.js', gateTimeoutMs: 1000,
     }, () => null);
     await expect(spawn(2, 'bodhilander-lead')).rejects.toThrow('is missing');
+  });
+});
+
+describe('the account a gate launches under', () => {
+  test('is stamped on its own row before the launch, and handed to the CLI', async () => {
+    const row: RunGateRow = {
+      id: 'g2', runId: 'run-1', repo: 'Bodhilander', gate: 2, agent: 'bodhilander-lead', attempt: 1, bgSessionId: null,
+      claudeSessionId: null, configDir: null, status: 'running', verdictJson: null, posture: 'manual', startedAt: '2026-09-15 00:00:00',
+    };
+    const order: string[] = [];
+    let launchedDir: string | null | undefined;
+    const spawn = spawnGateFor(run('C:/h'), OWNER, {
+      claudePath: 'claude', promptFileDir: 'C:/p', permissionsRoot: 'C:/perm', brokerPath: 'C:/b.js', gateTimeoutMs: 1000,
+    }, () => row, () => undefined, '/cfg/a', null, async (launch) => {
+      order.push('launch');
+      launchedDir = launch.context.configDir;
+      return { status: 'undriveable', reason: 'test', detail: '' } as never;
+    }, (gateId, dir) => order.push(`record ${gateId} ${dir}`));
+    await spawn(2, 'bodhilander-lead');
+    expect(order).toEqual(['record g2 /cfg/a', 'launch']);
+    expect(launchedDir).toBe('/cfg/a');
   });
 });
 

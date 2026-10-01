@@ -355,6 +355,41 @@ export interface AccountFailoverEvent {
   blocked?: 'no-healthy-account';
 }
 
+/** One rate-limit window: percent used (0-100+), when it resets and when it was read (epoch ms). */
+export interface UsageWindow {
+  pct: number;
+  resetsAt: number | null;
+  observedAt: number;
+}
+
+/** Where the newest observation in a usage record came from. */
+export type UsageSource = 'poll' | 'statusline';
+
+/** Why an account has no current usage reading. */
+export type UsageUnavailableReason =
+  | 'reauth'
+  | 'error'
+  | 'no-credentials'
+  | 'no-keychain-credentials'
+  | 'keychain-unavailable';
+
+/**
+ * An account's merged usage record. A window is null when nothing has reported
+ * it; null is never 0%. `unavailable` describes the latest poll, and can sit
+ * beside windows a statusline observation still supplies.
+ */
+export interface AccountUsage {
+  accountId: string;
+  fiveHour: UsageWindow | null;
+  sevenDay: UsageWindow | null;
+  source: UsageSource | null;
+  /** Epoch ms of its newest window reading, or null when there has been none. */
+  observedAt: number | null;
+  unavailable: UsageUnavailableReason | null;
+}
+
+export type AccountUsageMap = Record<string, AccountUsage>;
+
 /**
  * Outcome of reassigning a Claude account to a session or group (BDHLNDR-31).
  * CLAUDE_CONFIG_DIR is fixed when a pty spawns, so the listed sessions must be
