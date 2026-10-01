@@ -1,3 +1,5 @@
+import log from 'electron-log';
+
 /**
  * Token refreshes in flight, by config dir. A CLI launched mid-refresh would
  * read the old pair and spend a refresh token the refresh just rotated, so
@@ -50,6 +52,11 @@ async function within(work: Promise<unknown>, budgetMs: number): Promise<void> {
   clearTimeout(timer);
 }
 
+/** One save of the dir's held rotation, if it has one, for at most `budgetMs`. Never rejects. */
+export async function settleHeldRotation(configDir: string, budgetMs: number = LAUNCH_SAVE_BUDGET_MS): Promise<void> {
+  if (held.has(configDir)) await within(saveHeld(configDir), budgetMs);
+}
+
 /**
  * Resolves once no refresh is running for this config dir, and a held rotation
  * has had one save, for at most `saveBudgetMs`. Never rejects.
@@ -60,10 +67,13 @@ export async function tokenRefreshSettled(
 ): Promise<void> {
   if (!configDir) return;
   if (!held.has(configDir)) await pending.get(configDir)?.catch(() => undefined);
-  if (held.has(configDir)) await within(saveHeld(configDir), saveBudgetMs);
+  if (!held.has(configDir)) return;
+  await settleHeldRotation(configDir, saveBudgetMs);
+  if (held.has(configDir)) log.warn(`[Usage] Launching under ${configDir} before its refreshed token pair was saved`);
 }
 
 /** One save of every held rotation, all within `budgetMs`, for the way out. Never rejects. */
-export function saveHeldRotations(budgetMs: number): Promise<void> {
-  return within(Promise.all([...held.keys()].map(saveHeld)), budgetMs);
+export async function saveHeldRotations(budgetMs: number): Promise<void> {
+  await within(Promise.all([...held.keys()].map(saveHeld)), budgetMs);
+  if (held.size > 0) log.warn(`[Usage] Quitting with ${held.size} refreshed token pair(s) unsaved; those accounts will need a sign-in`);
 }

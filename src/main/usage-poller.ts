@@ -23,7 +23,7 @@ import {
   UsageObservation,
 } from './usage-meter';
 import { sinkFilePath } from './statusline-sink';
-import { holdRotation, releaseRotation, tokenRefreshSettled, trackTokenRefresh } from './token-refresh';
+import { holdRotation, releaseRotation, settleHeldRotation, trackTokenRefresh } from './token-refresh';
 import * as usageStore from './usage-store';
 
 /**
@@ -219,7 +219,7 @@ export class UsagePoller extends EventEmitter {
     if ((this.retryAt.get(account.id) ?? 0) > now) return;
     this.lastAttempt.set(account.id, now);
     // Refreshing again would spend a token the held pair already replaced.
-    if (this.held.has(account.id)) await tokenRefreshSettled(account.configDir);
+    if (this.held.has(account.id)) await settleHeldRotation(account.configDir);
     if (this.held.has(account.id)) return;
 
     const creds = await this.deps.credentials.read(account.configDir);

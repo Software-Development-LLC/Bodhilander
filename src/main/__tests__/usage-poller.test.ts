@@ -727,6 +727,7 @@ describe('a rotation the Keychain will not take', () => {
     await storePoller(work, fetch, kc.store).pollAll();
 
     kc.state.hang = true;
+    const warn = spyOn(log, 'warn');
     let settled = false;
     const waiting = tokenRefreshSettled(work.configDir, 40).then(() => { settled = true; });
     await Bun.sleep(5);
@@ -734,6 +735,9 @@ describe('a rotation the Keychain will not take', () => {
     await Bun.sleep(80);
     expect(settled).toBe(true);
     await waiting;
+    const warned = warn.mock.calls.map(call => String(call[0]));
+    warn.mockRestore();
+    expect(warned).toEqual([`[Usage] Launching under ${work.configDir} before its refreshed token pair was saved`]);
 
     let second = false;
     const behind = tokenRefreshSettled(work.configDir, 40).then(() => { second = true; });
@@ -769,6 +773,7 @@ describe('a rotation the Keychain will not take', () => {
     await storePoller(work, fetch, kc.store).pollAll();
 
     kc.state.hang = true;
+    const warn = spyOn(log, 'warn');
     let done = false;
     const quitting = saveHeldRotations(40).then(() => { done = true; });
     await Bun.sleep(5);
@@ -776,6 +781,9 @@ describe('a rotation the Keychain will not take', () => {
     await Bun.sleep(80);
     expect(done).toBe(true);
     await quitting;
+    const warned = warn.mock.calls.map(call => String(call[0]));
+    warn.mockRestore();
+    expect(warned.some(line => line.startsWith('[Usage] Quitting with '))).toBe(true);
   });
 
   test('a removed account takes its held pair with it', async () => {
