@@ -488,7 +488,9 @@ describe('a rotation the Keychain will not take', () => {
 
   test('a Keychain locked at write time sends nothing to the token file', async () => {
     const work = account('work');
-    writeCreds(work, NOW - 1000);
+    fs.writeFileSync(path.join(work.configDir, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: { accessToken: 'file-access', refreshToken: 'file-refresh', expiresAt: NOW - 1000, scopes: [] },
+    }));
     const before = fs.readFileSync(path.join(work.configDir, '.credentials.json'), 'utf-8');
     const kc = keychain(work);
     const { fetch } = fakeFetch(url => {
