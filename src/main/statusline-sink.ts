@@ -2,18 +2,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 
-import { ClaudeSettingsConfig, getClaudeSettingsPath, writeClaudeSettings } from './claude-settings';
+import { ClaudeSettingsConfig, getClaudeSettingsPath, resolveConfigDir, writeClaudeSettings } from './claude-settings';
 import { findGitBash } from './git-bash';
-import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
+import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
 /**
  * Installing the statusline sink into a managed config dir's settings.json.
  * A statusLine the user set is moved to a sidecar file and chained to, so it
- * keeps rendering; nothing is written when the entry is already current.
+ * keeps rendering; nothing is written when the entry is already current, and a
+ * sidecar already there outlives a settings.json that names no statusLine.
  */
 
 export type SinkInstallAction = 'installed' | 'updated' | 'unchanged' | 'error';
-export type SinkUninstallAction = 'restored' | 'removed' | 'unchanged' | 'error';
+export type SinkUninstallAction = 'restored' | 'adopted' | 'removed' | 'unchanged' | 'error';
 
 interface StatusLineEntry {
   type?: string;
@@ -109,8 +110,8 @@ function loadSettings(configDir: string): ClaudeSettingsConfig | null {
   const file = getClaudeSettingsPath(configDir);
   if (!fs.existsSync(file)) return {};
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+    const parsed = parseJsonText(fs.readFileSync(file, 'utf-8'));
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as ClaudeSettingsConfig) : null;
   } catch {
     return null;
   }
@@ -126,8 +127,7 @@ export function installStatuslineSink(configDir: string, launch: SinkLaunch): Si
 
   let action: SinkInstallAction = 'updated';
   if (!isOurs(current)) {
-    const userEntry = current?.command ? current : null;
-    if (!saveChain(configDir, userEntry)) return 'error';
+    if (current?.command && !saveChain(configDir, current)) return 'error';
     action = 'installed';
   }
 
@@ -136,36 +136,55 @@ export function installStatuslineSink(configDir: string, launch: SinkLaunch): Si
   return action;
 }
 
+/** Whether a user statusLine is on record for the sink in this dir to chain to. */
+export function hasSavedChain(configDir: string): boolean {
+  return readSavedChain(configDir)?.chain != null;
+}
+
 /** The statusLine install moved aside, or null when the record cannot be read. */
 function readSavedChain(configDir: string): { chain: StatusLineEntry | null } | null {
   const file = chainFilePath(configDir);
   if (!fs.existsSync(file)) return { chain: null };
   try {
-    const chain = JSON.parse(fs.readFileSync(file, 'utf-8'))?.chain;
+    const chain = (parseJsonText(fs.readFileSync(file, 'utf-8')) as { chain?: StatusLineEntry } | null)?.chain;
     return { chain: typeof chain?.command === 'string' ? chain : null };
   } catch {
     return null;
   }
 }
 
+/** The statusLine a dir's own settings.json names, unless it is ours or runs nothing. */
+function ownStatusLine(configDir: string): StatusLineEntry | null {
+  const entry = loadSettings(configDir)?.statusLine as StatusLineEntry | undefined;
+  if (typeof entry?.command !== 'string' || entry.command.trim() === '') return null;
+  return isOurs(entry) ? null : entry;
+}
+
 /**
  * Take the sink out of a config dir, putting back the statusLine it chained to.
- * A statusLine that is not ours is left alone, and so is everything when the
- * saved entry cannot be read, since removing ours then would lose the user's.
+ * A dir with no chain file was showing the ambient dir's statusLine through the
+ * sink, so it is given a copy to keep showing it; 'adopted' reports that.
+ * A statusLine that is not ours is left alone, as is everything when the saved
+ * entry cannot be read, since removing ours then would lose the user's.
  */
-export function uninstallStatuslineSink(configDir: string): SinkUninstallAction {
+export function uninstallStatuslineSink(
+  configDir: string,
+  ambientDir: string = resolveConfigDir(),
+): SinkUninstallAction {
   const settings = loadSettings(configDir);
   if (!settings) return 'error';
   if (!isOurs(settings.statusLine as StatusLineEntry | undefined)) return 'unchanged';
 
   const saved = readSavedChain(configDir);
   if (!saved) return 'error';
-  const userEntry = saved.chain;
-  if (userEntry) settings.statusLine = userEntry;
+  const borrowed = fs.existsSync(chainFilePath(configDir)) ? null : ownStatusLine(ambientDir);
+  const userEntry = saved.chain ?? borrowed;
+  if (userEntry) settings.statusLine = { ...userEntry, type: 'command' };
   else delete settings.statusLine;
   if (!writeClaudeSettings(settings, configDir)) return 'error';
   saveChain(configDir, null);
-  return userEntry ? 'restored' : 'removed';
+  if (saved.chain) return 'restored';
+  return borrowed ? 'adopted' : 'removed';
 }
 
 /**
@@ -175,6 +194,8 @@ export function uninstallStatuslineSink(configDir: string): SinkUninstallAction 
 export function sinkReconciler(
   launch: SinkLaunch | null,
   isEnabled: () => boolean,
+  ambientDir?: string,
 ): (configDir: string) => SinkInstallAction | SinkUninstallAction {
-  return configDir => (launch && isEnabled() ? installStatuslineSink(configDir, launch) : uninstallStatuslineSink(configDir));
+  return configDir =>
+    launch && isEnabled() ? installStatuslineSink(configDir, launch) : uninstallStatuslineSink(configDir, ambientDir);
 }
