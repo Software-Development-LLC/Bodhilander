@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
  * Usage: bodhilander-statusline.js <config-dir>, under the app's binary in Node
- * mode. Records `rate_limits` for the meters, then prints any chained statusLine.
+ * mode. Records `rate_limits` for the meters, then prints the user's statusLine:
+ * the one chained to, or the ambient `~/.claude` one when the dir had none.
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 
-import { STATUSLINE_CHAIN_FILE, STATUSLINE_SINK_FILE } from '../shared/usage';
+import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 import { findGitBash } from '../main/git-bash';
 
 const CHAIN_TIMEOUT_MS = 5_000;
@@ -16,6 +18,8 @@ const CHAIN_TIMEOUT_MS = 5_000;
 export interface StatuslineDeps {
   now: () => number;
   runChain: (command: string, input: string) => string;
+  /** The config dir whose statusLine stands in when this one chained to none. */
+  ambientDir: string;
 }
 
 /** Record the rate limits, if the payload carries any. Never throws. */
@@ -52,6 +56,27 @@ export function readChainedCommand(configDir: string): string | null {
   }
 }
 
+/**
+ * The statusLine command in a config dir's own settings.json, or null. A managed
+ * dir does not inherit `~/.claude/settings.json`, so the sink reads it instead.
+ */
+export function readSettingsCommand(configDir: string): string | null {
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf-8'));
+    const command = settings?.statusLine?.command;
+    if (typeof command !== 'string' || command.trim() === '') return null;
+    return command.includes(STATUSLINE_SCRIPT_NAME) ? null : command;
+  } catch {
+    return null;
+  }
+}
+
+/** A chain file, readable or not, is the last word; only its absence falls back. */
+function userCommand(configDir: string, ambientDir: string): string | null {
+  if (fs.existsSync(path.join(configDir, STATUSLINE_CHAIN_FILE))) return readChainedCommand(configDir);
+  return readSettingsCommand(ambientDir);
+}
+
 function chainShell(): string | boolean {
   if (process.platform !== 'win32') return true;
   return findGitBash(process.env) ?? true;
@@ -76,14 +101,20 @@ function runChainedCommand(command: string, input: string): string {
   return typeof result.stdout === 'string' ? result.stdout : '';
 }
 
-/** What to print as the status line: the chained command's stdout, or nothing. */
+const THIS_PROCESS: StatuslineDeps = {
+  now: Date.now,
+  runChain: runChainedCommand,
+  ambientDir: path.join(os.homedir(), '.claude'),
+};
+
+/** What to print as the status line: the user command's stdout, or nothing. */
 export function runStatusline(
   configDir: string,
   stdinText: string,
-  deps: StatuslineDeps = { now: Date.now, runChain: runChainedCommand },
+  deps: StatuslineDeps = THIS_PROCESS,
 ): string {
   recordRateLimits(configDir, stdinText, deps.now());
-  const command = readChainedCommand(configDir);
+  const command = userCommand(configDir, deps.ambientDir);
   if (!command) return '';
   try {
     return deps.runChain(command, stdinText);

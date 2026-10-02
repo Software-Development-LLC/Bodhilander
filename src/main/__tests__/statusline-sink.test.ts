@@ -17,18 +17,21 @@ import {
   sinkReconciler,
   uninstallStatuslineSink,
 } from '../statusline-sink';
-import { chainEnv, readChainedCommand, recordRateLimits, runStatusline } from '../../hooks/bodhilander-statusline';
+import { chainEnv, readChainedCommand, recordRateLimits, runStatusline, StatuslineDeps } from '../../hooks/bodhilander-statusline';
 
 const SCRIPT = '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js';
 const LAUNCH: SinkLaunch = { scriptPath: SCRIPT, execPath: '/opt/Bodhilander/Bodhilander', platform: 'darwin' };
 let dir: string;
+let ambient: string;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-sink-'));
+  ambient = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-ambient-'));
 });
 
 afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(ambient, { recursive: true, force: true });
 });
 
 const settings = () => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8'));
@@ -169,6 +172,14 @@ describe('the statusline script', () => {
     rate_limits: { five_hour: { used_percentage: 64, resets_at: 1790000000 } },
   });
 
+  const writeAmbient = (value: unknown) => fs.writeFileSync(path.join(ambient, 'settings.json'), JSON.stringify(value));
+  const chainFile = () => path.join(dir, 'bodhilander-statusline.json');
+  const printing = (seen: string[]): StatuslineDeps => ({
+    now: () => 1,
+    ambientDir: ambient,
+    runChain: (command) => { seen.push(command); return `ran ${command}`; },
+  });
+
   test('records rate_limits with the time it saw them', () => {
     expect(recordRateLimits(dir, turn, 1234)).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'bodhilander-usage.json'), 'utf-8'))).toEqual({
@@ -187,19 +198,75 @@ describe('the statusline script', () => {
     writeSettings({ statusLine: { type: 'command', command: 'my-line' } });
     installStatuslineSink(dir, LAUNCH);
     const seen: string[] = [];
-    const out = runStatusline(dir, turn, { now: () => 1, runChain: (command, input) => { seen.push(command, input); return 'opus | 64%'; } });
+    const out = runStatusline(dir, turn, { now: () => 1, ambientDir: ambient, runChain: (command, input) => { seen.push(command, input); return 'opus | 64%'; } });
     expect(out).toBe('opus | 64%');
     expect(seen).toEqual(['my-line', turn]);
   });
 
   test('with no user command it prints nothing', () => {
-    expect(runStatusline(dir, turn, { now: () => 1, runChain: () => 'unexpected' })).toBe('');
+    installStatuslineSink(dir, LAUNCH);
+    expect(runStatusline(dir, turn, { now: () => 1, ambientDir: ambient, runChain: () => 'unexpected' })).toBe('');
+  });
+
+  test('a dir that had no statusLine of its own shows the ambient one', () => {
+    writeAmbient({ statusLine: { type: 'command', command: 'bash "$HOME/.claude/statusline.sh"' } });
+    writeSettings({ model: 'opus' });
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
+    expect(fs.existsSync(chainFile())).toBe(false);
+    const seen: string[] = [];
+    expect(runStatusline(dir, turn, printing(seen))).toBe('ran bash "$HOME/.claude/statusline.sh"');
+    expect(seen).toEqual(['bash "$HOME/.claude/statusline.sh"']);
+  });
+
+  test('the dir’s own chained command wins over the ambient one', () => {
+    writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
+    writeSettings({ statusLine: { type: 'command', command: 'my-line' } });
+    installStatuslineSink(dir, LAUNCH);
+    expect(runStatusline(dir, turn, printing([]))).toBe('ran my-line');
+  });
+
+  test('a chain file written by hand is used as it stands and survives a reconcile', () => {
+    writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
+    installStatuslineSink(dir, LAUNCH);
+    const byHand = '{"chain":{"command":"hand-line"}}';
+    fs.writeFileSync(chainFile(), byHand);
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('unchanged');
+    expect(fs.readFileSync(chainFile(), 'utf-8')).toBe(byHand);
+    expect(runStatusline(dir, turn, printing([]))).toBe('ran hand-line');
+  });
+
+  test('a chain file that names no command silences the ambient one', () => {
+    writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
+    installStatuslineSink(dir, LAUNCH);
+    fs.writeFileSync(chainFile(), '{"chain":null}');
+    expect(runStatusline(dir, turn, printing([]))).toBe('');
+  });
+
+  test.each([
+    ['no settings.json', null],
+    ['no statusLine', { model: 'opus' }],
+    ['a blank command', { statusLine: { type: 'command', command: ' ' } }],
+    ['the sink itself', { statusLine: { type: 'command', command: sinkCommand(LAUNCH, '/elsewhere') } }],
+  ])('an ambient dir with %s gives no status line', (_name, value) => {
+    if (value) writeAmbient(value);
+    installStatuslineSink(dir, LAUNCH);
+    const seen: string[] = [];
+    expect(runStatusline(dir, turn, printing(seen))).toBe('');
+    expect(seen).toEqual([]);
+  });
+
+  test('turning the sink off leaves a dir that borrowed the ambient line with none of its own', () => {
+    writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
+    writeSettings({ model: 'opus' });
+    installStatuslineSink(dir, LAUNCH);
+    expect(uninstallStatuslineSink(dir)).toBe('removed');
+    expect(settings()).toEqual({ model: 'opus' });
   });
 
   test('a failing user command costs the status line, not the reading', () => {
     writeSettings({ statusLine: { type: 'command', command: 'boom' } });
     installStatuslineSink(dir, LAUNCH);
-    const out = runStatusline(dir, turn, { now: () => 5, runChain: () => { throw new Error('boom'); } });
+    const out = runStatusline(dir, turn, { now: () => 5, ambientDir: ambient, runChain: () => { throw new Error('boom'); } });
     expect(out).toBe('');
     expect(fs.existsSync(path.join(dir, 'bodhilander-usage.json'))).toBe(true);
   });
