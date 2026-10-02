@@ -60,7 +60,7 @@ export function readChainedCommand(configDir: string): string | null {
  * The statusLine command in a config dir's own settings.json, or null. A managed
  * dir does not inherit `~/.claude/settings.json`, so the sink reads it instead.
  */
-export function readSettingsCommand(configDir: string): string | null {
+function readSettingsCommand(configDir: string): string | null {
   try {
     const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf-8'));
     const command = settings?.statusLine?.command;

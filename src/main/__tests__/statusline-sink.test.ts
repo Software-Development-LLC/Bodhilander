@@ -242,6 +242,19 @@ describe('the statusline script', () => {
     expect(runStatusline(dir, turn, printing([]))).toBe('');
   });
 
+  test('a torn chain file prints nothing rather than the ambient line', () => {
+    writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
+    installStatuslineSink(dir, LAUNCH);
+    fs.writeFileSync(chainFile(), '{"chain":');
+    expect(runStatusline(dir, turn, printing([]))).toBe('');
+  });
+
+  test('a torn ambient settings.json prints nothing', () => {
+    fs.writeFileSync(path.join(ambient, 'settings.json'), '{"statusLine":');
+    installStatuslineSink(dir, LAUNCH);
+    expect(runStatusline(dir, turn, printing([]))).toBe('');
+  });
+
   test.each([
     ['no settings.json', null],
     ['no statusLine', { model: 'opus' }],
