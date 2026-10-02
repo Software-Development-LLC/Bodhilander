@@ -62,7 +62,8 @@ export function readChainedCommand(configDir: string): string | null {
  */
 function readSettingsCommand(configDir: string): string | null {
   try {
-    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf-8'));
+    const text = fs.readFileSync(path.join(configDir, 'settings.json'), 'utf-8');
+    const settings = JSON.parse(text.replace(/^\uFEFF/, ''));
     const command = settings?.statusLine?.command;
     if (typeof command !== 'string' || command.trim() === '') return null;
     return command.includes(STATUSLINE_SCRIPT_NAME) ? null : command;
@@ -101,17 +102,15 @@ function runChainedCommand(command: string, input: string): string {
   return typeof result.stdout === 'string' ? result.stdout : '';
 }
 
-const THIS_PROCESS: StatuslineDeps = {
-  now: Date.now,
-  runChain: runChainedCommand,
-  ambientDir: path.join(os.homedir(), '.claude'),
-};
+function thisProcess(): StatuslineDeps {
+  return { now: Date.now, runChain: runChainedCommand, ambientDir: path.join(os.homedir(), '.claude') };
+}
 
 /** What to print as the status line: the user command's stdout, or nothing. */
 export function runStatusline(
   configDir: string,
   stdinText: string,
-  deps: StatuslineDeps = THIS_PROCESS,
+  deps: StatuslineDeps = thisProcess(),
 ): string {
   recordRateLimits(configDir, stdinText, deps.now());
   const command = userCommand(configDir, deps.ambientDir);

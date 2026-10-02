@@ -9,7 +9,8 @@ import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } f
 /**
  * Installing the statusline sink into a managed config dir's settings.json.
  * A statusLine the user set is moved to a sidecar file and chained to, so it
- * keeps rendering; nothing is written when the entry is already current.
+ * keeps rendering; nothing is written when the entry is already current, and a
+ * sidecar already there outlives a settings.json that names no statusLine.
  */
 
 export type SinkInstallAction = 'installed' | 'updated' | 'unchanged' | 'error';
@@ -126,14 +127,18 @@ export function installStatuslineSink(configDir: string, launch: SinkLaunch): Si
 
   let action: SinkInstallAction = 'updated';
   if (!isOurs(current)) {
-    const userEntry = current?.command ? current : null;
-    if (!saveChain(configDir, userEntry)) return 'error';
+    if (current?.command && !saveChain(configDir, current)) return 'error';
     action = 'installed';
   }
 
   settings.statusLine = { ...current, type: 'command', command };
   if (!writeClaudeSettings(settings, configDir)) return 'error';
   return action;
+}
+
+/** Whether a user statusLine is on record for the sink in this dir to chain to. */
+export function hasSavedChain(configDir: string): boolean {
+  return readSavedChain(configDir)?.chain != null;
 }
 
 /** The statusLine install moved aside, or null when the record cannot be read. */
@@ -161,7 +166,7 @@ export function uninstallStatuslineSink(configDir: string): SinkUninstallAction 
   const saved = readSavedChain(configDir);
   if (!saved) return 'error';
   const userEntry = saved.chain;
-  if (userEntry) settings.statusLine = userEntry;
+  if (userEntry) settings.statusLine = { type: 'command', ...userEntry };
   else delete settings.statusLine;
   if (!writeClaudeSettings(settings, configDir)) return 'error';
   saveChain(configDir, null);

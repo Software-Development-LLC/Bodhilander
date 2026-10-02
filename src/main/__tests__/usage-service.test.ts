@@ -9,8 +9,10 @@ import * as path from 'path';
 
 const prefs = new Map<string, string>();
 const warnings: string[] = [];
+const infos: string[] = [];
+const into = (lines: string[]) => (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
 mock.module('electron-log', () => ({
-  default: { info() {}, error() {}, warn: (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); } },
+  default: { info: into(infos), error() {}, warn: into(warnings) },
 }));
 mock.module('../repositories/preferences', () => ({
   getPreference: (key: string) => prefs.get(key) ?? null,
@@ -125,6 +127,26 @@ describe('the sink follows its preference', () => {
     warnings.length = 0;
     await createUsageService(deps({ listAccounts: () => [accounts[0]] })).poller.pollAll();
     expect(warnings).toEqual([`[Usage] Could not update the statusline sink in ${accounts[0].configDir}`]);
+  });
+
+  test('each change of outcome is logged once per dir, saying whether a user entry was chained', async () => {
+    const [work, home] = accounts.map(acc => acc.configDir);
+    fs.writeFileSync(path.join(work, 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'mine' } }));
+    fs.writeFileSync(path.join(home, 'settings.json'), '[]');
+    const sinkLines = () => infos.filter(line => line.includes('Statusline sink'));
+    infos.length = 0;
+    const service = createUsageService(deps());
+    await service.poller.pollAll();
+    await service.poller.pollAll();
+    expect(sinkLines()).toEqual([
+      `[Usage] Statusline sink installed in ${work}; user statusLine chained: yes`,
+      `[Usage] Statusline sink error in ${home}; user statusLine chained: no`,
+      `[Usage] Statusline sink unchanged in ${work}; user statusLine chained: yes`,
+    ]);
+    infos.length = 0;
+    prefs.set('usageStatuslineSink', 'false');
+    service.preferenceChanged('usageStatuslineSink');
+    expect(sinkLines()).toEqual([`[Usage] Statusline sink restored in ${work}; user statusLine chained: no`]);
   });
 
   test('a build without the script installs nothing', async () => {

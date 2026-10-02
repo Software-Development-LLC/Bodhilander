@@ -82,6 +82,16 @@ describe('installStatuslineSink', () => {
     expect(readChainedCommand(dir)).toBe('echo mine');
   });
 
+  test('a chain file outlives a settings.json rewritten without any statusLine', () => {
+    installStatuslineSink(dir, LAUNCH);
+    const byHand = '{"chain":{"command":"hand-line"}}';
+    fs.writeFileSync(path.join(dir, 'bodhilander-statusline.json'), byHand);
+    writeSettings({ model: 'opus' });
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
+    expect(fs.readFileSync(path.join(dir, 'bodhilander-statusline.json'), 'utf-8')).toBe(byHand);
+    expect(readChainedCommand(dir)).toBe('hand-line');
+  });
+
   test('a statusLine the user set after ours becomes the new chain', () => {
     installStatuslineSink(dir, LAUNCH);
     writeSettings({ statusLine: { type: 'command', command: 'echo newer' } });
@@ -115,6 +125,13 @@ describe('uninstallStatuslineSink', () => {
     expect(uninstallStatuslineSink(dir)).toBe('restored');
     expect(settings()).toEqual({ model: 'opus', statusLine: mine });
     expect(fs.existsSync(chainFile())).toBe(false);
+  });
+
+  test('a chained entry that names no type goes back as a command', () => {
+    installStatuslineSink(dir, LAUNCH);
+    fs.writeFileSync(chainFile(), '{"chain":{"command":"hand-line","padding":1}}');
+    expect(uninstallStatuslineSink(dir)).toBe('restored');
+    expect(settings().statusLine).toEqual({ type: 'command', command: 'hand-line', padding: 1 });
   });
 
   test('with nothing chained, the statusLine is removed', () => {
@@ -247,6 +264,29 @@ describe('the statusline script', () => {
     installStatuslineSink(dir, LAUNCH);
     fs.writeFileSync(chainFile(), '{"chain":');
     expect(runStatusline(dir, turn, printing([]))).toBe('');
+  });
+
+  test('an ambient settings.json saved with a byte-order mark is still read', () => {
+    fs.writeFileSync(path.join(ambient, 'settings.json'), '\uFEFF{"statusLine":{"type":"command","command":"ambient-line"}}');
+    installStatuslineSink(dir, LAUNCH);
+    expect(runStatusline(dir, turn, printing([]))).toBe('ran ambient-line');
+  });
+
+  test('left to itself, it reads the ambient statusLine from the home dir and runs it', () => {
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    fs.mkdirSync(path.join(ambient, '.claude'));
+    fs.writeFileSync(path.join(ambient, '.claude', 'settings.json'), '{"statusLine":{"type":"command","command":"echo from-home"}}');
+    installStatuslineSink(dir, LAUNCH);
+    process.env.HOME = ambient;
+    process.env.USERPROFILE = ambient;
+    try {
+      expect(runStatusline(dir, turn).trim()).toBe('from-home');
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   test('a torn ambient settings.json prints nothing', () => {
