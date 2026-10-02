@@ -64,6 +64,7 @@ function deps(overrides: Partial<UsageServiceDeps> = {}): UsageServiceDeps {
     notify: () => undefined,
     now: () => NOW,
     watchSinks: false,
+    ambientDir: path.join(root, 'ambient'),
     ...overrides,
   };
 }
@@ -146,7 +147,22 @@ describe('the sink follows its preference', () => {
     infos.length = 0;
     prefs.set('usageStatuslineSink', 'false');
     service.preferenceChanged('usageStatuslineSink');
-    expect(sinkLines()).toEqual([`[Usage] Statusline sink restored in ${work}; user statusLine chained: no`]);
+    expect(sinkLines()).toEqual([`[Usage] Statusline sink restored in ${work}; user statusLine chained: yes`]);
+  });
+
+  test('an account given a copy of the ambient statusLine is logged as adopted', async () => {
+    const work = accounts[0].configDir;
+    fs.mkdirSync(path.join(root, 'ambient'));
+    fs.writeFileSync(path.join(root, 'ambient', 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: 'ambient-line' } }));
+    const service = createUsageService(deps({ listAccounts: () => [accounts[0]] }));
+    await service.poller.pollAll();
+    infos.length = 0;
+    prefs.set('usageStatuslineSink', 'false');
+    service.preferenceChanged('usageStatuslineSink');
+    expect(infos.filter(line => line.includes('Statusline sink'))).toEqual([
+      `[Usage] Statusline sink adopted in ${work}; user statusLine chained: no`,
+    ]);
+    expect(statusLine(accounts[0])).toEqual({ type: 'command', command: 'ambient-line' });
   });
 
   test('a build without the script installs nothing', async () => {

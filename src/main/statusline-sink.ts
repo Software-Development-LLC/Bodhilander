@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 
-import { ClaudeSettingsConfig, getClaudeSettingsPath, writeClaudeSettings } from './claude-settings';
+import { ClaudeSettingsConfig, getClaudeSettingsPath, resolveConfigDir, writeClaudeSettings } from './claude-settings';
 import { findGitBash } from './git-bash';
 import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
@@ -14,7 +14,7 @@ import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLIN
  */
 
 export type SinkInstallAction = 'installed' | 'updated' | 'unchanged' | 'error';
-export type SinkUninstallAction = 'restored' | 'removed' | 'unchanged' | 'error';
+export type SinkUninstallAction = 'restored' | 'adopted' | 'removed' | 'unchanged' | 'error';
 
 interface StatusLineEntry {
   type?: string;
@@ -153,24 +153,38 @@ function readSavedChain(configDir: string): { chain: StatusLineEntry | null } | 
   }
 }
 
+/** The statusLine a dir's own settings.json names, unless it is ours or runs nothing. */
+function ownStatusLine(configDir: string): StatusLineEntry | null {
+  const entry = loadSettings(configDir)?.statusLine as StatusLineEntry | undefined;
+  if (typeof entry?.command !== 'string' || entry.command.trim() === '') return null;
+  return isOurs(entry) ? null : entry;
+}
+
 /**
  * Take the sink out of a config dir, putting back the statusLine it chained to.
- * A statusLine that is not ours is left alone, and so is everything when the
- * saved entry cannot be read, since removing ours then would lose the user's.
+ * A dir with no chain file was showing the ambient dir's statusLine through the
+ * sink, so it is given a copy to keep showing it; 'adopted' reports that.
+ * A statusLine that is not ours is left alone, as is everything when the saved
+ * entry cannot be read, since removing ours then would lose the user's.
  */
-export function uninstallStatuslineSink(configDir: string): SinkUninstallAction {
+export function uninstallStatuslineSink(
+  configDir: string,
+  ambientDir: string = resolveConfigDir(),
+): SinkUninstallAction {
   const settings = loadSettings(configDir);
   if (!settings) return 'error';
   if (!isOurs(settings.statusLine as StatusLineEntry | undefined)) return 'unchanged';
 
   const saved = readSavedChain(configDir);
   if (!saved) return 'error';
-  const userEntry = saved.chain;
-  if (userEntry) settings.statusLine = { type: 'command', ...userEntry };
+  const borrowed = fs.existsSync(chainFilePath(configDir)) ? null : ownStatusLine(ambientDir);
+  const userEntry = saved.chain ?? borrowed;
+  if (userEntry) settings.statusLine = { ...userEntry, type: 'command' };
   else delete settings.statusLine;
   if (!writeClaudeSettings(settings, configDir)) return 'error';
   saveChain(configDir, null);
-  return userEntry ? 'restored' : 'removed';
+  if (saved.chain) return 'restored';
+  return borrowed ? 'adopted' : 'removed';
 }
 
 /**
@@ -180,6 +194,8 @@ export function uninstallStatuslineSink(configDir: string): SinkUninstallAction 
 export function sinkReconciler(
   launch: SinkLaunch | null,
   isEnabled: () => boolean,
+  ambientDir?: string,
 ): (configDir: string) => SinkInstallAction | SinkUninstallAction {
-  return configDir => (launch && isEnabled() ? installStatuslineSink(configDir, launch) : uninstallStatuslineSink(configDir));
+  return configDir =>
+    launch && isEnabled() ? installStatuslineSink(configDir, launch) : uninstallStatuslineSink(configDir, ambientDir);
 }

@@ -129,7 +129,7 @@ describe('uninstallStatuslineSink', () => {
     const mine = { type: 'command', command: 'bash ~/.claude/line.sh', padding: 2 };
     writeSettings({ model: 'opus', statusLine: mine });
     installStatuslineSink(dir, LAUNCH);
-    expect(uninstallStatuslineSink(dir)).toBe('restored');
+    expect(uninstallStatuslineSink(dir, ambient)).toBe('restored');
     expect(settings()).toEqual({ model: 'opus', statusLine: mine });
     expect(fs.existsSync(chainFile())).toBe(false);
   });
@@ -137,7 +137,7 @@ describe('uninstallStatuslineSink', () => {
   test('a chained entry that names no type goes back as a command', () => {
     installStatuslineSink(dir, LAUNCH);
     fs.writeFileSync(chainFile(), '{"chain":{"command":"hand-line","padding":1}}');
-    expect(uninstallStatuslineSink(dir)).toBe('restored');
+    expect(uninstallStatuslineSink(dir, ambient)).toBe('restored');
     expect(settings().statusLine).toEqual({ type: 'command', command: 'hand-line', padding: 1 });
   });
 
@@ -145,21 +145,89 @@ describe('uninstallStatuslineSink', () => {
     installStatuslineSink(dir, LAUNCH);
     fs.writeFileSync(chainFile(), '\uFEFF{"chain":{"type":"command","command":"hand-line"}}');
     expect(readChainedCommand(dir)).toBe('hand-line');
-    expect(uninstallStatuslineSink(dir)).toBe('restored');
+    expect(uninstallStatuslineSink(dir, ambient)).toBe('restored');
     expect(settings().statusLine).toEqual({ type: 'command', command: 'hand-line' });
+  });
+
+  describe('from a dir that was showing the ambient statusLine', () => {
+    const writeAmbient = (value: unknown) => fs.writeFileSync(path.join(ambient, 'settings.json'), JSON.stringify(value));
+
+    test('the whole ambient entry is copied in, as a command', () => {
+      writeAmbient({ statusLine: { command: 'ambient-line', padding: 2, refreshInterval: 5 } });
+      writeSettings({ model: 'opus' });
+      installStatuslineSink(dir, LAUNCH);
+      expect(uninstallStatuslineSink(dir, ambient)).toBe('adopted');
+      expect(settings()).toEqual({
+        model: 'opus',
+        statusLine: { type: 'command', command: 'ambient-line', padding: 2, refreshInterval: 5 },
+      });
+    });
+
+    test('the copy is the dir\u2019s own from then on: turning the sink back on chains it', () => {
+      writeAmbient({ statusLine: { type: 'command', command: 'ambient-line', padding: 2 } });
+      installStatuslineSink(dir, LAUNCH);
+      uninstallStatuslineSink(dir, ambient);
+      expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
+      expect(readChainedCommand(dir)).toBe('ambient-line');
+      expect(uninstallStatuslineSink(dir, ambient)).toBe('restored');
+      expect(settings().statusLine).toEqual({ type: 'command', command: 'ambient-line', padding: 2 });
+    });
+
+    test('a chain file is restored from as it stands, whatever the ambient dir holds', () => {
+      writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
+      writeSettings({ statusLine: { type: 'command', command: 'mine' } });
+      installStatuslineSink(dir, LAUNCH);
+      expect(uninstallStatuslineSink(dir, ambient)).toBe('restored');
+      expect(settings().statusLine).toEqual({ type: 'command', command: 'mine' });
+    });
+
+    test('a chain file that names no command keeps the ambient entry out', () => {
+      writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
+      installStatuslineSink(dir, LAUNCH);
+      fs.writeFileSync(chainFile(), '{"chain":null}');
+      expect(uninstallStatuslineSink(dir, ambient)).toBe('removed');
+      expect(settings().statusLine).toBeUndefined();
+    });
+
+    test.each([
+      ['no statusLine', { model: 'opus' }],
+      ['a blank command', { statusLine: { type: 'command', command: ' ' } }],
+      ['a statusLine with no command', { statusLine: { type: 'command', padding: 2 } }],
+      ['the sink itself', { statusLine: { type: 'command', command: sinkCommand(LAUNCH, '/elsewhere') } }],
+    ])('an ambient dir with %s leaves the account with none', (_name, value) => {
+      writeAmbient(value);
+      installStatuslineSink(dir, LAUNCH);
+      expect(uninstallStatuslineSink(dir, ambient)).toBe('removed');
+      expect(settings().statusLine).toBeUndefined();
+    });
+
+    test('left to its default, the ambient dir is the home dir\u2019s .claude', () => {
+      fs.mkdirSync(path.join(ambient, '.claude'));
+      fs.writeFileSync(path.join(ambient, '.claude', 'settings.json'), '{"statusLine":{"type":"command","command":"from-home"}}');
+      installStatuslineSink(dir, LAUNCH);
+      const probe = path.join(ambient, 'probe.ts');
+      const sink = path.join(__dirname, '..', 'statusline-sink.ts');
+      fs.writeFileSync(probe, `import { uninstallStatuslineSink } from ${JSON.stringify(sink)};\nprocess.stdout.write(uninstallStatuslineSink(${JSON.stringify(dir)}));\n`);
+      const run = spawnSync(process.execPath, [probe], {
+        encoding: 'utf-8',
+        env: { ...process.env, HOME: ambient, USERPROFILE: ambient },
+      });
+      expect(run.stdout.trim().split(/\s+/).pop()).toBe('adopted');
+      expect(settings().statusLine).toEqual({ type: 'command', command: 'from-home' });
+    });
   });
 
   test('with nothing chained, the statusLine is removed', () => {
     writeSettings({ model: 'opus' });
     installStatuslineSink(dir, LAUNCH);
-    expect(uninstallStatuslineSink(dir)).toBe('removed');
+    expect(uninstallStatuslineSink(dir, ambient)).toBe('removed');
     expect(settings()).toEqual({ model: 'opus' });
   });
 
   test('a statusLine that is not ours is left alone', () => {
     writeSettings({ statusLine: { type: 'command', command: 'echo mine' } });
     const before = fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8');
-    expect(uninstallStatuslineSink(dir)).toBe('unchanged');
+    expect(uninstallStatuslineSink(dir, ambient)).toBe('unchanged');
     expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe(before);
   });
 
@@ -167,13 +235,13 @@ describe('uninstallStatuslineSink', () => {
     writeSettings({ statusLine: { type: 'command', command: 'echo mine' } });
     installStatuslineSink(dir, LAUNCH);
     fs.writeFileSync(chainFile(), '{"chain":');
-    expect(uninstallStatuslineSink(dir)).toBe('error');
+    expect(uninstallStatuslineSink(dir, ambient)).toBe('error');
     expect(settings().statusLine.command).toBe(sinkCommand(LAUNCH, dir));
   });
 
   test('an unparseable settings.json is untouched', () => {
     fs.writeFileSync(path.join(dir, 'settings.json'), '{"model": "opus",');
-    expect(uninstallStatuslineSink(dir)).toBe('error');
+    expect(uninstallStatuslineSink(dir, ambient)).toBe('error');
     expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe('{"model": "opus",');
   });
 });
@@ -183,15 +251,15 @@ describe('sinkReconciler', () => {
     const mine = { type: 'command', command: 'echo mine' };
     for (const [launch, enabled] of [[LAUNCH, false], [null, true]] as const) {
       writeSettings({ statusLine: mine });
-      expect(sinkReconciler(LAUNCH, () => true)(dir)).toBe('installed');
-      expect(sinkReconciler(launch, () => enabled)(dir)).toBe('restored');
+      expect(sinkReconciler(LAUNCH, () => true, ambient)(dir)).toBe('installed');
+      expect(sinkReconciler(launch, () => enabled, ambient)(dir)).toBe('restored');
       expect(settings().statusLine).toEqual(mine);
     }
   });
 
   test('the preference is read on every reconcile, not captured once', () => {
     let enabled = true;
-    const reconcile = sinkReconciler(LAUNCH, () => enabled);
+    const reconcile = sinkReconciler(LAUNCH, () => enabled, ambient);
     expect(reconcile(dir)).toBe('installed');
     enabled = false;
     expect(reconcile(dir)).toBe('removed');
@@ -320,13 +388,6 @@ describe('the statusline script', () => {
     expect(seen).toEqual([]);
   });
 
-  test('turning the sink off leaves a dir that borrowed the ambient line with none of its own', () => {
-    writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
-    writeSettings({ model: 'opus' });
-    installStatuslineSink(dir, LAUNCH);
-    expect(uninstallStatuslineSink(dir)).toBe('removed');
-    expect(settings()).toEqual({ model: 'opus' });
-  });
 
   test('a failing user command costs the status line, not the reading', () => {
     writeSettings({ statusLine: { type: 'command', command: 'boom' } });
@@ -379,7 +440,7 @@ describe('the sink command', () => {
     writeSettings({ statusLine: mine });
     installStatuslineSink(dir, LAUNCH);
     const launch = sinkLaunchFor(SCRIPT, { execPath: 'x', platform: 'win32', gitBash: () => null });
-    expect(sinkReconciler(launch, () => true)(dir)).toBe('restored');
+    expect(sinkReconciler(launch, () => true, ambient)(dir)).toBe('restored');
     expect(settings().statusLine).toEqual(mine);
   });
 

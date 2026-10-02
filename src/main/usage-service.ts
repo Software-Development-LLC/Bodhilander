@@ -34,6 +34,8 @@ export interface UsageServiceDeps {
   notify: (title: string, body: string) => void;
   now?: () => number;
   watchSinks?: boolean;
+  /** Where the user's own statusLine lives; `~/.claude` when omitted. */
+  ambientDir?: string;
 }
 
 /** Accounts a live pty or an active run's gates hold. A failed run listing still counts the ptys. */
@@ -59,15 +61,17 @@ export interface UsageService {
 
 export function createUsageService(deps: UsageServiceDeps): UsageService {
   if (!deps.sink) log.warn('[Usage] Statusline sink unavailable; meters rely on polling alone');
-  const apply = sinkReconciler(deps.sink, () => isSinkEnabled(deps.getPreference(USAGE_SINK_PREF)));
+  const apply = sinkReconciler(deps.sink, () => isSinkEnabled(deps.getPreference(USAGE_SINK_PREF)), deps.ambientDir);
   const lastAction = new Map<string, string>();
   const reconcile = (configDir: string) => {
+    // Taking the sink out drops the chain record, so it is read on both sides.
+    const chainedBefore = hasSavedChain(configDir);
     const action = apply(configDir);
     if (action === 'error') log.warn(`[Usage] Could not update the statusline sink in ${configDir}`);
     // Every round reconciles, so only a change of outcome is worth a line.
     if (lastAction.get(configDir) === action) return;
     lastAction.set(configDir, action);
-    const chained = hasSavedChain(configDir) ? 'yes' : 'no';
+    const chained = chainedBefore || hasSavedChain(configDir) ? 'yes' : 'no';
     log.info(`[Usage] Statusline sink ${action} in ${configDir}; user statusLine chained: ${chained}`);
   };
   const now = deps.now ?? Date.now;
