@@ -4,7 +4,7 @@ import log from 'electron-log';
 
 import { ClaudeSettingsConfig, getClaudeSettingsPath, writeClaudeSettings } from './claude-settings';
 import { findGitBash } from './git-bash';
-import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
+import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
 /**
  * Installing the statusline sink into a managed config dir's settings.json.
@@ -110,8 +110,8 @@ function loadSettings(configDir: string): ClaudeSettingsConfig | null {
   const file = getClaudeSettingsPath(configDir);
   if (!fs.existsSync(file)) return {};
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+    const parsed = parseJsonText(fs.readFileSync(file, 'utf-8'));
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as ClaudeSettingsConfig) : null;
   } catch {
     return null;
   }
@@ -146,7 +146,7 @@ function readSavedChain(configDir: string): { chain: StatusLineEntry | null } | 
   const file = chainFilePath(configDir);
   if (!fs.existsSync(file)) return { chain: null };
   try {
-    const chain = JSON.parse(fs.readFileSync(file, 'utf-8'))?.chain;
+    const chain = (parseJsonText(fs.readFileSync(file, 'utf-8')) as { chain?: StatusLineEntry } | null)?.chain;
     return { chain: typeof chain?.command === 'string' ? chain : null };
   } catch {
     return null;

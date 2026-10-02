@@ -10,7 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 
-import { STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
+import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 import { findGitBash } from '../main/git-bash';
 
 const CHAIN_TIMEOUT_MS = 5_000;
@@ -48,8 +48,8 @@ export function recordRateLimits(configDir: string, stdinText: string, now: numb
 /** The user's own statusLine command, or null when there was none. */
 export function readChainedCommand(configDir: string): string | null {
   try {
-    const saved = JSON.parse(fs.readFileSync(path.join(configDir, STATUSLINE_CHAIN_FILE), 'utf-8'));
-    const command = saved?.chain?.command;
+    const saved = parseJsonText(fs.readFileSync(path.join(configDir, STATUSLINE_CHAIN_FILE), 'utf-8'));
+    const command = (saved as { chain?: { command?: unknown } } | null)?.chain?.command;
     return typeof command === 'string' && command.trim() !== '' ? command : null;
   } catch {
     return null;
@@ -62,9 +62,8 @@ export function readChainedCommand(configDir: string): string | null {
  */
 function readSettingsCommand(configDir: string): string | null {
   try {
-    const text = fs.readFileSync(path.join(configDir, 'settings.json'), 'utf-8');
-    const settings = JSON.parse(text.replace(/^\uFEFF/, ''));
-    const command = settings?.statusLine?.command;
+    const settings = parseJsonText(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf-8'));
+    const command = (settings as { statusLine?: { command?: unknown } } | null)?.statusLine?.command;
     if (typeof command !== 'string' || command.trim() === '') return null;
     return command.includes(STATUSLINE_SCRIPT_NAME) ? null : command;
   } catch {

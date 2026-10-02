@@ -113,5 +113,10 @@ export const STATUSLINE_SINK_FILE = 'bodhilander-usage.json';
 /** Holds the user's own statusLine entry, which the sink chains to. */
 export const STATUSLINE_CHAIN_FILE = 'bodhilander-statusline.json';
 
+/** JSON an editor saved with a byte-order mark, which JSON.parse refuses. */
+export function parseJsonText(text: string): unknown {
+  return JSON.parse(text.replace(/^\uFEFF/, ''));
+}
+
 /** Identifies the statusLine command this app installed. */
 export const STATUSLINE_SCRIPT_NAME = 'bodhilander-statusline.js';
