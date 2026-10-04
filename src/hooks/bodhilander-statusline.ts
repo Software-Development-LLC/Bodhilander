@@ -114,7 +114,7 @@ function killTree(child: ChildProcess, gitBash: string | null, shellPid: string 
   } catch { /* already gone */ }
 }
 
-/** The command's stdout, or nothing when it fails to start or outlives the timeout. */
+/** The command's stdout; past the timeout, only the lines it finished. Never throws. */
 export function runChainedCommand(command: string, input: string, timeoutMs = CHAIN_TIMEOUT_MS): Promise<string> {
   const shell = chainShell();
   const gitBash = typeof shell === 'string' ? shell : null;
@@ -133,7 +133,7 @@ export function runChainedCommand(command: string, input: string, timeoutMs = CH
       killTree(child, gitBash, /^\d+/.exec(stderr)?.[0]);
       for (const stream of child.stdio) stream?.destroy();
       child.unref();
-      finish('');
+      finish(stdout.slice(0, stdout.lastIndexOf('\n') + 1));
     }, timeoutMs);
     child.stdout?.setEncoding('utf-8');
     child.stdout?.on('data', (chunk: string) => { stdout += chunk; });

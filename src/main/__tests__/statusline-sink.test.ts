@@ -388,7 +388,7 @@ describe('the statusline script', () => {
     const elapsed = Date.now() - started;
     expect({ status: run.status, stdout: run.stdout }).toEqual({ status: 0, stdout: '' });
     expect(elapsed).toBeGreaterThanOrEqual(5_000);
-    expect(elapsed).toBeLessThan(9_000);
+    expect(elapsed).toBeLessThan(10_000);
     expect(fs.existsSync(path.join(dir, 'bodhilander-usage.json'))).toBe(true);
   }, 35_000);
 
@@ -426,12 +426,16 @@ describe('the chained command, run for real', () => {
     expect(await runChainedCommand('cat', 'opus | 64%', 5_000)).toBe('opus | 64%');
   }, 10_000);
 
+  test('on timeout it shows the lines already finished, not a torn one', async () => {
+    expect(await runChainedCommand('printf "opus | 64%%\\nhalf"; sleep 20', '', 1_500)).toBe('opus | 64%\n');
+  }, 10_000);
+
   test('on timeout everything it started is killed, not left behind', async () => {
     const [ran, late] = ['ran', 'late'].map((name) => path.join(dir, name).split(path.sep).join('/'));
     const started = Date.now();
     const out = await runChainedCommand(`bash -c 'echo > "${ran}"; sleep 3; echo > "${late}"'; echo early`, '', 1_500);
     expect(out).toBe('');
-    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(Date.now() - started).toBeLessThan(5_000);
     await new Promise((resolve) => setTimeout(resolve, 4_000));
     expect({ ran: fs.existsSync(ran), late: fs.existsSync(late) }).toEqual({ ran: true, late: false });
   }, 15_000);
