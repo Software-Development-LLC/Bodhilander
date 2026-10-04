@@ -201,15 +201,15 @@ describe('registerHooks', () => {
 
   test('leaves a settings.json it cannot parse byte-identical', () => {
     createHookScript();
+    const dir = accountConfigDir('acct-torn');
     const torn = '{ "model": "opus", "permissions": { "defaultMode": "au';
-    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
-    fs.writeFileSync(settingsJson(), torn);
+    fs.writeFileSync(path.join(dir, 'settings.json'), torn);
 
-    const result = registerHooks();
+    const result = registerHooks(dir);
 
-    expect(result.success).toBe(false);
     expect(result.action).toBe('error');
-    expect(fs.readFileSync(settingsJson(), 'utf-8')).toBe(torn);
+    expect(result.error).toContain(dir);
+    expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe(torn);
   });
 
   test('reads a settings.json that starts with a byte-order mark', () => {
