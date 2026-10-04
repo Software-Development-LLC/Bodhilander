@@ -8,7 +8,6 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { spawnSync } from 'child_process';
-import { buildSync } from 'esbuild';
 
 import {
   installStatuslineSink,
@@ -374,10 +373,16 @@ describe('the statusline script', () => {
     fs.writeFileSync(chainFile(), '{"chain":{"type":"command","command":"sleep 20; echo late"}}');
     // Under node, as the app runs it: bun's spawnSync never waited on the pipe a grandchild held.
     const bundle = path.join(ambient, 'bodhilander-statusline.js');
-    buildSync({
+    const options = {
       entryPoints: [path.join(__dirname, '..', '..', 'hooks', 'bodhilander-statusline.ts')],
       bundle: true, platform: 'node', target: 'node18', format: 'cjs', outfile: bundle, logLevel: 'silent',
+    };
+    // esbuild's buildSync needs a worker thread, which bun cannot host.
+    const build = spawnSync('node', ['-e', `require(${JSON.stringify(require.resolve('esbuild'))}).buildSync(${JSON.stringify(options)})`], {
+      encoding: 'utf-8',
+      timeout: 30_000,
     });
+    expect({ status: build.status, stderr: build.stderr }).toEqual({ status: 0, stderr: '' });
     const started = Date.now();
     const run = spawnSync('node', [bundle, dir], {
       input: turn,
