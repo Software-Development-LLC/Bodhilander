@@ -23,6 +23,7 @@ import {
   type HookCommand,
   type HookConfig,
   resolveConfigDir,
+  loadClaudeSettings,
   readClaudeSettings,
   writeClaudeSettings,
 } from './claude-settings';
@@ -288,7 +289,10 @@ function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: stri
 export function registerHooks(configDir?: string): { success: boolean; action: 'added' | 'updated' | 'unchanged' | 'error'; error?: string } {
   try {
     const hookScriptPath = getHookScriptPath();
-    const settings = readClaudeSettings(configDir);
+    const settings = loadClaudeSettings(configDir);
+    if (!settings) {
+      return { success: false, action: 'error', error: `Unreadable settings.json in ${configDir ?? '(default)'}` };
+    }
 
     // Purge stale Bodhilander/ClaudeLander entries FIRST — do this before any
     // early return, so users whose new hook script is missing still get their

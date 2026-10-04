@@ -199,6 +199,31 @@ describe('registerHooks', () => {
     expect(readJson(settingsJson()).hooks.PostToolUse).toHaveLength(1);
   });
 
+  test('leaves a settings.json it cannot parse byte-identical', () => {
+    createHookScript();
+    const torn = '{ "model": "opus", "permissions": { "defaultMode": "au';
+    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
+    fs.writeFileSync(settingsJson(), torn);
+
+    const result = registerHooks();
+
+    expect(result.success).toBe(false);
+    expect(result.action).toBe('error');
+    expect(fs.readFileSync(settingsJson(), 'utf-8')).toBe(torn);
+  });
+
+  test('reads a settings.json that starts with a byte-order mark', () => {
+    createHookScript();
+    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
+    fs.writeFileSync(settingsJson(), '﻿' + JSON.stringify({ model: 'opus' }));
+
+    expect(registerHooks().success).toBe(true);
+
+    const settings = readJson(settingsJson());
+    expect(settings.model).toBe('opus');
+    expect(settings.hooks.PostToolUse).toHaveLength(1);
+  });
+
   test('reports not-configured when the hook script is missing', () => {
     const result = registerHooks();
     expect(result.success).toBe(false);
@@ -328,6 +353,14 @@ describe('ensureDangerousModeAccepted', () => {
     // Byte-identical: repeated gate launches must not thrash the file (and a
     // rewrite risks racing a session that is reading it).
     expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe(before);
+  });
+
+  test('does not rewrite a settings file it cannot parse', () => {
+    const dir = accountConfigDir('acct-torn');
+    fs.writeFileSync(accountSettings(dir), '{ "hooks": ');
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(false);
+    expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe('{ "hooks": ');
   });
 
   test('leaves no temp file behind (temp + atomic rename)', () => {

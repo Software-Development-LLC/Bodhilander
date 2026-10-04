@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 
-import { ClaudeSettingsConfig, getClaudeSettingsPath, resolveConfigDir, writeClaudeSettings } from './claude-settings';
+import { loadClaudeSettings, resolveConfigDir, writeClaudeSettings } from './claude-settings';
 import { findGitBash } from './git-bash';
 import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
@@ -102,23 +102,8 @@ function saveChain(configDir: string, chain: StatusLineEntry | null): boolean {
   }
 }
 
-/**
- * The settings object, `{}` when there is no file, or null when the file is
- * not a JSON object, which must never be rewritten.
- */
-function loadSettings(configDir: string): ClaudeSettingsConfig | null {
-  const file = getClaudeSettingsPath(configDir);
-  if (!fs.existsSync(file)) return {};
-  try {
-    const parsed = parseJsonText(fs.readFileSync(file, 'utf-8'));
-    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as ClaudeSettingsConfig) : null;
-  } catch {
-    return null;
-  }
-}
-
 export function installStatuslineSink(configDir: string, launch: SinkLaunch): SinkInstallAction {
-  const settings = loadSettings(configDir);
+  const settings = loadClaudeSettings(configDir);
   if (!settings) return 'error';
   const current = settings.statusLine as StatusLineEntry | undefined;
   const command = sinkCommand(launch, configDir);
@@ -155,7 +140,7 @@ function readSavedChain(configDir: string): { chain: StatusLineEntry | null } | 
 
 /** The statusLine a dir's own settings.json names, unless it is ours or runs nothing. */
 function ownStatusLine(configDir: string): StatusLineEntry | null {
-  const entry = loadSettings(configDir)?.statusLine as StatusLineEntry | undefined;
+  const entry = loadClaudeSettings(configDir)?.statusLine as StatusLineEntry | undefined;
   if (typeof entry?.command !== 'string' || entry.command.trim() === '') return null;
   return isOurs(entry) ? null : entry;
 }
@@ -171,7 +156,7 @@ export function uninstallStatuslineSink(
   configDir: string,
   ambientDir: string = resolveConfigDir(),
 ): SinkUninstallAction {
-  const settings = loadSettings(configDir);
+  const settings = loadClaudeSettings(configDir);
   if (!settings) return 'error';
   if (!isOurs(settings.statusLine as StatusLineEntry | undefined)) return 'unchanged';
 

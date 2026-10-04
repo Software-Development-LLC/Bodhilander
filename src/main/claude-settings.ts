@@ -3,7 +3,7 @@
  * writing it, and the one flag the run engine has to set on it.
  *
  * Split out of `mcp-config.ts` deliberately as a LEAF module: it imports only
- * `fs`/`path`/`os` (+ `electron-log`), never the `electron` `app` singleton.
+ * `fs`/`path`/`os` (+ `electron-log`, `shared/usage`), never the `electron` `app` singleton.
  * `mcp-config` pulls `app` in for the hook-script path, and a module that
  * imports `app` cannot be imported by a unit test that hasn't mocked all of
  * electron. The gate launcher needs `ensureDangerousModeAccepted` right before
@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import log from 'electron-log';
+import { parseJsonText } from '../shared/usage';
 
 export interface HookCommand {
   type: 'command';
@@ -63,22 +64,27 @@ export function getClaudeSettingsPath(configDir?: string): string {
 }
 
 /**
- * Read Claude Code settings for the given config dir. A missing or unreadable
- * file reads as an empty object, so a caller merges into a known shape.
+ * Read Claude Code settings for a caller that will write them back. A missing
+ * file is `{}`; one that exists but is not a JSON object is null, and must not
+ * be written over -- it holds the user's own settings.
  */
-export function readClaudeSettings(configDir?: string): ClaudeSettingsConfig {
+export function loadClaudeSettings(configDir?: string): ClaudeSettingsConfig | null {
   const settingsPath = getClaudeSettingsPath(configDir);
+  if (!fs.existsSync(settingsPath)) return {};
 
   try {
-    if (fs.existsSync(settingsPath)) {
-      const content = fs.readFileSync(settingsPath, 'utf-8');
-      return JSON.parse(content);
-    }
+    const parsed = parseJsonText(fs.readFileSync(settingsPath, 'utf-8'));
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return parsed as ClaudeSettingsConfig;
+    log.warn(`[Claude Settings] settings.json is not an object; leaving it alone for ${resolveConfigDir(configDir)}`);
   } catch (err) {
-    log.warn('[Claude Settings] Failed to read settings:', err);
+    log.warn(`[Claude Settings] settings.json unparseable; leaving it alone for ${resolveConfigDir(configDir)}:`, err);
   }
+  return null;
+}
 
-  return {};
+/** Read-only view of Claude Code settings: an unreadable file reads as `{}`. */
+export function readClaudeSettings(configDir?: string): ClaudeSettingsConfig {
+  return loadClaudeSettings(configDir) ?? {};
 }
 
 /**
@@ -132,7 +138,8 @@ export function writeClaudeSettings(settings: ClaudeSettingsConfig, configDir?: 
  * it was already there), false only when the write failed.
  */
 export function ensureDangerousModeAccepted(configDir?: string): boolean {
-  const settings = readClaudeSettings(configDir);
+  const settings = loadClaudeSettings(configDir);
+  if (!settings) return false;
   if (settings.skipDangerousModePermissionPrompt === true) {
     return true; // Already accepted -- no write, so repeated gate launches don't thrash the file.
   }
