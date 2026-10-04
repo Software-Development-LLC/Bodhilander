@@ -381,6 +381,14 @@ describe('ensureDangerousModeAccepted', () => {
     expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe('{ "hooks": ');
   });
 
+  test('does not rewrite a settings file holding a non-object', () => {
+    const dir = accountConfigDir('acct-array');
+    fs.writeFileSync(accountSettings(dir), '[]');
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(false);
+    expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe('[]');
+  });
+
   test('leaves no temp file behind (temp + atomic rename)', () => {
     const dir = accountConfigDir('acct-atomic');
 

@@ -39,7 +39,7 @@ import { buildGateCommand, type GateMode, type RunSpawnContext } from './gate-co
 import { runGate, type GateOutcome, type GateSpawnOptions } from './gate-process';
 import { GATE_VERDICT_SCHEMA } from './gate-verdict';
 import { channelDirFor, hookSettingsText, mcpConfigText, PERMISSION_TOOL } from './permission-channel';
-import { ensureDangerousModeAccepted, ensureWorkspaceTrusted } from '../claude-settings';
+import { ensureDangerousModeAccepted, ensureWorkspaceTrusted, getClaudeSettingsPath } from '../claude-settings';
 
 export class GateLaunchError extends Error {
   // Set explicitly: without it `error.name` reads "Error" in a log, and the
@@ -423,8 +423,17 @@ export async function launchGate(launch: GateLaunch): Promise<GateOutcome> {
   // interactive accept, so seed the acceptance here -- idempotent, and only for
   // the posture that needs it, right before the launch that would fail without
   // it. Ambient login (no configDir) is left to the person's own acceptance.
-  if (launch.context.posture === 'bypass' && launch.context.configDir) {
-    ensureDangerousModeAccepted(launch.context.configDir);
+  if (
+    launch.context.posture === 'bypass' &&
+    launch.context.configDir &&
+    !ensureDangerousModeAccepted(launch.context.configDir)
+  ) {
+    return {
+      status: 'undriveable',
+      reason: `Could not pre-accept the bypass disclaimer: ${getClaudeSettingsPath(launch.context.configDir)} is unreadable or could not be written`,
+      detail: null,
+      durationMs: 0,
+    };
   }
 
   // Separately from the disclaimer, Claude Code refuses to run in a folder whose

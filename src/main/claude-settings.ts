@@ -69,24 +69,38 @@ export function getClaudeSettingsPath(configDir?: string): string {
  * must not be written over -- it holds the user's own settings.
  */
 export function loadClaudeSettings(configDir?: string): ClaudeSettingsConfig | null {
+  return parseSettingsFile(configDir, true);
+}
+
+const warnedUnreadable = new Set<string>();
+
+/**
+ * Read-only view of Claude Code settings: an unreadable file reads as `{}`.
+ * Called on every status poll, so the warning is logged once per config dir.
+ */
+export function readClaudeSettings(configDir?: string): ClaudeSettingsConfig {
+  return parseSettingsFile(configDir, !warnedUnreadable.has(resolveConfigDir(configDir))) ?? {};
+}
+
+function parseSettingsFile(configDir: string | undefined, warn: boolean): ClaudeSettingsConfig | null {
   const settingsPath = getClaudeSettingsPath(configDir);
   if (!fs.existsSync(settingsPath)) return {};
 
+  let problem: unknown;
   try {
     const text = fs.readFileSync(settingsPath, 'utf-8');
     if (text.trim() === '') return {};
     const parsed = parseJsonText(text);
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return parsed as ClaudeSettingsConfig;
-    log.warn(`[Claude Settings] settings.json is not an object; leaving it alone for ${resolveConfigDir(configDir)}`);
+    problem = 'not a JSON object';
   } catch (err) {
-    log.warn(`[Claude Settings] settings.json unparseable; leaving it alone for ${resolveConfigDir(configDir)}:`, err);
+    problem = err;
+  }
+  if (warn) {
+    warnedUnreadable.add(resolveConfigDir(configDir));
+    log.warn(`[Claude Settings] ${settingsPath} is unreadable; leaving it alone:`, problem);
   }
   return null;
-}
-
-/** Read-only view of Claude Code settings: an unreadable file reads as `{}`. */
-export function readClaudeSettings(configDir?: string): ClaudeSettingsConfig {
-  return loadClaudeSettings(configDir) ?? {};
 }
 
 /**

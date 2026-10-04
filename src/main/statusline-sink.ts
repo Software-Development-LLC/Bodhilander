@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 
-import { loadClaudeSettings, resolveConfigDir, writeClaudeSettings } from './claude-settings';
+import { loadClaudeSettings, readClaudeSettings, resolveConfigDir, writeClaudeSettings } from './claude-settings';
 import { findGitBash } from './git-bash';
 import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 
@@ -140,7 +140,7 @@ function readSavedChain(configDir: string): { chain: StatusLineEntry | null } | 
 
 /** The statusLine a dir's own settings.json names, unless it is ours or runs nothing. */
 function ownStatusLine(configDir: string): StatusLineEntry | null {
-  const entry = loadClaudeSettings(configDir)?.statusLine as StatusLineEntry | undefined;
+  const entry = readClaudeSettings(configDir).statusLine as StatusLineEntry | undefined;
   if (typeof entry?.command !== 'string' || entry.command.trim() === '') return null;
   return isOurs(entry) ? null : entry;
 }

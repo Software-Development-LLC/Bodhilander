@@ -99,6 +99,12 @@ describe('installStatuslineSink', () => {
     expect(readChainedCommand(dir)).toBe('echo mine');
   });
 
+  test('an empty settings.json is installed into', () => {
+    fs.writeFileSync(path.join(dir, 'settings.json'), '');
+    expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
+    expect(settings().statusLine.command).toBe(sinkCommand(LAUNCH, dir));
+  });
+
   test('a statusLine the user set after ours becomes the new chain', () => {
     installStatuslineSink(dir, LAUNCH);
     writeSettings({ statusLine: { type: 'command', command: 'echo newer' } });
