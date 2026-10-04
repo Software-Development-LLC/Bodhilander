@@ -212,10 +212,28 @@ describe('registerHooks', () => {
     expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe(torn);
   });
 
+  test('leaves a settings.json holding a non-object untouched', () => {
+    createHookScript();
+    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
+    fs.writeFileSync(settingsJson(), '[]');
+
+    expect(registerHooks().action).toBe('error');
+    expect(fs.readFileSync(settingsJson(), 'utf-8')).toBe('[]');
+  });
+
+  test('installs into an empty settings.json', () => {
+    createHookScript();
+    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
+    fs.writeFileSync(settingsJson(), '\uFEFF\n');
+
+    expect(registerHooks().success).toBe(true);
+    expect(readJson(settingsJson()).hooks.Stop).toHaveLength(1);
+  });
+
   test('reads a settings.json that starts with a byte-order mark', () => {
     createHookScript();
     fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
-    fs.writeFileSync(settingsJson(), '﻿' + JSON.stringify({ model: 'opus' }));
+    fs.writeFileSync(settingsJson(), '\uFEFF' + JSON.stringify({ model: 'opus' }));
 
     expect(registerHooks().success).toBe(true);
 

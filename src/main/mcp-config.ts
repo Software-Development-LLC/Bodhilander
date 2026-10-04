@@ -291,7 +291,7 @@ export function registerHooks(configDir?: string): { success: boolean; action: '
     const hookScriptPath = getHookScriptPath();
     const settings = loadClaudeSettings(configDir);
     if (!settings) {
-      return { success: false, action: 'error', error: `Unreadable settings.json in ${configDir ?? '(default)'}` };
+      return { success: false, action: 'error', error: `Unreadable settings.json in ${resolveConfigDir(configDir)}` };
     }
 
     // Purge stale Bodhilander/ClaudeLander entries FIRST — do this before any

@@ -65,15 +65,17 @@ export function getClaudeSettingsPath(configDir?: string): string {
 
 /**
  * Read Claude Code settings for a caller that will write them back. A missing
- * file is `{}`; one that exists but is not a JSON object is null, and must not
- * be written over -- it holds the user's own settings.
+ * or empty file is `{}`; one that holds anything but a JSON object is null, and
+ * must not be written over -- it holds the user's own settings.
  */
 export function loadClaudeSettings(configDir?: string): ClaudeSettingsConfig | null {
   const settingsPath = getClaudeSettingsPath(configDir);
   if (!fs.existsSync(settingsPath)) return {};
 
   try {
-    const parsed = parseJsonText(fs.readFileSync(settingsPath, 'utf-8'));
+    const text = fs.readFileSync(settingsPath, 'utf-8');
+    if (text.trim() === '') return {};
+    const parsed = parseJsonText(text);
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return parsed as ClaudeSettingsConfig;
     log.warn(`[Claude Settings] settings.json is not an object; leaving it alone for ${resolveConfigDir(configDir)}`);
   } catch (err) {
@@ -135,11 +137,14 @@ export function writeClaudeSettings(settings: ClaudeSettingsConfig, configDir?: 
  * interactively still gets the safety prompt.
  *
  * Returns true when the flag is set on disk afterwards (whether we wrote it or
- * it was already there), false only when the write failed.
+ * it was already there), false when the file could not be parsed or written.
  */
 export function ensureDangerousModeAccepted(configDir?: string): boolean {
   const settings = loadClaudeSettings(configDir);
-  if (!settings) return false;
+  if (!settings) {
+    log.warn(`[Claude Settings] Not pre-accepting bypass disclaimer: unreadable settings.json in ${resolveConfigDir(configDir)}`);
+    return false;
+  }
   if (settings.skipDangerousModePermissionPrompt === true) {
     return true; // Already accepted -- no write, so repeated gate launches don't thrash the file.
   }
