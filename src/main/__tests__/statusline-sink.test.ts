@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 import {
   installStatuslineSink,
@@ -17,7 +17,8 @@ import {
   sinkReconciler,
   uninstallStatuslineSink,
 } from '../statusline-sink';
-import { chainEnv, readChainedCommand, recordRateLimits, runStatusline, StatuslineDeps } from '../../hooks/bodhilander-statusline';
+import { chainEnv, readChainedCommand, recordRateLimits, runChainedCommand, runStatusline, shellPid, StatuslineDeps } from '../../hooks/bodhilander-statusline';
+import { findGitBash } from '../git-bash';
 
 const SCRIPT = '/opt/Bodhilander/dist/hooks/bodhilander-statusline.js';
 const LAUNCH: SinkLaunch = { scriptPath: SCRIPT, execPath: '/opt/Bodhilander/Bodhilander', platform: 'darwin' };
@@ -283,7 +284,7 @@ describe('the statusline script', () => {
   const printing = (seen: string[]): StatuslineDeps => ({
     now: () => 1,
     ambientDir: ambient,
-    runChain: (command) => { seen.push(command); return `ran ${command}`; },
+    runChain: async (command) => { seen.push(command); return `ran ${command}`; },
   });
 
   test('records rate_limits with the time it saw them', () => {
@@ -300,65 +301,65 @@ describe('the statusline script', () => {
     expect(fs.existsSync(path.join(dir, 'bodhilander-usage.json'))).toBe(false);
   });
 
-  test('passes the user command the same stdin and prints its output', () => {
+  test('passes the user command the same stdin and prints its output', async () => {
     writeSettings({ statusLine: { type: 'command', command: 'my-line' } });
     installStatuslineSink(dir, LAUNCH);
     const seen: string[] = [];
-    const out = runStatusline(dir, turn, { now: () => 1, ambientDir: ambient, runChain: (command, input) => { seen.push(command, input); return 'opus | 64%'; } });
+    const out = await runStatusline(dir, turn, { now: () => 1, ambientDir: ambient, runChain: async (command, input) => { seen.push(command, input); return 'opus | 64%'; } });
     expect(out).toBe('opus | 64%');
     expect(seen).toEqual(['my-line', turn]);
   });
 
-  test('with no user command it prints nothing', () => {
+  test('with no user command it prints nothing', async () => {
     installStatuslineSink(dir, LAUNCH);
-    expect(runStatusline(dir, turn, { now: () => 1, ambientDir: ambient, runChain: () => 'unexpected' })).toBe('');
+    expect(await runStatusline(dir, turn, { now: () => 1, ambientDir: ambient, runChain: async () => 'unexpected' })).toBe('');
   });
 
-  test('a dir that had no statusLine of its own shows the ambient one', () => {
+  test('a dir that had no statusLine of its own shows the ambient one', async () => {
     writeAmbient({ statusLine: { type: 'command', command: 'bash "$HOME/.claude/statusline.sh"' } });
     writeSettings({ model: 'opus' });
     expect(installStatuslineSink(dir, LAUNCH)).toBe('installed');
     expect(fs.existsSync(chainFile())).toBe(false);
     const seen: string[] = [];
-    expect(runStatusline(dir, turn, printing(seen))).toBe('ran bash "$HOME/.claude/statusline.sh"');
+    expect(await runStatusline(dir, turn, printing(seen))).toBe('ran bash "$HOME/.claude/statusline.sh"');
     expect(seen).toEqual(['bash "$HOME/.claude/statusline.sh"']);
   });
 
-  test('the dir’s own chained command wins over the ambient one', () => {
+  test('the dir’s own chained command wins over the ambient one', async () => {
     writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
     writeSettings({ statusLine: { type: 'command', command: 'my-line' } });
     installStatuslineSink(dir, LAUNCH);
-    expect(runStatusline(dir, turn, printing([]))).toBe('ran my-line');
+    expect(await runStatusline(dir, turn, printing([]))).toBe('ran my-line');
   });
 
-  test('a chain file written by hand is used as it stands and survives a reconcile', () => {
+  test('a chain file written by hand is used as it stands and survives a reconcile', async () => {
     writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
     installStatuslineSink(dir, LAUNCH);
     const byHand = '{"chain":{"command":"hand-line"}}';
     fs.writeFileSync(chainFile(), byHand);
     expect(installStatuslineSink(dir, LAUNCH)).toBe('unchanged');
     expect(fs.readFileSync(chainFile(), 'utf-8')).toBe(byHand);
-    expect(runStatusline(dir, turn, printing([]))).toBe('ran hand-line');
+    expect(await runStatusline(dir, turn, printing([]))).toBe('ran hand-line');
   });
 
-  test('a chain file that names no command silences the ambient one', () => {
+  test('a chain file that names no command silences the ambient one', async () => {
     writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
     installStatuslineSink(dir, LAUNCH);
     fs.writeFileSync(chainFile(), '{"chain":null}');
-    expect(runStatusline(dir, turn, printing([]))).toBe('');
+    expect(await runStatusline(dir, turn, printing([]))).toBe('');
   });
 
-  test('a torn chain file prints nothing rather than the ambient line', () => {
+  test('a torn chain file prints nothing rather than the ambient line', async () => {
     writeAmbient({ statusLine: { type: 'command', command: 'ambient-line' } });
     installStatuslineSink(dir, LAUNCH);
     fs.writeFileSync(chainFile(), '{"chain":');
-    expect(runStatusline(dir, turn, printing([]))).toBe('');
+    expect(await runStatusline(dir, turn, printing([]))).toBe('');
   });
 
-  test('an ambient settings.json saved with a byte-order mark is still read', () => {
+  test('an ambient settings.json saved with a byte-order mark is still read', async () => {
     fs.writeFileSync(path.join(ambient, 'settings.json'), '\uFEFF{"statusLine":{"type":"command","command":"ambient-line"}}');
     installStatuslineSink(dir, LAUNCH);
-    expect(runStatusline(dir, turn, printing([]))).toBe('ran ambient-line');
+    expect(await runStatusline(dir, turn, printing([]))).toBe('ran ambient-line');
   });
 
   test('run as its own process, it reads the ambient statusLine from the home dir and runs it', () => {
@@ -375,10 +376,50 @@ describe('the statusline script', () => {
     expect(fs.existsSync(path.join(dir, 'bodhilander-usage.json'))).toBe(true);
   });
 
-  test('a torn ambient settings.json prints nothing', () => {
+  // Under node, as the app runs it: bun's spawnSync never waited on the pipe a grandchild held.
+  const runBundled = () => {
+    const bundle = path.join(ambient, 'bodhilander-statusline.js');
+    const options = {
+      entryPoints: [path.join(__dirname, '..', '..', 'hooks', 'bodhilander-statusline.ts')],
+      bundle: true, platform: 'node', target: 'node18', format: 'cjs', outfile: bundle, logLevel: 'silent',
+    };
+    // esbuild's buildSync needs a worker thread, which bun cannot host.
+    const build = spawnSync('node', ['-e', `require(${JSON.stringify(require.resolve('esbuild'))}).buildSync(${JSON.stringify(options)})`], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+    });
+    expect({ status: build.status, stderr: build.stderr }).toEqual({ status: 0, stderr: '' });
+    const started = Date.now();
+    const run = spawnSync('node', [bundle, dir], {
+      input: turn,
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: ambient, USERPROFILE: ambient },
+      timeout: 60_000,
+    });
+    return { status: run.status, stdout: run.stdout, elapsed: Date.now() - started };
+  };
+
+  test('run as its own process, a chained command that outlives the timeout is cut off and the reading kept', () => {
+    fs.writeFileSync(chainFile(), '{"chain":{"type":"command","command":"sleep 30; echo late"}}');
+    const { status, stdout, elapsed } = runBundled();
+    expect({ status, stdout }).toEqual({ status: 0, stdout: '' });
+    expect(elapsed).toBeGreaterThanOrEqual(5_000);
+    expect(elapsed).toBeLessThan(18_000);
+    expect(fs.existsSync(path.join(dir, 'bodhilander-usage.json'))).toBe(true);
+  }, 70_000);
+
+  test.skipIf(process.platform !== 'win32')('run as its own process, a native grandchild the kill misses does not hold it open', () => {
+    const chain = { chain: { type: 'command', command: 'echo first; cmd //c "ping -n 30 127.0.0.1 >nul"; echo x' } };
+    fs.writeFileSync(chainFile(), JSON.stringify(chain));
+    const { status, stdout, elapsed } = runBundled();
+    expect({ status, stdout }).toEqual({ status: 0, stdout: 'first\n' });
+    expect(elapsed).toBeLessThan(18_000);
+  }, 70_000);
+
+  test('a torn ambient settings.json prints nothing', async () => {
     fs.writeFileSync(path.join(ambient, 'settings.json'), '{"statusLine":');
     installStatuslineSink(dir, LAUNCH);
-    expect(runStatusline(dir, turn, printing([]))).toBe('');
+    expect(await runStatusline(dir, turn, printing([]))).toBe('');
   });
 
   test.each([
@@ -386,22 +427,81 @@ describe('the statusline script', () => {
     ['no statusLine', { model: 'opus' }],
     ['a blank command', { statusLine: { type: 'command', command: ' ' } }],
     ['the sink itself', { statusLine: { type: 'command', command: sinkCommand(LAUNCH, '/elsewhere') } }],
-  ])('an ambient dir with %s gives no status line', (_name, value) => {
+  ])('an ambient dir with %s gives no status line', async (_name, value) => {
     if (value) writeAmbient(value);
     installStatuslineSink(dir, LAUNCH);
     const seen: string[] = [];
-    expect(runStatusline(dir, turn, printing(seen))).toBe('');
+    expect(await runStatusline(dir, turn, printing(seen))).toBe('');
     expect(seen).toEqual([]);
   });
 
 
-  test('a failing user command costs the status line, not the reading', () => {
+  test('a failing user command costs the status line, not the reading', async () => {
     writeSettings({ statusLine: { type: 'command', command: 'boom' } });
     installStatuslineSink(dir, LAUNCH);
-    const out = runStatusline(dir, turn, { now: () => 5, ambientDir: ambient, runChain: () => { throw new Error('boom'); } });
+    const out = await runStatusline(dir, turn, { now: () => 5, ambientDir: ambient, runChain: () => { throw new Error('boom'); } });
     expect(out).toBe('');
     expect(fs.existsSync(path.join(dir, 'bodhilander-usage.json'))).toBe(true);
   });
+});
+
+describe('the chained command, run for real', () => {
+  const posixPath = (name: string) => path.join(dir, name).split(path.sep).join('/');
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  test('gets the turn on stdin and its stdout is the status line', async () => {
+    expect(await runChainedCommand('cat', 'opus | 64%', 5_000)).toBe('opus | 64%');
+  }, 10_000);
+
+  test('on timeout it shows the lines already finished, not a torn one', async () => {
+    expect(await runChainedCommand('printf "opus | 64%%\nhalf"; sleep 30', '', 3_000)).toBe('opus | 64%\n');
+  }, 20_000);
+
+  test('on timeout everything it started is killed, not left behind', async () => {
+    const [ran, late] = ['ran', 'late'].map(posixPath);
+    const started = Date.now();
+    const out = await runChainedCommand(`bash -c 'echo > "${ran}"; sleep 12; echo > "${late}"'; echo early`, '', 3_000);
+    expect(out).toBe('');
+    expect(Date.now() - started).toBeLessThan(10_000);
+    await sleep(Math.max(0, started + 14_000 - Date.now()));
+    expect({ ran: fs.existsSync(ran), late: fs.existsSync(late) }).toEqual({ ran: true, late: false });
+  }, 25_000);
+
+  test('a background job with its output sent elsewhere is left to finish', async () => {
+    const marker = posixPath('refreshed');
+    const out = await runChainedCommand(`echo line; (sleep 4; echo > "${marker}") >/dev/null &`, '', 2_000);
+    expect(out).toBe('line\n');
+    for (let waited = 0; waited < 12_000 && !fs.existsSync(marker); waited += 250) await sleep(250);
+    expect(fs.existsSync(marker)).toBe(true);
+  }, 20_000);
+
+  test('the shell pid is only ever a whole first line of stderr', () => {
+    expect(shellPid('4242\n')).toBe('4242');
+    expect(shellPid('4242\r\nmore')).toBe('4242');
+    for (const stderr of ['4242', '4242junk\n', 'warning\n4242\n', ' 4242\n', '1\n', '0\n', '']) {
+      expect(shellPid(stderr)).toBeUndefined();
+    }
+  });
+
+  test.skipIf(process.platform !== 'win32')('a junk first line on stderr never picks the group that gets killed', async () => {
+    const bash = findGitBash(process.env);
+    expect(bash).not.toBeNull();
+    const bystander = spawn(bash as string, ['-c', 'echo $$; sleep 30'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    const pid = await new Promise<string>((resolve) => bystander.stdout?.once('data', (chunk) => resolve(String(chunk).trim())));
+    const bashEnv = path.join(dir, 'bash-env.sh');
+    fs.writeFileSync(bashEnv, `echo "${pid}junk" >&2\n`);
+    const saved = process.env.BASH_ENV;
+    process.env.BASH_ENV = bashEnv.split(path.sep).join('/');
+    try {
+      expect(await runChainedCommand('sleep 5', '', 1_500)).toBe('');
+      await sleep(1_000);
+      expect({ exitCode: bystander.exitCode, signalCode: bystander.signalCode }).toEqual({ exitCode: null, signalCode: null });
+    } finally {
+      if (saved === undefined) delete process.env.BASH_ENV;
+      else process.env.BASH_ENV = saved;
+      spawnSync(bash as string, ['-c', `kill -9 -- -${pid}`], { stdio: 'ignore', windowsHide: true });
+    }
+  }, 20_000);
 });
 
 test('the chained user command does not run in Node mode', () => {
