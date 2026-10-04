@@ -389,6 +389,15 @@ describe('ensureDangerousModeAccepted', () => {
     expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe('[]');
   });
 
+  test('reports a failed write as not accepted', () => {
+    const dir = accountConfigDir('acct-unwritable');
+    writeJson(accountSettings(dir), { model: 'opus' });
+    fs.mkdirSync(`${accountSettings(dir)}.bodhilander.tmp`);
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(false);
+    expect(readJson(accountSettings(dir))).toEqual({ model: 'opus' });
+  });
+
   test('leaves no temp file behind (temp + atomic rename)', () => {
     const dir = accountConfigDir('acct-atomic');
 

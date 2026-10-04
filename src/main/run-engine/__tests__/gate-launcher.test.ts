@@ -405,6 +405,17 @@ describe('launching', () => {
     await expect(fs.readdir(path.join(root, 'prompts'))).rejects.toThrow();
   });
 
+  test('a bypass gate whose disclaimer cannot be written is not launched', async () => {
+    const root = await harness(PLUGIN_SHAPED);
+    const configDir = path.join(root, 'account');
+    await fs.mkdir(path.join(configDir, 'settings.json.bodhilander.tmp'), { recursive: true });
+
+    const outcome = await launch(root, { context: { ...context(root), posture: 'bypass', configDir } });
+
+    expect(outcome.status).toBe('undriveable');
+    await expect(fs.readdir(path.join(root, 'prompts'))).rejects.toThrow();
+  });
+
   test('the outcome comes back from the process, not from the launcher', async () => {
     // End to end with node standing in for claude: the launcher's job ends at
     // handing over a command, and what came back is gate-process's reading.

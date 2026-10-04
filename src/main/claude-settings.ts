@@ -66,10 +66,11 @@ export function getClaudeSettingsPath(configDir?: string): string {
 /**
  * Read Claude Code settings for a caller that will write them back. A missing
  * or empty file is `{}`; one that holds anything but a JSON object is null, and
- * must not be written over -- it holds the user's own settings.
+ * must not be written over -- it holds the user's own settings. A caller that
+ * reports the refusal itself passes `warn: false`.
  */
-export function loadClaudeSettings(configDir?: string): ClaudeSettingsConfig | null {
-  return parseSettingsFile(configDir, true);
+export function loadClaudeSettings(configDir?: string, warn = true): ClaudeSettingsConfig | null {
+  return parseSettingsFile(configDir, warn);
 }
 
 const warnedUnreadable = new Set<string>();

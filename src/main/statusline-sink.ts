@@ -103,7 +103,7 @@ function saveChain(configDir: string, chain: StatusLineEntry | null): boolean {
 }
 
 export function installStatuslineSink(configDir: string, launch: SinkLaunch): SinkInstallAction {
-  const settings = loadClaudeSettings(configDir);
+  const settings = loadClaudeSettings(configDir, false);
   if (!settings) return 'error';
   const current = settings.statusLine as StatusLineEntry | undefined;
   const command = sinkCommand(launch, configDir);
@@ -156,7 +156,7 @@ export function uninstallStatuslineSink(
   configDir: string,
   ambientDir: string = resolveConfigDir(),
 ): SinkUninstallAction {
-  const settings = loadClaudeSettings(configDir);
+  const settings = loadClaudeSettings(configDir, false);
   if (!settings) return 'error';
   if (!isOurs(settings.statusLine as StatusLineEntry | undefined)) return 'unchanged';
 
