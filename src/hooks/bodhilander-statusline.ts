@@ -8,16 +8,17 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawnSync } from 'child_process';
+import { ChildProcess, execFileSync, spawn } from 'child_process';
 
 import { parseJsonText, STATUSLINE_CHAIN_FILE, STATUSLINE_SCRIPT_NAME, STATUSLINE_SINK_FILE } from '../shared/usage';
 import { findGitBash } from '../main/git-bash';
 
 const CHAIN_TIMEOUT_MS = 5_000;
+const KILL_TIMEOUT_MS = 2_000;
 
 export interface StatuslineDeps {
   now: () => number;
-  runChain: (command: string, input: string) => string;
+  runChain: (command: string, input: string) => Promise<string>;
   /** The config dir whose statusLine stands in when this one chained to none. */
   ambientDir: string;
 }
@@ -89,16 +90,60 @@ export function chainEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return next;
 }
 
-function runChainedCommand(command: string, input: string): string {
-  const result = spawnSync(command, {
-    input,
-    env: chainEnv(process.env),
-    shell: chainShell(),
-    encoding: 'utf-8',
-    timeout: CHAIN_TIMEOUT_MS,
-    windowsHide: true,
+const KILL_OPTIONS = { stdio: 'ignore', timeout: KILL_TIMEOUT_MS, windowsHide: true } as const;
+
+/** Sweeps until the group is empty: a process still being spawned escapes one pass. */
+const killGroup = (pid: string) => `for _ in 1 2 3 4 5; do kill -9 -- -${pid} 2>/dev/null || exit 0; sleep 0.1; done`;
+
+/**
+ * The shell and everything it started: a survivor holds the output pipe open.
+ * Git Bash runs a command as a Windows process whose parent has already exited,
+ * so `taskkill /T` misses it; the shell's MSYS process group does not.
+ */
+function killTree(child: ChildProcess, gitBash: string | null, shellPid: string | undefined): void {
+  if (!child.pid) return;
+  try {
+    if (process.platform !== 'win32') {
+      process.kill(-child.pid, 'SIGKILL');
+    } else if (gitBash && shellPid) {
+      execFileSync(gitBash, ['-c', killGroup(shellPid)], KILL_OPTIONS);
+    } else {
+      const taskkill = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe');
+      execFileSync(taskkill, ['/F', '/T', '/PID', String(child.pid)], KILL_OPTIONS);
+    }
+  } catch { /* already gone */ }
+}
+
+/** The command's stdout, or nothing when it fails to start or outlives the timeout. */
+export function runChainedCommand(command: string, input: string, timeoutMs = CHAIN_TIMEOUT_MS): Promise<string> {
+  const shell = chainShell();
+  const gitBash = typeof shell === 'string' ? shell : null;
+  return new Promise((resolve) => {
+    const child = spawn(gitBash ? `echo $$ >&2; ${command}` : command, {
+      env: chainEnv(process.env),
+      shell,
+      detached: process.platform !== 'win32',
+      stdio: ['pipe', 'pipe', gitBash ? 'pipe' : 'ignore'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    const finish = (out: string) => { clearTimeout(timer); resolve(out); };
+    const timer = setTimeout(() => {
+      killTree(child, gitBash, /^\d+/.exec(stderr)?.[0]);
+      for (const stream of child.stdio) stream?.destroy();
+      child.unref();
+      finish('');
+    }, timeoutMs);
+    child.stdout?.setEncoding('utf-8');
+    child.stdout?.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr?.setEncoding('utf-8');
+    child.stderr?.on('data', (chunk: string) => { if (stderr.length < 32) stderr += chunk; });
+    child.on('error', () => finish(''));
+    child.on('close', () => finish(stdout));
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(input);
   });
-  return typeof result.stdout === 'string' ? result.stdout : '';
 }
 
 function thisProcess(): StatuslineDeps {
@@ -106,16 +151,16 @@ function thisProcess(): StatuslineDeps {
 }
 
 /** What to print as the status line: the user command's stdout, or nothing. */
-export function runStatusline(
+export async function runStatusline(
   configDir: string,
   stdinText: string,
   deps: StatuslineDeps = thisProcess(),
-): string {
+): Promise<string> {
   recordRateLimits(configDir, stdinText, deps.now());
   const command = userCommand(configDir, deps.ambientDir);
   if (!command) return '';
   try {
-    return deps.runChain(command, stdinText);
+    return await deps.runChain(command, stdinText);
   } catch {
     return '';
   }
@@ -133,7 +178,7 @@ function readStdin(): Promise<string> {
 
 if (require.main === module) {
   const configDir = process.argv[2];
-  readStdin().then((input) => {
-    if (configDir) process.stdout.write(runStatusline(configDir, input));
-  }).catch(() => undefined);
+  readStdin().then(async (input) => {
+    if (configDir) process.stdout.write(await runStatusline(configDir, input));
+  }).catch(() => undefined).finally(() => process.stdout.write('', () => process.exit(0)));
 }
