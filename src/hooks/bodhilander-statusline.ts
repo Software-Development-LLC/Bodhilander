@@ -114,12 +114,18 @@ function killTree(child: ChildProcess, gitBash: string | null, shellPid: string 
   } catch { /* already gone */ }
 }
 
+/** The shell's pid from the first line it wrote to stderr; anything else names no group to kill. */
+export function shellPid(stderr: string): string | undefined {
+  const pid = /^(\d+)\r?\n/.exec(stderr)?.[1];
+  return pid && Number(pid) > 1 ? pid : undefined;
+}
+
 /** The command's stdout; past the timeout, only the lines it finished. Never throws. */
 export function runChainedCommand(command: string, input: string, timeoutMs = CHAIN_TIMEOUT_MS): Promise<string> {
   const shell = chainShell();
   const gitBash = typeof shell === 'string' ? shell : null;
   return new Promise((resolve) => {
-    const child = spawn(gitBash ? `echo $$ >&2; ${command}` : command, {
+    const child = spawn(gitBash ? `echo $$ >&2; exec 2>/dev/null; ${command}` : command, {
       env: chainEnv(process.env),
       shell,
       detached: process.platform !== 'win32',
@@ -130,9 +136,7 @@ export function runChainedCommand(command: string, input: string, timeoutMs = CH
     let stderr = '';
     const finish = (out: string) => { clearTimeout(timer); resolve(out); };
     const timer = setTimeout(() => {
-      killTree(child, gitBash, /^\d+/.exec(stderr)?.[0]);
-      for (const stream of child.stdio) stream?.destroy();
-      child.unref();
+      killTree(child, gitBash, shellPid(stderr));
       finish(stdout.slice(0, stdout.lastIndexOf('\n') + 1));
     }, timeoutMs);
     child.stdout?.setEncoding('utf-8');
