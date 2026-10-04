@@ -3,7 +3,7 @@
  * writing it, and the one flag the run engine has to set on it.
  *
  * Split out of `mcp-config.ts` deliberately as a LEAF module: it imports only
- * `fs`/`path`/`os` (+ `electron-log`), never the `electron` `app` singleton.
+ * `fs`/`path`/`os` (+ `electron-log`, `shared/usage`), never the `electron` `app` singleton.
  * `mcp-config` pulls `app` in for the hook-script path, and a module that
  * imports `app` cannot be imported by a unit test that hasn't mocked all of
  * electron. The gate launcher needs `ensureDangerousModeAccepted` right before
@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import log from 'electron-log';
+import { parseJsonText } from '../shared/usage';
 
 export interface HookCommand {
   type: 'command';
@@ -63,22 +64,44 @@ export function getClaudeSettingsPath(configDir?: string): string {
 }
 
 /**
- * Read Claude Code settings for the given config dir. A missing or unreadable
- * file reads as an empty object, so a caller merges into a known shape.
+ * Read Claude Code settings for a caller that will write them back. A missing
+ * or empty file is `{}`; one that holds anything but a JSON object is null, and
+ * must not be written over -- it holds the user's own settings. A caller that
+ * reports the refusal itself passes `warn: false`.
+ */
+export function loadClaudeSettings(configDir?: string, warn = true): ClaudeSettingsConfig | null {
+  return parseSettingsFile(configDir, warn);
+}
+
+const warnedUnreadable = new Set<string>();
+
+/**
+ * Read-only view of Claude Code settings: an unreadable file reads as `{}`.
+ * Called on every status poll, so the warning is logged once per config dir.
  */
 export function readClaudeSettings(configDir?: string): ClaudeSettingsConfig {
+  return parseSettingsFile(configDir, !warnedUnreadable.has(resolveConfigDir(configDir))) ?? {};
+}
+
+function parseSettingsFile(configDir: string | undefined, warn: boolean): ClaudeSettingsConfig | null {
   const settingsPath = getClaudeSettingsPath(configDir);
+  if (!fs.existsSync(settingsPath)) return {};
 
+  let problem: unknown;
   try {
-    if (fs.existsSync(settingsPath)) {
-      const content = fs.readFileSync(settingsPath, 'utf-8');
-      return JSON.parse(content);
-    }
+    const text = fs.readFileSync(settingsPath, 'utf-8');
+    if (text.trim() === '') return {};
+    const parsed = parseJsonText(text);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) return parsed as ClaudeSettingsConfig;
+    problem = 'not a JSON object';
   } catch (err) {
-    log.warn('[Claude Settings] Failed to read settings:', err);
+    problem = err;
   }
-
-  return {};
+  if (warn) {
+    warnedUnreadable.add(resolveConfigDir(configDir));
+    log.warn(`[Claude Settings] ${settingsPath} is unreadable; leaving it alone:`, problem);
+  }
+  return null;
 }
 
 /**
@@ -129,10 +152,14 @@ export function writeClaudeSettings(settings: ClaudeSettingsConfig, configDir?: 
  * interactively still gets the safety prompt.
  *
  * Returns true when the flag is set on disk afterwards (whether we wrote it or
- * it was already there), false only when the write failed.
+ * it was already there), false when the file could not be parsed or written.
  */
 export function ensureDangerousModeAccepted(configDir?: string): boolean {
-  const settings = readClaudeSettings(configDir);
+  const settings = loadClaudeSettings(configDir);
+  if (!settings) {
+    log.warn(`[Claude Settings] Not pre-accepting bypass disclaimer: unreadable settings.json in ${resolveConfigDir(configDir)}`);
+    return false;
+  }
   if (settings.skipDangerousModePermissionPrompt === true) {
     return true; // Already accepted -- no write, so repeated gate launches don't thrash the file.
   }

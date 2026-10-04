@@ -11,11 +11,18 @@
  *
  * Run with: bun test src/main/__tests__/claude-settings.test.ts
  */
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, test, beforeEach, afterEach, spyOn } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ensureWorkspaceTrusted, getClaudeJsonPath } from '../claude-settings';
+import log from 'electron-log';
+import {
+  ensureWorkspaceTrusted,
+  getClaudeJsonPath,
+  getClaudeSettingsPath,
+  loadClaudeSettings,
+  readClaudeSettings,
+} from '../claude-settings';
 
 let cfg = '';
 const CWD = 'C:/work/repos/_wt-co-999-service-api';
@@ -102,5 +109,35 @@ describe('ensureWorkspaceTrusted', () => {
     expect(ensureWorkspaceTrusted(cfg, 'C:\\work\\repos\\_wt-co-2-service-api')).toBe(true);
 
     expect(fs.readFileSync(getClaudeJsonPath(cfg), 'utf-8')).toBe(before);
+  });
+});
+
+describe('an unreadable settings.json', () => {
+  const unreadableWarnings = (warn: ReturnType<typeof spyOn>) =>
+    warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes(getClaudeSettingsPath(cfg))).length;
+
+  test('is warned about once per config dir on the read-only path', () => {
+    fs.writeFileSync(getClaudeSettingsPath(cfg), '{ "model": ');
+    const warn = spyOn(log, 'warn');
+    try {
+      expect(readClaudeSettings(cfg)).toEqual({});
+      expect(readClaudeSettings(cfg)).toEqual({});
+      expect(readClaudeSettings(cfg)).toEqual({});
+      expect(unreadableWarnings(warn)).toBe(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('is warned about on every refused write', () => {
+    fs.writeFileSync(getClaudeSettingsPath(cfg), '{ "model": ');
+    const warn = spyOn(log, 'warn');
+    try {
+      expect(loadClaudeSettings(cfg)).toBeNull();
+      expect(loadClaudeSettings(cfg)).toBeNull();
+      expect(unreadableWarnings(warn)).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
