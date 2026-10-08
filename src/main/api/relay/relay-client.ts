@@ -13,6 +13,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { randomUUID } from 'crypto';
 import { powerSaveBlocker } from 'electron';
 import { WebSocket } from 'ws';
 import log from 'electron-log';
@@ -21,7 +22,9 @@ import type { RelayShare, RelayStatus } from '../../../shared/types';
 import { ensureIdentity, identityFingerprint, signWithIdentity } from './relay-identity';
 import { SessionTunnel, type Principal } from './session-tunnel';
 import { defaultDeps } from './session-tunnel-deps';
-import { CAP_GRANTS_V1, buildShareCreateMessage } from './grants';
+import { CAP_GRANTS_V1, CAP_PUSH_V1, buildShareCreateMessage } from './grants';
+import type { RelayPushSubscription } from './push-seal';
+import { createAttentionGate, MAX_SPENT_WINDOWS, planAttentionPush, type AttentionEvent } from './push-attention';
 import { createHandoffTransport } from './handoff-transport';
 import type { HandoffTransport } from '../../transfer/handoff';
 import { ptyManager } from '../../pty-manager';
@@ -47,6 +50,8 @@ import { messageText } from '../ws-message';
 function getSessionName(sessionId: string): string | null {
   return getAllSessions().find((s) => s.id === sessionId)?.name ?? null;
 }
+
+export type { RelayPushSubscription } from './push-seal';
 
 /** A grant as the relay describes it. Never authorization on its own. */
 export interface PendingGrant {
@@ -136,6 +141,20 @@ export class RelayClient extends EventEmitter {
   private pendingOwner: AssertedOwner | null = null;
   /** Share requests waiting on the owner, keyed by grant id. */
   private readonly pendingGrants = new Map<string, PendingGrant>();
+  /**
+   * The owner's browser push subscriptions, as last stated by the relay. Held
+   * only in memory: they are the relay's record, refreshed on every connect,
+   * and persisting them would keep keys past a revocation we never heard about.
+   */
+  private pushSubs: RelayPushSubscription[] = [];
+  /** Suppresses a push storm from a session flapping in and out of `waiting`. */
+  private readonly attentionGate = createAttentionGate();
+  /**
+   * The debounce window each unanswered `push:send` spent, by its batch ref.
+   * A refusal names the batch it refused, so the two are paired exactly rather
+   * than by guessing which send a nack belongs to.
+   */
+  private readonly spentWindows = new Map<string, AttentionEvent>();
   /** Routes E2E terminal frames to/from web clients (M3). */
   private readonly tunnel = new SessionTunnel(
     (clientId, payload) => this.send({ type: 'to-client', clientId, payload }),
@@ -264,6 +283,7 @@ export class RelayClient extends EventEmitter {
     setPreference(PREF.enabled, 'false');
     this.stopKeepAwake();
     this.teardown();
+    this.attentionGate.clear();
     this.emitStatus();
   }
 
@@ -349,6 +369,11 @@ export class RelayClient extends EventEmitter {
       this.connected = false;
       this.stopPing();
       this.ws = null;
+      // A dropped socket does NOT run teardown(), so the subscription keys have
+      // to be released here too. Otherwise a list the relay has since reaped
+      // survives the gap and is sealed to in the instant after `agent:ready`,
+      // before the fresh `push:sync` lands.
+      this.forgetPushSubscriptions();
       if (wasConnected) this.emitStatus();
 
       if (!this.enabled) return;
@@ -383,6 +408,9 @@ export class RelayClient extends EventEmitter {
       owner?: AssertedOwner | null;
       grants?: PendingGrant[];
       grantId?: string;
+      subs?: RelayPushSubscription[];
+      ref?: string;
+      retryAfterSeconds?: number;
     };
     try {
       msg = JSON.parse(raw);
@@ -399,22 +427,13 @@ export class RelayClient extends EventEmitter {
     }
 
     if (msg.type === 'challenge' && msg.nonce) {
-      try {
-        const signature = signWithIdentity(buildAgentAuthMessage(msg.nonce)).toString('base64');
-        const identity = ensureIdentity();
-        // Tell the relay this build enforces grant certificates. It refuses to
-        // route a guest to any machine that has not said so, because an older
-        // build ignores the certificate entirely and would hand that guest
-        // every command.
-        this.send({ type: 'agent:auth', ed25519Pub: identity.ed25519Pub, signature, caps: [CAP_GRANTS_V1] });
-      } catch (err) {
-        log.error('[Relay] failed to answer challenge:', err instanceof Error ? err.message : err);
-        this.ws?.close();
-      }
+      this.answerChallenge(msg.nonce);
       return;
     }
 
     if (this.handleShareMessage(msg)) return;
+
+    if (this.handlePushMessage(msg)) return;
 
     if (msg.type === 'agent:ready') {
       this.connecting = false;
@@ -470,6 +489,12 @@ export class RelayClient extends EventEmitter {
     // The relay brokers client sessions over this socket; if it drops, they're
     // all gone (and their PTY listeners must be released).
     this.tunnel.closeAll();
+    // Subscription keys are the relay's record, re-sent on every connect, so a
+    // revocation heard while we were away cannot be acted on with a stale list.
+    this.forgetPushSubscriptions();
+    // The debounce windows deliberately survive a reconnect: a socket bouncing
+    // mid-flap is when a reset would let the storm through. `disable()` clears
+    // them, because that is a decision rather than a blip.
     this.connecting = false;
     this.connected = false;
     if (this.ws) {
@@ -481,6 +506,136 @@ export class RelayClient extends EventEmitter {
       }
       this.ws = null;
     }
+  }
+
+  // --- web push (M5.3) ---
+
+  /**
+   * Drop the relay's subscription list. Every path that ends a connection calls
+   * this, because the relay re-states the list on the next `agent:ready`.
+   */
+  private forgetPushSubscriptions(): void {
+    this.pushSubs = [];
+    this.spentWindows.clear();
+  }
+
+  /**
+   * The window a refusal is handing back — by ref when the relay named one.
+   * A relay too old to echo it leaves nothing to pair on, and the least-wrong
+   * guess is the NEWEST send: a fixed window refuses the tail of a burst.
+   */
+  private takeSpentWindow(ref: string | null): AttentionEvent | undefined {
+    if (ref !== null) {
+      const named = this.spentWindows.get(ref);
+      if (named) this.spentWindows.delete(ref);
+      return named;
+    }
+    let newest: string | undefined;
+    for (const key of this.spentWindows.keys()) newest = key;
+    if (newest === undefined) return undefined;
+    const spent = this.spentWindows.get(newest);
+    this.spentWindows.delete(newest);
+    return spent;
+  }
+
+  /**
+   * Sign the relay's nonce and say what this build can do. `grants:v1` means it
+   * enforces grant certificates, so the relay may route guests here; `push:v1`
+   * is the same promise reversed — without it, no subscription keys.
+   */
+  private answerChallenge(nonce: string): void {
+    try {
+      const signature = signWithIdentity(buildAgentAuthMessage(nonce)).toString('base64');
+      const identity = ensureIdentity();
+      this.send({
+        type: 'agent:auth',
+        ed25519Pub: identity.ed25519Pub,
+        signature,
+        caps: [CAP_GRANTS_V1, CAP_PUSH_V1],
+      });
+    } catch (err) {
+      log.error('[Relay] failed to answer challenge:', err instanceof Error ? err.message : err);
+      this.ws?.close();
+    }
+  }
+
+  /**
+   * The relay's push messages, split out so `handleMessage` stays one dispatch
+   * — the same shape as the sharing branches. Reports whether it was ours.
+   */
+  private handlePushMessage(msg: { type?: string; subs?: RelayPushSubscription[]; ref?: string; retryAfterSeconds?: number }): boolean {
+    // The owner's set of subscribed browsers. Sent on connect and whenever it
+    // changes; the relay never asks us for anything back.
+    if (msg.type === 'push:sync' && Array.isArray(msg.subs)) {
+      this.notePushSubscriptions(msg.subs);
+      return true;
+    }
+    // The relay would not take that batch. Nothing was delivered, so the
+    // debounce it cost is given back.
+    if (msg.type === 'push:throttled') {
+      this.notePushThrottled(msg.ref, msg.retryAfterSeconds);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Adopt the relay's statement of which browsers are subscribed. Replaced
+   * wholesale, never merged: subscribe, unsubscribe and 410-reaping all land
+   * there, so a merge would resurrect a device its owner just switched off.
+   */
+  private notePushSubscriptions(subs: RelayPushSubscription[]): void {
+    this.pushSubs = subs.filter(
+      (s): s is RelayPushSubscription =>
+        !!s && typeof s.id === 'string' && typeof s.p256dh === 'string' && typeof s.auth === 'string',
+    );
+    log.info('[Relay] push subscriptions updated', { count: this.pushSubs.length });
+  }
+
+  /**
+   * A session needs the owner: seal one notification per subscribed browser,
+   * hand the bodies to the relay to address. The name rides inside the
+   * ciphertext (design §10). A state change never waits on a notification.
+   */
+  notifyAttention(event: AttentionEvent): void {
+    // Every decision — the guards, the debounce window the desktop notifier
+    // also uses, the payload, the per-device sealing — is in `planAttentionPush`
+    // so it can be tested without an Electron app or a socket.
+    const planned = planAttentionPush({
+      connected: this.connected,
+      machineId: getPreference(PREF.machineId),
+      subs: this.pushSubs,
+      gate: this.attentionGate,
+      event,
+      onSealError: (err) =>
+        log.warn('[Relay] could not seal a push payload:', err instanceof Error ? err.message : err),
+    });
+    if (!planned) return;
+
+    // Recorded against a ref the relay echoes back if it refuses this batch, so
+    // the window is handed to the right session rather than to whichever send
+    // happened to sit at one end of a queue.
+    const ref = randomUUID();
+    this.spentWindows.set(ref, planned.spent);
+    if (this.spentWindows.size > MAX_SPENT_WINDOWS) {
+      const oldest = this.spentWindows.keys().next().value;
+      if (oldest !== undefined) this.spentWindows.delete(oldest);
+    }
+    log.info('[Relay] sending attention push', { state: event.state, devices: planned.message.items.length });
+    this.send({ ...planned.message, ref });
+  }
+
+  /**
+   * The relay refused a batch. Reopen the window it cost us, so the next state
+   * change on that session notifies instead of being debounced against a
+   * notification that never left.
+   */
+  private notePushThrottled(ref: unknown, retryAfterSeconds: unknown): void {
+    const spent = this.takeSpentWindow(typeof ref === 'string' ? ref : null);
+    if (spent) this.attentionGate.forget(spent.sessionId, spent.state);
+    log.warn('[Relay] push refused by the relay; debounce reopened', {
+      retryAfterSeconds: typeof retryAfterSeconds === 'number' ? retryAfterSeconds : null,
+    });
   }
 
   // --- sharing (M5.2) ---
