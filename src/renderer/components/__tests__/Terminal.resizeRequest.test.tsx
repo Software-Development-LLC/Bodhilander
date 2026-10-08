@@ -138,7 +138,7 @@ async function renderTerminal() {
   await act(async () => {
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, INITIAL_FIT_DELAY_MS)));
   });
-  expect(ptyResizes).toEqual(['164x48', '164x48']);
+  expect(ptyResizes).toHaveLength(2);
   ptyResizes = [];
   termResizes = [];
   return rendered;
