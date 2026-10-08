@@ -143,9 +143,10 @@ export interface Repositories {
 
   /**
    * Record this user's handoff, replacing whatever they had prepared before.
-   * Returns the bundle it displaced, whose file the caller must remove.
+   * Returns the bundle it displaced, whose file the caller must remove, or
+   * null when the store, counted inside the same transaction, has no room.
    */
-  putHandoffBundle(input: PutHandoffInput): { row: HandoffBundle; previousId: string | null };
+  putHandoffBundle(input: PutHandoffInput): { row: HandoffBundle; previousId: string | null } | null;
   /** The user's live handoff, or null when there is none or it has lapsed. */
   getHandoffBundle(userId: string): HandoffBundle | null;
   /** Drop the named handoff once its destination has restored from it. */
@@ -174,6 +175,8 @@ export interface PutHandoffInput {
   sourceMachineId: string;
   byteSize: number;
   ttlSeconds: number;
+  /** Ceiling on every other account's bytes plus this one. */
+  storeMaxBytes?: number;
 }
 
 export interface ShareInvite {
@@ -616,6 +619,8 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
       // rather than leaving two claims on one slot. The id changes with it:
       // a destination that declined the old bundle must be offered this one.
       return db.transaction(() => {
+        const others = this.totalHandoffBytes(input.userId);
+        if (input.storeMaxBytes !== undefined && others + input.byteSize > input.storeMaxBytes) return null;
         const previous = db
           .query('SELECT id FROM handoff_bundles WHERE user_id = ?')
           .get(input.userId) as { id: string } | null;

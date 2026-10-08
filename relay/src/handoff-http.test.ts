@@ -407,6 +407,33 @@ describe('the disk the store sits on', () => {
     expect(fs.readdirSync(f.dir)).toHaveLength(1);
   });
 
+  test('two accounts uploading at once cannot both fit under a ceiling made for one', async () => {
+    const f = await fixture({ HANDOFF_STORE_MAX_BYTES: '200' });
+    const statuses = (
+      await Promise.all([
+        put(f, f.stranger, sealHandoff(Buffer.alloc(120)).bytes, { ip: '198.51.100.9' }),
+        put(f, f.oldMachine, sealHandoff(Buffer.alloc(120)).bytes),
+      ])
+    ).map((res) => res.status);
+
+    expect(statuses.sort()).toEqual([200, 507]);
+    expect(f.repos.totalHandoffBytes()).toBeLessThanOrEqual(200);
+    expect(fs.readdirSync(f.dir)).toHaveLength(1);
+  });
+
+  test('the insert itself refuses a bundle the store has no room for', async () => {
+    const f = await fixture();
+    const other = f.repos.upsertGithubUser({
+      providerUserId: '3', displayName: 'Sam', login: 'sam-p', email: null, avatarUrl: null,
+    });
+    const bundle = { sourceMachineId: f.oldMachine.id, byteSize: 120, ttlSeconds: 60, storeMaxBytes: 200 };
+    expect(f.repos.putHandoffBundle({ ...bundle, id: 'a', userId: other.id })).not.toBeNull();
+
+    expect(f.repos.putHandoffBundle({ ...bundle, id: 'b', userId: f.user.id })).toBeNull();
+    expect(f.repos.getHandoffBundle(f.user.id)).toBeNull();
+    expect(f.repos.getHandoffBundle(other.id)?.id).toBe('a');
+  });
+
   test('does not count a user against themselves when they replace their own', async () => {
     const f = await fixture({ HANDOFF_STORE_MAX_BYTES: '200' });
     expect((await put(f, f.oldMachine, sealHandoff(Buffer.alloc(120)).bytes)).status).toBe(200);

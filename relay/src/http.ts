@@ -681,13 +681,22 @@ export function createRouter(ctx: RelayContext) {
     }
 
     await commitHandoff(config.handoffDir, id);
-    const { row, previousId } = repos.putHandoffBundle({
+    // Counted again at insert time: another account's upload may have landed
+    // while this one streamed.
+    const put = repos.putHandoffBundle({
       id,
       userId: auth.machine.user_id,
       sourceMachineId: machineId,
       byteSize: written.bytes,
       ttlSeconds: config.handoffTtlSeconds,
+      storeMaxBytes: config.handoffStoreMaxBytes,
     });
+    if (!put) {
+      await removeHandoff(config.handoffDir, id);
+      logger.warn('handoff refused at insert: store full', { machineId, bytes: written.bytes });
+      return json({ error: 'store_full' }, 507);
+    }
+    const { row, previousId } = put;
     if (previousId) await removeHandoff(config.handoffDir, previousId);
     logger.info('handoff prepared', { machineId, bytes: row.byte_size });
     return json({ handoff: publicHandoff(row, auth.machine.name) });

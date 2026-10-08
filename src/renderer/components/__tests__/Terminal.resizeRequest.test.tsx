@@ -5,7 +5,7 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { RelayResizeRequest } from '../../../shared/types';
 
 class FakeBuffer {
@@ -62,7 +62,7 @@ mock.module('@xterm/addon-webgl', () => ({
   WebglAddon: class { onContextLoss = noop; dispose = noop; },
 }));
 
-const Terminal = (await import('../Terminal')).default;
+const { default: Terminal, INITIAL_FIT_DELAY_MS } = await import('../Terminal');
 
 let ptyResizes: string[] = [];
 let deliverRequest: ((request: RelayResizeRequest) => void) | null = null;
@@ -129,21 +129,16 @@ afterEach(() => {
 });
 
 /**
- * Mount, then let the startup path settle: creating the pty sends resizes of
- * its own, and those are not what any of these tests are about.
- *
- * Waits for the startup resize to ARRIVE rather than for a duration. A fixed
- * 60ms was enough on a developer machine and not on a loaded ubuntu runner,
- * where the startup resizes landed after the window closed and therefore
- * after the clear below -- so `ptyResizes` held 3 entries in a test asserting
- * it was empty, and the failure named the prompt rather than the mount.
+ * Mount, then let the startup path settle: creating the pty resizes it, and so
+ * does the mount's own fit a frame and INITIAL_FIT_DELAY_MS later. Waiting on
+ * that same schedule, queued after the component's, lands after it.
  */
 async function renderTerminal() {
   const rendered = render(<Terminal sessionId="s1" cwd="/tmp" launchClaude provider="claude" isActive />);
-  await waitFor(() => { expect(ptyResizes.length).toBeGreaterThan(0); });
-  // The prompt these tests act on cannot appear before the terminal does, so
-  // waiting for the mount to finish is part of the same settling.
-  await act(async () => { await Promise.resolve(); });
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, INITIAL_FIT_DELAY_MS)));
+  });
+  expect(ptyResizes).toHaveLength(2);
   ptyResizes = [];
   termResizes = [];
   return rendered;
@@ -152,6 +147,20 @@ async function renderTerminal() {
 async function ask(over: Partial<RelayResizeRequest> = {}) {
   await act(async () => { deliverRequest!(request(over)); });
 }
+
+test('a late first frame is still settled before a test acts', async () => {
+  // A loaded runner delivers frames late; the mount's fit must not land after
+  // the helper has cleared the startup resizes.
+  const realFrame = window.requestAnimationFrame;
+  window.requestAnimationFrame = (cb) => realFrame((t) => { setTimeout(() => cb(t), 150); });
+  try {
+    await renderTerminal();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    expect(ptyResizes).toEqual([]);
+  } finally {
+    window.requestAnimationFrame = realFrame;
+  }
+});
 
 describe('a guest asking to be fitted to their screen', () => {
   test('nothing happens until the owner answers', async () => {
