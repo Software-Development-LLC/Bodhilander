@@ -62,6 +62,10 @@ const AUTO_SCROLL_THRESHOLD = 5;
 // this by requiring a sane minimum before propagating a resize.
 const MIN_COLS = 10;
 const MIN_ROWS = 2;
+
+/** The mount's own fit, one frame plus this long after the terminal opens. */
+export const INITIAL_FIT_DELAY_MS = 50;
+
 // Context-menu hints. Copy/paste are Cmd+C/Cmd+V on macOS and Ctrl+Shift+C/V
 // elsewhere, because bare Ctrl+C must stay available to send SIGINT.
 const COPY_SHORTCUT_LABEL = IS_MAC ? 'Cmd+C' : 'Ctrl+Shift+C';
@@ -729,7 +733,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
 
     // Initial fit after layout settles
     requestAnimationFrame(() => {
-      setTimeout(() => handleResize(), 50);
+      setTimeout(() => handleResize(), INITIAL_FIT_DELAY_MS);
     });
 
     return () => {
