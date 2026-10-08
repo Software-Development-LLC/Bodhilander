@@ -693,6 +693,7 @@ export function createRouter(ctx: RelayContext) {
     });
     if (!put) {
       await removeHandoff(config.handoffDir, id);
+      logger.warn('handoff refused at insert: store full', { machineId, bytes: written.bytes });
       return json({ error: 'store_full' }, 507);
     }
     const { row, previousId } = put;
