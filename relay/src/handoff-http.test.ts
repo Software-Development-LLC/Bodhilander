@@ -407,6 +407,20 @@ describe('the disk the store sits on', () => {
     expect(fs.readdirSync(f.dir)).toHaveLength(1);
   });
 
+  test('two accounts uploading at once cannot both fit under a ceiling made for one', async () => {
+    const f = await fixture({ HANDOFF_STORE_MAX_BYTES: '200' });
+    const statuses = (
+      await Promise.all([
+        put(f, f.stranger, sealHandoff(Buffer.alloc(120)).bytes, { ip: '198.51.100.9' }),
+        put(f, f.oldMachine, sealHandoff(Buffer.alloc(120)).bytes),
+      ])
+    ).map((res) => res.status);
+
+    expect(statuses.sort()).toEqual([200, 507]);
+    expect(f.repos.totalHandoffBytes()).toBeLessThanOrEqual(200);
+    expect(fs.readdirSync(f.dir)).toHaveLength(1);
+  });
+
   test('does not count a user against themselves when they replace their own', async () => {
     const f = await fixture({ HANDOFF_STORE_MAX_BYTES: '200' });
     expect((await put(f, f.oldMachine, sealHandoff(Buffer.alloc(120)).bytes)).status).toBe(200);
