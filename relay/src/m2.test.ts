@@ -204,6 +204,36 @@ describe('router: /link + /link/claim (end to end)', () => {
 });
 
 // ---------------------------------------------------------------------------
+describe('router: dispatch', () => {
+  const { config } = loadConfig({ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'secret' });
+  const route = createRouter({ config, logger, repos: freshRepos() });
+  const status = async (method: string, path: string) =>
+    (await route(new Request(`http://relay.test${path}`, { method }))).status;
+
+  test('an exact route answers only its own method', async () => {
+    expect(await status('GET', '/health')).toBe(200);
+    expect(await status('POST', '/health')).toBe(404);
+    expect(await status('GET', '/link')).toBe(404);
+  });
+
+  test('a parameterised path with a method it does not serve is not found', async () => {
+    expect(await status('PUT', '/api/machines/m1/shares')).toBe(404);
+    expect(await status('DELETE', '/api/machines/m1/shares')).toBe(404);
+    expect(await status('POST', '/api/machines/m1/shares/i1')).toBe(404);
+    expect(await status('GET', '/api/shares/g1')).toBe(404);
+    expect(await status('POST', '/api/machines/m1/handoff')).toBe(404);
+    expect(await status('PUT', '/api/machines/m1/handoff/bundle')).toBe(404);
+    expect(await status('GET', '/api/machines/m1/handoff/other')).toBe(404);
+  });
+
+  test('each parameterised route reaches its handler', async () => {
+    expect(await status('GET', '/api/machines/m1/shares')).toBe(401);
+    expect(await status('DELETE', '/api/machines/m1/shares/i1')).toBe(401);
+    expect(await status('DELETE', '/api/shares/g1')).toBe(401);
+    expect(await status('GET', '/api/shares')).toBe(401);
+  });
+});
+
 describe('router: rate limiting', () => {
   const { config } = loadConfig({});
   const PEER = '198.51.100.4';

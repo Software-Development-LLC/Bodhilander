@@ -154,21 +154,36 @@ export function createRouter(ctx: RelayContext) {
     return json({ error: 'rate_limited' }, 429, { 'retry-after': String(result.retryAfter) });
   }
 
+  type RouteHandler = (req: Request, peerIp: string | null) => Response | Promise<Response>;
+
+  /** Routes matched on method and exact path, keyed `METHOD /path`. */
+  const exactRoutes = new Map<string, RouteHandler>([
+    ['GET /health', () => json({ ok: true, version, commit: config.commit, uptime: process.uptime() })],
+    ['GET /auth/github/login', handleLogin],
+    ['POST /auth/logout', handleLogout],
+    ['GET /api/me', handleMe],
+    ['GET /api/machines', handleListMachines],
+    ['POST /link', async (req, peerIp) => limited(req, peerIp, 'link', LINK_PER_IP) ?? (await handleLink(req))],
+    [
+      'POST /link/claim',
+      async (req, peerIp) => limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req)),
+    ],
+    ['GET /api/shares', handleListMyShares],
+    // Code-guessing surface, same as /link/claim.
+    [
+      'POST /api/shares/redeem',
+      async (req, peerIp) => limited(req, peerIp, 'redeem', CLAIM_PER_IP) ?? (await handleRedeem(req)),
+    ],
+  ]);
+
   return async function route(req: Request, peerIp: string | null = null): Promise<Response> {
     const url = new URL(req.url);
     const { pathname } = url;
     const method = req.method;
 
     try {
-      // A handoff sets Bun's body ceiling for the whole server, so only the
-      // route that wants it may exceed the JSON bound. This refuses a declared
-      // oversize before a byte is pulled; `readJson` bounds the rest.
-      const handoff = matchMachineHandoff(pathname);
-      const isHandoffUpload = method === 'PUT' && !!handoff && !handoff.bundle;
-      const declaredLength = Number(req.headers.get('content-length') ?? 0);
-      if (!isHandoffUpload && declaredLength > MAX_JSON_BODY_BYTES) {
-        return json({ error: 'payload_too_large' }, 413);
-      }
+      const refused = refuseOversizeBody(req, method, pathname);
+      if (refused) return refused;
 
       const webResponse = webRoute(req);
       if (webResponse) return webResponse;
@@ -178,104 +193,14 @@ export function createRouter(ctx: RelayContext) {
         if (devResponse) return devResponse;
       }
 
-      if (pathname === '/health' && method === 'GET') {
-        return json({ ok: true, version, commit: config.commit, uptime: process.uptime() });
-      }
-
-      if (pathname === '/auth/github/login' && method === 'GET') {
-        if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
-        const state = randomToken(16);
-        return new Response(null, {
-          status: 302,
-          headers: {
-            location: buildAuthorizeUrl(githubConfig, state, !!config.allowedGithubOrg),
-            'set-cookie': serializeCookie(OAUTH_STATE_COOKIE, state, { secure, maxAgeSeconds: 600 }),
-          },
-        });
-      }
-
       if (pathname === '/auth/github/callback' && method === 'GET') {
         return handleOAuthCallback(url, req);
       }
 
-      if (pathname === '/auth/logout' && method === 'POST') {
-        const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
-        if (token) repos.deleteSession(token);
-        return new Response(null, {
-          status: 204,
-          headers: { 'set-cookie': clearCookie(SESSION_COOKIE, secure) },
-        });
-      }
+      const exact = exactRoutes.get(`${method} ${pathname}`);
+      if (exact) return await exact(req, peerIp);
 
-      if (pathname === '/api/me' && method === 'GET') {
-        const user = currentUser(req);
-        if (!user) return json({ error: 'unauthorized' }, 401);
-        return json({ user: publicUser(user) });
-      }
-
-      if (pathname === '/api/machines' && method === 'GET') {
-        const user = currentUser(req);
-        if (!user) return json({ error: 'unauthorized' }, 401);
-        return json({ machines: machinesFor(user) });
-      }
-
-      if (pathname === '/link' && method === 'POST') {
-        return limited(req, peerIp, 'link', LINK_PER_IP) ?? (await handleLink(req));
-      }
-
-      if (pathname === '/link/claim' && method === 'POST') {
-        return limited(req, peerIp, 'claim', CLAIM_PER_IP) ?? (await handleClaim(req));
-      }
-
-      // --- sharing (M5.2) ---
-
-      const shares = matchMachineShares(pathname);
-      if (shares) {
-        if (method === 'POST' && !shares.inviteId) {
-          return limited(req, peerIp, 'share', SHARE_PER_IP) ?? (await handleCreateShare(req, shares.machineId));
-        }
-        if (method === 'GET' && !shares.inviteId) return handleListShares(req, shares.machineId);
-        if (method === 'DELETE' && shares.inviteId) {
-          return handleRevokeInvite(req, shares.machineId, shares.inviteId);
-        }
-      }
-
-      if (pathname === '/api/shares' && method === 'GET') {
-        return handleListMyShares(req);
-      }
-
-      if (pathname === '/api/shares/redeem' && method === 'POST') {
-        // Code-guessing surface, same as /link/claim.
-        return limited(req, peerIp, 'redeem', CLAIM_PER_IP) ?? (await handleRedeem(req));
-      }
-
-      const grantId = matchShareGrant(pathname);
-      if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
-
-      // --- machine handoff ---
-
-      if (handoff) {
-        if (method === 'PUT' && !handoff.bundle) {
-          return (
-            limited(req, peerIp, 'handoff-put', HANDOFF_UPLOAD_PER_IP) ??
-            (await handleHandoffPut(req, handoff.machineId))
-          );
-        }
-        if (method === 'GET') {
-          return (
-            limited(req, peerIp, 'handoff-read', HANDOFF_READ_PER_IP) ??
-            (await handleHandoffRead(req, handoff.machineId, handoff.bundle))
-          );
-        }
-        if (method === 'DELETE' && !handoff.bundle) {
-          return (
-            limited(req, peerIp, 'handoff-delete', HANDOFF_DELETE_PER_IP) ??
-            (await handleHandoffDelete(req, handoff.machineId))
-          );
-        }
-      }
-
-      return json({ error: 'not_found' }, 404);
+      return (await routeParameterised(req, method, pathname, peerIp)) ?? json({ error: 'not_found' }, 404);
     } catch (err) {
       if (err instanceof PayloadTooLarge) return json({ error: 'payload_too_large' }, 413);
       logger.error('unhandled http error', {
@@ -286,6 +211,118 @@ export function createRouter(ctx: RelayContext) {
       return json({ error: 'internal_error' }, 500);
     }
   };
+
+  /**
+   * A handoff sets Bun's body ceiling for the whole server, so only the route
+   * that wants it may exceed the JSON bound. This refuses a declared oversize
+   * before a byte is pulled; `readJson` bounds the rest.
+   */
+  function refuseOversizeBody(req: Request, method: string, pathname: string): Response | null {
+    const handoff = matchMachineHandoff(pathname);
+    const isHandoffUpload = method === 'PUT' && !!handoff && !handoff.bundle;
+    const declaredLength = Number(req.headers.get('content-length') ?? 0);
+    if (!isHandoffUpload && declaredLength > MAX_JSON_BODY_BYTES) {
+      return json({ error: 'payload_too_large' }, 413);
+    }
+    return null;
+  }
+
+  /** Routes whose path carries an id. Null when none of them matches. */
+  async function routeParameterised(
+    req: Request,
+    method: string,
+    pathname: string,
+    peerIp: string | null,
+  ): Promise<Response | null> {
+    const shares = matchMachineShares(pathname);
+    if (shares) {
+      const response = await routeMachineShares(req, method, shares, peerIp);
+      if (response) return response;
+    }
+
+    const grantId = matchShareGrant(pathname);
+    if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
+
+    const handoff = matchMachineHandoff(pathname);
+    if (handoff) return routeMachineHandoff(req, method, handoff, peerIp);
+    return null;
+  }
+
+  async function routeMachineShares(
+    req: Request,
+    method: string,
+    shares: { machineId: string; inviteId: string | null },
+    peerIp: string | null,
+  ): Promise<Response | null> {
+    if (method === 'POST' && !shares.inviteId) {
+      return limited(req, peerIp, 'share', SHARE_PER_IP) ?? (await handleCreateShare(req, shares.machineId));
+    }
+    if (method === 'GET' && !shares.inviteId) return handleListShares(req, shares.machineId);
+    if (method === 'DELETE' && shares.inviteId) {
+      return handleRevokeInvite(req, shares.machineId, shares.inviteId);
+    }
+    return null;
+  }
+
+  async function routeMachineHandoff(
+    req: Request,
+    method: string,
+    handoff: { machineId: string; bundle: boolean },
+    peerIp: string | null,
+  ): Promise<Response | null> {
+    if (method === 'PUT' && !handoff.bundle) {
+      return (
+        limited(req, peerIp, 'handoff-put', HANDOFF_UPLOAD_PER_IP) ??
+        (await handleHandoffPut(req, handoff.machineId))
+      );
+    }
+    if (method === 'GET') {
+      return (
+        limited(req, peerIp, 'handoff-read', HANDOFF_READ_PER_IP) ??
+        (await handleHandoffRead(req, handoff.machineId, handoff.bundle))
+      );
+    }
+    if (method === 'DELETE' && !handoff.bundle) {
+      return (
+        limited(req, peerIp, 'handoff-delete', HANDOFF_DELETE_PER_IP) ??
+        (await handleHandoffDelete(req, handoff.machineId))
+      );
+    }
+    return null;
+  }
+
+  function handleLogin(): Response {
+    if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);
+    const state = randomToken(16);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: buildAuthorizeUrl(githubConfig, state, !!config.allowedGithubOrg),
+        'set-cookie': serializeCookie(OAUTH_STATE_COOKIE, state, { secure, maxAgeSeconds: 600 }),
+      },
+    });
+  }
+
+  function handleLogout(req: Request): Response {
+    const token = parseCookies(req.headers.get('cookie'))[SESSION_COOKIE];
+    if (token) repos.deleteSession(token);
+    return new Response(null, {
+      status: 204,
+      headers: { 'set-cookie': clearCookie(SESSION_COOKIE, secure) },
+    });
+  }
+
+  function handleMe(req: Request): Response {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    return json({ user: publicUser(user) });
+  }
+
+  function handleListMachines(req: Request): Response {
+    const user = currentUser(req);
+    if (!user) return json({ error: 'unauthorized' }, 401);
+    return json({ machines: machinesFor(user) });
+  }
 
   async function handleOAuthCallback(url: URL, req: Request): Promise<Response> {
     if (!githubConfig) return json({ error: 'oauth_not_configured' }, 503);

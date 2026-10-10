@@ -141,24 +141,7 @@ export class RelayConnection {
 
     const payload = msg.payload as { type?: string; [k: string]: unknown };
 
-    // Unsealed handshake reply.
-    if (payload?.type === 'handshake') {
-      const edPub = String(payload.ed25519Pub);
-      const xPub = String(payload.agentX25519Pub);
-      const sig = String(payload.signature);
-      const sigOk = await verifyHandshakeProof(edPub, xPub, this.clientKeys!.pubB64, sig);
-      const identityOk = edPub === this.machineEd25519Pub; // pin to the machine we asked for
-      const fp = await fingerprint(edPub);
-      this.onFingerprint(fp, sigOk && identityOk);
-      if (!sigOk || !identityOk) {
-        this.onState('error', 'This machine failed identity verification. The connection may be tampered with.');
-        this.ws?.close();
-        return;
-      }
-      this.key = await deriveSessionKey(this.clientKeys!.priv, xPub);
-      this.onState('ready');
-      return;
-    }
+    if (payload?.type === 'handshake') return this.handleHandshake(payload);
 
     // An unsealed refusal, before any key exists. Only trusted to mean "you
     // did not get in" — never to explain why, since nothing has authenticated
@@ -167,44 +150,60 @@ export class RelayConnection {
       return this.onState('denied', 'not_authorized');
     }
 
-    // Sealed frame.
-    const frame = payload as unknown as SealedFrame;
+    return this.handleSealed(payload as unknown as SealedFrame);
+  }
+
+  /** The agent's unsealed handshake reply: verify its identity, then derive the session key. */
+  private async handleHandshake(payload: { [k: string]: unknown }): Promise<void> {
+    const edPub = String(payload.ed25519Pub);
+    const xPub = String(payload.agentX25519Pub);
+    const sig = String(payload.signature);
+    const sigOk = await verifyHandshakeProof(edPub, xPub, this.clientKeys!.pubB64, sig);
+    const identityOk = edPub === this.machineEd25519Pub; // pin to the machine we asked for
+    const fp = await fingerprint(edPub);
+    this.onFingerprint(fp, sigOk && identityOk);
+    if (!sigOk || !identityOk) {
+      this.onState('error', 'This machine failed identity verification. The connection may be tampered with.');
+      this.ws?.close();
+      return;
+    }
+    this.key = await deriveSessionKey(this.clientKeys!.priv, xPub);
+    this.onState('ready');
+  }
+
+  private async handleSealed(frame: SealedFrame): Promise<void> {
     if (!this.key || typeof frame?.n !== 'number' || frame.n <= this.recvCounter) return;
     try {
       const inner = await openJson<Inner>(this.key, frame);
       this.recvCounter = frame.n;
-      // A SEALED refusal is trustworthy: only the machine could have written
-      // it, so its reason can safely drive what the guest is told.
-      //
-      // But ONLY an access-ended reason ends the session. A refused single
-      // command is not an ended session, and treating every `denied` as
-      // terminal told people the owner had revoked them when they had merely
-      // sent one command their role does not allow. The reason is checked
-      // against the known ending set rather than trusted blindly, which also
-      // covers agents still sending the old shared frame type.
-      if (inner.type === 'command:denied') {
-        this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
-        return;
-      }
-      if (inner.type === 'denied') {
-        // A `denied` with NO reason ends the session. Failing the other way
-        // would swallow a genuine access-ended notice from any sender that
-        // omits the field — silence is the worse error here, because the
-        // guest would sit watching a channel that is already closed.
-        // A reason that is present but not an ending one is a command
-        // refusal, which is the legacy frame this fix exists for.
-        const reason = typeof inner.reason === 'string' ? inner.reason : null;
-        if (reason === null || isEndingReason(reason)) {
-          this.onState('denied', reason ?? 'revoked');
-        } else {
-          this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
-        }
-        return;
-      }
-      this.onMessage(inner);
+      this.dispatchSealed(inner);
     } catch {
       /* drop unauthenticatable frame */
     }
+  }
+
+  /**
+   * A SEALED refusal is trustworthy: only the machine could have written it.
+   * But only an access-ended reason ends the session; a refused single command
+   * does not, and a `denied` carrying any other reason is the legacy form of one.
+   */
+  private dispatchSealed(inner: Inner): void {
+    if (inner.type === 'command:denied') {
+      this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
+      return;
+    }
+    if (inner.type === 'denied') {
+      // NO reason ends the session: silence is the worse error, since the
+      // guest would sit watching a channel that is already closed.
+      const reason = typeof inner.reason === 'string' ? inner.reason : null;
+      if (reason === null || isEndingReason(reason)) {
+        this.onState('denied', reason ?? 'revoked');
+      } else {
+        this.onCommandDenied(typeof inner.command === 'string' ? inner.command : '');
+      }
+      return;
+    }
+    this.onMessage(inner);
   }
 
   /** Seal and send a command to the agent (terminal:*, sessions:list, etc.). */

@@ -98,11 +98,15 @@ describe('the account a gate launches under', () => {
     let launchedDir: string | null | undefined;
     const spawn = spawnGateFor(run('C:/h'), OWNER, {
       claudePath: 'claude', promptFileDir: 'C:/p', permissionsRoot: 'C:/perm', brokerPath: 'C:/b.js', gateTimeoutMs: 1000,
-    }, () => row, () => undefined, '/cfg/a', null, async (launch) => {
-      order.push('launch');
-      launchedDir = launch.context.configDir;
-      return { status: 'undriveable', reason: 'test', detail: '' } as never;
-    }, (gateId, dir) => order.push(`record ${gateId} ${dir}`));
+    }, () => row, {
+      accountConfigDir: '/cfg/a',
+      launch: async (launch) => {
+        order.push('launch');
+        launchedDir = launch.context.configDir;
+        return { status: 'undriveable', reason: 'test', detail: '' } as never;
+      },
+      recordConfigDir: (gateId, dir) => order.push(`record ${gateId} ${dir}`),
+    });
     await spawn(2, 'bodhilander-lead');
     expect(order).toEqual(['record g2 /cfg/a', 'launch']);
     expect(launchedDir).toBe('/cfg/a');
