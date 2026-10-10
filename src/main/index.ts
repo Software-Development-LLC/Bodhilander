@@ -50,7 +50,7 @@ import { candidateAccountForGroup, resolveAccountForGroup } from './account-reso
 import { credentialStoreFor } from './credential-store';
 import { saveHeldRotations } from './token-refresh';
 import { QUIT_CLEANUP_BUDGET_MS, runQuitCleanup } from './quit-cleanup';
-import { resolveWindowBounds, showWhenReady } from './window-bounds';
+import { restoreMainWindowBounds, watchMainWindowLoad } from './window-bounds';
 import { sinkLaunchFor } from './statusline-sink';
 import { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } from './session-routing';
 import { createUsageService, UsageService } from './usage-service';
@@ -558,19 +558,15 @@ function createWindow(): void {
     sweepFailbacks();
   });
 
-  // Restore saved window bounds or use defaults
-  const savedBounds = prefsRepo.getWindowBounds();
-  const { bounds, adjustment } = resolveWindowBounds(
-    savedBounds,
+  const placement = restoreMainWindowBounds(
+    prefsRepo,
     screen.getAllDisplays().map(display => display.workArea),
     screen.getPrimaryDisplay().workArea,
+    log,
   );
-  if (adjustment) {
-    log.info(`[Window] Saved bounds adjusted: ${adjustment}`);
-  }
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     icon: path.join(__dirname, '../../build/icon.png'),
-    ...bounds,
+    ...placement.bounds,
     show: false, // shown on 'ready-to-show' to avoid a blank-window flash
     webPreferences: {
       nodeIntegration: false,
@@ -581,21 +577,14 @@ function createWindow(): void {
 
   const win = new BrowserWindow(windowOptions);
   mainWindow = win;
+  watchMainWindowLoad(win, log);
 
-  // Maximize if it was maximized before
-  if (savedBounds?.isMaximized) {
-    mainWindow.maximize();
+  // maximize() shows the window, so it comes after the watcher that settles on 'show'.
+  if (placement.maximize) {
+    win.maximize();
   }
 
-  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    log.error(`[Window] Failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
-  });
-
-  mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-
-  showWhenReady(win, timeoutMs => {
-    log.warn(`[Window] 'ready-to-show' did not fire within ${timeoutMs}ms; showing the window anyway`);
-  });
+  win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   // Create custom application menu
   createApplicationMenu(mainWindow);

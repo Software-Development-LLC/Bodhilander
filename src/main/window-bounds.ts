@@ -12,6 +12,7 @@ export interface SavedBounds {
   y?: number;
   width?: number;
   height?: number;
+  isMaximized?: boolean;
 }
 
 export interface RestoredBounds {
@@ -47,11 +48,12 @@ function overlap(aStart: number, aLength: number, bStart: number, bLength: numbe
   return Math.max(0, Math.min(aStart + aLength, bStart + bLength) - Math.max(aStart, bStart));
 }
 
-function visibleTitleBar(x: number, y: number, width: number, area: Rect): { width: number; height: number } {
-  return {
-    width: overlap(x, width, area.x, area.width),
-    height: overlap(y, TITLE_BAR_HEIGHT, area.y, area.height),
-  };
+function isTitleBarReachable(x: number, y: number, width: number, displays: Rect[]): boolean {
+  const minWidth = Math.min(MIN_VISIBLE_TITLE_BAR_WIDTH, width);
+  return displays.some(area =>
+    overlap(x, width, area.x, area.width) >= minWidth &&
+    overlap(y, TITLE_BAR_HEIGHT, area.y, area.height) >= MIN_VISIBLE_TITLE_BAR_HEIGHT,
+  );
 }
 
 function clampSize(width: number, height: number, area: Rect): { width: number; height: number } {
@@ -59,69 +61,92 @@ function clampSize(width: number, height: number, area: Rect): { width: number; 
 }
 
 /**
- * Drops a saved position whose title bar no connected display shows enough of,
- * so Electron centers the window on the primary display, and clamps the size
- * to the display the window opens on.
+ * Keeps saved bounds whose title bar some connected display can reach, exactly
+ * as saved. Otherwise the window is centred on the primary display and its size
+ * clamped to fit there.
  */
 export function resolveWindowBounds(
   saved: SavedBounds | null | undefined,
   displays: Rect[],
   primary: Rect,
 ): BoundsResolution {
-  const savedWidth = isPositiveSize(saved?.width) ? saved.width : DEFAULT_WINDOW_SIZE.width;
-  const savedHeight = isPositiveSize(saved?.height) ? saved.height : DEFAULT_WINDOW_SIZE.height;
-  const hasPosition = isCoordinate(saved?.x) && isCoordinate(saved?.y);
+  const width = isPositiveSize(saved?.width) ? saved.width : DEFAULT_WINDOW_SIZE.width;
+  const height = isPositiveSize(saved?.height) ? saved.height : DEFAULT_WINDOW_SIZE.height;
+  const x = saved?.x;
+  const y = saved?.y;
 
-  if (!hasPosition) {
-    const size = clampSize(savedWidth, savedHeight, primary);
-    const clamped = size.width !== savedWidth || size.height !== savedHeight;
+  if (!isCoordinate(x) || !isCoordinate(y)) {
+    const size = clampSize(width, height, primary);
+    const clamped = size.width !== width || size.height !== height;
     return {
       bounds: size,
-      adjustment: clamped ? `size ${savedWidth}x${savedHeight} clamped to ${size.width}x${size.height}` : null,
+      adjustment: clamped ? `size ${width}x${height} clamped to ${size.width}x${size.height}` : null,
     };
   }
 
-  const x = saved!.x as number;
-  const y = saved!.y as number;
-  const minWidth = Math.min(MIN_VISIBLE_TITLE_BAR_WIDTH, savedWidth);
-  let target: Rect | null = null;
-  let bestVisible = 0;
-  for (const area of displays) {
-    const visible = visibleTitleBar(x, y, savedWidth, area);
-    if (visible.width < minWidth || visible.height < MIN_VISIBLE_TITLE_BAR_HEIGHT) continue;
-    if (visible.width * visible.height > bestVisible) {
-      bestVisible = visible.width * visible.height;
-      target = area;
+  if (isTitleBarReachable(x, y, width, displays)) {
+    return { bounds: { x, y, width, height }, adjustment: null };
+  }
+
+  const size = clampSize(width, height, primary);
+  const centred = {
+    x: primary.x + Math.round((primary.width - size.width) / 2),
+    y: primary.y + Math.round((primary.height - size.height) / 2),
+    ...size,
+  };
+  return {
+    bounds: centred,
+    adjustment:
+      `saved position (${x}, ${y}) is not on any connected display; ` +
+      `centred on the primary display at (${centred.x}, ${centred.y}) ${size.width}x${size.height}`,
+  };
+}
+
+export interface WindowBoundsStore {
+  getWindowBounds(): SavedBounds | null;
+  setWindowBounds(bounds: { x: number; y: number; width: number; height: number; isMaximized?: boolean }): void;
+}
+
+export interface WindowLogger {
+  info(message: string): void;
+  warn(message: string): void;
+  error(message: string): void;
+}
+
+export interface MainWindowPlacement {
+  bounds: RestoredBounds;
+  maximize: boolean;
+}
+
+/** Reads the saved bounds, resolves them, and writes back any adjustment so it is made once. */
+export function restoreMainWindowBounds(
+  store: WindowBoundsStore,
+  displays: Rect[],
+  primary: Rect,
+  log: WindowLogger,
+): MainWindowPlacement {
+  const saved = store.getWindowBounds();
+  const { bounds, adjustment } = resolveWindowBounds(saved, displays, primary);
+  if (adjustment) {
+    log.info(`[Window] Saved bounds adjusted: ${adjustment}`);
+    if (bounds.x !== undefined && bounds.y !== undefined) {
+      store.setWindowBounds({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        isMaximized: saved?.isMaximized ?? false,
+      });
     }
   }
-
-  if (!target) {
-    const size = clampSize(savedWidth, savedHeight, primary);
-    return {
-      bounds: size,
-      adjustment: `saved position (${x}, ${y}) is not on any connected display; centering on the primary display`,
-    };
-  }
-
-  const size = clampSize(savedWidth, savedHeight, target);
-  if (size.width === savedWidth && size.height === savedHeight) {
-    return { bounds: { x, y, width: savedWidth, height: savedHeight }, adjustment: null };
-  }
-
-  // A clamped window is pulled fully inside the display so its new edges land on-screen.
-  const fittedX = Math.min(Math.max(x, target.x), target.x + target.width - size.width);
-  const fittedY = Math.min(Math.max(y, target.y), target.y + target.height - size.height);
-  return {
-    bounds: { x: fittedX, y: fittedY, ...size },
-    adjustment: `size ${savedWidth}x${savedHeight} clamped to ${size.width}x${size.height} at (${fittedX}, ${fittedY})`,
-  };
+  return { bounds, maximize: saved?.isMaximized === true };
 }
 
 export interface ShowableWindow {
   isDestroyed(): boolean;
   isVisible(): boolean;
   show(): void;
-  once(event: 'ready-to-show' | 'closed', listener: () => void): unknown;
+  once(event: 'ready-to-show' | 'show' | 'closed', listener: () => void): unknown;
 }
 
 export const READY_TO_SHOW_FALLBACK_MS = 5000;
@@ -135,20 +160,47 @@ export function showWhenReady(
   onFallback: (timeoutMs: number) => void,
   timeoutMs: number = READY_TO_SHOW_FALLBACK_MS,
 ): void {
-  // Once either path has run, a later one must not re-show a window the user hid.
+  // Once the window has been shown by anything, neither path may show it again.
   let settled = false;
   const timer = setTimeout(() => {
+    if (settled || win.isDestroyed() || win.isVisible()) return;
     settled = true;
-    if (win.isDestroyed() || win.isVisible()) return;
     onFallback(timeoutMs);
     win.show();
   }, timeoutMs);
-
-  win.once('ready-to-show', () => {
-    clearTimeout(timer);
-    if (settled || win.isDestroyed()) return;
+  const settle = () => {
     settled = true;
+    clearTimeout(timer);
+  };
+
+  win.once('show', settle);
+  win.once('closed', settle);
+  win.once('ready-to-show', () => {
+    if (settled || win.isDestroyed()) return;
+    settle();
     win.show();
   });
-  win.once('closed', () => clearTimeout(timer));
+}
+
+export interface LoadableWindow extends ShowableWindow {
+  webContents: {
+    on(
+      event: 'did-fail-load',
+      listener: (event: unknown, errorCode: number, errorDescription: string, validatedURL: string) => void,
+    ): unknown;
+  };
+}
+
+/** Wires everything that reports on, or recovers from, the main window failing to appear. */
+export function watchMainWindowLoad(
+  win: LoadableWindow,
+  log: WindowLogger,
+  timeoutMs: number = READY_TO_SHOW_FALLBACK_MS,
+): void {
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    log.error(`[Window] Failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
+  });
+  showWhenReady(win, ms => {
+    log.warn(`[Window] 'ready-to-show' did not fire within ${ms}ms; showing the window anyway`);
+  }, timeoutMs);
 }
