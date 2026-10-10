@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -50,6 +50,7 @@ import { candidateAccountForGroup, resolveAccountForGroup } from './account-reso
 import { credentialStoreFor } from './credential-store';
 import { saveHeldRotations } from './token-refresh';
 import { QUIT_CLEANUP_BUDGET_MS, runQuitCleanup } from './quit-cleanup';
+import { restoreMainWindowBounds, watchMainWindowLoad } from './window-bounds';
 import { sinkLaunchFor } from './statusline-sink';
 import { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } from './session-routing';
 import { createUsageService, UsageService } from './usage-service';
@@ -557,12 +558,15 @@ function createWindow(): void {
     sweepFailbacks();
   });
 
-  // Restore saved window bounds or use defaults
-  const savedBounds = prefsRepo.getWindowBounds();
+  const placement = restoreMainWindowBounds(
+    prefsRepo,
+    screen.getAllDisplays().map(display => display.workArea),
+    screen.getPrimaryDisplay().workArea,
+    log,
+  );
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     icon: path.join(__dirname, '../../build/icon.png'),
-    width: savedBounds?.width || 1200,
-    height: savedBounds?.height || 800,
+    ...placement.bounds,
     show: false, // shown on 'ready-to-show' to avoid a blank-window flash
     webPreferences: {
       nodeIntegration: false,
@@ -571,23 +575,16 @@ function createWindow(): void {
     },
   };
 
-  if (savedBounds?.x !== undefined && savedBounds?.y !== undefined) {
-    windowOptions.x = savedBounds.x;
-    windowOptions.y = savedBounds.y;
+  const win = new BrowserWindow(windowOptions);
+  mainWindow = win;
+  watchMainWindowLoad(win, log);
+
+  // maximize() can show the window, so it comes after the watcher that settles on 'show'.
+  if (placement.maximize) {
+    win.maximize();
   }
 
-  mainWindow = new BrowserWindow(windowOptions);
-
-  // Maximize if it was maximized before
-  if (savedBounds?.isMaximized) {
-    mainWindow.maximize();
-  }
-
-  mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-  });
+  win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   // Create custom application menu
   createApplicationMenu(mainWindow);
