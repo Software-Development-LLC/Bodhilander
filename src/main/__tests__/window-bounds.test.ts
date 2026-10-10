@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { resolveWindowBounds, showWhenReady, DEFAULT_WINDOW_SIZE, Rect, ShowableWindow } from '../window-bounds';
+import { resolveWindowBounds, showWhenReady, DEFAULT_WINDOW_SIZE } from '../window-bounds';
+import type { Rect, ShowableWindow } from '../window-bounds';
 
 const PRIMARY: Rect = { x: 0, y: 25, width: 1440, height: 875 };
 const LEFT_EXTERNAL: Rect = { x: -1920, y: -200, width: 1920, height: 1080 };
@@ -69,6 +70,13 @@ describe('resolveWindowBounds', () => {
     expect(result.adjustment).toBeNull();
   });
 
+  test('opens on the display showing most of a title bar that straddles two displays', () => {
+    const right: Rect = { x: 1440, y: 25, width: 800, height: 600 };
+    const saved = { x: 1100, y: 100, width: 1000, height: 700 };
+    const result = resolveWindowBounds(saved, [PRIMARY, right], PRIMARY);
+    expect(result.bounds).toEqual({ x: 1440, y: 25, width: 800, height: 600 });
+  });
+
   test('uses the default size with no position when nothing was saved', () => {
     expect(resolveWindowBounds(null, [PRIMARY], PRIMARY)).toEqual({
       bounds: { ...DEFAULT_WINDOW_SIZE },
@@ -105,10 +113,10 @@ describe('showWhenReady', () => {
   test('shows on ready-to-show and never falls back afterwards', async () => {
     const win = new FakeWindow();
     const fallbacks: number[] = [];
-    showWhenReady(win, ms => fallbacks.push(ms), 20);
+    showWhenReady(win, ms => fallbacks.push(ms), 10);
     win.emit('ready-to-show');
     win.visible = false;
-    await wait(50);
+    await wait(200);
     expect(win.shows).toBe(1);
     expect(fallbacks).toEqual([]);
   });
@@ -116,18 +124,18 @@ describe('showWhenReady', () => {
   test('shows the window and reports it when ready-to-show never fires', async () => {
     const win = new FakeWindow();
     const fallbacks: number[] = [];
-    showWhenReady(win, ms => fallbacks.push(ms), 20);
-    await wait(50);
+    showWhenReady(win, ms => fallbacks.push(ms), 10);
+    await wait(200);
     expect(win.shows).toBe(1);
-    expect(fallbacks).toEqual([20]);
+    expect(fallbacks).toEqual([10]);
   });
 
   test('does not show a window that was destroyed before the timeout', async () => {
     const win = new FakeWindow();
     const fallbacks: number[] = [];
-    showWhenReady(win, ms => fallbacks.push(ms), 20);
+    showWhenReady(win, ms => fallbacks.push(ms), 10);
     win.destroyed = true;
-    await wait(50);
+    await wait(200);
     expect(win.shows).toBe(0);
     expect(fallbacks).toEqual([]);
   });
@@ -135,19 +143,28 @@ describe('showWhenReady', () => {
   test('does not show a window that was closed before the timeout', async () => {
     const win = new FakeWindow();
     const fallbacks: number[] = [];
-    showWhenReady(win, ms => fallbacks.push(ms), 20);
+    showWhenReady(win, ms => fallbacks.push(ms), 10);
     win.emit('closed');
-    await wait(50);
+    await wait(200);
     expect(win.shows).toBe(0);
     expect(fallbacks).toEqual([]);
+  });
+
+  test('does not re-show a window hidden after the fallback when ready-to-show arrives late', async () => {
+    const win = new FakeWindow();
+    showWhenReady(win, () => {}, 10);
+    await wait(200);
+    win.visible = false;
+    win.emit('ready-to-show');
+    expect(win.shows).toBe(1);
   });
 
   test('does not show again when something else already showed the window', async () => {
     const win = new FakeWindow();
     const fallbacks: number[] = [];
-    showWhenReady(win, ms => fallbacks.push(ms), 20);
+    showWhenReady(win, ms => fallbacks.push(ms), 10);
     win.show();
-    await wait(50);
+    await wait(200);
     expect(win.shows).toBe(1);
     expect(fallbacks).toEqual([]);
   });

@@ -59,10 +59,9 @@ function clampSize(width: number, height: number, area: Rect): { width: number; 
 }
 
 /**
- * Decide where the main window opens, given the bounds saved last session and
- * the work areas of the displays connected now. Position is dropped (so the
- * window centers on the primary display) when no display shows enough of its
- * title bar; size is clamped to the display it will open on.
+ * Drops a saved position whose title bar no connected display shows enough of,
+ * so Electron centers the window on the primary display, and clamps the size
+ * to the display the window opens on.
  */
 export function resolveWindowBounds(
   saved: SavedBounds | null | undefined,
@@ -136,7 +135,10 @@ export function showWhenReady(
   onFallback: (timeoutMs: number) => void,
   timeoutMs: number = READY_TO_SHOW_FALLBACK_MS,
 ): void {
+  // Once either path has run, a later one must not re-show a window the user hid.
+  let settled = false;
   const timer = setTimeout(() => {
+    settled = true;
     if (win.isDestroyed() || win.isVisible()) return;
     onFallback(timeoutMs);
     win.show();
@@ -144,7 +146,9 @@ export function showWhenReady(
 
   win.once('ready-to-show', () => {
     clearTimeout(timer);
-    if (!win.isDestroyed()) win.show();
+    if (settled || win.isDestroyed()) return;
+    settled = true;
+    win.show();
   });
   win.once('closed', () => clearTimeout(timer));
 }
