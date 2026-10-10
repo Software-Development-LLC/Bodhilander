@@ -772,7 +772,8 @@ describe('share:* messages (M5.2)', () => {
       const { grantId } = await shared(server.port!, db, repos, b);
       const agentA = await onlineAgent(server.port!, a.pub, a.sign, ['grants:v1']);
       agentA.ws.send(JSON.stringify({ type: 'share:deny', grantId, reason: 'declined' }));
-      await Bun.sleep(30);
+      agentA.ws.send(JSON.stringify({ type: 'ping' }));
+      await agentA.nextOfType('pong');
       expect(repos.getGrant(grantId)!.status).toBe('pending');
     } finally {
       db.close();

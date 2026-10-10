@@ -226,17 +226,18 @@ export function createGateway(ctx: WsGatewayContext) {
         : null,
     });
     // Close the split-brain on every reconnect: the relay holds certificates
-    // and routes, the desktop holds the session lists and revocation status,
-    // so a relay volume loss or a desktop reinstall leaves the two disagreeing.
+    // and routes, the desktop holds the session lists and revocation status.
+    // Without this a relay volume loss leaves ghosts in the owner's settings,
+    // and a desktop reinstall leaves guests connecting to a DENY_ALL with no
+    // explanation.
     sendShareSync(ws, machine.id);
     logger.info('agent online', { machineId: machine.id });
   }
 
   /**
-   * One live socket per machine. Publish the new socket BEFORE closing the
-   * old one: the close handler only touches `agents` when the map still points
-   * at the socket that closed, so it can't delete the live entry or announce a
-   * spurious `agent:offline` to clients.
+   * One live socket per machine, published BEFORE the old one closes: the close
+   * handler only touches `agents` while the map still points at the closing
+   * socket, so it can't delete the live entry or announce a spurious offline.
    */
   function publishAgent(ws: ServerWebSocket<SocketData>, machineId: string): void {
     const previous = agents.get(machineId);

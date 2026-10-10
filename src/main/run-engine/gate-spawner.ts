@@ -138,16 +138,6 @@ export function targetFor(
   };
 }
 
-/**
- * The `spawnGate` dependency for one run.
- *
- * `activeGate` is a dependency rather than an import so the refusal below is
- * assertable: the row for this role's turn was opened by the driver before
- * this is called, and it is the one thing that knows the attempt number --
- * and therefore the channel key a person will look up. Its absence is a
- * broken invariant, and a broken invariant that quietly defaulted would hand
- * this role a channel another turn already used.
- */
 export interface SpawnGateOptions {
   log?: (line: string) => void;
   /** The run's managed account config dir, resolved by the wiring; null = ambient. */
@@ -160,6 +150,16 @@ export interface SpawnGateOptions {
   recordConfigDir?: (gateId: string, configDir: string | null) => void;
 }
 
+/**
+ * The `spawnGate` dependency for one run.
+ *
+ * `activeGate` is a dependency rather than an import so the refusal below is
+ * assertable: the row for this role's turn was opened by the driver before
+ * this is called, and it is the one thing that knows the attempt number --
+ * and therefore the channel key a person will look up. Its absence is a
+ * broken invariant, and a broken invariant that quietly defaulted would hand
+ * this role a channel another turn already used.
+ */
 export function spawnGateFor(
   run: RunRow,
   owner: RunOwnerRow,

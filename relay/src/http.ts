@@ -182,7 +182,8 @@ export function createRouter(ctx: RelayContext) {
     const method = req.method;
 
     try {
-      const refused = refuseOversizeBody(req, method, pathname);
+      const handoff = matchMachineHandoff(pathname);
+      const refused = refuseOversizeBody(req, method, handoff);
       if (refused) return refused;
 
       const webResponse = webRoute(req);
@@ -200,7 +201,8 @@ export function createRouter(ctx: RelayContext) {
       const exact = exactRoutes.get(`${method} ${pathname}`);
       if (exact) return await exact(req, peerIp);
 
-      return (await routeParameterised(req, method, pathname, peerIp)) ?? json({ error: 'not_found' }, 404);
+      const routed = await routeParameterised(req, method, pathname, handoff, peerIp);
+      return routed ?? json({ error: 'not_found' }, 404);
     } catch (err) {
       if (err instanceof PayloadTooLarge) return json({ error: 'payload_too_large' }, 413);
       logger.error('unhandled http error', {
@@ -217,8 +219,7 @@ export function createRouter(ctx: RelayContext) {
    * that wants it may exceed the JSON bound. This refuses a declared oversize
    * before a byte is pulled; `readJson` bounds the rest.
    */
-  function refuseOversizeBody(req: Request, method: string, pathname: string): Response | null {
-    const handoff = matchMachineHandoff(pathname);
+  function refuseOversizeBody(req: Request, method: string, handoff: MachineHandoffPath | null): Response | null {
     const isHandoffUpload = method === 'PUT' && !!handoff && !handoff.bundle;
     const declaredLength = Number(req.headers.get('content-length') ?? 0);
     if (!isHandoffUpload && declaredLength > MAX_JSON_BODY_BYTES) {
@@ -232,6 +233,7 @@ export function createRouter(ctx: RelayContext) {
     req: Request,
     method: string,
     pathname: string,
+    handoff: MachineHandoffPath | null,
     peerIp: string | null,
   ): Promise<Response | null> {
     const shares = matchMachineShares(pathname);
@@ -243,7 +245,6 @@ export function createRouter(ctx: RelayContext) {
     const grantId = matchShareGrant(pathname);
     if (grantId && method === 'DELETE') return handleRevokeGrant(req, grantId);
 
-    const handoff = matchMachineHandoff(pathname);
     if (handoff) return routeMachineHandoff(req, method, handoff, peerIp);
     return null;
   }
@@ -267,7 +268,7 @@ export function createRouter(ctx: RelayContext) {
   async function routeMachineHandoff(
     req: Request,
     method: string,
-    handoff: { machineId: string; bundle: boolean },
+    handoff: MachineHandoffPath,
     peerIp: string | null,
   ): Promise<Response | null> {
     if (method === 'PUT' && !handoff.bundle) {
@@ -796,8 +797,13 @@ function matchMachineShares(pathname: string): { machineId: string; inviteId: st
   return { machineId: parts[2]!, inviteId: parts[4] ?? null };
 }
 
+interface MachineHandoffPath {
+  machineId: string;
+  bundle: boolean;
+}
+
 /** `/api/machines/:machineId/handoff[/bundle]` */
-function matchMachineHandoff(pathname: string): { machineId: string; bundle: boolean } | null {
+function matchMachineHandoff(pathname: string): MachineHandoffPath | null {
   const parts = pathname.split('/').filter(Boolean);
   if (parts.length < 4 || parts[0] !== 'api' || parts[1] !== 'machines' || parts[3] !== 'handoff') return null;
   if (parts.length > 5) return null;
