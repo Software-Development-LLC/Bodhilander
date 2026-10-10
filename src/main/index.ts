@@ -579,7 +579,7 @@ function createWindow(): void {
   mainWindow = win;
   watchMainWindowLoad(win, log);
 
-  // maximize() shows the window, so it comes after the watcher that settles on 'show'.
+  // maximize() can show the window, so it comes after the watcher that settles on 'show'.
   if (placement.maximize) {
     win.maximize();
   }

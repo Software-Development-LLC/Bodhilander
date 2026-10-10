@@ -130,13 +130,17 @@ export function restoreMainWindowBounds(
   if (adjustment) {
     log.info(`[Window] Saved bounds adjusted: ${adjustment}`);
     if (bounds.x !== undefined && bounds.y !== undefined) {
-      store.setWindowBounds({
-        x: bounds.x,
-        y: bounds.y,
-        width: bounds.width,
-        height: bounds.height,
-        isMaximized: saved?.isMaximized ?? false,
-      });
+      try {
+        store.setWindowBounds({
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+          isMaximized: saved?.isMaximized ?? false,
+        });
+      } catch (error) {
+        log.warn(`[Window] Could not save adjusted bounds: ${String(error)}`);
+      }
     }
   }
   return { bounds, maximize: saved?.isMaximized === true };
@@ -186,7 +190,13 @@ export interface LoadableWindow extends ShowableWindow {
   webContents: {
     on(
       event: 'did-fail-load',
-      listener: (event: unknown, errorCode: number, errorDescription: string, validatedURL: string) => void,
+      listener: (
+        event: unknown,
+        errorCode: number,
+        errorDescription: string,
+        validatedURL: string,
+        isMainFrame: boolean,
+      ) => void,
     ): unknown;
   };
 }
@@ -197,8 +207,11 @@ export function watchMainWindowLoad(
   log: WindowLogger,
   timeoutMs: number = READY_TO_SHOW_FALLBACK_MS,
 ): void {
-  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    log.error(`[Window] Failed to load ${validatedURL}: ${errorCode} ${errorDescription}`);
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    const message = `[Window] Failed to load ${validatedURL}: ${errorCode} ${errorDescription}`;
+    // -3 is ERR_ABORTED: one navigation replaced another, not a failure to load.
+    if (isMainFrame && errorCode !== -3) log.error(message);
+    else log.warn(message);
   });
   showWhenReady(win, ms => {
     log.warn(`[Window] 'ready-to-show' did not fire within ${ms}ms; showing the window anyway`);

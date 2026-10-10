@@ -163,6 +163,14 @@ describe('restoreMainWindowBounds', () => {
     expect(log.lines).toEqual([]);
   });
 
+  test('still places the window when saving the adjustment fails', () => {
+    const store = new MemoryStore({ x: 4000, y: 100, width: 1200, height: 700 });
+    store.setWindowBounds = () => { throw new Error('database is locked'); };
+    const log = new MemoryLog();
+    expect(restoreMainWindowBounds(store, [PRIMARY], PRIMARY, log).bounds).toEqual(centredOnPrimary(1200, 700));
+    expect(log.lines[1]).toBe('warn [Window] Could not save adjusted bounds: Error: database is locked');
+  });
+
   test('writes nothing when there is no position to persist', () => {
     const store = new MemoryStore({ width: 3000, height: 2000 } as SavedBounds);
     const log = new MemoryLog();
@@ -181,7 +189,13 @@ describe('restoreMainWindowBounds', () => {
   });
 });
 
-type FailLoadListener = (event: unknown, errorCode: number, errorDescription: string, validatedURL: string) => void;
+type FailLoadListener = (
+  event: unknown,
+  errorCode: number,
+  errorDescription: string,
+  validatedURL: string,
+  isMainFrame: boolean,
+) => void;
 
 class FakeWindow implements LoadableWindow {
   destroyed = false;
@@ -279,9 +293,19 @@ describe('watchMainWindowLoad', () => {
     const win = new FakeWindow();
     const log = new MemoryLog();
     watchMainWindowLoad(win, log, 10);
-    win.failLoad?.({}, -6, 'ERR_FILE_NOT_FOUND', 'file:///app/renderer/index.html');
+    win.failLoad?.({}, -6, 'ERR_FILE_NOT_FOUND', 'file:///app/renderer/index.html', true);
     win.emit('closed');
     expect(log.lines).toEqual(['error [Window] Failed to load file:///app/renderer/index.html: -6 ERR_FILE_NOT_FOUND']);
+  });
+
+  test('logs an aborted navigation or a subframe failure as a warning', () => {
+    const win = new FakeWindow();
+    const log = new MemoryLog();
+    watchMainWindowLoad(win, log, 10);
+    win.failLoad?.({}, -3, 'ERR_ABORTED', 'file:///app/renderer/index.html', true);
+    win.failLoad?.({}, -6, 'ERR_FILE_NOT_FOUND', 'https://example.test/frame', false);
+    win.emit('closed');
+    expect(log.lines.map(line => line.split(' ')[0])).toEqual(['warn', 'warn']);
   });
 
   test('warns when it had to show the window without ready-to-show', async () => {
