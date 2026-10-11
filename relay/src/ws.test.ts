@@ -190,6 +190,20 @@ describe('agent WebSocket handshake', () => {
     }
   });
 
+  test('a first message other than agent:auth is closed with 4401', async () => {
+    const repos = freshRepos();
+    const server = startServer(repos);
+    try {
+      const c = connect(`ws://127.0.0.1:${server.port}/ws`);
+      await c.opened;
+      await c.next(); // challenge
+      c.ws.send(JSON.stringify({ type: 'ping' }));
+      expect(await c.closed).toEqual({ code: 4401, reason: 'auth required' });
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test('a bad signature is closed with 4401', async () => {
     const repos = freshRepos();
     const { pub } = await registerMachine(repos);
@@ -491,6 +505,54 @@ describe('client ↔ agent brokering (M3)', () => {
     }
   });
 
+  test('client:kick closes only a client bound to the kicking agent, with its reason', async () => {
+    const repos = freshRepos();
+    const a = await registerMachine(repos, 'user-a');
+    const b = await registerMachine(repos, 'user-b');
+    const server = startServer(repos);
+    try {
+      const agentA = await onlineAgent(server.port!, a.pub, a.sign);
+      const agentB = await onlineAgent(server.port!, b.pub, b.sign);
+      const { token } = repos.createSession(b.userId, 3600);
+      const clientB = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await clientB.opened;
+      clientB.ws.send(JSON.stringify({ type: 'client:open', machineId: b.machineId }));
+      const clientId = (await agentB.nextOfType('client:open')).clientId;
+      await clientB.nextOfType('channel:open');
+
+      agentA.ws.send(JSON.stringify({ type: 'client:kick', clientId, reason: 'hijack' }));
+      agentB.ws.send(JSON.stringify({ type: 'client:kick', clientId, reason: 'paused' }));
+      expect(await clientB.closed).toEqual({ code: 4403, reason: 'paused' });
+
+      agentA.ws.close();
+      agentB.ws.close();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test('client:kick without a reason closes with "ended"', async () => {
+    const repos = freshRepos();
+    const { pub, sign, machineId, userId } = await registerMachine(repos);
+    const server = startServer(repos);
+    try {
+      const agent = await onlineAgent(server.port!, pub, sign);
+      const { token } = repos.createSession(userId, 3600);
+      const client = connect(`ws://127.0.0.1:${server.port}/ws/client`, { cookie: `bdl_session=${token}` });
+      await client.opened;
+      client.ws.send(JSON.stringify({ type: 'client:open', machineId }));
+      const clientId = (await agent.nextOfType('client:open')).clientId;
+      await client.nextOfType('channel:open');
+
+      agent.ws.send(JSON.stringify({ type: 'client:kick', clientId }));
+      expect(await client.closed).toEqual({ code: 4403, reason: 'ended' });
+
+      agent.ws.close();
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test('a second client:open on the same socket is refused (4400)', async () => {
     const repos = freshRepos();
     const { pub, sign, machineId, userId } = await registerMachine(repos);
@@ -695,6 +757,24 @@ describe('share:* messages (M5.2)', () => {
       agent.ws.send(JSON.stringify({ type: 'share:deny', grantId, reason: 'declined' }));
       await Bun.sleep(30);
       expect(repos.getGrant(grantId)!.status).toBe('revoked');
+    } finally {
+      db.close();
+      server.stop(true);
+    }
+  });
+
+  test('an agent cannot deny a grant belonging to another machine', async () => {
+    const { db, repos } = freshReposWithDb();
+    const a = await registerMachine(repos, 'user-a');
+    const b = await registerMachine(repos, 'user-b');
+    const server = startServer(repos);
+    try {
+      const { grantId } = await shared(server.port!, db, repos, b);
+      const agentA = await onlineAgent(server.port!, a.pub, a.sign, ['grants:v1']);
+      agentA.ws.send(JSON.stringify({ type: 'share:deny', grantId, reason: 'declined' }));
+      agentA.ws.send(JSON.stringify({ type: 'ping' }));
+      await agentA.nextOfType('pong');
+      expect(repos.getGrant(grantId)!.status).toBe('pending');
     } finally {
       db.close();
       server.stop(true);

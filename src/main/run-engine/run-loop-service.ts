@@ -428,7 +428,13 @@ async function executorFor(config: SpawnConfig, ghPath: string, run: RunRow, own
   const roles = await agentsForOwner(run, owner);
   const target = targetFor(run, owner, roles.agents, machine.approvers());
   const commands = processDeps({ ghPath, pythonPath: run.pythonPath ?? 'python' });
-  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, (line) => log.info(`[RunLoop] ${line}`), accountConfigDirFor(run), await repoContextFor(owner), resilientLaunch, runsRepo.setGateConfigDir);
+  const spawnGate = spawnGateFor(run, owner, config, runsRepo.activeGate, {
+    log: (line) => log.info(`[RunLoop] ${line}`),
+    accountConfigDir: accountConfigDirFor(run),
+    repoContext: await repoContextFor(owner),
+    launch: resilientLaunch,
+    recordConfigDir: runsRepo.setGateConfigDir,
+  });
   return {
     target,
     deps: {

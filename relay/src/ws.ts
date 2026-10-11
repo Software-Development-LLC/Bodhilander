@@ -156,68 +156,7 @@ export function createGateway(ctx: WsGatewayContext) {
   }
 
   async function handleAgent(ws: ServerWebSocket<SocketData>, data: AgentSocketData, msg: Record<string, unknown>) {
-    if (!data.authed) {
-      if (msg.type !== 'agent:auth' || typeof msg.ed25519Pub !== 'string' || typeof msg.signature !== 'string') {
-        ws.close(4401, 'auth required');
-        return;
-      }
-      const edBytes = fromBase64(msg.ed25519Pub);
-      const sigBytes = fromBase64(msg.signature);
-      if (!edBytes || !sigBytes) {
-        ws.close(4400, 'malformed auth');
-        return;
-      }
-      if (!(await verifyEd25519(edBytes, sigBytes, buildAgentAuthMessage(data.nonce)))) {
-        ws.close(4401, 'bad signature');
-        return;
-      }
-      const machine = repos.findMachineByEd25519(edBytes);
-      if (!machine) {
-        ws.close(4404, 'unknown machine');
-        return;
-      }
-      data.authed = true;
-      data.machineId = machine.id;
-      // Advertised capabilities. Only strings, and only after the signature
-      // has proven who is speaking — an unauthenticated socket must not be
-      // able to claim `grants:v1` for a machine it does not control.
-      data.caps = Array.isArray(msg.caps) ? msg.caps.filter((c): c is string => typeof c === 'string') : [];
-      if (data.authTimer) {
-        clearTimeout(data.authTimer);
-        data.authTimer = null;
-      }
-      // One live socket per machine. Publish the new socket BEFORE closing the
-      // old one: the close handler only touches `agents` when the map still
-      // points at the socket that closed, so this ordering guarantees it can't
-      // delete the live entry or announce a spurious `agent:offline` to clients.
-      const previous = agents.get(machine.id);
-      agents.set(machine.id, ws);
-      if (previous && previous !== ws) {
-        logger.info('replacing an existing agent socket', { machineId: machine.id });
-        previous.close(4409, 'replaced by a newer connection');
-      }
-      repos.touchMachine(machine.id);
-      // Who the relay says owns this machine. The desktop cannot learn its own
-      // relay user id from anywhere else, and this is an ASSERTION, not proof:
-      // a human confirms it once (design §3), because minting owner capability
-      // for whatever id an untrusted party named would hand the relay the keys.
-      const owner = repos.getUser(machine.user_id);
-      send(ws, {
-        type: 'agent:ready',
-        machineId: machine.id,
-        owner: owner
-          ? { userId: owner.id, displayName: owner.display_name, email: owner.primary_email }
-          : null,
-      });
-      // Close the split-brain on every reconnect: the relay holds certificates
-      // and routes, the desktop holds the session lists and revocation status.
-      // Without this a relay volume loss leaves ghosts in the owner's settings,
-      // and a desktop reinstall leaves guests connecting to a DENY_ALL with no
-      // explanation.
-      sendShareSync(ws, machine.id);
-      logger.info('agent online', { machineId: machine.id });
-      return;
-    }
+    if (!data.authed) return authenticateAgent(ws, data, msg);
 
     // Authenticated agent.
     if (msg.type === 'ping') {
@@ -229,62 +168,157 @@ export function createGateway(ctx: WsGatewayContext) {
     // to THIS agent's machine — without that check an agent could name any
     // client id in the table and inject frames into someone else's channel.
     if (msg.type === 'to-client' && typeof msg.clientId === 'string') {
-      const client = clients.get(msg.clientId);
-      if (client && (client.data as ClientSocketData).machineId === data.machineId) {
-        send(client, { type: 'from-agent', payload: msg.payload });
-      }
+      const client = clientOfMachine(msg.clientId, data.machineId);
+      if (client) send(client, { type: 'from-agent', payload: msg.payload });
       return;
     }
 
     if (!data.machineId) return;
+    handleAgentShareMessage(data.machineId, msg);
+  }
 
-    // The owner approved: attach the countersigned certificate. Scoped to this
-    // agent's own machine, so an agent cannot bind a grant on someone else's.
+  async function authenticateAgent(
+    ws: ServerWebSocket<SocketData>,
+    data: AgentSocketData,
+    msg: Record<string, unknown>,
+  ): Promise<void> {
+    if (msg.type !== 'agent:auth' || typeof msg.ed25519Pub !== 'string' || typeof msg.signature !== 'string') {
+      ws.close(4401, 'auth required');
+      return;
+    }
+    const edBytes = fromBase64(msg.ed25519Pub);
+    const sigBytes = fromBase64(msg.signature);
+    if (!edBytes || !sigBytes) {
+      ws.close(4400, 'malformed auth');
+      return;
+    }
+    if (!(await verifyEd25519(edBytes, sigBytes, buildAgentAuthMessage(data.nonce)))) {
+      ws.close(4401, 'bad signature');
+      return;
+    }
+    const machine = repos.findMachineByEd25519(edBytes);
+    if (!machine) {
+      ws.close(4404, 'unknown machine');
+      return;
+    }
+    data.authed = true;
+    data.machineId = machine.id;
+    // Advertised capabilities. Only strings, and only after the signature
+    // has proven who is speaking — an unauthenticated socket must not be
+    // able to claim `grants:v1` for a machine it does not control.
+    data.caps = Array.isArray(msg.caps) ? msg.caps.filter((c): c is string => typeof c === 'string') : [];
+    if (data.authTimer) {
+      clearTimeout(data.authTimer);
+      data.authTimer = null;
+    }
+    publishAgent(ws, machine.id);
+    repos.touchMachine(machine.id);
+    // Who the relay says owns this machine. The desktop cannot learn its own
+    // relay user id from anywhere else, and this is an ASSERTION, not proof:
+    // a human confirms it once (design §3), because minting owner capability
+    // for whatever id an untrusted party named would hand the relay the keys.
+    const owner = repos.getUser(machine.user_id);
+    send(ws, {
+      type: 'agent:ready',
+      machineId: machine.id,
+      owner: owner
+        ? { userId: owner.id, displayName: owner.display_name, email: owner.primary_email }
+        : null,
+    });
+    // Close the split-brain on every reconnect: the relay holds certificates
+    // and routes, the desktop holds the session lists and revocation status.
+    // Without this a relay volume loss leaves ghosts in the owner's settings,
+    // and a desktop reinstall leaves guests connecting to a DENY_ALL with no
+    // explanation.
+    sendShareSync(ws, machine.id);
+    logger.info('agent online', { machineId: machine.id });
+  }
+
+  /**
+   * One live socket per machine, published BEFORE the old one closes: the close
+   * handler only touches `agents` while the map still points at the closing
+   * socket, so it can't delete the live entry or announce a spurious offline.
+   */
+  function publishAgent(ws: ServerWebSocket<SocketData>, machineId: string): void {
+    const previous = agents.get(machineId);
+    agents.set(machineId, ws);
+    if (previous && previous !== ws) {
+      logger.info('replacing an existing agent socket', { machineId });
+      previous.close(4409, 'replaced by a newer connection');
+    }
+  }
+
+  /** The client socket `clientId`, only if it is bound to `machineId`. */
+  function clientOfMachine(clientId: string, machineId: string | null): ServerWebSocket<SocketData> | null {
+    const client = clients.get(clientId);
+    if (client && (client.data as ClientSocketData).machineId === machineId) return client;
+    return null;
+  }
+
+  /** The grant `grantId`, only if it is on `machineId`. */
+  function grantOfMachine(grantId: string, machineId: string): MachineGrant | null {
+    const grant = repos.getGrant(grantId);
+    if (!grant || grant.machine_id !== machineId) return null;
+    return grant;
+  }
+
+  function handleAgentShareMessage(machineId: string, msg: Record<string, unknown>): void {
     if (msg.type === 'share:bind' && typeof msg.grantId === 'string' && typeof msg.certificate === 'string') {
-      const grant = repos.getGrant(msg.grantId);
-      if (!grant || grant.machine_id !== data.machineId) return;
-      const expiresAt = typeof msg.expiresAt === 'number' ? msg.expiresAt : 0;
-      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return;
-      if (repos.bindGrantCertificate(msg.grantId, msg.certificate, expiresAt)) {
-        logger.info('grant bound', { machineId: data.machineId, grantId: msg.grantId });
-      }
+      bindGrant(machineId, msg.grantId, msg.certificate, msg.expiresAt);
       return;
     }
-
-    // The owner said no, or the machine cannot honour it.
     if (msg.type === 'share:deny' && typeof msg.grantId === 'string') {
-      const grant = repos.getGrant(msg.grantId);
-      if (!grant || grant.machine_id !== data.machineId) return;
-      repos.revokeGrant(msg.grantId);
-      kickGrant(msg.grantId, typeof msg.reason === 'string' ? msg.reason : 'denied');
-      logger.info('grant denied', { machineId: data.machineId, grantId: msg.grantId });
+      denyGrant(machineId, msg.grantId, msg.reason);
       return;
     }
-
-    // The desktop is the authority on revocation, so its list wins. Anything
-    // the relay still holds for this machine that the agent does not name is a
-    // ghost — from a relay restore, or a revocation queued while offline.
     if (msg.type === 'share:reconcile' && Array.isArray(msg.activeGrantIds)) {
-      const live = new Set(msg.activeGrantIds.filter((id): id is string => typeof id === 'string'));
-      let dropped = 0;
-      for (const grant of repos.listGrantsForMachine(data.machineId)) {
-        if (live.has(grant.id)) continue;
-        repos.revokeGrant(grant.id);
-        kickGrant(grant.id, 'revoked');
-        dropped += 1;
-      }
-      if (dropped > 0) logger.info('reconciled away stale grants', { machineId: data.machineId, dropped });
+      reconcileGrants(machineId, msg.activeGrantIds);
       return;
     }
-
     // Cut one live client without revoking its grant — used for pause and for
     // ending a session the guest was watching.
     if (msg.type === 'client:kick' && typeof msg.clientId === 'string') {
-      const client = clients.get(msg.clientId);
-      if (client && (client.data as ClientSocketData).machineId === data.machineId) {
-        client.close(4403, typeof msg.reason === 'string' ? msg.reason : 'ended');
-      }
+      const client = clientOfMachine(msg.clientId, machineId);
+      if (client) client.close(4403, typeof msg.reason === 'string' ? msg.reason : 'ended');
     }
+  }
+
+  /**
+   * The owner approved: attach the countersigned certificate. Scoped to this
+   * agent's own machine, so an agent cannot bind a grant on someone else's.
+   */
+  function bindGrant(machineId: string, grantId: string, certificate: string, rawExpiresAt: unknown): void {
+    if (!grantOfMachine(grantId, machineId)) return;
+    const expiresAt = typeof rawExpiresAt === 'number' ? rawExpiresAt : 0;
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return;
+    if (repos.bindGrantCertificate(grantId, certificate, expiresAt)) {
+      logger.info('grant bound', { machineId, grantId });
+    }
+  }
+
+  /** The owner said no, or the machine cannot honour it. */
+  function denyGrant(machineId: string, grantId: string, reason: unknown): void {
+    if (!grantOfMachine(grantId, machineId)) return;
+    repos.revokeGrant(grantId);
+    kickGrant(grantId, typeof reason === 'string' ? reason : 'denied');
+    logger.info('grant denied', { machineId, grantId });
+  }
+
+  /**
+   * The desktop is the authority on revocation, so its list wins. Anything
+   * the relay still holds for this machine that the agent does not name is a
+   * ghost — from a relay restore, or a revocation queued while offline.
+   */
+  function reconcileGrants(machineId: string, activeGrantIds: unknown[]): void {
+    const live = new Set(activeGrantIds.filter((id): id is string => typeof id === 'string'));
+    let dropped = 0;
+    for (const grant of repos.listGrantsForMachine(machineId)) {
+      if (live.has(grant.id)) continue;
+      repos.revokeGrant(grant.id);
+      kickGrant(grant.id, 'revoked');
+      dropped += 1;
+    }
+    if (dropped > 0) logger.info('reconciled away stale grants', { machineId, dropped });
   }
 
   /** Tell an agent about every grant the relay currently holds for its machine. */
