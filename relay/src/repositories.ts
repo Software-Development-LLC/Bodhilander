@@ -426,7 +426,7 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
         code_hash: sha256Hex(code),
         // Stored lowercased so the case-insensitive comparison at redemption
         // is a plain equality check rather than a per-row COLLATE.
-        expected_github_login: input.expectedGithubLogin?.trim().toLowerCase() || null,
+        expected_github_login: normalizeExpectedLogin(input.expectedGithubLogin),
         role: input.role,
         label: input.label,
         grant_ttl_seconds: input.grantTtlSeconds,
@@ -674,6 +674,13 @@ export function createRepositories(db: RelayDb, now: () => number = Date.now): R
       return (db.query('SELECT id FROM handoff_bundles').all() as { id: string }[]).map((row) => row.id);
     },
   };
+}
+
+/** A blank login addresses nobody, so it is stored as no address at all. */
+function normalizeExpectedLogin(login: string | null | undefined): string | null {
+  const normalized = login?.trim().toLowerCase();
+  if (!normalized) return null;
+  return normalized;
 }
 
 /** bun:sqlite binds Buffer/Uint8Array as BLOB; normalize to Buffer for binding. */

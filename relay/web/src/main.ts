@@ -1073,13 +1073,18 @@ function openNewGroup() {
   syncColor();
   onDirs = renderDirs;
   const parentDir = sel?.parentId ? app.groups.find((g) => g.id === sel.parentId)?.workingDir : sel?.workingDir;
-  browseDir(parentDir || '~');
+  browseDir(dirOrHome(parentDir));
   $('#ngGo')!.onclick = () => {
     const name = ($<HTMLInputElement>('#ngName')!.value || '').trim() || 'Group';
     pendingGroupName = name;
     app.conn?.command({ type: 'group:create', name, parentId: ngParent === '__top' ? null : ngParent, workingDir: ngPath, color: ngColor });
     history.back(); // groups refresh will rebuild the tree and select the new group
   };
+}
+/** A group with no working folder ('') browses from home, same as a missing one. */
+function dirOrHome(dir: string | undefined): string {
+  if (!dir) return '~';
+  return dir;
 }
 function browseDir(p: string) { ngPath = p; app.conn?.command({ type: 'dirs:list', path: p }); }
 function renderDirs(d: { path: string; entries: string[] }) {

@@ -138,6 +138,18 @@ export function targetFor(
   };
 }
 
+export interface SpawnGateOptions {
+  log?: (line: string) => void;
+  /** The run's managed account config dir, resolved by the wiring; null = ambient. */
+  accountConfigDir?: string | null;
+  /** The config's context for this owner's repo, resolved by the wiring; null = none. */
+  repoContext?: string | null;
+  /** How a gate is launched; the wiring wraps `launchGate` with quota-resilience. */
+  launch?: (launch: GateLaunch) => Promise<GateOutcome>;
+  /** Stamps the launch's config dir on its gate row, so later checks read that dir. */
+  recordConfigDir?: (gateId: string, configDir: string | null) => void;
+}
+
 /**
  * The `spawnGate` dependency for one run.
  *
@@ -153,21 +165,15 @@ export function spawnGateFor(
   owner: RunOwnerRow,
   config: SpawnConfig,
   activeGate: (runId: string, repo: string) => RunGateRow | null,
-  log: (line: string) => void = () => undefined,
-  /** The run's managed account config dir (#327), resolved by the wiring; null = ambient. */
-  accountConfigDir: string | null = null,
-  /** The config's context for this owner's repo (Phase 4), resolved by the wiring; null = none. */
-  repoContext: string | null = null,
-  /**
-   * How a gate is launched. Injected so the wiring can wrap `launchGate` with
-   * quota-resilience (CO-722 R1) without this module importing the accounts
-   * repository. Defaults to the bare `launchGate` for tests and callers that
-   * don't need the wrapper.
-   */
-  launch: (launch: GateLaunch) => Promise<GateOutcome> = launchGate,
-  /** Stamps the launch's config dir on its gate row, so later checks read that dir. */
-  recordConfigDir: (gateId: string, configDir: string | null) => void = () => undefined,
+  options: SpawnGateOptions = {},
 ): ExecutorDeps['spawnGate'] {
+  const {
+    log = () => undefined,
+    accountConfigDir = null,
+    repoContext = null,
+    launch = launchGate,
+    recordConfigDir = () => undefined,
+  } = options;
   const modeFor = config.modeFor ?? defaultModeFor;
   const taskFor = config.taskFor ?? defaultTaskFor;
   return async (gate, agent) => {

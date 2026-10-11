@@ -295,7 +295,7 @@ async function executorFor(runId: string) {
   for (const note of roles.notes) console.log(`  note      ${note}`);
   const target = engineTargetFor(run, owners, roles.agents, approvers());
   const commands = processDeps({ ghPath: env('BODHI_GH', 'gh'), pythonPath: target.pythonPath });
-  const spawnGate = spawnGateFor(run, owners, spawnConfig(), runs.activeGate, (line) => console.log(`  ${line}`));
+  const spawnGate = spawnGateFor(run, owners, spawnConfig(), runs.activeGate, { log: (line) => console.log(`  ${line}`) });
   return { run, owners, target, deps: { ...commands, spawnGate } };
 }
 
