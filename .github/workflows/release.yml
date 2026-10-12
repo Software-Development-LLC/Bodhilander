@@ -90,7 +90,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - runs-on: ubuntu-latest
             platform: linux
           # Pinned to windows-2022 (VS 2022) deliberately (#109). GitHub moved
           # the `windows-latest` label to windows-2025-vs2026 (Visual Studio
@@ -99,7 +99,7 @@ jobs:
           # Studio installation to use". Same build-reproducibility reasoning as
           # the pinned macOS runners below. Revisit when node-gyp/node-pty gain
           # VS 2026 support (or if windows-2022 is retired).
-          - os: windows-2022
+          - runs-on: windows-2022
             platform: win
           # BDHLNDR-38: build each Mac arch on its native runner so postinstall
           # (electron-rebuild) and sharp's optional-dep resolution produce
@@ -108,14 +108,13 @@ jobs:
           # Intel Mac users to hang at the splash screen when better-sqlite3
           # failed to load.
           #
-          # macos-15-intel is GitHub's current Intel x64 12-core larger runner
-          # (retired macos-13 replacement). It's a paid tier (~$0.077/min, ~$1
-          # per release) — larger runners don't use the public-repo free quota.
-          - os: macos-14
+          # mac-x64 runs on the org's self-hosted Intel Macs (macOS 15). The box
+          # persists between runs, so nothing below may assume a fresh image.
+          - runs-on: macos-14
             platform: mac-arm64
-          - os: macos-15-intel
+          - runs-on: [self-hosted, macOS, X64, intel]
             platform: mac-x64
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runs-on }}
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -207,6 +206,9 @@ jobs:
         run: bunx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The temporary signing keychain lands here, which the runner empties
+          # between jobs, so a cancelled run cannot leave the key on the box.
+          APP_BUILDER_TMP_DIR: ${{ runner.temp }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
