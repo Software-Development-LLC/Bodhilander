@@ -109,8 +109,8 @@ jobs:
           # failed to load.
           #
           # mac-x64 runs on the org's self-hosted Intel Macs (macOS 15), whose
-          # workspace and home persist between runs; `macos-15-intel` is the
-          # hosted fallback if they are offline.
+          # workspace and home persist between runs. Labels never fall back: if
+          # those Macs are offline, edit this entry back to `macos-15-intel`.
           - runs-on: macos-14
             platform: mac-arm64
           - runs-on: [self-hosted, macOS, X64, intel]
@@ -218,8 +218,10 @@ jobs:
       - name: Remove the temporary signing keychain
         if: always() && startsWith(matrix.platform, 'mac')
         run: |
-          for k in "$RUNNER_TEMP"/*.keychain; do
-            [[ -e "$k" ]] && security delete-keychain "$k" || true
+          for k in "$RUNNER_TEMP"/*.keychain "$RUNNER_TEMP"/*.keychain-db; do
+            [[ -e "$k" ]] || continue
+            echo "Deleting $k"
+            security delete-keychain "$k" || echo "::warning::could not delete keychain $k"
           done
 
       - name: Upload artifacts
