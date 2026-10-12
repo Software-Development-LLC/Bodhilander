@@ -97,7 +97,7 @@ jobs:
           # 2026), which the project's node-gyp doesn't yet detect — the
           # postinstall electron-rebuild fails with "Could not find any Visual
           # Studio installation to use". Same build-reproducibility reasoning as
-          # the pinned macOS runners below. Revisit when node-gyp/node-pty gain
+          # the pinned macos-14 runner below. Revisit when node-gyp/node-pty gain
           # VS 2026 support (or if windows-2022 is retired).
           - runs-on: windows-2022
             platform: win
@@ -108,8 +108,9 @@ jobs:
           # Intel Mac users to hang at the splash screen when better-sqlite3
           # failed to load.
           #
-          # mac-x64 runs on the org's self-hosted Intel Macs (macOS 15). The box
-          # persists between runs, so nothing below may assume a fresh image.
+          # mac-x64 runs on the org's self-hosted Intel Macs (macOS 15), whose
+          # workspace and home persist between runs; `macos-15-intel` is the
+          # hosted fallback if they are offline.
           - runs-on: macos-14
             platform: mac-arm64
           - runs-on: [self-hosted, macOS, X64, intel]
@@ -206,14 +207,20 @@ jobs:
         run: bunx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # The temporary signing keychain lands here, which the runner empties
-          # between jobs, so a cancelled run cannot leave the key on the box.
+          # Puts the temporary signing keychain where the cleanup step finds it.
           APP_BUILDER_TMP_DIR: ${{ runner.temp }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Remove the temporary signing keychain
+        if: always() && startsWith(matrix.platform, 'mac')
+        run: |
+          for k in "$RUNNER_TEMP"/*.keychain; do
+            [[ -e "$k" ]] && security delete-keychain "$k" || true
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
