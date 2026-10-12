@@ -1,0 +1,182 @@
+/* The board: a GitHub Projects v2 view (board-driven orchestration, Phase 1). */
+.board {
+  padding: 0.75rem 1rem;
+  overflow: auto;
+  /* An ordinary flex child of .main, below the .view-switcher. `flex:1;
+   * min-height:0` rather than `height:100%` for the reason spelled out on
+   * .arena-panel: with the switcher above it, `height:100%` resolves against
+   * the FULL column, so a long "Ready to start" list overflows the bottom of
+   * the viewport instead of scrolling here. min-height:0 lets this box shrink
+   * below its content's min-content height, which is what makes overflow:auto
+   * actually engage. */
+  flex: 1;
+  min-height: 0;
+}
+.board--loading,
+.board--problem {
+  padding: 1rem;
+}
+.board--problem {
+  color: var(--accent-negative, #d66);
+}
+.board__title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+.board__count {
+  opacity: 0.6;
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+.board__empty {
+  opacity: 0.7;
+  font-size: 0.85rem;
+}
+.board__section {
+  margin-bottom: 1rem;
+}
+.board__section-head {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.7;
+}
+.board__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.board__init {
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border, #333);
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.board__init--eligible {
+  border-color: var(--accent-positive, #3a7);
+}
+.board__init-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.board__badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent-positive, #3a7);
+  color: #041;
+}
+.board__init-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: inherit;
+  text-decoration: none;
+  flex: 1;
+  min-width: 12rem;
+}
+.board__init-title:hover {
+  text-decoration: underline;
+}
+.board__status {
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 5px;
+  border: 1px solid var(--border, #555);
+  opacity: 0.9;
+}
+.board__status--done {
+  opacity: 0.55;
+}
+.board__status--approved {
+  border-color: var(--accent-positive, #3a7);
+}
+.board__priority {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.05rem 0.4rem;
+  border-radius: 5px;
+  border: 1px solid var(--border, #555);
+  white-space: nowrap;
+}
+.board__priority--urgent {
+  background: var(--accent-negative, #b34);
+  color: #fff;
+  border-color: transparent;
+}
+.board__priority--high {
+  border-color: var(--accent-negative, #b34);
+  color: var(--accent-negative, #d56);
+}
+.board__priority--low {
+  opacity: 0.6;
+}
+.board__approval {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 5px;
+  border: 1px solid var(--accent-positive, #3a7);
+  opacity: 0.85;
+}
+.board__initiate {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.6rem;
+  border-radius: 6px;
+  border: none;
+  background: var(--accent-positive, #3a7);
+  color: #041;
+  cursor: pointer;
+}
+.board__initiate:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.board__initiated {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-positive, #3a7);
+}
+.board__initiate-error {
+  margin: 0.3rem 0 0;
+  font-size: 0.72rem;
+  color: var(--accent-negative, #d56);
+}
+.board__repos {
+  margin: 0.3rem 0 0;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+.board__children {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0 0 0 0.5rem;
+  border-left: 2px solid var(--border, #333);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.board__child {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.75rem;
+}
+.board__child-repo {
+  opacity: 0.85;
+  min-width: 12rem;
+}
+.board__child a {
+  color: inherit;
+}
+.board__child-status {
+  opacity: 0.6;
+}

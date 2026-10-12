@@ -11,6 +11,30 @@
  * globals back. Component tests only need document/window/HTMLElement.
  */
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
+import log from 'electron-log';
+
+/**
+ * Stop the suite writing into the installed app's log file.
+ *
+ * electron-log's file transport resolves a default path per platform — on macOS
+ * `~/Library/Logs/<appName>/main.log`, which is the same file a running
+ * Bodhilander is appending to. Any module under test that imports electron-log
+ * therefore logs into it, at an offset of its own, while the app writes at its
+ * own: the two interleave and overwrite, and the result is a log that is not a
+ * record of either.
+ *
+ * That is not a tidiness problem. It was found while reading that log to
+ * diagnose a real account-switch bug (#213), where the file contained fixture
+ * accounts from `account-auth.test.ts` — labels "Work" and "Doomed",
+ * will@acme.test, "teardown glitched" — interleaved with, and in places on top
+ * of, the app's own entries. Tests corrupting the evidence you debug with is
+ * worse than tests being noisy.
+ *
+ * Disabling the transport rather than redirecting it: nothing asserts on log
+ * FILES, so a temp path would only move the litter somewhere else. Console
+ * output is untouched, so a test that needs to see a log line still can.
+ */
+log.transports.file.level = false;
 
 // Capture Bun's natives before happy-dom replaces them.
 // Network/crypto only. DOM-side globals (Event, EventTarget, MessageEvent, …)

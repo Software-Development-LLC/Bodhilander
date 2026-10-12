@@ -1,0 +1,94 @@
+/**
+ * The handoff knobs an operator can turn. Both have a shipped default the
+ * desktop assumes, so a deployment that overrides one and not the other is
+ * worth being able to see.
+ */
+import { describe, expect, test } from 'bun:test';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { ConfigError, loadConfig } from './config';
+
+const BASE = { NODE_ENV: 'test', PUBLIC_URL: 'http://relay.test' };
+
+describe('handoff storage limits', () => {
+  test('default to a week, 256 MiB per bundle and 8 GiB across the store', () => {
+    const { config } = loadConfig(BASE);
+    expect(config.handoffTtlSeconds).toBe(7 * 24 * 60 * 60);
+    expect(config.handoffMaxBytes).toBe(256 * 1024 * 1024);
+    expect(config.handoffStoreMaxBytes).toBe(8 * 1024 * 1024 * 1024);
+  });
+
+  test('put bundles beside the database, which is what the volume holds', () => {
+    // Stated as two independent facts rather than one path literal: the
+    // config resolves the db path, so a literal only holds on the platform
+    // that shaped it.
+    const dbPath = path.join(os.tmpdir(), 'relay-config-test', 'relay.db');
+    const { config } = loadConfig({ ...BASE, DB_PATH: dbPath });
+    expect(path.dirname(config.handoffDir)).toBe(path.dirname(dbPath));
+    expect(path.basename(config.handoffDir)).toBe('handoffs');
+    expect(loadConfig({ ...BASE, HANDOFF_DIR: '/elsewhere' }).config.handoffDir).toBe('/elsewhere');
+  });
+
+  test('refuse an in-memory database with nowhere named to put the bundles', () => {
+    // There is no directory to sit beside, and the obvious stand-in — a fixed
+    // name under the system temp directory — is a world-writable path holding
+    // other people's sealed bundles. Say so instead of picking it.
+    expect(() => loadConfig({ ...BASE, DB_PATH: ':memory:' })).toThrow(ConfigError);
+    expect(loadConfig({ ...BASE, DB_PATH: ':memory:', HANDOFF_DIR: '/elsewhere' }).config.handoffDir).toBe('/elsewhere');
+  });
+
+  test('are overridable per deployment', () => {
+    const { config } = loadConfig({ ...BASE, HANDOFF_TTL_SECONDS: '3600', HANDOFF_MAX_BYTES: '1048576' });
+    expect(config.handoffTtlSeconds).toBe(3600);
+    expect(config.handoffMaxBytes).toBe(1048576);
+  });
+
+  test('fail loudly rather than falling back to a default nobody chose', () => {
+    expect(() => loadConfig({ ...BASE, HANDOFF_TTL_SECONDS: '0' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...BASE, HANDOFF_MAX_BYTES: 'lots' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...BASE, HANDOFF_STORE_MAX_BYTES: '0' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...BASE, HANDOFF_TTL_SECONDS: '-1' })).toThrow(ConfigError);
+  });
+});
+
+describe('build stamp', () => {
+  test('carries the commit the image was built from', () => {
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d' }).config.commit).toBe('7d5cb5d');
+  });
+
+  test('is null, not empty, when the build did not stamp one', () => {
+    // An unset --build-arg reaches the process as "", so the absent case has
+    // to collapse to one value a reader can test against.
+    expect(loadConfig(BASE).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '' }).config.commit).toBeNull();
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '   ' }).config.commit).toBeNull();
+  });
+
+  test('passes a -dirty suffix through, which is what the deploy docs promise', () => {
+    expect(loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d-dirty' }).config.commit).toBe('7d5cb5d-dirty');
+  });
+
+  test('ignores the build arg name, which .env can reach and must not win', () => {
+    // --env-file is applied over the image's ENV, so a RELAY_COMMIT left in
+    // .env would outrank the baked stamp and date the relay wrongly.
+    expect(loadConfig({ ...BASE, RELAY_COMMIT: 'stale99' }).config.commit).toBeNull();
+    expect(
+      loadConfig({ ...BASE, RELAY_BUILD_COMMIT: '7d5cb5d', RELAY_COMMIT: 'stale99' }).config.commit,
+    ).toBe('7d5cb5d');
+  });
+
+  test('still warns in production when only the build arg name got through', () => {
+    // The case the deploy docs spend the most words on: the value reached the
+    // container, under the one name the app does not read.
+    const { config, warnings } = loadConfig({
+      NODE_ENV: 'production',
+      SESSION_SECRET: 'x'.repeat(64),
+      RELAY_COMMIT: 'stale99',
+    });
+    expect(config.commit).toBeNull();
+    const stamp = warnings.find((w) => w.includes('RELAY_BUILD_COMMIT'));
+    expect(stamp).toBeDefined();
+    // Naming the build arg too, since that is the half an operator must fix.
+    expect(stamp).toContain('RELAY_COMMIT=');
+  });
+});

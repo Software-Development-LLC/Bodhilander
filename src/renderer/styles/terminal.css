@@ -8,34 +8,6 @@
   height: 100%;
 }
 
-/* Ensure xterm viewport scrollbar works properly */
-.terminal-container .xterm-viewport {
-  overflow-y: scroll !important;
-  scrollbar-width: thin;
-  scrollbar-color: #3a3a3a #1e1e1e;
-}
-
-/* Scrollbar styling for xterm viewport */
-.terminal-container .xterm-viewport::-webkit-scrollbar {
-  width: 10px;
-  background: #1e1e1e;
-}
-
-.terminal-container .xterm-viewport::-webkit-scrollbar-track {
-  background: #1e1e1e;
-}
-
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
-  background-color: #3a3a3a;
-  border-radius: 5px;
-  border: 2px solid #1e1e1e;
-  min-height: 40px;
-}
-
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover {
-  background-color: #4a4a4a;
-}
-
 /* Ensure xterm screen doesn't block scrollbar clicks */
 .terminal-container .xterm-screen {
   pointer-events: none;
@@ -73,6 +45,22 @@
 
 .terminal-stopped button:hover {
   background: #5a75ff;
+}
+
+/* The gap between "the pty was killed" and "its replacement is up" (#164).
+   Same frame as the stopped view because it is the same empty terminal, but
+   the second line is what stops a multi-second wait reading as a failure. */
+.terminal-restarting {
+  gap: 8px;
+}
+
+.terminal-restarting-detail {
+  font-size: 12px;
+  /* #888 on #1e1e1e is 4.7:1; the #666 used elsewhere for hints is 2.9:1 and
+     would not clear AA at this size. */
+  color: #888;
+  max-width: 42ch;
+  text-align: center;
 }
 
 .terminal-error {
@@ -240,6 +228,59 @@
 .mobile-resize-banner-btn:hover {
   background: #4dd3e1;
 }
+
+/* A guest asked to be fitted to their screen. Shares the slot with the
+   mobile-resize banner — which is the state accepting produces — so when both
+   are up the question stays above the thing it caused. */
+.resize-request-banner {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-md, 6px);
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.resize-request-banner ~ .mobile-resize-banner { top: 62px; }
+
+.resize-request-text { flex: 1; min-width: 240px; }
+
+.resize-request-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.resize-request-actions button {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: 12px;
+  cursor: pointer;
+  border: none;
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.resize-request-actions button:hover { background: var(--color-border); }
+
+.resize-request-actions .primary {
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  font-weight: 500;
+}
+
+.resize-request-actions .primary:hover { background: var(--color-accent-hover); }
 
 .provider-install-banner code {
   color: #ffd890;

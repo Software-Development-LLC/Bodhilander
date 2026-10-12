@@ -1,0 +1,42 @@
+/* Arm a run from the app (CO-722). */
+.run-arm {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border, #333);
+}
+.run-arm__start {
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid var(--border, #555);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.run-arm__start:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.run-arm__error {
+  color: var(--accent-negative, #d66);
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+.run-arm__armed,
+.run-arm__refused {
+  display: block; /* .run-arm__armed is an <output>, inline by default */
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+.run-arm__armed ul,
+.run-arm__refused ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+.run-arm__refused .run-arm__what {
+  display: block;
+  font-weight: 600;
+}
+.run-arm__refused .run-arm__fix {
+  display: block;
+  opacity: 0.8;
+}

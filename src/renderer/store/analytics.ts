@@ -59,8 +59,8 @@ export function useAnalytics(timeRange: TimeRange): UseAnalyticsResult {
   }, [timeRange]);
 
   useEffect(() => {
-    loadStats();
+    void loadStats();
   }, [loadStats]);
 
-  return { globalStats, recentEvents, loading, error, refresh: loadStats };
+  return { globalStats, recentEvents, loading, error, refresh: () => { void loadStats(); } };
 }

@@ -1,0 +1,127 @@
+# Sidebar "Show only active" Toggle — Design
+
+**Issue:** [#149](https://github.com/Software-Development-LLC/Bodhilander/issues/149)
+**Date:** 2026-07-30
+
+## Problem
+
+Users with many groups want to collapse the sidebar down to just what is live. The text filter (#141) narrows by name; this adds an orthogonal narrowing by session activity.
+
+## Definition
+
+A session is **active** when `state !== 'stopped'`. All of `idle`, `working`, `waiting`, and `error` count as active — an errored session is a live pane the user likely wants to see. Only `stopped` is inactive.
+
+A group (top-level or sub-group) is **active** when it, or any descendant in its subtree, has at least one active session.
+
+## Scope
+
+**In scope:** a persisted toggle in the sidebar; extending the pure filter module so it narrows by activity, combined with the text query as AND; the empty-state wording.
+
+**Out of scope (unchanged):** drag-drop, keyboard navigation, the text filter's own matching, and every panel.
+
+## UI
+
+An icon toggle button sits inline to the **left of the filter input**, on the `.sidebar-filter` row, so the two filter controls read as one cluster:
+
+`[⚡ toggle] [ Filter groups & sessions… ]`
+
+- Pressed/active visual state when on (accent border + background), `aria-pressed={showActiveOnly}`, `title`/`aria-label` "Show only groups with active sessions".
+- Clicking flips the state and persists it.
+
+## Persistence
+
+Stored via the existing preferences API (`window.electronAPI.getPreference` / `setPreference`, SQLite-backed — the same mechanism as the update channel):
+
+- Key: `sidebar.showActiveOnly`, value `'true'` / `'false'`.
+- Loaded once on mount; default **off** when unset.
+- Async read means the sidebar briefly renders unfiltered on launch before the stored value applies. Acceptable and consistent with how the update-channel setting loads.
+
+## Filter logic
+
+`computeGroupFilter` gains a fourth parameter and the result reports both flags:
+
+```ts
+export interface GroupFilterResult {
+  active: boolean;                 // query non-empty OR activeOnly — callers use this to gate filtering + auto-expand
+  visibleGroupIds: Set<string>;
+  visibleSessionIds: Set<string>;
+}
+
+export function computeGroupFilter(
+  groups: Group[],
+  sessions: Session[],
+  rawQuery: string,
+  activeOnly = false,
+): GroupFilterResult;
+```
+
+Let `q = rawQuery.trim().toLowerCase()`, `qActive = q !== ''`.
+
+- If `!qActive && !activeOnly` → `active: false`, empty sets (callers render everything, exactly as today).
+- `isActive(s) = s.state !== 'stopped'`.
+- `nameMatches(name) = name.toLowerCase().includes(q)`.
+- `chainMatchesInclusive(g)` = `nameMatches(g.name)` OR any ancestor of `g` name-matches — i.e. `g` lies in the subtree of a name-matched group. This is what the current `revealSubtree` expresses (a name-matched group reveals its whole subtree).
+
+**Session visibility** (`visibleSessionIds`):
+
+```
+for each session s (g = its group):
+  if activeOnly && !isActive(s): hidden
+  else if !qActive:              visible          # active-only mode: every active session shows
+  else if nameMatches(s.name) || chainMatchesInclusive(g): visible
+  else:                          hidden
+```
+
+**Group visibility** (`visibleGroupIds`, both levels):
+
+```
+group g is visible if:
+  its subtree contains a visible session, OR
+  (qActive && !activeOnly && chainMatchesInclusive(g))   # preserves today's "name-matched (or under a name-matched) group shows even when empty"
+then: every ancestor of a visible group is also visible (context)
+```
+
+The `!activeOnly` guard on the second clause is the AND: with the toggle on, a name-matched group whose subtree has no active session is hidden. With the toggle off, behavior is byte-identical to #141 (verified by keeping every existing `groupFilter` test green).
+
+**Faithfulness check** (worked in tests):
+- toggle off → identical to current text filter, including empty name-matched groups and empty sub-groups under a name-matched parent still showing.
+- parent name-matches, child has one active + one stopped session, toggle on → parent + child visible, only the active session renders.
+- parent name-matches, all descendant sessions stopped, toggle on → hidden.
+
+### Search-mode vs. row-filtering (revised during review)
+
+`filter.active` originally drove two things at once: *row filtering* and the *search-mode locks* — force-expanding collapsed groups, disabling collapse chevrons, and disabling drag-reorder. That conflation is safe only while `active` means a transient text query. The active-only toggle is **persisted**, so keeping the locks on `filter.active` would disable collapse and drag app-wide across launches (a real bug caught in review).
+
+So the two concerns are split:
+
+- **Row filtering** stays on `filter.active` (text OR active-only) — `visibleTopLevelGroups`, the session/sub-group visibility filters, and the empty-state gate.
+- **Search-mode locks** move to a separate `isSearching = filterText.trim().length > 0` (text query only) — force-expand, chevron `disabled`, `draggable`, the keyboard collapse/expand/select guards, and the collapse hint.
+
+`buildNavItems` therefore takes an explicit `forceExpand` parameter (defaulting to `filter.active` for back-compat) which `App.tsx` passes `isSearching`, so keyboard navigation mirrors exactly what renders: under the toggle a collapsed group is still collapsed (its sessions neither rendered nor navigable), while under a text search collapsed groups force-expand as before.
+
+**Consequence — the collapse asymmetry:** with the active-only toggle on (and no text query), a collapsed group that contains an active session shows in the list but stays collapsed; you expand it to see which session is live. This differs from the text filter, which force-expands. It is deliberate: the toggle is persistent and must not override the user's collapse state or lock collapse/drag. (Confirmed by the `activeOnly does NOT force-expand` nav test.)
+
+## App.tsx integration
+
+1. Persistence lives in a `useActiveOnlyPreference` hook: loads `getPreference('sidebar.showActiveOnly')` once on mount, persists via `setPreference` on toggle, and ignores a stale mount-read once the user has interacted (closes a load race).
+2. `filter = useMemo(() => computeGroupFilter(groups, sessions, filterText, showActiveOnly), [groups, sessions, filterText, showActiveOnly])`.
+3. `const isSearching = filterText.trim().length > 0` gates the search-mode locks (see above); `visibleTopLevelGroups` and the render-time filters stay on `filter.active`.
+4. Render the toggle button in the `.sidebar-filter` row, left of the input.
+5. Empty state adapts: when `filter.active` and nothing renders — "No groups have active sessions" if `showActiveOnly && !filterText.trim()`, otherwise the existing "No groups or sessions match".
+
+## Reactivity
+
+Sessions are already reactive; the `filter` memo depends on `sessions`, so the view updates live — a session stopping drops its group out if it was the last active one, and starting one brings the group back. That is the feature's point.
+
+The selected session (`activeSessionId`) can be filtered out of the sidebar while still open in the terminal — same as the text filter today. No special handling.
+
+## Testing
+
+- **`groupFilter.test.ts`** (bun): existing tests stay green (toggle defaults off). New cases: active-only with no query; active-only + text AND; descendant counting across sub-groups; name-matched group intersected with active-only (all-stopped subtree hidden); `error` counts as active; `stopped` excluded; empty query + toggle off returns inactive.
+- **`useActiveOnlyPreference.test.ts`**: the persistence round trip against a mocked `electronAPI` — load `'true'`/`null`, persist `'true'`/`'false'`, and the toggle-before-load race.
+- **`SidebarFilter.test.tsx`**: the toggle button — `aria-pressed` in both states, click flips it, it is a real `<button>`.
+- **`buildNavItems` nav tests**: active-only respects collapse (does not force-expand); a text search still force-expands.
+
+## Rollout
+
+Single PR to `development`, closing #149. No schema change (preferences table already exists), no version/channel implications.

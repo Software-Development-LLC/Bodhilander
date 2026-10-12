@@ -1,0 +1,192 @@
+/**
+ * Board reader tests (board-driven orchestration, Phase 1).
+ *
+ * The riskiest early bit is the GraphQL shape + grouping, so these run against a
+ * fixture shaped exactly like real `gh api graphql` output from Project #17
+ * (a cross-repo initiative with per-repo children, a standalone item, a PR card
+ * to skip, and a not-eligible initiative). Properties that matter: a `gh` that
+ * exits 0 but returns errors / an inaccessible project is a PROBLEM (never a
+ * silently empty board), children link to their initiative across repos, and
+ * eligibility keys on the configured Status value.
+ *
+ * Run with: bun test src/main/github/__tests__/board-reader.test.ts
+ */
+import { describe, expect, test } from 'bun:test';
+import { boardQueryArgv, buildBoard, parseBoardPage, type RawBoardNode } from '../board-reader';
+
+const item = (over: Partial<{
+  number: number; title: string; repo: string; state: string; url: string;
+  status: string | null; parent: { number: number; repo: string } | null; assignees: string[];
+  approval: string; priority: string;
+}> = {}) => ({
+  content: {
+    __typename: 'Issue',
+    number: over.number ?? 1,
+    title: over.title ?? 'x',
+    state: over.state ?? 'OPEN',
+    url: over.url ?? 'https://github.com/o/r/issues/1',
+    repository: { name: over.repo ?? 'repo-a' },
+    parent: over.parent ? { number: over.parent.number, repository: { name: over.parent.repo } } : null,
+    assignees: { nodes: (over.assignees ?? []).map((login) => ({ login })) },
+    issueFieldValues: { nodes: [
+      ...(over.approval ? [{ __typename: 'IssueFieldSingleSelectValue', name: over.approval, field: { name: 'Approved for Development' } }] : []),
+      ...(over.priority ? [{ __typename: 'IssueFieldSingleSelectValue', name: over.priority, field: { name: 'Priority' } }] : []),
+    ] },
+  },
+  status: over.status === undefined ? { name: 'Todo' } : over.status === null ? null : { name: over.status },
+});
+
+function envelope(nodes: unknown[], hasNextPage = false, endCursor = 'C2') {
+  return JSON.stringify({
+    data: { organization: { projectV2: {
+      title: 'Bodhi Pulse', number: 17,
+      items: { pageInfo: { hasNextPage, endCursor }, nodes },
+    } } },
+  });
+}
+
+describe('boardQueryArgv', () => {
+  test('carries org, number, and the query; omits cursor when absent', () => {
+    const a = boardQueryArgv('Software-Development-LLC', 17);
+    expect(a.slice(0, 6)).toEqual(['api', 'graphql', '-f', 'org=Software-Development-LLC', '-F', 'number=17']);
+    expect(a).not.toContain('cursor=');
+    expect(a.some((x) => x.startsWith('query='))).toBe(true);
+  });
+  test('includes the cursor when paginating', () => {
+    const a = boardQueryArgv('org', 3, 'CURSOR');
+    expect(a).toContain('cursor=CURSOR');
+  });
+});
+
+describe('parseBoardPage', () => {
+  test('parses issues, skips PR cards, reads status/parent/assignees/issue-fields', () => {
+    const out = parseBoardPage(envelope([
+      item({ number: 130, repo: 'bodhi-code', status: 'Todo', approval: 'Approved', priority: 'High', assignees: ['brannon-bowden'] }),
+      item({ number: 2561, repo: 'bodhi-service-api', parent: { number: 130, repo: 'bodhi-code' }, status: 'Todo' }),
+      { content: { __typename: 'PullRequest', number: 999 }, status: null },
+    ]));
+    expect(out.status).toBe('page');
+    if (out.status !== 'page') throw new Error('unreachable');
+    expect(out.nodes).toHaveLength(2); // PR skipped
+    expect(out.nodes[0]).toMatchObject({ number: 130, repo: 'bodhi-code', status: 'Todo', assignees: ['brannon-bowden'] });
+    // Issue Fields land in the name→value map, keyed by field name.
+    expect(out.nodes[0].issueFields).toEqual({ 'Approved for Development': 'Approved', 'Priority': 'High' });
+    expect(out.nodes[1].issueFields).toEqual({}); // no issue fields set
+    expect(out.nodes[1].parent).toEqual({ repo: 'bodhi-code', number: 130 });
+    expect(out.nextCursor).toBeNull(); // hasNextPage false
+  });
+
+  test('a next page yields its cursor', () => {
+    const out = parseBoardPage(envelope([item()], true, 'NEXT'));
+    if (out.status !== 'page') throw new Error('expected page');
+    expect(out.nextCursor).toBe('NEXT');
+  });
+
+  test('non-JSON is a problem, not a throw', () => {
+    expect(parseBoardPage('boom').status).toBe('problem');
+  });
+
+  test('a GraphQL errors[] (exit 0) is a problem', () => {
+    const out = parseBoardPage(JSON.stringify({ data: null, errors: [{ message: 'Bad credentials' }] }));
+    expect(out.status).toBe('problem');
+    if (out.status !== 'problem') throw new Error('unreachable');
+    expect(out.problem).toContain('Bad credentials');
+  });
+
+  test('an inaccessible/missing project is a problem', () => {
+    const out = parseBoardPage(JSON.stringify({ data: { organization: { projectV2: null } } }));
+    expect(out.status).toBe('problem');
+    if (out.status !== 'problem') throw new Error('unreachable');
+    expect(out.problem).toContain('project scope');
+  });
+});
+
+describe('buildBoard', () => {
+  const GATE = { approvalField: 'Approved for Development', eligibleValues: ['Approved'] };
+  // A node with its Issue Field values; `approval`/`priority` land in issueFields.
+  const node = (over: Partial<RawBoardNode> & { approval?: string; priority?: string }): RawBoardNode => {
+    const { approval, priority, ...rest } = over;
+    const issueFields: Record<string, string> = { ...(rest.issueFields ?? {}) };
+    if (approval) issueFields['Approved for Development'] = approval;
+    if (priority) issueFields['Priority'] = priority;
+    return {
+      number: 1, title: 'x', repo: 'r', state: 'OPEN', status: 'Todo', url: 'u',
+      assignees: [], parent: null, ...rest, issueFields,
+    };
+  };
+
+  const nodes: RawBoardNode[] = [
+    node({ number: 130, title: '[CO-130][Initiative] X', repo: 'bodhi-code', approval: 'Approved' }),
+    node({ number: 2561, repo: 'bodhi-service-api', parent: { repo: 'bodhi-code', number: 130 } }),
+    node({ number: 141, repo: 'bodhi-service-insights', parent: { repo: 'bodhi-code', number: 130 } }),
+    node({ number: 900, title: '[CO-900] Done one', repo: 'bodhi-code', state: 'CLOSED', status: 'Done', approval: 'Approved' }),
+    node({ number: 42, title: '[BSI-42] standalone', repo: 'bodhi-service-insights', approval: 'Approved' }),
+  ];
+
+  test('groups children under their initiative across repos', () => {
+    const b = buildBoard(nodes, { title: 'Bodhi Pulse', number: 17 }, GATE);
+    const co130 = b.initiatives.find((i) => i.item.number === 130 && i.item.repo === 'bodhi-code')!;
+    expect(co130.children.map((c) => c.repo).sort()).toEqual(['bodhi-service-api', 'bodhi-service-insights']);
+    // Scope is the CHILDREN's repos only: the umbrella issue lives in bodhi-code,
+    // which does no work here, so bodhi-code is NOT an owner. Without this the run
+    // spawns a third owner for the tracking repo that opens an empty PR.
+    expect(co130.repos.sort()).toEqual(['bodhi-service-api', 'bodhi-service-insights']);
+    // Children are NOT listed as their own initiatives.
+    expect(b.initiatives.some((i) => i.item.number === 2561)).toBe(false);
+  });
+
+  test('the initiative repo IS in scope when it has a child there (a real work repo)', () => {
+    // Umbrella in bodhi-code with a bodhi-code child (work in the hub too) plus an
+    // api child -> the parent repo earns its place via its own child issue.
+    const withSelfChild: RawBoardNode[] = [
+      node({ number: 200, title: '[CO-200][Initiative] Y', repo: 'bodhi-code', approval: 'Approved' }),
+      node({ number: 201, repo: 'bodhi-code', parent: { repo: 'bodhi-code', number: 200 } }),
+      node({ number: 202, repo: 'bodhi-service-api', parent: { repo: 'bodhi-code', number: 200 } }),
+    ];
+    const b = buildBoard(withSelfChild, { title: 'x', number: 17 }, GATE);
+    const co200 = b.initiatives.find((i) => i.item.number === 200)!;
+    expect(co200.repos.sort()).toEqual(['bodhi-code', 'bodhi-service-api']);
+  });
+
+  test('eligibility keys on the approval value, not closed', () => {
+    const b = buildBoard(nodes, { title: 'x', number: 17 }, GATE);
+    expect(b.initiatives.find((i) => i.item.number === 130)!.eligible).toBe(true);   // Approved, OPEN
+    expect(b.initiatives.find((i) => i.item.number === 900)!.eligible).toBe(false);  // Approved but CLOSED
+    expect(b.initiatives.find((i) => i.item.number === 42)!.eligible).toBe(true);    // single-repo, Approved
+  });
+
+  test('any of several eligible approval values qualifies; others do not', () => {
+    const items = [
+      node({ number: 1, approval: 'Approved' }),
+      node({ number: 2, approval: 'Auto-approved' }),
+      node({ number: 3, approval: 'Not Approved' }),
+      node({ number: 4 }), // no approval field set
+    ];
+    const b = buildBoard(items, { title: 'x', number: 17 }, { approvalField: 'Approved for Development', eligibleValues: ['Approved', 'Auto-approved'] });
+    expect(b.initiatives.find((i) => i.item.number === 1)!.eligible).toBe(true);
+    expect(b.initiatives.find((i) => i.item.number === 2)!.eligible).toBe(true);
+    expect(b.initiatives.find((i) => i.item.number === 3)!.eligible).toBe(false);
+    expect(b.initiatives.find((i) => i.item.number === 4)!.eligible).toBe(false); // no value never matches
+  });
+
+  test('surfaces the approval and priority values on the item', () => {
+    const b = buildBoard([node({ number: 5, approval: 'Approved', priority: 'Urgent' })], { title: 'x', number: 17 }, GATE);
+    const it = b.initiatives.find((i) => i.item.number === 5)!.item;
+    expect(it.approval).toBe('Approved');
+    expect(it.priority).toBe('Urgent');
+  });
+
+  test('a single-repo item is an initiative with no children', () => {
+    const b = buildBoard(nodes, { title: 'x', number: 17 }, GATE);
+    const solo = b.initiatives.find((i) => i.item.number === 42)!;
+    expect(solo.children).toEqual([]);
+    expect(solo.repos).toEqual(['bodhi-service-insights']);
+  });
+
+  test('an orphan child (parent not on the board) is treated as top-level', () => {
+    const orphan = node({ number: 77, title: 'orphan', repo: 'repo-x', parent: { repo: 'gone', number: 5 } });
+    const b = buildBoard([orphan], { title: 'x', number: 1 }, GATE);
+    expect(b.initiatives).toHaveLength(1);
+    expect(b.initiatives[0].item.number).toBe(77);
+  });
+});

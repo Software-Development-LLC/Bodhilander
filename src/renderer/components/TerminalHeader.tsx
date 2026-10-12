@@ -1,9 +1,21 @@
 import React, { useState } from 'react';
 import { Session } from '../../shared/types';
 import { useSessionStats, formatDuration, formatStatsTooltip } from '../store/session-stats';
+import { SessionAccountIndicator, SessionAccountIndicatorProps } from './SessionAccountIndicator';
 
 interface TerminalHeaderProps {
   session: Session;
+  /**
+   * Live-vs-assigned account state for the header indicator (#165). null when
+   * no Claude accounts are registered, or when this session doesn't run the
+   * Claude provider — the header then looks exactly as it did before accounts
+   * existed.
+   *
+   * Resolved by the caller rather than looked up here: App keeps one header
+   * mounted per open session (inactive ones are only display:none), so any
+   * fetching in this component would fan out across every session at once.
+   */
+  account?: SessionAccountIndicatorProps | null;
   onRename: (name: string) => void;
   onRestart: () => void;
   onStop: () => void;
@@ -12,6 +24,7 @@ interface TerminalHeaderProps {
 
 const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   session,
+  account,
   onRename,
   onRestart,
   onStop,
@@ -68,6 +81,8 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
       <span className="header-path" title={session.workingDir}>
         {truncatePath(session.workingDir)}
       </span>
+
+      {account && <SessionAccountIndicator {...account} />}
 
       {stats && stats.totalEvents > 0 && (
         <span className="header-stats" title={formatStatsTooltip(stats)}>

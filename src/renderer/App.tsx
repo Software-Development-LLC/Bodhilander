@@ -3,7 +3,14 @@ import Terminal from './components/Terminal';
 import TerminalHeader from './components/TerminalHeader';
 import ContextMenu, { MenuItem } from './components/ContextMenu';
 import { NamePromptModal } from './components/NamePromptModal';
+import { LinkProjectModal } from './components/LinkProjectModal';
+import { OwnerConfirmModal, type PendingOwner } from './components/OwnerConfirmModal';
+import { ShareSessionModal } from './components/ShareSessionModal';
+import { GuestJoinRequestModal } from './components/GuestJoinRequestModal';
 import { SettingsModal, SettingsTab } from './components/SettingsModal';
+import { HandoffRestoreOffer } from './components/MachineHandoff';
+import { ArrivalReportModal } from './components/ArrivalReport';
+import { hasOutstandingWork } from '../shared/arrival';
 import { NewItemChoice } from './components/NewItemChoice';
 import { SidebarFilter } from './components/SidebarFilter';
 import { SessionRow } from './components/SessionRow';
@@ -11,14 +18,40 @@ import { GroupColorPicker } from './components/GroupColorPicker';
 import AnalyticsPanel from './components/panels/AnalyticsPanel';
 import { ArenaPanel } from './components/ArenaPanel';
 import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
-import { ClaudeAccount, Session } from '../shared/types';
+import { RunInbox } from './components/RunInbox';
+import { RunList } from './components/RunList';
+import { BoardView } from './components/BoardView';
+import { RunArm } from './components/RunArm';
+import { RunPrepare } from './components/RunPrepare';
+import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
+import { FailoverNotice } from './components/FailoverNotice';
+import { AccountSwitchNotice } from './components/AccountSwitchNotice';
+import { AccountSwitchReport, reportGroupSwitch, reportSessionSwitch } from './accountSwitchReport';
+import { AccountFailoverEvent, ClaudeAccount, Group, Session } from '../shared/types';
+import type { ArrivalReport, LiveAccountBinding, LiveAccountBindings, RelayAttachedGuest, RelayPendingShare, RelayStatus } from '../shared/types';
 import { useSessions } from './store/sessions';
 import { useGroups } from './store/groups';
 import { computeGroupFilter, buildNavItems } from './store/groupFilter';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useActiveOnlyPreference } from './hooks/useActiveOnlyPreference';
 import './styles/global.css';
 import './styles/context-menu.css';
 import ErrorBoundary from './components/ErrorBoundary';
+
+/**
+ * Of the sessions an automatic account switch moved (#207), the ones with a pty
+ * to replace.
+ *
+ * A stopped session has nothing running under the old account and picks the new
+ * one up whenever it is next started; restarting it here would start a session
+ * the user had deliberately ended.
+ */
+export function respawnable(sessionIds: string[], sessions: Session[]): string[] {
+  const stopped = new Set(
+    sessions.filter(session => session.state === 'stopped').map(session => session.id)
+  );
+  return sessionIds.filter(id => !stopped.has(id));
+}
 
 /**
  * Collapse-chevron labels. While a filter is active every row is force-expanded,
@@ -34,12 +67,115 @@ function chevronAriaLabel(collapsed: boolean, filtering: boolean, kind: 'group' 
   return collapsed ? `Expand ${kind}` : `Collapse ${kind}`;
 }
 
+/**
+ * How an account is named in a context menu (#165).
+ *
+ * The label alone does not say which login an account is: two accounts both
+ * called "Work" are indistinguishable in the menu, and after a login the email
+ * is the only thing that tells them apart. Only an account resolved as logged
+ * out says so; one that simply recorded no address trails off, because the tail
+ * is there to identify a login, not to grade it.
+ *
+ * MenuItem.label is a string, so the swatch that carries colour elsewhere
+ * cannot come along; label + email identifies the account without it, which is
+ * the accessible baseline the swatch was never allowed to be responsible for.
+ */
+export function accountMenuLabel(acc: ClaudeAccount, isCurrent: boolean): string {
+  let tail = '';
+  if (acc.email) tail = ` — ${acc.email}`;
+  else if (acc.loggedIn === false) tail = ' — not yet logged in';
+
+  return `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"`
+    + tail
+    + (acc.isDefault ? ' (default)' : '');
+}
+
+/**
+ * How the group menu's "use the default" item is named (#213).
+ *
+ * It used to say only "Use default account", sitting one row above the account
+ * list — so during a usage limit, when the whole reason for opening this menu
+ * is to get off the default, a single-row miss put the group back on the
+ * account it was escaping and said nothing. Naming the destination makes the
+ * consequence readable before the click rather than hours later.
+ */
+export function defaultAccountMenuLabel(accounts: ClaudeAccount[], isCurrent: boolean): string {
+  const fallback = accounts.find(acc => acc.isDefault) ?? null;
+  const tail = fallback ? ` (${fallback.label})` : '';
+  return `${isCurrent ? '✓ ' : '   '}Use default account${tail}`;
+}
+
+/** The group context-menu label for the GitHub-project link (CO-722, Phase 2B). */
+export function projectMenuLabel(group: Group | undefined): string {
+  if (group?.githubProjectNumber == null) return 'Link GitHub Project…';
+  const name = group.githubProjectName ? ` (${group.githubProjectName})` : '';
+  return `GitHub Project: #${group.githubProjectNumber}${name}…`;
+}
+
+/**
+ * Everything the session header's account indicator needs, resolved (#165).
+ *
+ * Two questions that look like one and are not: the session → group → default
+ * chain answers "what will this session run under", the live binding published
+ * by PtyManager answers "what is it running under right now". CLAUDE_CONFIG_DIR
+ * is baked into a pty at spawn, so the two diverge the moment an account is
+ * switched on a live session and stay diverged until it respawns. Presenting
+ * the first as if it were the second is exactly what made #164's first symptom
+ * look like nothing had happened — every surface agreed with the user's pick
+ * while the old account went on being billed.
+ *
+ * Returns null when there is nothing to disclose: no accounts registered at
+ * all, or a session that is not a Claude session (a plain shell, or codex/grok,
+ * which main deliberately never publishes a binding for). The header then keeps
+ * its pre-accounts look rather than growing an empty slot.
+ *
+ * Pure and exported so the resolution can be pinned by tests without standing
+ * up the whole App tree.
+ */
+export function resolveAccountIndicator(args: {
+  session: Session;
+  accounts: ClaudeAccount[];
+  /** The live binding for this session, or undefined when no pty is running. */
+  binding: LiveAccountBinding | undefined;
+  /** Result of the session → group → default chain. */
+  assignedAccount: ClaudeAccount | null;
+  onApplySwitch: () => void;
+}): SessionAccountIndicatorProps | null {
+  const { session, accounts, binding, assignedAccount, onApplySwitch } = args;
+  if (session.shellType !== 'claude' || session.provider !== 'claude') return null;
+  // No accounts registered is the pre-accounts look, and it stays that way —
+  // unless a pty is running under an account id, which by then can only be one
+  // the user deleted out from under it. That is precisely when naming the live
+  // account matters: the process is alive, still billing a login whose config
+  // dir has been removed, and an empty header would say nothing at all.
+  if (accounts.length === 0 && !binding?.accountId) return null;
+
+  // Join by id rather than snapshotting the account onto the binding, so a
+  // rename or a recolour shows up without waiting for the pty to respawn.
+  const live = binding?.accountId
+    ? accounts.find(a => a.id === binding.accountId) ?? null
+    : null;
+
+  return {
+    liveAccount: live,
+    assignedAccount,
+    // Presence in the map IS the pty: main deletes the entry on exit. Reading
+    // session.state instead would call a session "running" through the whole
+    // restart window, when there is no pty and no account in use.
+    isRunning: !!binding,
+    liveAccountUnknown: !!binding?.accountId && !live,
+    isOverride: session.claudeAccountId !== null,
+    onApplySwitch,
+  };
+}
+
 const App: React.FC = () => {
   const {
     groups,
     loading: groupsLoading,
     createGroup,
     updateGroup,
+    setGroupAccount,
     removeGroup,
     reorderGroup,
     toggleCollapse,
@@ -49,6 +185,8 @@ const App: React.FC = () => {
   } = useGroups();
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
+  // The group whose GitHub-project link is being edited (CO-722, Phase 2B).
+  const [linkProjectGroupId, setLinkProjectGroupId] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
   const [colorPickerGroupId, setColorPickerGroupId] = useState<string | null>(null);
@@ -77,13 +215,43 @@ const App: React.FC = () => {
 
   // Sidebar text filter (#141). Ephemeral — never persisted.
   const [filterText, setFilterText] = useState('');
+  // "Show only active" toggle (#149). Persisted via the preferences table.
+  const [showActiveOnly, handleActiveOnlyChange] = useActiveOnlyPreference();
   const [isResizing, setIsResizing] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [arrivalReport, setArrivalReport] = useState<ArrivalReport | null>(null);
+
+  // Raised at launch only while something in it is still waiting on a person.
+  // A restore onto the same machine, with every folder present and every
+  // account signed in, has nothing to say — and saying it anyway is how a
+  // report becomes something people dismiss without reading. It stays
+  // reachable from Settings regardless.
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.arrivalRead().then((report) => {
+      if (!cancelled && report && hasOutstandingWork(report)) setArrivalReport(report);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Which Settings tab to land on. Claude accounts left the sidebar and became
   // a Settings tab, so App needs to be able to open Settings straight to it.
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('general');
   const [claudeAccounts, setClaudeAccounts] = useState<ClaudeAccount[]>([]);
+  /**
+   * The most recent automatic account switch, until the user dismisses it
+   * (#207). One at a time: these arrive seconds apart at most —
+   * one account running dry moves every session on it in a single event — and
+   * a stack of banners would push the terminal off screen.
+   */
+  const [failoverNotice, setFailoverNotice] = useState<AccountFailoverEvent | null>(null);
+  // What the last manual account switch did, when it restarted nothing (#214).
+  const [switchNotice, setSwitchNotice] = useState<AccountSwitchReport | null>(null);
+  // Which account each running pty ACTUALLY spawned under (#165), keyed by
+  // session id. Absent id = no pty running for that session.
+  const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
   // True when the running build is itself a beta (version contains -beta.).
   // Shows a BETA pill in the sidebar so opt-in testers know what they're on
   // (BDHLNDR-32).
@@ -104,6 +272,9 @@ const App: React.FC = () => {
   // Analytics and Arena all live in the same content area, so they are one
   // value rather than a boolean each.
   const [contentView, setContentView] = useState<ContentView>('terminal');
+  // Bumped when a run is armed so the inbox beside RunArm re-reads at once
+  // rather than waiting out its poll -- the newly armed run shows immediately.
+  const [runsRefresh, setRunsRefresh] = useState(0);
   // Group whose working dir the arena panel should scope to ("Ask Arena" menu).
   const [arenaGroupId, setArenaGroupId] = useState<string | null>(null);
 
@@ -111,9 +282,11 @@ const App: React.FC = () => {
 
   // Destructive action confirmation state
   const [confirmAction, setConfirmAction] = useState<{
-    type: 'closeSession' | 'deleteGroup';
+    type: 'closeSession' | 'deleteGroup' | 'restartForAccountSwitch';
     id: string;
     message: string;
+    /** Sessions to respawn, for 'restartForAccountSwitch'. */
+    sessionIds?: string[];
   } | null>(null);
 
   const GROUP_COLORS = [
@@ -127,6 +300,7 @@ const App: React.FC = () => {
     setActiveSessionId,
     createSession,
     updateSession,
+    setSessionAccount,
     removeSession,
     getSessionsByGroup,
     getStateCounts,
@@ -145,9 +319,16 @@ const App: React.FC = () => {
 
   // Which sidebar rows survive the text filter (#141).
   const filter = useMemo(
-    () => computeGroupFilter(groups, sessions, filterText),
-    [groups, sessions, filterText],
+    () => computeGroupFilter(groups, sessions, filterText, showActiveOnly),
+    [groups, sessions, filterText, showActiveOnly],
   );
+
+  // "Search mode" is a text query only. It force-expands collapsed groups and
+  // suspends collapse/drag while you search — transient, cleared when the box
+  // empties. The active-only toggle must NOT do those things: it is persisted,
+  // so locking collapse/drag on it would disable them app-wide across launches
+  // (#149). It only prunes which rows render, via `filter`.
+  const isSearching = filterText.trim().length > 0;
 
   // The top-level rows actually rendered. Drives both the list and the empty
   // state, so the two can never disagree.
@@ -228,6 +409,39 @@ const App: React.FC = () => {
       window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
     }
   }, [settingsOpen]);
+
+  /**
+   * Track the account every running pty is actually bound to (#165).
+   *
+   * Both halves are load-bearing. The push event is what keeps this honest
+   * through a respawn the renderer never asked for — the BDHLNDR-9
+   * resume-failure fallback replaces a pty silently, by design, and would
+   * otherwise leave the header naming an account that died with the old
+   * process. The one-shot query is what makes a renderer that mounted after
+   * the ptys were already running (a reload, a crash recovery) correct
+   * immediately rather than only after the next spawn or exit.
+   *
+   * Last-writer-wins per session id, so the two cannot fight: the query runs
+   * once, at mount, and every later write is an event about one session.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI.getLiveAccounts()
+      .then(map => { if (!cancelled) setLiveAccounts(map); })
+      .catch(err => console.error('Failed to load live account bindings:', err));
+    const off = window.electronAPI.onPtyLiveAccount((sessionId, binding) => {
+      setLiveAccounts(prev => {
+        const next = { ...prev };
+        if (binding) next[sessionId] = binding;
+        else delete next[sessionId];
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
 
   // Determine once at mount whether the running app build is a beta —
   // controls the BETA pill shown in the sidebar header (BDHLNDR-32).
@@ -366,6 +580,187 @@ const App: React.FC = () => {
     setColorPickerGroupId(null);
   };
 
+  // Board-driven orchestration (CO-722, Phase 2B): the clone root the run engine
+  // cuts worktrees from for this group's project. Mirrors the working-dir picker.
+  const handleSetGroupCloneRoot = async (groupId: string) => {
+    const group = groups.find(g => g.id === groupId);
+    const dir = await window.electronAPI.selectDirectory(group?.cloneRoot ?? undefined);
+    if (dir) {
+      await updateGroup(groupId, { cloneRoot: dir });
+    }
+  };
+
+  // Persist a group's board link. The modal supplies the number (or null to
+  // unlink); we resolve the board's display name so the sidebar can show it
+  // without a round-trip, tolerating a fetch that fails (number kept, name null).
+  const handleLinkGroupProject = async (groupId: string, projectNumber: number | null) => {
+    setLinkProjectGroupId(null);
+    if (projectNumber === null) {
+      await updateGroup(groupId, { githubProjectNumber: null, githubProjectName: null });
+      return;
+    }
+    let name: string | null = null;
+    try {
+      const res = await window.electronAPI.getProjectBoard(projectNumber);
+      if (res.status === 'ok') name = res.project.title;
+    } catch {
+      // A resolution failure is not fatal — keep the number the user chose.
+    }
+    await updateGroup(groupId, { githubProjectNumber: projectNumber, githubProjectName: name });
+  };
+
+  /**
+   * Of the sessions whose account just changed, the ones with a pty to replace.
+   * Stopped sessions are skipped — they have nothing running under the old
+   * account and pick the new one up whenever the user starts them.
+   */
+  const liveSessionsAmong = (sessionIds: string[]) =>
+    sessionIds.filter(id => sessions.find(s => s.id === id)?.state !== 'stopped');
+
+  /**
+   * Respawn the ptys of sessions whose account just changed (BDHLNDR-31).
+   * The account only reaches the CLI as CLAUDE_CONFIG_DIR, which is fixed when
+   * the pty spawns — without this the picked account applies to nothing until
+   * the user restarts by hand. Main has already carried the conversation
+   * transcript over, so the relaunch resumes where the old account left off.
+   */
+  const restartSessions = useCallback((sessionIds: string[]) => {
+    if (sessionIds.length === 0) return;
+    setRestartKeys(prev => {
+      const next = { ...prev };
+      for (const id of sessionIds) next[id] = (next[id] ?? 0) + 1;
+      return next;
+    });
+  }, []);
+
+  /**
+   * Latest sessions, readable from a subscription that must not re-subscribe
+   * every time one of them changes state.
+   *
+   * The failover listener below needs to know which of the moved sessions are
+   * actually running, and session state changes on almost every keystroke of
+   * agent output. Putting `sessions` in that effect's dependencies would tear
+   * down and re-register the IPC listener continuously, and a failover event
+   * arriving in the gap would be dropped — the one event this feature exists
+   * to act on.
+   */
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+
+  /**
+   * Apply an account switch the app made on its own (#207).
+   *
+   * Main has already written the assignments and carried the conversations;
+   * what it cannot do is respawn the ptys, because a pty's CLAUDE_CONFIG_DIR is
+   * fixed at spawn and only this side owns the terminals. Until the respawn the
+   * sessions are still billing the account that just ran dry, so this is not
+   * cosmetic follow-up — it is the half of the switch that makes it real.
+   */
+  useEffect(() => {
+    return window.electronAPI.onAccountFailover((event) => {
+      setFailoverNotice(event);
+
+      // Cooldowns and default/rank state both just changed.
+      window.electronAPI.listAccounts().then(setClaudeAccounts).catch(() => {});
+
+      restartSessions(respawnable(event.sessionIds, sessionsRef.current));
+    });
+  }, [restartSessions]);
+
+  /**
+   * The header account indicator for one session (#165).
+   *
+   * Sits here rather than beside effectiveAccountForSession because it needs
+   * restartSessions, which is declared just above: a `const` referenced from a
+   * dependency array is evaluated at render time, so the order is not cosmetic.
+   */
+  const accountIndicatorFor = useCallback((session: Session): SessionAccountIndicatorProps | null => (
+    resolveAccountIndicator({
+      session,
+      accounts: claudeAccounts,
+      binding: liveAccounts[session.id],
+      assignedAccount: effectiveAccountForSession(session.id),
+      // A switch the user points at directly restarts outright — the same rule
+      // handleAssignSessionAccount follows. Only a group-wide sweep, which can
+      // take several sessions down at once, asks first.
+      onApplySwitch: () => restartSessions([session.id]),
+    })
+  ), [claudeAccounts, liveAccounts, effectiveAccountForSession, restartSessions]);
+
+  /**
+   * What the sidebar row says about a session's account (#165).
+   *
+   * Derived from the same resolution the header uses, so the two surfaces
+   * cannot contradict each other. They used to: decline the "restart 5
+   * sessions?" prompt after a group switch and every row recoloured to the new
+   * account immediately while all five ptys kept billing the old one — the
+   * exact lie this feature exists to stop telling, and on the four sessions the
+   * user cannot see (inactive headers are display:none) the sidebar is the only
+   * thing saying anything at all.
+   */
+  const sidebarAccountFor = useCallback((session: Session): {
+    account: ClaudeAccount | null;
+    pendingSwitch: { target: ClaudeAccount | null } | null;
+  } => {
+    const indicator = accountIndicatorFor(session);
+    // Non-Claude sessions and the pre-accounts look keep the old behaviour:
+    // there is no live binding to prefer, so the assignment is all there is.
+    if (!indicator) return { account: effectiveAccountForSession(session.id), pendingSwitch: null };
+    return {
+      account: indicator.isRunning ? indicator.liveAccount : indicator.assignedAccount,
+      pendingSwitch: isSwitchPending(indicator) ? { target: indicator.assignedAccount } : null,
+    };
+  }, [accountIndicatorFor, effectiveAccountForSession]);
+
+  // Switching one session's account restarts it outright: the user pointed at
+  // that session and picked an account, so the restart is the thing they asked
+  // for.
+  const handleAssignSessionAccount = async (sessionId: string, accountId: string | null) => {
+    const result = await setSessionAccount(sessionId, accountId);
+    if (!result) return; // The store already logged the failure; say nothing untrue.
+
+    const liveAffected = liveSessionsAmong(result.affectedSessionIds);
+    restartSessions(liveAffected);
+    setSwitchNotice(reportSessionSwitch(result, {
+      targetName: sessions.find(s => s.id === sessionId)?.name ?? 'This session',
+      pickedAccountId: accountId,
+      liveAffected,
+    }));
+  };
+
+  // A group switch can sweep several running sessions at once, which is a much
+  // bigger action than the click implies — so the restart is opt-in. Declining
+  // still persists the assignment; those sessions move over on their next
+  // restart.
+  const handleAssignGroupAccount = async (groupId: string, accountId: string | null) => {
+    const result = await setGroupAccount(groupId, accountId);
+    if (!result) return; // The store already logged the failure; say nothing untrue.
+
+    const live = liveSessionsAmong(result.affectedSessionIds);
+    setSwitchNotice(reportGroupSwitch(result, {
+      targetName: groups.find(g => g.id === groupId)?.name ?? 'This group',
+      pickedAccountId: accountId,
+      liveAffected: live,
+    }));
+    if (live.length === 0) return;
+
+    const count = live.length === 1 ? '1 running session' : `${live.length} running sessions`;
+    setConfirmAction({
+      type: 'restartForAccountSwitch',
+      id: groupId,
+      sessionIds: live,
+      // States the change as done, because it is: the row was written before
+      // this dialog existed and "Not now" declines only the restart. Read as a
+      // confirmation prompt — which is what a modal appearing straight after a
+      // click looks like — dismissing it feels like cancelling the switch, and
+      // the group silently stays moved (#213).
+      message: `This group now uses the new account. ${count} in it `
+        + `${live.length === 1 ? 'is' : 'are'} still running on the previous one. `
+        + `Restart ${live.length === 1 ? 'it' : 'them'} now to apply the switch? `
+        + `Conversations resume where they left off. Skipping applies the switch on their next restart.`,
+    });
+  };
+
   const handleSessionContextMenu = (e: React.MouseEvent, sessionId: string, sessionName: string) => {
     e.preventDefault();
     const session = sessions.find(s => s.id === sessionId);
@@ -373,20 +768,38 @@ const App: React.FC = () => {
 
     const items: MenuItem[] = [
       { label: 'Rename', onClick: () => handleStartEditSession(sessionId, sessionName) },
+      {
+        label: 'Set Working Directory…',
+        onClick: () => { void handleRelinkSession(sessionId, session?.workingDir ?? ''); },
+      },
     ];
+
+    // Sharing is entered PER SESSION, which is the whole shape of the feature —
+    // there is no "share my machine" anywhere. Only offered while remote
+    // hosting is actually connected: an invite minted against a relay we
+    // cannot reach would fail at the point the owner is trying to be helpful.
+    if (relayReady) {
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
+      items.push({
+        label: 'Share…',
+        onClick: () => setSharingSession({ id: sessionId, name: sessionName }),
+      });
+    }
 
     // Account-assignment items (BDHLNDR-31) — only shown when accounts are registered.
     if (claudeAccounts.length > 0) {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
         label: `${currentAccountId === null ? '✓ ' : '   '}Inherit account from group`,
-        onClick: () => updateSession(sessionId, { claudeAccountId: null }),
+        // Fire-and-forget: the menu closes on click and the store logs its own
+        // failures, so there's nothing for the caller to await.
+        onClick: () => { void handleAssignSessionAccount(sessionId, null); },
       });
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
       for (const acc of claudeAccounts) {
-        const isCurrent = currentAccountId === acc.id;
         items.push({
-          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
-          onClick: () => updateSession(sessionId, { claudeAccountId: acc.id }),
+          label: accountMenuLabel(acc, currentAccountId === acc.id),
+          onClick: () => { void handleAssignSessionAccount(sessionId, acc.id); },
         });
       }
     }
@@ -407,6 +820,11 @@ const App: React.FC = () => {
       { label: 'New Session', onClick: () => handleNewSession(groupId) },
       { label: 'Rename', onClick: () => handleStartEditGroup(groupId, groupName) },
       { label: 'Set Working Directory', onClick: () => handleSetGroupDirectory(groupId) },
+      {
+        label: projectMenuLabel(group),
+        onClick: () => setLinkProjectGroupId(groupId),
+      },
+      { label: 'Set Clone Root…', onClick: () => { void handleSetGroupCloneRoot(groupId); } },
       { label: 'New Sub-Group', onClick: () => handleCreateSubGroup(groupId), disabled: !!groups.find(g => g.id === groupId)?.parentId },
       {
         label: 'Ask Arena About This Folder',
@@ -423,14 +841,20 @@ const App: React.FC = () => {
     if (claudeAccounts.length > 0) {
       items.push({ label: 'separator', onClick: () => {}, separator: true });
       items.push({
-        label: `${currentAccountId === null ? '✓ ' : '   '}Use default account`,
-        onClick: () => updateGroup(groupId, { claudeAccountId: null }),
+        label: defaultAccountMenuLabel(claudeAccounts, currentAccountId === null),
+        // Fire-and-forget, as above — the restart prompt is raised from inside
+        // the handler once main reports which sessions moved.
+        onClick: () => { void handleAssignGroupAccount(groupId, null); },
       });
+      // This item clears the assignment rather than setting one, and during a
+      // usage limit the account it resolves to is usually the one being fled.
+      // A separator so the row above the account list is not one slip away
+      // from undoing the switch the user came here to make (#213).
+      items.push({ label: 'separator', onClick: () => {}, separator: true });
       for (const acc of claudeAccounts) {
-        const isCurrent = currentAccountId === acc.id;
         items.push({
-          label: `${isCurrent ? '✓ ' : '   '}Use "${acc.label}"${acc.isDefault ? ' (default)' : ''}`,
-          onClick: () => updateGroup(groupId, { claudeAccountId: acc.id }),
+          label: accountMenuLabel(acc, currentAccountId === acc.id),
+          onClick: () => { void handleAssignGroupAccount(groupId, acc.id); },
         });
       }
     }
@@ -669,9 +1093,9 @@ const App: React.FC = () => {
     }
   }, [sessions, activeSessionId, setActiveSessionId]);
 
-  const handleCloseSession = useCallback(async () => {
+  const handleCloseSession = useCallback(() => {
     if (activeSessionId) {
-      await handleRemoveSession(activeSessionId);
+      handleRemoveSession(activeSessionId);
     }
   }, [activeSessionId, handleRemoveSession]);
 
@@ -684,8 +1108,8 @@ const App: React.FC = () => {
   // Flat navigation list for keyboard navigation. Mirrors the rendered rows,
   // so it must stay filter-aware (#141).
   const navItems = useMemo(
-    () => buildNavItems(groups, sessions, filter),
-    [groups, sessions, filter],
+    () => buildNavItems(groups, sessions, filter, isSearching),
+    [groups, sessions, filter, isSearching],
   );
 
 
@@ -728,7 +1152,7 @@ const App: React.FC = () => {
   const handleCollapse = useCallback(() => {
     // Rows are force-expanded while filtering, so a collapse write would be an
     // invisible, persisted change (#141).
-    if (!sidebarFocused || !focusedItemId || filter.active) return;
+    if (!sidebarFocused || !focusedItemId || isSearching) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
       if (group && !group.collapsed) {
@@ -740,13 +1164,13 @@ const App: React.FC = () => {
         toggleCollapse(session.groupId);
       }
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse, filter.active]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, sessions, toggleCollapse, isSearching]);
 
   const handleExpand = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
       const group = groups.find(g => g.id === focusedItemId);
-      if (group?.collapsed && !filter.active) {
+      if (group?.collapsed && !isSearching) {
         toggleCollapse(focusedItemId);
       }
     } else if (focusedItemType === 'session') {
@@ -757,12 +1181,12 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId, filter.active]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, groups, toggleCollapse, setActiveSessionId, isSearching]);
 
   const handleSelect = useCallback(() => {
     if (!sidebarFocused || !focusedItemId) return;
     if (focusedItemType === 'group') {
-      if (!filter.active) toggleCollapse(focusedItemId);
+      if (!isSearching) toggleCollapse(focusedItemId);
     } else if (focusedItemType === 'session') {
       setActiveSessionId(focusedItemId);
       setSidebarFocused(false);
@@ -771,7 +1195,7 @@ const App: React.FC = () => {
         window.dispatchEvent(new Event('focus-terminal'));
       }, 50);
     }
-  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId, filter.active]);
+  }, [sidebarFocused, focusedItemId, focusedItemType, toggleCollapse, setActiveSessionId, isSearching]);
 
   const handleNewGroup = useCallback(async () => {
     const name = `Group ${groups.filter(g => !g.parentId).length + 1}`;
@@ -786,6 +1210,36 @@ const App: React.FC = () => {
 
   // Wiring for one session row. Hoisted out of the JSX so the per-row callbacks
   // are not nested five closures deep inside the group/sub-group maps.
+  const [pendingOwner, setPendingOwner] = useState<PendingOwner | null>(null);
+  /** Guests attached right now — the presence surfaces read this. */
+  const [attachedGuests, setAttachedGuests] = useState<RelayAttachedGuest[]>([]);
+  /** Share requests waiting on an answer. */
+  const [pendingShares, setPendingShares] = useState<RelayPendingShare[]>([]);
+  /** The session the share modal is open for, if any. */
+  const [sharingSession, setSharingSession] = useState<{ id: string; name: string } | null>(null);
+  /** Whether sharing can be offered at all — linked, enabled and connected. */
+  const [relayReady, setRelayReady] = useState(false);
+
+  /** Guests watching a given session right now. */
+  const guestsBySession = useMemo(() => {
+    const map = new Map<string, RelayAttachedGuest[]>();
+    for (const guest of attachedGuests) {
+      for (const sessionId of guest.sessionIds) {
+        const list = map.get(sessionId);
+        if (list) list.push(guest);
+        else map.set(sessionId, [guest]);
+      }
+    }
+    return map;
+  }, [attachedGuests]);
+
+  // A session restored from another machine points at a folder that is not
+  // here. Picking the folder is all it takes to make it launchable again.
+  const handleRelinkSession = useCallback(async (id: string, currentDir: string) => {
+    const chosen = await window.electronAPI.selectDirectory(currentDir || undefined);
+    if (chosen) await updateSession(id, { workingDir: chosen, state: 'stopped' });
+  }, [updateSession]);
+
   const sessionRowProps = useCallback((session: Session, groupId: string) => ({
     session,
     isActive: session.id === activeSessionId,
@@ -794,8 +1248,10 @@ const App: React.FC = () => {
     dropPosition: dropTarget?.type === 'session' && dropTarget.id === session.id
       ? dropTarget.position
       : null,
-    draggable: !filter.active,
-    account: effectiveAccountForSession(session.id),
+    draggable: !isSearching,
+    ...sidebarAccountFor(session),
+    watchingCount: guestsBySession.get(session.id)?.length ?? 0,
+    watchingNames: guestsBySession.get(session.id)?.map((g) => (g.login ? `@${g.login}` : (g.displayName ?? 'someone'))),
     isEditing: editingSessionId === session.id,
     editingName: editingSessionName,
     onEditingNameChange: setEditingSessionName,
@@ -809,13 +1265,13 @@ const App: React.FC = () => {
     onDragOver: (e: React.DragEvent) => handleSessionDragOver(e, session.id, groupId),
     onDrop: (e: React.DragEvent) => handleSessionDrop(e, session.id, groupId),
     onClose: () => handleRemoveSession(session.id),
+    onRelink: () => handleRelinkSession(session.id, session.workingDir),
   }), [
     activeSessionId, focusedItemType, focusedItemId, draggedItem, dropTarget,
-    filter.active, effectiveAccountForSession, editingSessionId, editingSessionName,
+    isSearching, sidebarAccountFor, editingSessionId, editingSessionName,
     handleStartEditSession, handleFinishEditSession, handleSessionClick, handleSessionContextMenu,
     handleSessionDragStart, handleDragEnd, handleSessionDragOver, handleSessionDrop,
-    handleRemoveSession,
-  ]);
+    handleRemoveSession, guestsBySession, handleRelinkSession]);
 
   const getContextShortcuts = useCallback(() => {
     if (sidebarFocused) {
@@ -824,7 +1280,7 @@ const App: React.FC = () => {
         { key: 'Enter', label: 'Select' },
         // Collapse/expand is unavailable while filtering — rows are
         // force-expanded, so advertising it would be a lie (#141).
-        ...(filter.active ? [] : [{ key: '←→', label: 'Collapse' }]),
+        ...(isSearching ? [] : [{ key: '←→', label: 'Collapse' }]),
         { key: `${appMod}G`, label: 'New Group' },
       ];
     }
@@ -835,7 +1291,7 @@ const App: React.FC = () => {
       { key: 'Ctrl+Tab', label: 'Next' },
       { key: `${appMod}W`, label: 'Close' },
     ];
-  }, [sidebarFocused, appMod, filter.active]);
+  }, [sidebarFocused, appMod, isSearching]);
 
   const handleNewSubGroup = useCallback(async () => {
     if (focusedItemType === 'group' && focusedItemId) {
@@ -867,6 +1323,7 @@ const App: React.FC = () => {
     onViewTerminal: () => setContentView('terminal'),
     onViewAnalytics: () => setContentView('analytics'),
     onViewArena: () => setContentView('arena'),
+    onViewRuns: () => setContentView('runs'),
   }), [handleKeyboardNewSession, handleNextSession, handlePrevSession, handleNextWaiting, handleCloseSession, handleFocusSidebar, handleNewGroup, handleNewSubGroup, handleNavigateUp, handleNavigateDown, handleCollapse, handleExpand, handleSelect]);
 
   useKeyboardShortcuts(shortcutHandlers);
@@ -891,6 +1348,7 @@ const App: React.FC = () => {
       window.electronAPI.onMenuViewTerminal(() => setContentView('terminal')),
       window.electronAPI.onMenuViewAnalytics(() => setContentView('analytics')),
       window.electronAPI.onMenuViewArena(() => setContentView('arena')),
+      window.electronAPI.onMenuViewRuns(() => setContentView('runs')),
       window.electronAPI.onMenuFocusSidebar(handleFocusSidebar),
       // "Claude Accounts..." is the only discoverable entry point to accounts
       // now that the sidebar key button is gone, so it deep-links Settings
@@ -920,6 +1378,75 @@ const App: React.FC = () => {
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
+  }, []);
+
+  // Owner confirmation (session sharing §3). Lives here rather than in
+  // RemoteHostingSettings because it fires when the agent connects, which is
+  // usually nowhere near the Settings modal — and it must be answered before
+  // the machine can be shared from.
+
+  useEffect(() => {
+    let cancelled = false;
+    const apply = (s: RelayStatus) => {
+      setPendingOwner(s.pendingOwner);
+      setAttachedGuests(s.attachedGuests ?? []);
+      setPendingShares(s.pendingShares ?? []);
+      setRelayReady(s.enabled && s.linked && s.connected);
+    };
+    window.electronAPI
+      .relayGetStatus()
+      .then((s) => {
+        if (!cancelled) apply(s);
+      })
+      .catch(() => {
+        /* relay off or unavailable — nothing to show */
+      });
+    const off = window.electronAPI.onRelayStatus(apply);
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
+
+  const handleApproveShare = useCallback(async (grantId: string) => {
+    try {
+      const status = await window.electronAPI.relayApproveShare(grantId);
+      setPendingShares(status.pendingShares ?? []);
+    } catch {
+      // The request went away underneath us (expired, or revoked elsewhere).
+      // Drop it rather than leaving a prompt that can no longer be answered.
+      setPendingShares((prev) => prev.filter((p) => p.grantId !== grantId));
+    }
+  }, []);
+
+  const handleDenyShare = useCallback(async (grantId: string) => {
+    try {
+      const status = await window.electronAPI.relayDenyShare(grantId);
+      setPendingShares(status.pendingShares ?? []);
+    } catch {
+      setPendingShares((prev) => prev.filter((p) => p.grantId !== grantId));
+    }
+  }, []);
+
+  const handleConfirmOwner = useCallback(async (userId: string) => {
+    try {
+      const status = await window.electronAPI.relayConfirmOwner(userId);
+      setPendingOwner(status.pendingOwner);
+    } catch {
+      // The pending owner changed underneath us (a reconnect asserting someone
+      // else). Clear it and let the next status push re-raise the question,
+      // rather than leaving a stale identity on screen to be confirmed.
+      setPendingOwner(null);
+    }
+  }, []);
+
+  const handleRejectOwner = useCallback(async () => {
+    try {
+      const status = await window.electronAPI.relayRejectOwner();
+      setPendingOwner(status.pendingOwner);
+    } catch {
+      setPendingOwner(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -998,10 +1525,19 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <SidebarFilter value={filterText} onChange={setFilterText} />
+        <SidebarFilter
+          value={filterText}
+          onChange={setFilterText}
+          activeOnly={showActiveOnly}
+          onActiveOnlyChange={handleActiveOnlyChange}
+        />
 
         {filter.active && visibleTopLevelGroups.length === 0 && (
-          <output className="sidebar-filter-empty">No groups or sessions match</output>
+          <output className="sidebar-filter-empty">
+            {showActiveOnly && !filterText.trim()
+              ? 'No groups have active sessions'
+              : 'No groups or sessions match'}
+          </output>
         )}
 
         {visibleTopLevelGroups
@@ -1010,7 +1546,7 @@ const App: React.FC = () => {
             {/* Render main group */}
             <li
               className={`group ${draggedItem?.type === 'group' && draggedItem.id === group.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === group.id ? `drop-${dropTarget.position}` : ''}`}
-              draggable={!filter.active}
+              draggable={!isSearching}
               onDragStart={(e) => handleGroupDragStart(e, group.id)}
               onDragEnd={handleDragEnd}
               onDragOver={(e) => handleGroupDragOver(e, group.id)}
@@ -1027,11 +1563,11 @@ const App: React.FC = () => {
                     e.stopPropagation();
                     toggleCollapse(group.id);
                   }}
-                  disabled={filter.active}
-                  title={chevronTitle(group.collapsed, filter.active)}
-                  aria-label={chevronAriaLabel(group.collapsed, filter.active, 'group')}
+                  disabled={isSearching}
+                  title={chevronTitle(group.collapsed, isSearching)}
+                  aria-label={chevronAriaLabel(group.collapsed, isSearching, 'group')}
                 >
-                  {group.collapsed && !filter.active ? '▶' : '▼'}
+                  {group.collapsed && !isSearching ? '▶' : '▼'}
                 </button>
                 <button
                   className="group-color"
@@ -1103,7 +1639,7 @@ const App: React.FC = () => {
                   +
                 </button>
               </div>
-              {(filter.active || !group.collapsed) && (
+              {(isSearching || !group.collapsed) && (
                 <ul
                   className={`group-sessions ${dropTarget?.id === `group:${group.id}` ? 'drop-target' : ''}`}
                   onDragOver={(e) => handleGroupAreaDragOver(e, group.id)}
@@ -1119,13 +1655,13 @@ const App: React.FC = () => {
             </li>
 
             {/* Render sub-groups when parent not collapsed */}
-            {(filter.active || !group.collapsed) && getSubGroups(group.id)
+            {(isSearching || !group.collapsed) && getSubGroups(group.id)
               .filter(subGroup => !filter.active || filter.visibleGroupIds.has(subGroup.id))
               .map(subGroup => (
               <li
                 key={subGroup.id}
                 className={`group sub-group ${draggedItem?.type === 'group' && draggedItem.id === subGroup.id ? 'dragging' : ''} ${dropTarget?.type === 'group' && dropTarget.id === subGroup.id ? `drop-${dropTarget.position}` : ''}`}
-                draggable={!filter.active}
+                draggable={!isSearching}
                 onDragStart={(e) => handleGroupDragStart(e, subGroup.id)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleGroupDragOver(e, subGroup.id)}
@@ -1142,11 +1678,11 @@ const App: React.FC = () => {
                       e.stopPropagation();
                       toggleCollapse(subGroup.id);
                     }}
-                    disabled={filter.active}
-                    title={chevronTitle(subGroup.collapsed, filter.active)}
-                    aria-label={chevronAriaLabel(subGroup.collapsed, filter.active, 'sub-group')}
+                    disabled={isSearching}
+                    title={chevronTitle(subGroup.collapsed, isSearching)}
+                    aria-label={chevronAriaLabel(subGroup.collapsed, isSearching, 'sub-group')}
                   >
-                    {subGroup.collapsed && !filter.active ? '▶' : '▼'}
+                    {subGroup.collapsed && !isSearching ? '▶' : '▼'}
                   </button>
                   <button
                     className="group-color sub-group-color"
@@ -1211,7 +1747,7 @@ const App: React.FC = () => {
                     +
                   </button>
                 </div>
-                {(filter.active || !subGroup.collapsed) && (
+                {(isSearching || !subGroup.collapsed) && (
                   <ul
                     className={`group-sessions ${dropTarget?.id === `group:${subGroup.id}` ? 'drop-target' : ''}`}
                     onDragOver={(e) => handleGroupAreaDragOver(e, subGroup.id)}
@@ -1233,6 +1769,20 @@ const App: React.FC = () => {
 
       <main className="main">
         <ViewSwitcher value={contentView} onChange={setContentView} shortcutPrefix={appMod} />
+        {failoverNotice && (
+          <FailoverNotice
+            event={failoverNotice}
+            onDismiss={() => setFailoverNotice(null)}
+            onOpenAccounts={() => {
+              setSettingsInitialTab('accounts');
+              setSettingsOpen(true);
+              setFailoverNotice(null);
+            }}
+          />
+        )}
+        {switchNotice && (
+          <AccountSwitchNotice report={switchNotice} onDismiss={() => setSwitchNotice(null)} />
+        )}
         {contentView === 'analytics' && (
           <AnalyticsPanel
             onClose={() => setContentView('terminal')}
@@ -1246,6 +1796,20 @@ const App: React.FC = () => {
             initialGroupId={arenaGroupId}
           />
         )}
+        {contentView === 'runs' && (
+          // Four stacked panels below the .view-switcher. Wrapped in a single
+          // scroll container (flex:1; min-height:0; overflow-y:auto) so the
+          // whole stack scrolls in place rather than growing past the bottom
+          // of the content column with its lower panels/actions unreachable --
+          // the same class of bug .board and .arena-panel already document.
+          <div className="runs-view">
+            <RunPrepare onArmed={() => setRunsRefresh((n) => n + 1)} />
+            <RunArm onArmed={() => setRunsRefresh((n) => n + 1)} />
+            <RunList key={`active-${runsRefresh}`} />
+            <RunInbox key={runsRefresh} />
+          </div>
+        )}
+        {contentView === 'board' && <BoardView />}
         {/* The terminal area is HIDDEN, never unmounted, when another view is
             selected. Unmounting would dispose every xterm instance and kill the
             PTYs, so switching tabs would visually reset all live sessions.
@@ -1266,6 +1830,7 @@ const App: React.FC = () => {
             >
               <TerminalHeader
                 session={session}
+                account={accountIndicatorFor(session)}
                 onRename={(name) => {
                   updateSession(session.id, { name });
                 }}
@@ -1279,7 +1844,11 @@ const App: React.FC = () => {
                   cwd={session.workingDir}
                   launchClaude={session.shellType === 'claude'}
                   provider={session.provider}
-                  isStopped={session.state === 'stopped'}
+                  isStopped={session.state === 'stopped' || !!session.workingDirMissing}
+                  blockedReason={session.workingDirMissing
+                    ? `Working directory not found on this machine: ${session.workingDir || '(none set)'}`
+                    : undefined}
+                  onBlockedAction={() => { void handleRelinkSession(session.id, session.workingDir); }}
                   restartKey={restartKeys[session.id] || 0}
                   isActive={session.id === activeSessionId}
                   sessionState={session.state}
@@ -1339,6 +1908,28 @@ const App: React.FC = () => {
       )}
 
 
+      {/* Binds this machine to a relay account. Rendered last so it sits above
+          anything else that happens to be open — it must be answered. */}
+      <OwnerConfirmModal
+        pending={pendingOwner}
+        onConfirm={handleConfirmOwner}
+        onReject={handleRejectOwner}
+      />
+
+      {/* One at a time: two people asking at once is rare, and stacking
+          consent prompts invites answering the wrong one. */}
+      <GuestJoinRequestModal
+        request={pendingShares[0] ?? null}
+        onApprove={handleApproveShare}
+        onDeny={handleDenyShare}
+      />
+
+      <ShareSessionModal
+        sessionId={sharingSession?.id ?? null}
+        sessionName={sharingSession?.name ?? ''}
+        onClose={() => setSharingSession(null)}
+      />
+
       {/* Name prompt modals */}
       <NamePromptModal
         isOpen={sessionPrompt !== null}
@@ -1377,6 +1968,15 @@ const App: React.FC = () => {
         }}
       />
 
+      {/* Board-driven orchestration: link a group to a GitHub Projects v2 board */}
+      <LinkProjectModal
+        isOpen={linkProjectGroupId !== null}
+        groupName={groups.find(g => g.id === linkProjectGroupId)?.name ?? ''}
+        initialNumber={groups.find(g => g.id === linkProjectGroupId)?.githubProjectNumber ?? null}
+        onConfirm={(n) => { if (linkProjectGroupId) void handleLinkGroupProject(linkProjectGroupId, n); }}
+        onCancel={() => setLinkProjectGroupId(null)}
+      />
+
       {/* Choice menu for + button on groups */}
       <NewItemChoice
         isOpen={newItemChoice !== null}
@@ -1406,6 +2006,13 @@ const App: React.FC = () => {
         onClose={() => setSettingsOpen(false)}
       />
 
+      {/* Raised once when this account has state waiting from another machine. */}
+      <HandoffRestoreOffer onRestored={() => window.location.reload()} />
+
+      {/* What the last restore left undone. Raised only while something is
+          still outstanding; it stays reachable from Settings either way. */}
+      <ArrivalReportModal report={arrivalReport} onClosed={() => setArrivalReport(null)} />
+
       {/* Destructive action confirmation dialog */}
       {confirmAction && (
         <div className="modal-overlay" onClick={() => setConfirmAction(null)}>
@@ -1418,12 +2025,20 @@ const App: React.FC = () => {
           >
             <p id="confirm-message">{confirmAction.message}</p>
             <div className="confirm-actions">
-              <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={() => {
+              <button className="btn btn-secondary" onClick={() => setConfirmAction(null)}>
+                {confirmAction.type === 'restartForAccountSwitch' ? 'Not now' : 'Cancel'}
+              </button>
+              {/* Closing a session or deleting a group destroys something; a
+                  restart to apply an account switch just re-runs it, so it
+                  shouldn't wear the danger styling that says otherwise. */}
+              <button className={`btn ${confirmAction.type === 'restartForAccountSwitch' ? 'btn-primary' : 'btn-danger'}`} onClick={() => {
                 if (confirmAction.type === 'closeSession') doRemoveSession(confirmAction.id);
                 if (confirmAction.type === 'deleteGroup') doDeleteGroup(confirmAction.id);
+                if (confirmAction.type === 'restartForAccountSwitch') restartSessions(confirmAction.sessionIds ?? []);
                 setConfirmAction(null);
-              }}>Confirm</button>
+              }}>
+                {confirmAction.type === 'restartForAccountSwitch' ? 'Restart' : 'Confirm'}
+              </button>
             </div>
           </div>
         </div>

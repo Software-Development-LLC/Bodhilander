@@ -4,7 +4,7 @@
  * Run with: bun test src/main/__tests__
  */
 import { describe, expect, test } from 'bun:test';
-import { classifySpawnFailure } from '../spawn-failure';
+import { classifySpawnFailure, detectSpawnFailure } from '../spawn-failure';
 
 describe('classifySpawnFailure', () => {
   describe("'missing' — shell can't find the CLI", () => {
@@ -89,5 +89,34 @@ describe('classifySpawnFailure', () => {
     test('empty output is not a failure', () => {
       expect(classifySpawnFailure('codex', '')).toBeNull();
     });
+  });
+});
+
+describe('detectSpawnFailure', () => {
+  test('returns the matching line, not the whole launch buffer', () => {
+    const output = 'Welcome to Claude Code!\nhook failed: Error: spawn /usr/bin/foo ENOENT\n> ready';
+    expect(detectSpawnFailure('claude', output)).toEqual({
+      kind: 'broken',
+      line: 'hook failed: Error: spawn /usr/bin/foo ENOENT',
+    });
+  });
+
+  test('strips ANSI from the reported line', () => {
+    const output = '\x1b[31mzsh: command not found: codex\x1b[0m\n';
+    expect(detectSpawnFailure('codex', output)).toEqual({
+      kind: 'missing',
+      line: 'zsh: command not found: codex',
+    });
+  });
+
+  test('caps a very long line', () => {
+    const output = `Error: spawn /${'a'.repeat(400)} ENOENT`;
+    const line = detectSpawnFailure('codex', output)!.line;
+    expect(line.length).toBe(301);
+    expect(line.endsWith('…')).toBe(true);
+  });
+
+  test('null for normal startup', () => {
+    expect(detectSpawnFailure('claude', 'Welcome to Claude Code!')).toBeNull();
   });
 });

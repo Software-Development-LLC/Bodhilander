@@ -1,0 +1,115 @@
+/* Native <dialog> + showModal(): the browser owns modality, focus trapping and
+   the backdrop, so there is no overlay div here and none is wanted. */
+
+.owner-confirm-modal {
+  max-width: 460px;
+  padding: 20px 24px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d4d4d4;
+}
+
+.owner-confirm-modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.owner-confirm-modal h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.owner-confirm-lede {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: #b8b8b8;
+}
+
+/* The account is the whole decision, so it gets the visual weight rather than
+   sitting inside a paragraph the reader can skim past. */
+.owner-confirm-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  background: #1e1e1e;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+}
+
+.owner-confirm-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e0e0e0;
+  /* An account name is arbitrary remote text; never let it push the dialog wide. */
+  overflow-wrap: anywhere;
+}
+
+.owner-confirm-email {
+  font-size: 12px;
+  color: #9a9a9a;
+  overflow-wrap: anywhere;
+}
+
+.owner-confirm-note {
+  margin: 0 0 12px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #9a9a9a;
+}
+
+.owner-confirm-warning {
+  margin: 0 0 12px 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #e8c48a;
+  background: rgba(232, 196, 138, 0.08);
+  border-left: 2px solid #e8c48a;
+  border-radius: 2px;
+}
+
+.owner-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.owner-confirm-buttons button {
+  padding: 7px 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.owner-confirm-reject {
+  background: #3a3a3a;
+  border-color: #4a4a4a !important;
+  color: #d4d4d4;
+}
+
+.owner-confirm-reject:hover {
+  background: #454545;
+}
+
+/* Not btn-danger: confirming is the constructive answer, and colouring it as a
+   destructive one would push people toward the wrong button by reflex. */
+.owner-confirm-accept {
+  background: #0e639c;
+  color: #ffffff;
+}
+
+.owner-confirm-accept:hover {
+  background: #1177bb;
+}
+
+.owner-confirm-buttons button:focus-visible {
+  outline: 2px solid #69adff;
+  outline-offset: 2px;
+}

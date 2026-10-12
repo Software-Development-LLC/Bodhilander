@@ -18,9 +18,11 @@ import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as groupsRepo from '../../repositories/groups';
 import { ptyManager } from '../../pty-manager';
+import { withSpawnRetry, isTransientSpawnError } from '../../spawn-retry';
 import { getApiServer } from '../index';
 import { soundManager } from '../../sound-manager';
 import { resolveLaunchProviderId } from '../../providers';
+import { routeNewSessionByUsage, sessionTokenRefreshPending, sessionTokenRefreshSettled } from '../../session-routing';
 
 /** Emits 'created' (Session) / 'groupsChanged' when sessions or groups are
  *  created remotely, so the main process can refresh the desktop renderer. */
@@ -47,6 +49,9 @@ export function createRemoteGroup(opts: CreateGroupOptions): Group {
     parentId: opts.parentId ?? null,
     collapsed: false,
     claudeAccountId: null,
+    githubProjectNumber: null,
+    githubProjectName: null,
+    cloneRoot: null,
   };
   groupsRepo.createGroup(group);
   log.info('[Relay] remote group created', { id: group.id, name: group.name, parentId: group.parentId });
@@ -97,10 +102,14 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
     durationSeconds: 0,
     claudeAccountId: null,
     provider: opts.provider,
+    // A brand-new session has never been failed over (#207).
+    failoverFromAccountId: null,
+    failoverPrevAccountId: null,
   };
 
   // Step 1 — persist the row, log the start event, notify LAN clients.
   sessionsRepo.createSession(session);
+  routeNewSessionByUsage(id);
   try {
     sessionEventsRepo.createEvent(session.id, 'session_start', null);
   } catch (err) {
@@ -113,7 +122,35 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
   }
 
   // Step 2 — spawn the PTY exactly as pty:create does.
-  ptyManager.createSession(id, cwd, opts.launchClaude, resolveLaunchProviderId(session.provider, opts.provider));
+  //
+  // A remote owner connecting can open sessions in a burst, which is exactly
+  // when macOS hands back a transient `posix_spawnp failed` (EAGAIN — the
+  // process/PTY limit momentarily reached). Keep the common path fully
+  // synchronous (this function returns a Session and its callers aren't async),
+  // but on a transient failure ride it out with delayed background retries so
+  // the pty still attaches to the row we already created, instead of the
+  // session arriving permanently terminal-less.
+  const spawn = (): void =>
+    ptyManager.createSession(id, cwd, opts.launchClaude, resolveLaunchProviderId(session.provider, opts.provider));
+  const launch = (): void => {
+    try {
+      spawn();
+    } catch (err) {
+      if (!isTransientSpawnError(err)) throw err;
+      log.warn('[Relay] transient pty spawn failure; retrying in background', { id });
+      void withSpawnRetry(spawn, { retries: 3, delayMs: 400 }).catch((finalErr) => {
+        log.error('[Relay] pty spawn failed after retries', { id, error: finalErr });
+      });
+    }
+  };
+  // A CLI started mid-refresh would spend the refresh token the refresh just rotated.
+  if (sessionTokenRefreshPending(id)) {
+    void sessionTokenRefreshSettled(id).then(launch).catch((err) => {
+      log.error('[Relay] pty spawn after a token refresh failed', { id, error: err });
+    });
+  } else {
+    launch();
+  }
   try {
     soundManager.playStartSound();
   } catch {
@@ -121,6 +158,7 @@ export function createRemoteSession(opts: CreateSessionOptions): Session {
   }
 
   log.info('[Relay] remote session created', { id, groupId: opts.groupId, provider: opts.provider, launchClaude: opts.launchClaude });
-  remoteSessionEvents.emit('created', session);
-  return session;
+  const created = sessionsRepo.getSession(id) ?? session;
+  remoteSessionEvents.emit('created', created);
+  return created;
 }

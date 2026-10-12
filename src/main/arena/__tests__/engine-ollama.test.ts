@@ -17,7 +17,9 @@ mock.module('../../repositories/preferences', () => ({
 }));
 
 // In-memory stand-in mirroring the repo's semantics so prepareFollowUp's
-// history replay can be exercised (it reads prior rounds via getRun).
+// history replay can be exercised (it reads prior rounds via getRun). It
+// mirrors the repo's FULL export shape: in a shared-registry run a partial
+// mock namespace reads as "Export named '…' not found" to any later importer.
 const finalized: any[] = [];
 const store = { runs: new Map<string, any>(), responses: [] as any[] };
 mock.module('../../repositories/arena', () => ({
@@ -38,6 +40,17 @@ mock.module('../../repositories/arena', () => ({
       Object.assign(row, { status: final.status, text: final.text, sessionRef: final.sessionRef, error: final.error });
     }
   },
+  settleInterruptedResponses: () => {
+    let settled = 0;
+    for (const row of store.responses) {
+      if (row.status === 'running') {
+        row.status = 'error';
+        row.error = 'Interrupted by app restart';
+        settled += 1;
+      }
+    }
+    return settled;
+  },
   getRun: (id: string) => {
     const run = store.runs.get(id);
     if (!run) return null;
@@ -53,6 +66,10 @@ mock.module('../../providers', () => ({
     throw new Error('CLI providers not used in these tests');
   },
 }));
+// The engine imports the key vault, whose real module links electron's
+// safeStorage — an export this file's electron stub does not provide. Without
+// this stub the whole file dies at import in an isolated (per-file) registry.
+mock.module('../../key-vault', () => ({ vaultEnvFor: () => ({}) }));
 
 const { ArenaEngine } = await import('../engine');
 

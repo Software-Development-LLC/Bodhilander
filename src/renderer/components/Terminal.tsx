@@ -1,14 +1,15 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Terminal as XTerm } from 'xterm';
-import { FitAddon } from 'xterm-addon-fit';
-import { WebglAddon } from 'xterm-addon-webgl';
-import { ProviderInstallHint } from '../../shared/types';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
+import { ProviderInstallHint, RelayResizeRequest } from '../../shared/types';
 import { ProviderInstallModal } from './ProviderInstallModal';
+import { KEEP_MY_SIZE, RESIZE_ONCE, resizeRequestCopy, shouldPrompt } from './resizeRequestPrompt';
 // The keyboard scheme lives in one place — see the table at the top of
 // useKeyboardShortcuts.ts. Importing the predicates (instead of re-deriving
 // them here) is what keeps the xterm allowlist and the app handler in sync.
 import { IS_MAC, isAppShortcut, isCopyShortcut, isPasteShortcut } from '../hooks/useKeyboardShortcuts';
-import 'xterm/css/xterm.css';
+import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
 interface TerminalProps {
@@ -26,6 +27,13 @@ interface TerminalProps {
   restartKey?: number;
   isActive?: boolean;
   sessionState?: string;
+  /**
+   * Why this session cannot be launched at all. Set, the stopped pane offers
+   * the fix instead of a Start button that would throw in pty-manager.
+   */
+  blockedReason?: string;
+  /** What to do about `blockedReason` — today, pick a working directory. */
+  onBlockedAction?: () => void;
   onStart?: () => void;
   onError?: (error: string) => void;
   /**
@@ -54,12 +62,16 @@ const AUTO_SCROLL_THRESHOLD = 5;
 // this by requiring a sane minimum before propagating a resize.
 const MIN_COLS = 10;
 const MIN_ROWS = 2;
+
+/** The mount's own fit, one frame plus this long after the terminal opens. */
+export const INITIAL_FIT_DELAY_MS = 50;
+
 // Context-menu hints. Copy/paste are Cmd+C/Cmd+V on macOS and Ctrl+Shift+C/V
 // elsewhere, because bare Ctrl+C must stay available to send SIGINT.
 const COPY_SHORTCUT_LABEL = IS_MAC ? 'Cmd+C' : 'Ctrl+Shift+C';
 const PASTE_SHORTCUT_LABEL = IS_MAC ? 'Cmd+V' : 'Ctrl+Shift+V';
 
-const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, provider, isStopped = false, restartKey = 0, isActive = false, sessionState, onStart, onError, externalPty = false }) => {
+const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true, provider, isStopped = false, restartKey = 0, isActive = false, sessionState, blockedReason, onBlockedAction, onStart, onError, externalPty = false }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -67,6 +79,19 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   const lastPasteTimeRef = useRef<number>(0);
   const prevSessionStateRef = useRef<string | undefined>(sessionState);
   const [isRunning, setIsRunning] = useState(!isStopped);
+  /**
+   * A restart or retry is between "killed the pty" and "spawned its
+   * replacement" (#164).
+   *
+   * Waiting for the process to really die replaced a 100ms flash with a wait
+   * as long as Claude Code takes to exit, and the stopped view — "Session
+   * stopped", with a Start button — is the wrong thing to show for seconds of
+   * it. It reads as a failed restart, and its Start button spawns a pty with no
+   * kill and no ordering, which is precisely the create-before-death race this
+   * whole change removes. So the in-between gets its own view, with no button
+   * to press.
+   */
+  const [restarting, setRestarting] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, hasSelection: false });
   const [error, setError] = useState<string | null>(null);
   // Launch-failure hint from main (provider CLI missing or broken): shown as
@@ -80,6 +105,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // unrequested) from our own.
   const desktopSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const [mobileSize, setMobileSize] = useState<{ cols: number; rows: number } | null>(null);
+  // A guest asked to be fitted to their screen. Held until the owner answers:
+  // guests never resize this PTY themselves, so nothing has happened yet.
+  const [resizeRequest, setResizeRequest] = useState<RelayResizeRequest | null>(null);
+  // Whether this window is currently holding a size it granted to a guest.
+  const heldFitRef = useRef(false);
 
   // Track isActive in a ref so handleResize (set up in the main effect which
   // does NOT depend on isActive) can skip background sessions without a layout
@@ -88,6 +118,28 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
   // says nothing about which content view is showing.
   const isActiveRef = useRef(isActive);
   useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
+
+  // Whether this component is still on screen (#164). The restart/retry paths
+  // now await the pty's real death, so their continuation runs at a moment no
+  // effect scope covers — closing the session mid-restart must not flip a
+  // torn-down terminal back to "running" and respawn the pty behind it. This is
+  // component lifetime, distinct from the per-run `mounted` flag inside the
+  // xterm effect, which only guards that effect's own async work.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  // Stop is a decision the user can take DURING a restart's kill window, and
+  // that window is now as long as the process takes to die (#164). The [isStopped]
+  // effect below can't carry it: it sets isRunning to false, which it already
+  // is mid-restart, so React re-renders nothing and the restart's continuation
+  // goes on to spawn a replacement the user just asked not to exist. Worse, a
+  // second Stop click changes no prop, so that effect never fires again. The
+  // ref lets the continuation read the prop as of the moment it resumes.
+  const isStoppedRef = useRef(isStopped);
+  useEffect(() => { isStoppedRef.current = isStopped; }, [isStopped]);
 
   // Fit the xterm renderer to the current container size AND propagate the new
   // cols/rows to the PTY (BDHLNDR-12). Kept as a single source of truth so the
@@ -100,6 +152,12 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     // early-out spares the layout flush below for every background session on
     // each window resize.
     if (!isActiveRef.current) return;
+    // A fit granted to a guest is held until this window takes it back on
+    // purpose. Without this the next focus, window resize or session switch
+    // re-measures an unchanged container and pushes the desktop grid back —
+    // silently, and with no message to the guest, who cannot ask again for
+    // ten seconds and is panning a 164-column terminal in the meantime.
+    if (heldFitRef.current) return;
     // …but isActive only tracks which SESSION is selected; it says nothing
     // about which CONTENT VIEW is showing. App.tsx hides the whole
     // .terminal-area with display:none while Analytics or Arena is active, and
@@ -118,15 +176,10 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     const rect = terminalRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) return;
 
-    // BDHLNDR-43: fitAddon.fit() drives xterm's internal resize
-    // (onResize → _renderService.handleResize / the deferred
-    // _pausedResizeTask). If a queued resize (ResizeObserver rAF, window
-    // 'resize', activation-effect timers) lands during/after teardown, those
-    // xterm internals are undefined and throw the recurring
-    // "Cannot read properties of undefined (reading 'handleResize')". Refs are
-    // nulled on cleanup so this normally early-returns; this try/catch is the
-    // final safety net so any residual dispose/paused-renderer race can never
-    // escape to window.onerror (same posture as the BDHLNDR-8 dispose guards).
+    // Refs are nulled on cleanup so a queued resize (ResizeObserver rAF,
+    // window 'resize', activation-effect timers) normally early-returns
+    // before reaching here; this try/catch is the remaining defense against
+    // a dispose/paused-renderer race that slips through anyway.
     try {
       fitAddonRef.current.fit();
       const { cols, rows } = xtermRef.current;
@@ -141,8 +194,10 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     }
   }, [sessionId]);
 
-  // Resume the desktop's own size (undo a mobile viewer's shrink).
+  // Resume the desktop's own size (undo a mobile viewer's shrink, or a fit
+  // this window granted to a guest — taking it back is a deliberate act).
   const resumeDesktopSize = useCallback(() => {
+    heldFitRef.current = false;
     setMobileSize(null);
     handleResize();
   }, [handleResize]);
@@ -157,6 +212,9 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       const desk = desktopSizeRef.current;
       if (!desk) return; // haven't fit yet — nothing to compare against
       if (cols === desk.cols && rows === desk.rows) {
+        // Back at this window's own size by some other route — whatever was
+        // being held for a guest is over, so re-fitting is allowed again.
+        heldFitRef.current = false;
         setMobileSize(null);
         return;
       }
@@ -166,6 +224,37 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       }
     });
   }, [sessionId]);
+
+  // A guest asked for this session to be fitted to their screen. It is a
+  // request and only a request: it reaches a prompt, never the PTY.
+  useEffect(() => {
+    return window.electronAPI.onRelayResizeRequest((request) => {
+      if (!shouldPrompt(request, sessionId, desktopSizeRef.current)) return;
+      // The prompt in front of the owner is the one they answer. Replacing it
+      // means the size they read is not the size they agree to — a second
+      // guest asking between the reading and the click would resize this
+      // terminal to a number nobody ever saw.
+      setResizeRequest((pending) => pending ?? request);
+    });
+  }, [sessionId]);
+
+  // Accepting resizes once — one act, not a standing rule. The size is then
+  // HELD against this window's own re-fits until the owner takes it back
+  // through the banner below, because a fit that dies at the next focus is a
+  // promise to the guest that this window quietly breaks.
+  const acceptResizeRequest = useCallback(() => {
+    const request = resizeRequest;
+    setResizeRequest(null);
+    if (!request) return;
+    heldFitRef.current = true;
+    setMobileSize({ cols: request.cols, rows: request.rows });
+    try { xtermRef.current?.resize(request.cols, request.rows); } catch { /* disposed */ }
+    window.electronAPI.resizeSession(sessionId, request.cols, request.rows);
+  }, [resizeRequest, sessionId]);
+
+  // Declining tells the guest nothing and changes nothing: their view stays
+  // exactly as it was, and they may ask again later.
+  const declineResizeRequest = useCallback(() => setResizeRequest(null), []);
 
   // Surface provider launch failures (spawn ENOENT / command not found)
   // detected by main for this session's pty.
@@ -197,23 +286,68 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     setIsRunning(!isStopped);
   }, [isStopped]);
 
-  // Handle restart: cycle isRunning off then on to kill PTY and start fresh
+  /**
+   * Restart: kill the pty, wait for it to actually be dead, then spawn again.
+   *
+   * This used to be a fixed 100ms timer (#164). Claude Code takes far longer
+   * than that to exit, so the replacement pty was inserted under this session
+   * id while the old one was still dying — and the old process's exit then
+   * landed on its own replacement. Depending on the exit code that either
+   * orphaned the new pty (main dropped it from its map, so every keystroke and
+   * every byte of output was silently discarded and the switch looked like a
+   * no-op) or ran the BDHLNDR-9 resume-failure fallback against it, which
+   * cleared the stored conversation UUID and started the user over on a blank
+   * conversation. 'pty:kill' is an invoke handle now and main resolves it on
+   * the process's real exit, so the respawn is ordered after the death instead
+   * of guessing at how long one takes.
+   *
+   * Deliberately NOT keyed on isActive: this effect kills a pty, and re-running
+   * it because the user clicked a different session in the sidebar would
+   * restart every session that has ever been restarted, every time focus moved.
+   * The focus follow-up reads isActiveRef so it still only steals focus for the
+   * session actually on screen.
+   */
   useEffect(() => {
-    if (restartKey > 0) {
-      setIsRunning(false);
-      const timer = setTimeout(() => {
-        setError(null);
-        setIsRunning(true);
-        // Focus terminal after restart is complete (wait for terminal to be created)
-        setTimeout(() => {
-          if (isActive && xtermRef.current) {
-            xtermRef.current.focus();
-          }
-        }, 200);
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [restartKey, isActive]);
+    if (restartKey === 0) return;
+
+    let cancelled = false;
+    let focusTimer: number | undefined;
+
+    setIsRunning(false);
+    setRestarting(true);
+
+    void (async () => {
+      try {
+        await window.electronAPI.killSession(sessionId);
+      } catch (err) {
+        // safeHandle re-throws into the renderer now, so a kill can fail here.
+        // A session left stopped is worse than one restarted over a pty that
+        // may still be draining — main coalesces per id, so the respawn's own
+        // kill still waits on whatever teardown is in flight.
+        console.warn('Kill before restart failed; restarting anyway:', err);
+      }
+      if (cancelled || !isMountedRef.current) return;
+      setRestarting(false);
+      // The user pressed Stop while we were waiting for the old pty to die.
+      // The kill they wanted has already happened; finishing the restart would
+      // hand them back a running session they explicitly asked to end.
+      if (isStoppedRef.current) return;
+      setError(null);
+      setIsRunning(true);
+      // Focus after the replacement terminal has had a frame to be created.
+      focusTimer = window.setTimeout(() => {
+        if (isActiveRef.current && xtermRef.current) {
+          xtermRef.current.focus();
+        }
+      }, 200);
+    })();
+
+    return () => {
+      cancelled = true;
+      setRestarting(false);
+      if (focusTimer !== undefined) clearTimeout(focusTimer);
+    };
+  }, [restartKey, sessionId]);
 
   // Listen for focus-terminal event to focus this terminal
   useEffect(() => {
@@ -394,6 +528,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         cursor: '#d4d4d4',
         cursorAccent: '#1e1e1e',
         selectionBackground: '#2a3570',
+        // The scrollbar is xterm's own overlay slider now, not a styleable
+        // .xterm-viewport — these reproduce the old thin dark-grey look.
+        scrollbarSliderBackground: '#3a3a3a',
+        scrollbarSliderHoverBackground: '#4a4a4a',
+        scrollbarSliderActiveBackground: '#5a5a5a',
       },
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 14,
@@ -421,7 +560,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         term.loadAddon(webglAddon);
         webglAddonRef.current = webglAddon;
       } catch (e) {
-        console.warn('WebGL addon failed to load, using canvas renderer:', e);
+        console.warn('WebGL addon failed to load, falling back to the DOM renderer:', e);
       }
     });
 
@@ -594,7 +733,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
 
     // Initial fit after layout settles
     requestAnimationFrame(() => {
-      setTimeout(() => handleResize(), 50);
+      setTimeout(() => handleResize(), INITIAL_FIT_DELAY_MS);
     });
 
     return () => {
@@ -607,7 +746,13 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
       window.removeEventListener('focus', handleResize);
       resizeObserver.disconnect();
       cleanupPtyData();
-      window.electronAPI.killSession(sessionId);
+      // killSession is an invoke handle now (#164) and safeHandle re-throws, so
+      // an unswallowed rejection here would surface as an unhandled rejection
+      // during teardown — reported by window.onunhandledrejection with no
+      // context and nothing the user can act on. Silent on purpose: a cleanup
+      // has no UI left to report into, and the restart path above logs the same
+      // failure at the point where it still means something.
+      void window.electronAPI.killSession(sessionId).catch(() => {});
 
       // Dispose the WebGL addon explicitly before term.dispose() so its internal
       // RenderService is still valid. Letting term.dispose() cascade into the
@@ -638,24 +783,55 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     };
   }, [sessionId, cwd, launchClaude, isRunning, handleResize, pasteFromClipboard]);
 
+  /**
+   * Start a stopped session — and, like every other respawn path, only once
+   * whatever pty this id had is gone (#164).
+   *
+   * Stop's own kill comes from the xterm effect's cleanup, which is
+   * fire-and-forget, so nothing used to order it against the create that a
+   * Start issues next. Killing again is free when there is nothing to kill:
+   * main resolves immediately for an unknown id, and joins the teardown
+   * already in flight when there is one.
+   */
   const handleStart = () => {
     setError(null);
     setInstallHint(null);
     setInstallSucceeded(false);
-    setIsRunning(true);
-    onStart?.();
+    void (async () => {
+      try {
+        await window.electronAPI.killSession(sessionId);
+      } catch (err) {
+        console.warn('Kill before start failed; starting anyway:', err);
+      }
+      if (!isMountedRef.current) return;
+      setIsRunning(true);
+      onStart?.();
+    })();
   };
 
+  // Same ordering rule as the restart effect (#164): the old pty has to be gone
+  // before a replacement is spawned under the same session id, or the dying
+  // process's exit lands on its successor. The 100ms guess this replaces was
+  // the shorter of the two windows, since a retry usually follows a launch that
+  // already failed — but "usually already dead" is not an ordering guarantee.
   const handleRetry = () => {
     setError(null);
     setInstallHint(null);
     setInstallSucceeded(false);
     setIsRunning(false);
-    // Small delay then restart
-    setTimeout(() => {
+    setRestarting(true);
+    void (async () => {
+      try {
+        await window.electronAPI.killSession(sessionId);
+      } catch (err) {
+        console.warn('Kill before retry failed; retrying anyway:', err);
+      }
+      if (!isMountedRef.current) return;
+      setRestarting(false);
+      if (isStoppedRef.current) return;
       setIsRunning(true);
       onStart?.();
-    }, 100);
+    })();
   };
 
   // Launch-failure banner + install modal, shared by the running and stopped
@@ -733,6 +909,35 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     );
   }
 
+  // Ordered before the stopped view on purpose: both are "no terminal on
+  // screen", but only one of them is waiting for something, and only one of
+  // them should offer a button that spawns a pty (#164).
+  if (restarting) {
+    return (
+      <output className="terminal-stopped terminal-restarting">
+        {installHintUi}
+        <p>Waiting for the session to exit…</p>
+        <p className="terminal-restarting-detail">
+          It will start again on its own. Claude Code can take a few seconds to shut down.
+        </p>
+      </output>
+    );
+  }
+
+  if (!isRunning && blockedReason) {
+    return (
+      <div className="terminal-stopped terminal-blocked">
+        {installHintUi}
+        <p>{blockedReason}</p>
+        <p className="terminal-blocked-detail">
+          The folder this session ran in is not on this machine — it may have moved, or come from a
+          transfer bundle written elsewhere. Point it at the folder to start it again.
+        </p>
+        {onBlockedAction && <button onClick={onBlockedAction}>Set Working Directory…</button>}
+      </div>
+    );
+  }
+
   if (!isRunning) {
     return (
       <div className="terminal-stopped">
@@ -750,6 +955,17 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
         className="terminal-container"
         onContextMenu={handleContextMenu}
       />
+      {resizeRequest && (
+        <output className="resize-request-banner">
+          <span className="resize-request-text">
+            👀 {resizeRequestCopy(resizeRequest, desktopSizeRef.current)}
+          </span>
+          <div className="resize-request-actions">
+            <button className="primary" onClick={acceptResizeRequest}>{RESIZE_ONCE}</button>
+            <button onClick={declineResizeRequest}>{KEEP_MY_SIZE}</button>
+          </div>
+        </output>
+      )}
       {mobileSize && (
         <div className="mobile-resize-banner">
           <span className="mobile-resize-banner-text">

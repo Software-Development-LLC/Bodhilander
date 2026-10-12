@@ -1,0 +1,109 @@
+/**
+ * Where a person lands when the app opens, and how the machine picker reads.
+ * Apart from main.ts so it can be tested: main.ts pulls in xterm and runs
+ * boot() at import time, so nothing in it is reachable from a unit test.
+ */
+
+/** The `/api/machines` fields these decisions read. */
+export interface ArrivalMachine {
+  id: string;
+  name: string;
+  /** How you reach it. Guests get a certificate; owners get null. */
+  relation?: 'owner' | 'grantee';
+  ownerName?: string | null;
+}
+
+export interface Arrival<T extends ArrivalMachine = ArrivalMachine> {
+  /** The machine to connect to. */
+  machine: T;
+  /** Whether the machine pill — and the picker behind it — is offered at all. */
+  showPicker: boolean;
+  /** Skip the session list on arrival: see `planArrival`. */
+  landInTerminal: boolean;
+}
+
+export const isGuestMachine = (m: ArrivalMachine): boolean => m.relation === 'grantee';
+
+/**
+ * Label by PERSON for a guest. "Machine" is owner vocabulary: a guest was
+ * invited to a session by someone, and has no relationship with the hardware.
+ */
+export function machineLabel(m: ArrivalMachine): string {
+  return isGuestMachine(m) && m.ownerName ? `${m.ownerName}'s ${m.name}` : m.name;
+}
+
+/**
+ * How to open for this person. One grant and nothing of their own means no
+ * picker and no list: choosing between one thing is not a choice. Anyone with
+ * a machine of their own keeps the pill — it is also how they link another.
+ */
+export function planArrival<T extends ArrivalMachine>(machines: T[], preferredId: string | null): Arrival<T> | null {
+  if (!machines.length) return null;
+  const machine = machines.find((m) => m.id === preferredId) ?? machines[0]!;
+  const single = machines.length === 1 && isGuestMachine(machines[0]!);
+  return { machine, showPicker: !single, landInTerminal: single };
+}
+
+export interface MachineSection<T extends ArrivalMachine = ArrivalMachine> {
+  title: string;
+  items: T[];
+}
+
+/**
+ * The picker's rows, split by whose they are. Shared rows are named after the
+ * person who shared them — "SHARED WITH ME" over "Will's laptop" — so the
+ * list reads as people rather than as inventory.
+ */
+export function machineSections<T extends ArrivalMachine>(machines: T[]): MachineSection<T>[] {
+  const mine = machines.filter((m) => !isGuestMachine(m));
+  const shared = machines
+    .filter(isGuestMachine)
+    .slice()
+    .sort((a, b) => (a.ownerName ?? '').localeCompare(b.ownerName ?? '') || a.name.localeCompare(b.name));
+  const sections: MachineSection<T>[] = [];
+  if (mine.length) sections.push({ title: 'My machines', items: mine });
+  if (shared.length) sections.push({ title: 'Shared with me', items: shared });
+  return sections;
+}
+
+/**
+ * Whether the headings earn their place. A heading separates one section from
+ * another, so the only section has nothing to separate itself from — and it
+ * would repeat the sheet's own title directly underneath it.
+ */
+export function showSectionTitles(sections: MachineSection<ArrivalMachine>[]): boolean {
+  return sections.length > 1;
+}
+
+/**
+ * The picker's own heading. It says the same thing as the section inside it,
+ * in the same voice — two names for one list on one screen is a wobble.
+ */
+export function machineMenuTitle(machines: ArrivalMachine[]): string {
+  return machines.length > 0 && machines.every(isGuestMachine) ? 'Shared with me' : 'Machines';
+}
+
+/** What the app has already opened, so landing happens once and only once. */
+export interface Opened {
+  /** True once this arrival has landed, even if they have since gone Back. */
+  landed: boolean;
+  /** The terminal on screen right now, if any. */
+  activeId: string | null;
+}
+
+/**
+ * The session to open without being asked, or null when there is a real
+ * choice: a grant covering several sessions is a list to read, and picking
+ * one would hide the others.
+ */
+export function autoOpenSessionId(
+  arrival: Arrival | null,
+  sessionIds: string[],
+  opened: Opened,
+): string | null {
+  // `landed` outlives `activeId` on purpose: going Back clears the terminal
+  // but not the fact of having arrived, and the list is polled every couple of
+  // seconds — without it each refresh would drag the guest straight back in.
+  if (!arrival?.landInTerminal || opened.landed || opened.activeId) return null;
+  return sessionIds.length === 1 ? sessionIds[0]! : null;
+}

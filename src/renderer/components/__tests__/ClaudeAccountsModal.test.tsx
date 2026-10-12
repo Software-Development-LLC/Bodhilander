@@ -1,0 +1,549 @@
+/**
+ * The accounts panel's row — which accounts are actually in use (#165).
+ *
+ * Deleting an account unbinds every session on it, and before this the list
+ * gave no way to tell which rows that would disturb. The in-use pill has to be
+ * legible next to the pre-existing `default` tag without leaning on colour, so
+ * these tests pin the count and the accessible name, not the styling.
+ *
+ * AccountRow is tested directly: the panel around it self-fetches, and
+ * stubbing four IPC methods to reach the same markup buys nothing. The panel
+ * itself is stood up only for the delete confirmation, which is the one thing
+ * the row does not own.
+ *
+ * Run with: bun test src/renderer/components/__tests__/ClaudeAccountsModal.test.tsx
+ */
+import React from 'react';
+import { describe, expect, test, afterEach } from 'bun:test';
+import { act, render, screen, cleanup, fireEvent } from '@testing-library/react';
+import {
+  AccountRow,
+  ClaudeAccountsPanel,
+  FailoverSettings,
+  LoginBanner,
+  LoginHint,
+  removalWarning,
+  runningWarning,
+  THRESHOLD_SAVE_DEBOUNCE_MS,
+} from '../ClaudeAccountsModal';
+import { AccountUsage, ClaudeAccount } from '../../../shared/types';
+
+afterEach(cleanup);
+
+function account(overrides: Partial<ClaudeAccount> = {}): ClaudeAccount {
+  return {
+    id: 'a1',
+    label: 'Personal',
+    email: 'me@example.com',
+    color: '#61afef',
+    isDefault: false,
+    ...overrides,
+  } as ClaudeAccount;
+}
+
+function renderRow(overrides: Partial<ClaudeAccount> = {}, runningSessions = 0) {
+  let deleted = 0;
+  let madeDefault = 0;
+  render(
+    <AccountRow
+      account={account(overrides)}
+      runningSessions={runningSessions}
+      onMakeDefault={() => { madeDefault++; }}
+      onDelete={() => { deleted++; }}
+    />
+  );
+  return { deleted: () => deleted, madeDefault: () => madeDefault };
+}
+
+const inUse = () => document.querySelector('.in-use-tag') as HTMLElement;
+const signedOut = () => document.querySelector('.signed-out-tag') as HTMLElement;
+
+describe('AccountRow', () => {
+  test('names the account through the shared chip', () => {
+    renderRow();
+    expect(document.querySelector('.account-chip-md')).toBeTruthy();
+    expect(screen.getByText('Personal')).toBeTruthy();
+    expect(screen.getByText('me@example.com')).toBeTruthy();
+  });
+
+  test('an idle account carries no usage badge at all', () => {
+    renderRow({}, 0);
+    expect(inUse()).toBeNull();
+  });
+
+  test('an account resolved as signed out is the one told to log in', () => {
+    renderRow({ email: null, loggedIn: false });
+    expect(signedOut()).toBeTruthy();
+    expect(signedOut().getAttribute('aria-label')).toBe('Not signed in');
+  });
+
+  // The status follows the resolved login, not the address: on macOS a healthy
+  // account records no address, and this is the row where a user would act on
+  // being told — wrongly — that none of their accounts had ever logged in.
+  test('a logged-in account with no address is not told to log in', () => {
+    renderRow({ email: null, loggedIn: true });
+    expect(signedOut()).toBeNull();
+    expect(screen.getByText('Personal')).toBeTruthy();
+  });
+
+  test('an unresolved account makes no claim about its login either way', () => {
+    renderRow({ email: null });
+    expect(signedOut()).toBeNull();
+  });
+
+  // The address used to outrank the status and hide it. That was a safety net
+  // for a login state that could not be trusted; now that it can, and now that
+  // every login records an address, that rule would hide every logout instead.
+  // The two answer different questions, so the row carries both.
+  test('a signed-out account keeps its address AND says it is signed out', () => {
+    renderRow({ email: 'me@example.com', loggedIn: false });
+    expect(screen.getByText('me@example.com')).toBeTruthy();
+    expect(signedOut()).toBeTruthy();
+  });
+
+  test('the status reads without colour, in the tag and its accessible name', () => {
+    renderRow({ email: 'me@example.com', loggedIn: false });
+    expect(signedOut().textContent).toContain('not signed in');
+    expect(signedOut().getAttribute('title')).toContain('log in again');
+  });
+
+  test('usage is reported as a number, not a tint', () => {
+    renderRow({}, 2);
+    expect(inUse().textContent).toContain('2');
+    expect(inUse().getAttribute('aria-label')).toBe('In use by 2 running sessions');
+  });
+
+  test('a single session reads in the singular', () => {
+    renderRow({}, 1);
+    expect(inUse().getAttribute('aria-label')).toBe('In use by 1 running session');
+    expect(inUse().getAttribute('title')).toContain('session is');
+  });
+
+  test('default and in-use are two distinct tags, not one merged state', () => {
+    renderRow({ isDefault: true }, 1);
+    const tag = document.querySelector('.default-tag') as HTMLElement;
+    expect(tag).toBeTruthy();
+    expect(inUse()).toBeTruthy();
+    expect(tag === inUse()).toBe(false);
+    // The default account has nothing to promote it to.
+    expect(screen.queryByText('Make default')).toBeNull();
+  });
+
+  test('the row actions report up rather than acting themselves', () => {
+    const { deleted, madeDefault } = renderRow();
+    fireEvent.click(screen.getByText('Make default'));
+    fireEvent.click(screen.getByText('Delete'));
+    expect(madeDefault()).toBe(1);
+    expect(deleted()).toBe(1);
+  });
+});
+
+/**
+ * The panel is stood up for one thing the row cannot answer: the delete
+ * confirmation. The panel already knows how many ptys are on an account — it
+ * renders the number two inches above the button — and deleting removes the
+ * config dir out from under them, so withholding that from the dialog while it
+ * says "sessions themselves are kept" is the one place that count had a job.
+ */
+describe('ClaudeAccountsPanel delete confirmation', () => {
+  const listed: ClaudeAccount[] = [account({ id: 'a1', label: 'Personal' })];
+
+  function stubApi(
+    live: Record<string, { accountId: string | null }>,
+    cost: { sessions: number; conversations: number } = { sessions: 0, conversations: 0 },
+  ) {
+    const deleted: string[] = [];
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      listAccounts: async () => listed,
+      getLiveAccounts: async () => live,
+      onPtyLiveAccount: () => () => {},
+      onAccountLoginCompleted: () => () => {},
+      accountRemovalCost: async () => cost,
+      deleteAccount: async (id: string) => { deleted.push(id); },
+      setDefaultAccount: async () => true,
+      startAccountLogin: async () => ({ account: listed[0], ptyId: 'p' }),
+      cancelAccountLogin: async () => {},
+      // Failover surface (#207): the panel reads the toggles and
+      // can reorder or release accounts.
+      getAllPreferences: async () => ({}),
+      setPreference: async () => {},
+      setAccountFallbackOrder: async () => {},
+      clearAccountLimit: async () => {},
+      getAccountUsage: async () => ({}),
+      refreshAccountUsage: async () => ({}),
+      onAccountUsageUpdated: () => () => {},
+      platform: 'darwin',
+      homedir: '/home',
+    };
+    return deleted;
+  }
+
+  async function openPanel(
+    live: Record<string, { accountId: string | null }>,
+    cost?: { sessions: number; conversations: number },
+  ) {
+    const deleted = stubApi(live, cost);
+    const messages: string[] = [];
+    (window as unknown as { confirm: (m: string) => boolean }).confirm = (m: string) => {
+      messages.push(m);
+      return true;
+    };
+    await act(async () => { render(<ClaudeAccountsPanel />); });
+    return { deleted, messages };
+  }
+
+  const clickDelete = () => act(async () => { fireEvent.click(screen.getByText('Delete')); });
+
+  test('names the sessions that will lose their account directory', async () => {
+    const { deleted, messages } = await openPanel({
+      s1: { accountId: 'a1' },
+      s2: { accountId: 'a1' },
+      s3: { accountId: 'other' },
+    });
+
+    await clickDelete();
+
+    expect(messages[0]).toContain('2 sessions are using it right now');
+    expect(messages[0]).toContain('their account directory goes away underneath them');
+    expect(deleted).toEqual(['a1']);
+  });
+
+  test('says nothing about running sessions when there are none', async () => {
+    const { messages } = await openPanel({ s3: { accountId: 'other' } });
+
+    await clickDelete();
+
+    expect(messages[0]).not.toContain('using it right now');
+  });
+
+  /**
+   * The transcripts go with the config directory, and nothing else on disk
+   * records them. A confirmation that only lists what it unsets reads as
+   * reversible, which is how a machine handoff's carried history gets thrown
+   * away by someone tidying up stale accounts.
+   */
+  test('counts the conversations the delete destroys', async () => {
+    const { messages } = await openPanel({}, { sessions: 3, conversations: 12 });
+
+    await clickDelete();
+
+    expect(messages[0]).toContain('permanently deletes 12 saved conversations');
+    expect(messages[0]).toContain('The 3 sessions bound to this account stay in the sidebar');
+    expect(messages[0]).toContain('cannot be resumed');
+  });
+
+  /**
+   * Measuring the cost is a new round-trip standing between the button and the
+   * dialog. If it can reject, it can take the whole delete with it and leave a
+   * button that does nothing when clicked.
+   */
+  test('still offers the delete when the cost cannot be measured', async () => {
+    const deleted = stubApi({});
+    (window as unknown as { electronAPI: { accountRemovalCost: () => Promise<never> } })
+      .electronAPI.accountRemovalCost = () => Promise.reject(new Error('database is locked'));
+    const messages: string[] = [];
+    (window as unknown as { confirm: (m: string) => boolean }).confirm = (m: string) => {
+      messages.push(m);
+      return true;
+    };
+    await act(async () => { render(<ClaudeAccountsPanel />); });
+
+    await clickDelete();
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('removes its saved credentials');
+    expect(messages[0]).not.toContain('permanently deletes');
+    expect(deleted).toEqual(['a1']);
+  });
+});
+
+/**
+ * The login overlay's copy. It sits on top of the accounts panel, which reads
+ * the same config dir main just read, so any claim it makes that main could
+ * not confirm puts two answers about one account on screen at once.
+ */
+describe('LoginHint', () => {
+  function hint(props: Partial<React.ComponentProps<typeof LoginHint>> = {}) {
+    render(
+      <LoginHint
+        completed={false}
+        verified={false}
+        exited={false}
+        isMac={false}
+        {...props}
+      />
+    );
+    return document.body.textContent ?? '';
+  }
+
+  test('a login main actually saw is reported as signed in', () => {
+    expect(hint({ completed: true, verified: true })).toContain('signed in');
+  });
+
+  // The user can press "I'm logged in" before OAuth finishes: main resolves no
+  // login, writes no address, and the panel behind renders "Not yet logged in".
+  test('a completion main could not confirm never claims the account is signed in', () => {
+    const text = hint({ completed: true, verified: false, isMac: true });
+    expect(text).not.toContain('signed in');
+    expect(text).toContain('Recorded');
+    expect(text).toContain('/login');
+  });
+
+  test('an exited login is reported as exited, not as completed', () => {
+    const text = hint({ exited: true });
+    expect(text).toContain('exited before credentials were saved');
+    expect(text).not.toContain('signed in');
+  });
+
+  test('a completed login outranks an exit that followed it', () => {
+    expect(hint({ completed: true, verified: true, exited: true })).toContain('signed in');
+  });
+
+  test('macOS is told about the button it alone is shown', () => {
+    expect(hint({ isMac: true })).toContain("I'm logged in");
+  });
+
+  test('every other platform is not offered a button it does not have', () => {
+    const text = hint({ isMac: false });
+    expect(text).not.toContain("I'm logged in");
+    expect(text).toContain('/login');
+  });
+});
+
+/**
+ * The banner is the overlay's most emphatic claim, and the one a user acts on
+ * by closing the window. It may only appear for a login main actually found.
+ */
+describe('LoginBanner', () => {
+  const banner = () => document.querySelector('.completion-banner');
+
+  test('a verified completion is the only thing called saved', () => {
+    render(<LoginBanner completed verified />);
+    expect(banner()!.textContent).toContain('Login saved');
+  });
+
+  // The user can press "I'm logged in" before OAuth finishes. Main then finds
+  // no login, and the panel behind this overlay says so — a banner here would
+  // be the same account described two ways on one screen.
+  test('a completion main could not confirm is never called saved', () => {
+    render(<LoginBanner completed verified={false} />);
+    expect(banner()).toBeNull();
+    expect(document.body.textContent).not.toContain('Login saved');
+  });
+
+  test('nothing is claimed before the login completes at all', () => {
+    render(<LoginBanner completed={false} verified />);
+    expect(banner()).toBeNull();
+  });
+
+  test('an unstarted login claims nothing either', () => {
+    render(<LoginBanner completed={false} verified={false} />);
+    expect(banner()).toBeNull();
+  });
+});
+
+/**
+ * The confirmation's wording, tested where it is decided rather than through
+ * the panel. Both counts have a singular the plural branch never exercises,
+ * and a zero that has to read as reassurance rather than a warning about
+ * nothing.
+ */
+describe('removalWarning', () => {
+  test('names conversations and sessions in the plural', () => {
+    const text = removalWarning({ sessions: 3, conversations: 12 });
+    expect(text).toContain('permanently deletes 12 saved conversations');
+    expect(text).toContain('The 3 sessions bound to this account stay in the sidebar');
+    expect(text).toContain('they cannot be resumed');
+  });
+
+  test('speaks of one conversation and one session in the singular', () => {
+    const text = removalWarning({ sessions: 1, conversations: 1 });
+    expect(text).toContain('permanently deletes 1 saved conversation.');
+    expect(text).toContain('The session bound to this account stays in the sidebar');
+    expect(text).toContain('its history is gone');
+  });
+
+  // Conversations with nothing bound to them is reachable: the sessions were
+  // deleted, or the transcripts arrived in a bundle. Saying "The 0 sessions"
+  // is the failure this guards.
+  test('reports conversations with no sessions without inventing a session count', () => {
+    const text = removalWarning({ sessions: 0, conversations: 4 });
+    expect(text).toContain('permanently deletes 4 saved conversations.');
+    expect(text).not.toContain('0 sessions');
+    expect(text).not.toContain('bound to this account');
+  });
+
+  test('says plainly when there is nothing to lose', () => {
+    const text = removalWarning({ sessions: 0, conversations: 0 });
+    expect(text).toContain('no saved conversations, so nothing is lost');
+    expect(text).not.toContain('permanently deletes');
+  });
+
+  // A cost we could not measure must not be reported as a cost of zero, which
+  // is the one wrong answer that reads as safe.
+  test('claims nothing when the cost could not be measured', () => {
+    expect(removalWarning(null)).toBe('');
+  });
+});
+
+describe('runningWarning', () => {
+  test('is silent when nothing is running', () => {
+    expect(runningWarning(0)).toBe('');
+  });
+
+  test('agrees with itself in the singular', () => {
+    const text = runningWarning(1);
+    expect(text).toContain('1 session is using it right now');
+    expect(text).toContain('It keeps running, but its account directory goes away underneath it');
+  });
+
+  test('agrees with itself in the plural', () => {
+    const text = runningWarning(2);
+    expect(text).toContain('2 sessions are using it right now');
+    expect(text).toContain('They keep running, but their account directory goes away underneath them');
+  });
+});
+
+describe('usage meters', () => {
+  const NOW = Date.parse('2026-09-30T12:00:00Z');
+  const MIN = 60_000;
+  const noop = () => {};
+  const usage = (over: Partial<AccountUsage> = {}): AccountUsage => ({
+    accountId: 'a1',
+    fiveHour: { pct: 92, resetsAt: NOW + 40 * MIN, observedAt: NOW - 3 * MIN },
+    sevenDay: { pct: 31, resetsAt: NOW + 2 * 24 * 60 * MIN, observedAt: NOW - 3 * MIN },
+    source: 'poll',
+    observedAt: NOW - 3 * MIN,
+    unavailable: null,
+    ...over,
+  });
+
+  function row(value: AccountUsage | null) {
+    render(
+      <AccountRow
+        account={account({ id: 'a1', label: 'Work' })}
+        runningSessions={0}
+        usage={value}
+        usageThreshold={85}
+        now={NOW}
+        position={1}
+        canMoveUp={false}
+        canMoveDown={false}
+        onMoveUp={noop}
+        onMoveDown={noop}
+        onClearLimit={noop}
+        onMakeDefault={noop}
+        onDelete={noop}
+      />,
+    );
+  }
+
+  test('shows both windows, their resets and the reading age', () => {
+    row(usage());
+    const text = document.querySelector('.usage-meters')!.textContent!;
+    expect(text).toContain('5h');
+    expect(text).toContain('92%');
+    expect(text).toContain('resets in 40m');
+    expect(text).toContain('7d');
+    expect(text).toContain('31%');
+    expect(text).toContain('resets in 2d');
+    expect(text).toContain('as of 3m ago');
+    expect(text).not.toContain('stale');
+    expect(document.querySelector('.usage-meter.usage-warn')).toBeTruthy();
+    expect(document.querySelector('.account-chip-usage-warn')).toBeTruthy();
+  });
+
+  test('an old reading is marked stale and the chip shows no colour', () => {
+    row(usage({ observedAt: NOW - 20 * MIN }));
+    expect(document.querySelector('.usage-stale-tag')).toBeTruthy();
+    expect(document.querySelector('.account-chip-usage')).toBeNull();
+  });
+
+  test('a failed refresh reads as re-auth needed, never as 0%', () => {
+    row(usage({ fiveHour: null, sevenDay: null, observedAt: null, unavailable: 'reauth' }));
+    const text = document.querySelector('.usage-meters')!.textContent!;
+    expect(text).toBe('usage unavailable (re-auth needed)');
+    expect(text).not.toContain('0%');
+  });
+
+  test('no reading yet says so', () => {
+    row(null);
+    expect(document.querySelector('.usage-meters')!.textContent).toBe('usage: no reading yet');
+  });
+
+  test('opening the panel asks for an immediate poll and renders what comes back', async () => {
+    let refreshed = 0;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      listAccounts: async () => [account({ id: 'a1', label: 'Work' })],
+      getLiveAccounts: async () => ({}),
+      onPtyLiveAccount: () => () => {},
+      onAccountLoginCompleted: () => () => {},
+      getAllPreferences: async () => ({}),
+      setPreference: async () => {},
+      getAccountUsage: async () => ({}),
+      refreshAccountUsage: async () => {
+        refreshed++;
+        return { a1: usage({ fiveHour: { pct: 92, resetsAt: Date.now() + 40 * MIN, observedAt: Date.now() }, observedAt: Date.now() }) };
+      },
+      onAccountUsageUpdated: () => () => {},
+      platform: 'win32',
+      homedir: '/home',
+    };
+    await act(async () => { render(<ClaudeAccountsPanel />); });
+    expect(refreshed).toBe(1);
+    expect(document.querySelector('.usage-meters')!.textContent).toContain('92%');
+  });
+});
+
+describe('FailoverSettings', () => {
+  let writes: [string, string][];
+
+  async function mount(prefs: Record<string, string> = {}) {
+    writes = [];
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      getAllPreferences: async () => prefs,
+      setPreference: async (key: string, value: string) => { writes.push([key, value]); },
+    };
+    await act(async () => { render(<FailoverSettings threshold={85} onThresholdChange={() => {}} />); });
+  }
+
+  const sinkBox = () => screen.getByText('Read usage from the Claude status line.').closest('label')!.querySelector('input')!;
+  const thresholdBox = () => screen.getByLabelText('Usage warning threshold, percent');
+  const afterDebounce = () => act(() => new Promise<void>(r => setTimeout(r, THRESHOLD_SAVE_DEBOUNCE_MS + 100)));
+
+  test('the status line switch starts on, reads a saved off, and saves each flip', async () => {
+    await mount({ usageStatuslineSink: 'false' });
+    expect(sinkBox().checked).toBe(false);
+    fireEvent.click(sinkBox());
+    expect(sinkBox().checked).toBe(true);
+    fireEvent.click(sinkBox());
+    expect(writes).toEqual([['usageStatuslineSink', 'true'], ['usageStatuslineSink', 'false']]);
+    cleanup();
+    await mount();
+    expect(sinkBox().checked).toBe(true);
+  });
+
+  test('typing saves the threshold once it settles, without waiting for blur', async () => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value: '7' } });
+    fireEvent.change(thresholdBox(), { target: { value: '70' } });
+    expect(writes).toEqual([]);
+    await afterDebounce();
+    expect(writes).toEqual([['usageWarnThreshold', '70']]);
+  });
+
+  test('a blur saves at once and the pending save does not repeat it', async () => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value: '60' } });
+    fireEvent.blur(thresholdBox());
+    await afterDebounce();
+    expect(writes).toEqual([['usageWarnThreshold', '60']]);
+  });
+
+  test.each([[''], ['150'], ['0']])('typing %p waits for blur rather than saving the default', async (value) => {
+    await mount();
+    fireEvent.change(thresholdBox(), { target: { value } });
+    await afterDebounce();
+    expect(writes).toEqual([]);
+  });
+});

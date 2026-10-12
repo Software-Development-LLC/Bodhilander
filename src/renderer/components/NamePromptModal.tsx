@@ -73,7 +73,7 @@ export const NamePromptModal: React.FC<NamePromptModalProps> = ({
     }
   }, [isOpen, defaultValue, accountPicker?.initialAccountId, providerPicker]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.SyntheticEvent) => {
     e.preventDefault();
     const trimmed = value.trim();
     const finalName = trimmed || defaultValue;

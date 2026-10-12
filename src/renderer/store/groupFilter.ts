@@ -14,82 +14,81 @@ export interface GroupFilterResult {
 }
 
 /**
- * Decide which groups, sub-groups and sessions survive a text filter.
+ * Decide which groups, sub-groups and sessions survive the sidebar filters.
  *
- * Rules:
- *  - A group matched by name reveals its entire subtree (sub-groups + sessions).
- *  - A matching sub-group or session keeps its ancestors visible as context,
- *    without revealing that ancestor's other children.
- *  - Anything with no match in its subtree is omitted.
+ * Two orthogonal narrowings, combined as AND:
+ *  - Text query (#141): a group matched by name reveals its whole subtree; a
+ *    matching sub-group or session keeps its ancestors visible as context.
+ *  - `activeOnly` (#149): a session counts only when `state !== 'stopped'`, and
+ *    a group survives only if its subtree holds at least one such session. A
+ *    name-matched-but-all-stopped group is therefore hidden while it is on.
  *
+ * With `activeOnly` false the output is identical to the pure text filter.
  * Pure and total: no I/O, no mutation of the inputs.
  */
 export function computeGroupFilter(
   groups: Group[],
   sessions: Session[],
   rawQuery: string,
+  activeOnly = false,
 ): GroupFilterResult {
   const visibleGroupIds = new Set<string>();
   const visibleSessionIds = new Set<string>();
 
   const query = rawQuery.trim().toLowerCase();
-  if (!query) {
+  const qActive = query !== '';
+  if (!qActive && !activeOnly) {
     return { active: false, visibleGroupIds, visibleSessionIds };
   }
 
   const byId = new Map(groups.map(g => [g.id, g]));
 
-  const childrenOf = new Map<string, Group[]>();
-  for (const g of groups) {
-    if (!g.parentId) continue;
-    const siblings = childrenOf.get(g.parentId);
-    if (siblings) siblings.push(g);
-    else childrenOf.set(g.parentId, [g]);
-  }
+  const nameMatches = (name: string) => name.toLowerCase().includes(query);
+  const isActive = (s: Session) => s.state !== 'stopped';
 
-  const sessionsOf = new Map<string, Session[]>();
-  for (const s of sessions) {
-    const existing = sessionsOf.get(s.groupId);
-    if (existing) existing.push(s);
-    else sessionsOf.set(s.groupId, [s]);
-  }
-
-  const matches = (name: string) => name.toLowerCase().includes(query);
-
-  // Guards against re-walking a subtree, and against infinite recursion if a
-  // malformed parentId ever produced a cycle.
-  const revealed = new Set<string>();
-
-  /** Reveal a matched group and everything beneath it. */
-  const revealSubtree = (group: Group) => {
-    if (revealed.has(group.id)) return;
-    revealed.add(group.id);
-    visibleGroupIds.add(group.id);
-    for (const s of sessionsOf.get(group.id) ?? []) visibleSessionIds.add(s.id);
-    for (const child of childrenOf.get(group.id) ?? []) revealSubtree(child);
+  // True when `start` lies in the subtree of a name-matched group (itself or an
+  // ancestor name-matches) — the "a name match reveals its whole subtree" rule.
+  // The `seen` guard also stops a malformed parentId cycle.
+  const chainMatchesInclusive = (start: Group | undefined): boolean => {
+    const seen = new Set<string>();
+    let cur = start;
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      if (nameMatches(cur.name)) return true;
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+    return false;
   };
 
   /** Reveal a group and its ancestors as context (their children untouched). */
   const revealAncestry = (groupId: string | null | undefined) => {
     const seen = new Set<string>();
-    let current = groupId ? byId.get(groupId) : undefined;
-    while (current && !seen.has(current.id)) {
-      seen.add(current.id);
-      visibleGroupIds.add(current.id);
-      current = current.parentId ? byId.get(current.parentId) : undefined;
+    let cur = groupId ? byId.get(groupId) : undefined;
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      visibleGroupIds.add(cur.id);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
   };
 
-  for (const group of groups) {
-    if (!matches(group.name)) continue;
-    revealSubtree(group);
-    revealAncestry(group.parentId);
-  }
-
+  // Pass 1 — session visibility, intersecting the text and active filters.
   for (const s of sessions) {
-    if (!matches(s.name)) continue;
+    if (activeOnly && !isActive(s)) continue;
+    const textOK = !qActive || nameMatches(s.name) || chainMatchesInclusive(byId.get(s.groupId));
+    if (!textOK) continue;
     visibleSessionIds.add(s.id);
     revealAncestry(s.groupId);
+  }
+
+  // Pass 2 — a name-matched group (or one under a name-matched group) is
+  // revealed even with no visible session, but only when we are NOT requiring
+  // active sessions. This preserves #141's "empty matched group still shows".
+  if (qActive && !activeOnly) {
+    for (const g of groups) {
+      if (!chainMatchesInclusive(g)) continue;
+      visibleGroupIds.add(g.id);
+      revealAncestry(g.parentId);
+    }
   }
 
   return { active: true, visibleGroupIds, visibleSessionIds };
@@ -116,12 +115,17 @@ export function buildNavItems(
   groups: Group[],
   sessions: Session[],
   filter: GroupFilterResult,
+  forceExpand: boolean = filter.active,
 ): NavItem[] {
   const items: NavItem[] = [];
 
+  // Row visibility follows the filter (text OR active-only). Expansion is a
+  // separate concern: only a text search force-expands collapsed groups, so
+  // callers pass `forceExpand` independently (#149). The default keeps the
+  // pre-#149 behavior for callers that don't distinguish the two.
   const groupVisible = (g: Group) => !filter.active || filter.visibleGroupIds.has(g.id);
   const sessionVisible = (s: Session) => !filter.active || filter.visibleSessionIds.has(s.id);
-  const expanded = (g: Group) => filter.active || !g.collapsed;
+  const expanded = (g: Group) => forceExpand || !g.collapsed;
 
   const sessionsOf = (groupId: string) =>
     sessions.filter(s => s.groupId === groupId && sessionVisible(s)).sort(byOrder);

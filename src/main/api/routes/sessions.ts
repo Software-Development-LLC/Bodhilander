@@ -10,6 +10,7 @@ import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as chatEventsRepo from '../../repositories/chat-events';
 import { ptyManager } from '../../pty-manager';
+import { routeNewSessionByUsage, sessionTokenRefreshSettled } from '../../session-routing';
 import { requireControlPermission, requireModifyPermission } from '../middleware/auth';
 import {
   validateIdParam,
@@ -173,7 +174,7 @@ export function createSessionsRouter(): Router {
     '/',
     requireModifyPermission,
     validateCreateSession,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const { groupId, name, workingDir, launchClaude } = req.body;
 
@@ -196,9 +197,13 @@ export function createSessionsRouter(): Router {
           durationSeconds: 0,
           claudeAccountId: null,
           provider: 'claude',
+          // A brand-new session has never been failed over (#207).
+          failoverFromAccountId: null,
+          failoverPrevAccountId: null,
         };
 
         sessionsRepo.createSession(session);
+        routeNewSessionByUsage(id);
 
         // Log session start event (BDHLNDR-17)
         try {
@@ -209,11 +214,12 @@ export function createSessionsRouter(): Router {
 
         // Start PTY if requested
         if (launchClaude) {
+          await sessionTokenRefreshSettled(id);
           ptyManager.createSession(id, session.workingDir, true, session.provider);
         }
 
         log.info(`[SessionsAPI] Created session: ${id}`);
-        res.status(201).json({ session });
+        res.status(201).json({ session: sessionsRepo.getSession(id) ?? session });
       } catch (error) {
         log.error('[SessionsAPI] Error creating session:', error);
         res.status(500).json({ error: 'Failed to create session' });
@@ -261,13 +267,15 @@ export function createSessionsRouter(): Router {
     '/:id',
     requireModifyPermission,
     validateIdParam,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const id = getStringParam(req.params.id);
 
-        // Stop PTY if running
+        // Stop PTY if running. A kill failure aborts the delete and surfaces
+        // as the 500 below; kill() already emptied its session slot, so a
+        // retry skips straight to removing the record.
         if (ptyManager.getSession(id)) {
-          ptyManager.kill(id);
+          await ptyManager.kill(id);
         }
 
         sessionsRepo.deleteSession(id);
@@ -288,10 +296,12 @@ export function createSessionsRouter(): Router {
     '/:id/start',
     requireControlPermission,
     validateIdParam,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const id = getStringParam(req.params.id);
-        const { launchClaude } = req.body;
+        // A POST with no JSON body leaves req.body undefined; destructuring it
+        // threw before any of the checks below could answer.
+        const { launchClaude } = req.body ?? {};
 
         const sessions = sessionsRepo.getAllSessions();
         const session = sessions.find(s => s.id === id);
@@ -306,13 +316,23 @@ export function createSessionsRouter(): Router {
           return;
         }
 
+        // createSession throws on a missing cwd. Answering here instead names
+        // the folder, which is the only thing that lets the owner fix it.
+        if (session.workingDirMissing) {
+          res.status(409).json({
+            error: `Working directory not found on this machine: ${session.workingDir || '(none set)'}`,
+          });
+          return;
+        }
+
+        await sessionTokenRefreshSettled(id);
         ptyManager.createSession(id, session.workingDir, launchClaude ?? false, session.provider);
 
         log.info(`[SessionsAPI] Started session: ${id}`);
         res.json({ success: true });
       } catch (error) {
         log.error('[SessionsAPI] Error starting session:', error);
-        res.status(500).json({ error: 'Failed to start session' });
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to start session' });
       }
     }
   );
@@ -324,7 +344,7 @@ export function createSessionsRouter(): Router {
     '/:id/stop',
     requireControlPermission,
     validateIdParam,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       try {
         const id = getStringParam(req.params.id);
 
@@ -333,7 +353,9 @@ export function createSessionsRouter(): Router {
           return;
         }
 
-        ptyManager.kill(id);
+        // Settles on the real exit (force path bounds it), so success means
+        // the process is gone — a client may start again on this response.
+        await ptyManager.kill(id);
 
         log.info(`[SessionsAPI] Stopped session: ${id}`);
         res.json({ success: true });

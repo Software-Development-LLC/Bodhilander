@@ -7,7 +7,15 @@
  * - failure signatures surviving a chatty startup (dedicated launch buffer)
  *   and pty chunk splits,
  * - createInstallSession's deferred emission, prime flush, and
- *   exit-before-prime flush.
+ *   exit-before-prime flush,
+ * - pty identity (#164): a superseded pty's late exit/output must not touch
+ *   the replacement bound to its id, kill() settles off the real exit and
+ *   coalesces per id, and the silent resume-failure respawn inherits the last
+ *   known size instead of dropping back to 80x24,
+ * - the kill force path, on an injectable grace: a pty trapping the graceful
+ *   signal is reaped by SIGKILL, and a graceful kill that throws rejects the
+ *   caller while the armed reaper still escalates,
+ * - live-account publication (#165) for a provider without account support.
  *
  * Run with: bun test src/main/__tests__
  */
@@ -19,29 +27,38 @@ interface FakePty {
   pid: number;
   spawnFile: string;
   spawnArgs: string[];
+  /** Options node-pty was spawned with — the initial cols/rows live here (#164). */
+  spawnOpts: { cols: number; rows: number };
   dataCb: ((data: string) => void) | null;
   exitCb: ((event: { exitCode: number }) => void) | null;
+  /** Signals delivered through the handle; undefined is the default kill(). */
+  killSignals: (string | undefined)[];
   onData(cb: (data: string) => void): void;
   onExit(cb: (event: { exitCode: number }) => void): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  kill(signal?: string): void;
 }
 
 const spawned: FakePty[] = [];
 
-function fakeSpawn(file: string, args: string[]): FakePty {
+function fakeSpawn(file: string, args: string[], opts: { cols: number; rows: number }): FakePty {
   const p: FakePty = {
     pid: 1000 + spawned.length,
     spawnFile: file,
     spawnArgs: args,
+    spawnOpts: opts,
     dataCb: null,
     exitCb: null,
+    killSignals: [],
     onData(cb) { p.dataCb = cb; },
     onExit(cb) { p.exitCb = cb; },
     write() {},
     resize() {},
-    kill() { p.exitCb?.({ exitCode: 0 }); },
+    kill(signal?: string) {
+      p.killSignals.push(signal);
+      p.exitCb?.({ exitCode: 0 });
+    },
   };
   spawned.push(p);
   return p;
@@ -50,11 +67,14 @@ function fakeSpawn(file: string, args: string[]): FakePty {
 // Mock discipline: bun's mock.module patches a specifier for the whole test
 // process, so ONLY mock modules that no other test file exercises for real
 // (node-pty, electron-log) or that are mocked with a compatible shape
-// elsewhere (electron, preferences, accounts, shell-detector). The provider
-// registry, sessions repository, and key-vault are used REAL —
-// resolve.test/sessions.test/key-vault.test cover them — which works because
-// these tests run codex, a passthrough provider whose capabilities are all
-// false, so no DB-backed function is ever called.
+// elsewhere (electron, preferences, shell-detector). The provider registry,
+// sessions repository, accounts repository, account resolver, and key-vault
+// are used REAL — resolve.test/sessions.test/accounts.test/key-vault.test
+// cover them — which works because these tests run codex, a passthrough
+// provider whose capabilities are all false, so no DB-backed function is ever
+// called. The accounts repository in particular must NOT be mocked here:
+// repositories/__tests__/accounts.test.ts tests it for real, and a mock
+// registered by this file would silently become that file's subject.
 mock.module('node-pty', () => ({ spawn: fakeSpawn }));
 mock.module('electron-log', () => ({
   default: { info() {}, warn() {}, error() {} },
@@ -68,17 +88,6 @@ mock.module('../repositories/preferences', () => ({
   getPreference: () => null,
   setPreference: () => {},
   deletePreference: () => {},
-}));
-// Superset of the accounts-repo surface so account-auth.ts stays satisfied
-// no matter which file's mock a given evaluation order leaves in place.
-mock.module('../repositories/accounts', () => ({
-  resolveAccountForSession: () => null,
-  touchAccount: () => {},
-  getAllAccounts: () => [],
-  createAccount: (a: unknown) => a,
-  updateAccount: () => undefined,
-  deleteAccount: () => undefined,
-  getAccount: () => null,
 }));
 // Any real, existing executable path works — the pty spawn is mocked.
 mock.module('../shell-detector', () => ({
@@ -266,6 +275,427 @@ describe('resize (dynamic sizing)', () => {
   });
 });
 
+describe('pty identity (#164)', () => {
+  /**
+   * The restart shape that lost conversations: kill the pty, spawn a
+   * replacement under the SAME id, and only then let the old process die.
+   * `neutraliseKill` stops the fake dying synchronously so the test controls
+   * when the late exit lands — which is the whole point of the scenario.
+   */
+  function killThenRespawn(manager: InstanceType<typeof PtyManager>, id = 'session-1') {
+    createAgentSession(manager, id);
+    const first = spawned[0];
+    first.kill = () => {};
+    const killed = manager.kill(id);
+    manager.createSession(id, cwd, true, 'codex');
+    return { first, second: spawned[1], killed };
+  }
+
+  test('a late zero-code exit from a killed pty leaves its replacement alone', async () => {
+    const manager = new PtyManager();
+    const exits: Array<{ id: string; exitCode: number }> = [];
+    manager.on('exit', (e: { id: string; exitCode: number }) => exits.push(e));
+
+    const { first, second, killed } = killThenRespawn(manager);
+    first.exitCb!({ exitCode: 0 });
+
+    const live = manager.getSession('session-1');
+    expect(live).toBeDefined();
+    expect(live!.pty).toBe(second as unknown as typeof live.pty);
+    expect(exits).toEqual([]);
+    expect(spawned.length).toBe(2);
+    // Resolves off the real exit, not a timer — no clock is advanced here.
+    await killed;
+  });
+
+  test('a late non-zero exit from a killed pty neither respawns nor emits exit', async () => {
+    const manager = new PtyManager();
+    const exits: Array<{ id: string; exitCode: number }> = [];
+    manager.on('exit', (e: { id: string; exitCode: number }) => exits.push(e));
+
+    const { first, second, killed } = killThenRespawn(manager);
+    // Non-zero inside the resume-failure window is the branch that used to
+    // clear the replacement's conversation UUID and spawn a third pty.
+    first.exitCb!({ exitCode: 1 });
+
+    expect(spawned.length).toBe(2);
+    expect(manager.getSession('session-1')!.pty).toBe(second as unknown as never);
+    expect(exits).toEqual([]);
+    await killed;
+  });
+
+  test('stale output from a superseded pty never reaches its replacement', async () => {
+    const manager = new PtyManager();
+    const events: Array<{ id: string; data: string }> = [];
+    manager.on('data', (e: { id: string; data: string }) => events.push(e));
+
+    const { first, killed } = killThenRespawn(manager);
+    first.dataCb!('STALE-BYTES');
+
+    expect(events.some(e => e.data.includes('STALE-BYTES'))).toBe(false);
+    expect(manager.getBuffer('session-1')).not.toContain('STALE-BYTES');
+
+    first.exitCb!({ exitCode: 0 });
+    await killed;
+  });
+
+  test('kill() coalesces so a second caller waits on the same exit', async () => {
+    const manager = new PtyManager();
+    createAgentSession(manager);
+    const first = spawned[0];
+    first.kill = () => {};
+
+    // The renderer's restart kills from both the effect cleanup and the
+    // restart effect; the second caller must join the first teardown rather
+    // than see an empty map and conclude the process is already gone.
+    const a = manager.kill('session-1');
+    const b = manager.kill('session-1');
+
+    let settled = 0;
+    const aSettled = a.then(() => { settled++; });
+    const bSettled = b.then(() => { settled++; });
+
+    first.exitCb!({ exitCode: 0 });
+    await Promise.all([aSettled, bSettled]);
+    expect(settled).toBe(2);
+  });
+
+  test('the resume-failure respawn keeps the last known size', () => {
+    const manager = new PtyManager();
+    const exits: unknown[] = [];
+    manager.on('exit', (e) => exits.push(e));
+    createAgentSession(manager);
+    manager.resize('session-1', 120, 40);
+
+    // Only claude declares capabilities.resume, and reaching for it here would
+    // drag in the real sessions repo + account resolver this file may not mock.
+    // Flipping the flag on the live session reaches the same branch.
+    const live = manager.getSession('session-1')! as unknown as { resumeAttempted: boolean };
+    live.resumeAttempted = true;
+
+    spawned[0].exitCb!({ exitCode: 1 });
+
+    expect(spawned.length).toBe(2);
+    expect(spawned[1].spawnOpts.cols).toBe(120);
+    expect(spawned[1].spawnOpts.rows).toBe(40);
+    expect(manager.getSize('session-1')).toEqual({ cols: 120, rows: 40 });
+    // The fallback is deliberately silent — the renderer must not see a stop.
+    expect(exits).toEqual([]);
+  });
+
+  test('a second create for a live session id is refused instead of orphaning the first pty', () => {
+    const manager = new PtyManager();
+    createAgentSession(manager);
+
+    // Overwriting the map entry left the displaced Claude Code running with
+    // nothing holding a handle to it: the identity guard swallows its exit and
+    // drops its output, so it would leak silently for the life of the app.
+    expect(() => manager.createSession('session-1', cwd, true, 'codex')).toThrow(/already has a running pty/);
+    expect(spawned.length).toBe(1);
+    expect(manager.getSession('session-1')!.pty).toBe(spawned[0] as unknown as never);
+  });
+
+  test('a resume failure keeps the conversation when its transcript was staged', () => {
+    const manager = new PtyManager();
+    const exits: Array<{ id: string; exitCode: number }> = [];
+    manager.on('exit', (e: { id: string; exitCode: number }) => exits.push(e));
+    createAgentSession(manager);
+
+    // Same reach-in as the size test above: only claude declares
+    // capabilities.accounts, and launching it here would drag in the real
+    // sessions repo and account resolver this file deliberately does not mock.
+    const live = manager.getSession('session-1')! as unknown as {
+      resumeAttempted: boolean;
+      transcriptStaged: string;
+    };
+    live.resumeAttempted = true;
+    live.transcriptStaged = 'carried';
+
+    spawned[0].exitCb!({ exitCode: 1 });
+
+    // The transcript is demonstrably in the dir this pty launched under, so the
+    // non-zero exit is evidence of something else — a bad key, a broken MCP
+    // entry, a shell rc — and must not cost the user their conversation id.
+    expect(spawned.length).toBe(1);
+    expect(exits).toEqual([{ id: 'session-1', exitCode: 1 }]);
+  });
+
+  test('a resume failure whose transcript is nowhere still respawns fresh', () => {
+    const manager = new PtyManager();
+    const exits: unknown[] = [];
+    manager.on('exit', (e) => exits.push(e));
+    createAgentSession(manager);
+
+    const live = manager.getSession('session-1')! as unknown as {
+      resumeAttempted: boolean;
+      transcriptStaged: string;
+    };
+    live.resumeAttempted = true;
+    live.transcriptStaged = 'missing';
+
+    spawned[0].exitCb!({ exitCode: 1 });
+
+    // Searched every known config dir and found nothing: the stored id really
+    // is unusable, and BDHLNDR-9's silent restart is the recovery.
+    expect(spawned.length).toBe(2);
+    expect(exits).toEqual([]);
+  });
+
+  test('createSession honours an explicit initial size', () => {
+    const manager = new PtyManager();
+    manager.createSession('s2', cwd, true, 'codex', { cols: 100, rows: 30 });
+
+    expect(spawned[0].spawnOpts.cols).toBe(100);
+    expect(spawned[0].spawnOpts.rows).toBe(30);
+    expect(manager.getSize('s2')).toEqual({ cols: 100, rows: 30 });
+  });
+});
+
+describe('kill() force path (injectable grace)', () => {
+  // The escalation branch is POSIX (win32 shells out to taskkill instead).
+  const posixTest = process.platform === 'win32' ? test.skip : test;
+
+  posixTest('a pty that traps the graceful signal is SIGKILLed and the waiter still resolves', async () => {
+    const manager = new PtyManager({ killGraceMs: 5 });
+    createAgentSession(manager);
+    const proc = spawned[0];
+    // Records the signals but never exits — the timer is the only way out.
+    proc.kill = (signal?: string) => { proc.killSignals.push(signal); };
+
+    await manager.kill('session-1');
+
+    expect(proc.killSignals).toEqual([undefined, 'SIGKILL']);
+  });
+
+  posixTest('a graceful kill that throws rejects the caller but leaves the reaper armed', async () => {
+    const manager = new PtyManager({ killGraceMs: 5 });
+    createAgentSession(manager);
+    const proc = spawned[0];
+    proc.kill = (signal?: string) => {
+      if (signal === undefined) throw new Error('native handle already gone');
+      proc.killSignals.push(signal);
+    };
+
+    await expect(manager.kill('session-1')).rejects.toThrow('native handle already gone');
+    // The map slot emptied before the throw, so a caller that catches can
+    // retry its own work without tripping over a phantom live session.
+    expect(manager.getSession('session-1')).toBeUndefined();
+
+    // The force timer armed ahead of the signal still escalates and reaps.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(proc.killSignals).toEqual(['SIGKILL']);
+    // The drained teardown released its pending entry: a follow-up kill
+    // resolves immediately instead of joining a settled waiter.
+    await manager.kill('session-1');
+  });
+});
+
+describe('serialized teardown', () => {
+  const posixTest = process.platform === 'win32' ? test.skip : test;
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  /** Sessions whose ptys record signals but exit only when the test says so. */
+  function createHeld(manager: InstanceType<typeof PtyManager>, ids: string[]): FakePty[] {
+    return ids.map((id) => {
+      createAgentSession(manager, id);
+      const proc = spawned[spawned.length - 1];
+      proc.kill = (signal?: string) => { proc.killSignals.push(signal); };
+      return proc;
+    });
+  }
+
+  test.each([['win32', true], ['darwin', false], ['linux', false]])(
+    'on %s, serialization defaults to %p',
+    async (platform, serialized) => {
+      const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      Object.defineProperty(process, 'platform', { value: platform });
+      try {
+        const manager = new PtyManager({ killGraceMs: 10_000 });
+        const [p1, p2] = createHeld(manager, ['s1', 's2']);
+        const kills = [manager.kill('s1'), manager.kill('s2')];
+        await flush();
+        expect(p2.killSignals).toStrictEqual(serialized ? [] : [undefined]);
+        p1.exitCb!({ exitCode: 0 });
+        await flush();
+        p2.exitCb!({ exitCode: 0 });
+        await Promise.all(kills);
+      } finally {
+        Object.defineProperty(process, 'platform', realPlatform);
+      }
+    },
+  );
+
+  test('the next pty is not signalled until the previous one exits', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    const k1 = manager.kill('s1');
+    const k2 = manager.kill('s2');
+    await flush();
+    expect(p1.killSignals).toStrictEqual([undefined]);
+    expect(p2.killSignals).toStrictEqual([]);
+    // Both leave the map at once, so nothing writes to a pty queued for death.
+    expect(manager.getSession('s2')).toBeUndefined();
+
+    p1.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(p2.killSignals).toStrictEqual([undefined]);
+
+    p2.exitCb!({ exitCode: 0 });
+    await Promise.all([k1, k2]);
+  });
+
+  test('a queued pty that exits on its own is never signalled', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    const k1 = manager.kill('s1');
+    const k2 = manager.kill('s2');
+    await flush();
+    p2.exitCb!({ exitCode: 0 });
+    p1.exitCb!({ exitCode: 0 });
+    await Promise.all([k1, k2]);
+
+    expect(p2.killSignals).toStrictEqual([]);
+  });
+
+  // A stuck pty reaches the force path, which is taskkill on win32.
+  posixTest('a pty that never exits releases the queue after the bound', async () => {
+    const manager = new PtyManager({ killGraceMs: 200, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    void manager.kill('s1');
+    const k2 = manager.kill('s2');
+    await new Promise((r) => setTimeout(r, 300));
+    // The force path has fired for p1, but the queue still waits on its exit.
+    expect(p1.killSignals).toStrictEqual([undefined, 'SIGKILL']);
+    expect(p2.killSignals).toStrictEqual([]);
+
+    await new Promise((r) => setTimeout(r, 300));
+    expect(p2.killSignals[0]).toBeUndefined();
+    expect(p2.killSignals.length).toBeGreaterThan(0);
+    p2.exitCb!({ exitCode: 0 });
+    await k2;
+  });
+
+  test('a graceful kill that throws rejects its caller only once the queue drains', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p0, p1, p2] = createHeld(manager, ['s0', 's1', 's2']);
+    p1.kill = () => { throw new Error('native handle already gone'); };
+
+    void manager.kill('s0');
+    let rejection: unknown = null;
+    const k1 = manager.kill('s1').catch((err) => { rejection = err; });
+    const k2 = manager.kill('s2');
+
+    p0.exitCb!({ exitCode: 0 });
+    await flush();
+    p1.exitCb!({ exitCode: 0 });
+    await flush();
+    // The queue moved past the throw, and the caller is still held behind it.
+    expect(p2.killSignals).toStrictEqual([undefined]);
+    expect(rejection).toBeNull();
+
+    p2.exitCb!({ exitCode: 0 });
+    await Promise.all([k1, k2]);
+    expect((rejection as Error).message).toBe('native handle already gone');
+  });
+
+  test('killing an id with nothing to tear down does not wait on the queue', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1] = createHeld(manager, ['s1']);
+    void manager.kill('s1');
+
+    await manager.kill('never-spawned');
+    expect(p1.killSignals).toStrictEqual([undefined]);
+    p1.exitCb!({ exitCode: 0 });
+  });
+
+  test('killAll signals every pty before any exits, bypassing the queue', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const procs = createHeld(manager, ['s1', 's2', 's3']);
+
+    let done = false;
+    const all = manager.killAll().then(() => { done = true; });
+    await flush();
+    expect(procs.map((p) => p.killSignals)).toStrictEqual([[undefined], [undefined], [undefined]]);
+    expect(done).toBe(false);
+
+    for (const p of procs) p.exitCb!({ exitCode: 0 });
+    await all;
+    expect(done).toBe(true);
+  });
+
+  test('killAll signals ptys still waiting in the queue and waits for them', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2, p3] = createHeld(manager, ['s1', 's2', 's3']);
+    void manager.kill('s1');
+    void manager.kill('s2');
+    await flush();
+    expect(p2.killSignals).toStrictEqual([]);
+
+    let done = false;
+    const all = manager.killAll().then(() => { done = true; });
+    await flush();
+    expect([p1, p2, p3].map((p) => p.killSignals)).toStrictEqual([[undefined], [undefined], [undefined]]);
+
+    p1.exitCb!({ exitCode: 0 });
+    p3.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(done).toBe(false);
+    p2.exitCb!({ exitCode: 0 });
+    await all;
+    // Its turn in the queue comes later and must not signal it twice.
+    await flush();
+    expect(p2.killSignals).toStrictEqual([undefined]);
+  });
+
+  test('a kill resolves, and so frees its id to respawn, only once the queue drains', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: true });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+    const resolved: string[] = [];
+    void manager.kill('s1').then(() => resolved.push('first'));
+    void manager.kill('s2');
+    // The renderer's second, coalesced kill for the same id.
+    void manager.kill('s1').then(() => resolved.push('joined'));
+
+    p1.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(resolved).toStrictEqual([]);
+
+    p2.exitCb!({ exitCode: 0 });
+    await flush();
+    expect(resolved.sort()).toStrictEqual(['first', 'joined']);
+  });
+
+  test('without serialization every pty is signalled at once', async () => {
+    const manager = new PtyManager({ killGraceMs: 10_000, serializeTeardown: false });
+    const [p1, p2] = createHeld(manager, ['s1', 's2']);
+
+    const kills = [manager.kill('s1'), manager.kill('s2')];
+    expect(p1.killSignals).toStrictEqual([undefined]);
+    expect(p2.killSignals).toStrictEqual([undefined]);
+    p1.exitCb!({ exitCode: 0 });
+    p2.exitCb!({ exitCode: 0 });
+    await Promise.all(kills);
+  });
+});
+
+describe('live account bindings (#165)', () => {
+  test('no binding is published for a provider without account support', () => {
+    const manager = new PtyManager();
+    const bindings: Array<{ id: string; binding: unknown }> = [];
+    manager.on('liveAccount', (e: { id: string; binding: unknown }) => bindings.push(e));
+
+    manager.createSession('session-1', cwd, true, 'codex');
+
+    // codex never reads CLAUDE_CONFIG_DIR, so "running under ~/.claude" would
+    // be a lie rather than a default.
+    expect(manager.getLiveAccounts()).toEqual({});
+    expect(bindings).toEqual([{ id: 'session-1', binding: null }]);
+  });
+});
+
 describe('getSerializedBuffer (rendered-text history)', () => {
   test('returns resolved text of the scrollback, keeping content that scrolled off', async () => {
     const manager = new PtyManager();
@@ -284,5 +714,71 @@ describe('getSerializedBuffer (rendered-text history)', () => {
   test('returns empty string for an unknown session', async () => {
     const manager = new PtyManager();
     expect(await manager.getSerializedBuffer('nope')).toBe('');
+  });
+});
+
+/**
+ * #169. A shared session replays the window since someone was let in — not the
+ * whole scrollback, which would hand over what was on screen before the
+ * decision to share, and not nothing, which wipes the guest's view every time
+ * they come back to it.
+ */
+describe('getSerializedBufferSince (the window a guest is entitled to)', () => {
+  test('replays from the mark onward and nothing before it', async () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('SECRET BEFORE THE SHARE\r\n');
+
+    const mark = manager.scrollbackMark('session-1')!;
+    ptyProc.dataCb!('watched output\r\n');
+
+    const text = await manager.getSerializedBufferSince('session-1', mark);
+    expect(text).toContain('watched output');
+    expect(text).not.toContain('SECRET BEFORE THE SHARE');
+  });
+
+  test('a mark taken at the current position replays nothing', async () => {
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('already on screen\r\n');
+
+    const text = await manager.getSerializedBufferSince('session-1', manager.scrollbackMark('session-1')!);
+    expect(text).toBe('');
+  });
+
+  test('a mark the scrollback cap has evicted yields what survives, never more', async () => {
+    // The mark counts characters ever produced, so it stays resolvable after a
+    // trim; an index into the buffer would silently point somewhere else and
+    // replay content from before the share.
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('EVICTED FIRST LINE\r\n');
+    const mark = manager.scrollbackMark('session-1')!;
+    // Push past the 2MB cap plus its 25% slack so the trim actually runs.
+    for (let i = 0; i < 40; i++) ptyProc.dataCb!('x'.repeat(100 * 1024));
+    ptyProc.dataCb!('\r\nlast line\r\n');
+
+    const text = await manager.getSerializedBufferSince('session-1', mark);
+    expect(text).toContain('last line');
+    expect(text).not.toContain('EVICTED FIRST LINE');
+  });
+
+  test('a mark from a previous PTY instance clamps to the end and replays nothing', async () => {
+    // A restarted session gets a fresh buffer, so an older instance's mark is
+    // larger than everything this one has produced. The grant's ptyEpoch check
+    // already refuses a certificate whose sessions have restarted, so such a
+    // mark should never reach here — and if one does it must fail closed and
+    // empty rather than replaying from a clamped-to-zero start.
+    const manager = new PtyManager();
+    const { ptyProc } = createAgentSession(manager);
+    ptyProc.dataCb!('output from the new instance\r\n');
+
+    expect(await manager.getSerializedBufferSince('session-1', 10_000_000)).toBe('');
+  });
+
+  test('returns empty string for an unknown session, and no mark for one', async () => {
+    const manager = new PtyManager();
+    expect(manager.scrollbackMark('nope')).toBeNull();
+    expect(await manager.getSerializedBufferSince('nope', 0)).toBe('');
   });
 });

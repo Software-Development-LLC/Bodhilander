@@ -1,0 +1,235 @@
+/* The run inbox (CO-722). Reuses the app's own tokens rather than introducing
+   a palette: this is a list of things that need a person, and it should look
+   like the rest of the app rather than like a new product. */
+
+.run-inbox {
+  padding: 24px 28px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.run-inbox h2 {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.run-inbox__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-inbox__row {
+  border: 1px solid var(--border-color, #2a2a2a);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: var(--bg-secondary, #1a1a1a);
+}
+
+/* A stopped run is the one to open first, so it is the one that is marked.
+   Runs that are merely waiting keep the ordinary border. */
+.run-inbox__row--inconclusive,
+.run-inbox__row--failed {
+  border-left-color: var(--status-error, #c15b5b);
+}
+
+.run-inbox__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+/* Halt: a quiet outline button that reveals its intent (a negative action) on
+ * hover, so it never competes with the row's primary approve/deny controls. */
+.run-inbox__halt {
+  margin-left: auto;
+  padding: 0.2rem 0.55rem;
+  border-radius: 5px;
+  border: 1px solid var(--border, #555);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.run-inbox__halt:hover:not(:disabled) {
+  border-color: var(--accent-negative, #d66);
+  color: var(--accent-negative, #d66);
+}
+.run-inbox__halt:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.run-inbox__halt-error {
+  margin: 0.35rem 0 0;
+  color: var(--accent-negative, #d66);
+  font-size: 0.8rem;
+}
+
+.run-inbox__key {
+  font-weight: 600;
+}
+
+.run-inbox__waited {
+  font-size: 12px;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.run-inbox__reason {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.run-inbox__repos {
+  margin: 6px 0 0;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.run-inbox--empty,
+.run-inbox--loading,
+.run-inbox--problem {
+  padding: 40px 28px;
+}
+
+.run-inbox--empty p,
+.run-inbox--problem p {
+  margin: 6px 0 12px;
+  opacity: 0.7;
+  font-size: 13px;
+}
+
+/* A refresh that failed over a list we already have. A note, not a page:
+   the list is a minute stale and that is what this says. */
+.run-inbox__stale {
+  /* <output> is inline by default. */
+  display: block;
+  margin: 0 0 12px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+/* Permission requests inside a waitingPermission row (CO-722, #288). */
+.run-inbox__perms {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.run-inbox__perm {
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 0.5rem;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.run-inbox__perm-tool {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+.run-inbox__perm-input {
+  margin: 0 0 0.5rem;
+  max-height: 8rem;
+  overflow: auto;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.85;
+}
+.run-inbox__perm-repo {
+  font-weight: 600;
+  opacity: 0.9;
+  margin-right: 0.25rem;
+}
+.run-inbox__perm-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.run-inbox__manifest {
+  margin-top: 0.5rem;
+}
+.run-inbox__manifest-loading {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+.run-inbox__merge-order {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.run-inbox__manifest-body {
+  margin: 0 0 0.5rem;
+  max-height: 16rem;
+  overflow: auto;
+  padding: 0.5rem;
+  border-radius: 6px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.run-inbox__manifest-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.run-inbox__deny-reason {
+  flex: 2;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--border, #555);
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+}
+.run-inbox__deny-reason:disabled {
+  opacity: 0.5;
+}
+.run-inbox__allow,
+.run-inbox__deny {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.run-inbox__allow {
+  background: var(--accent-positive, #1f6f3f);
+  color: #fff;
+}
+.run-inbox__deny {
+  background: transparent;
+  border-color: var(--border, #555);
+  color: inherit;
+}
+.run-inbox__allow:disabled,
+.run-inbox__deny:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The `claude attach` command for a bypass gate waiting on a person (no broker). */
+.run-inbox__attach {
+  margin: 0.4rem 0 0;
+  font-size: 0.82rem;
+}
+.run-inbox__attach code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  font-size: 0.8rem;
+  user-select: all;
+}

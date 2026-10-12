@@ -37,7 +37,9 @@ function freshDb(): Database {
       ended_at TEXT DEFAULT NULL,
       duration_seconds REAL DEFAULT 0,
       claude_account_id TEXT DEFAULT NULL,
-      provider TEXT NOT NULL DEFAULT 'claude'
+      provider TEXT NOT NULL DEFAULT 'claude',
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
     )
   `);
   return d;
@@ -119,5 +121,63 @@ describe('updateSession provider change invalidates the stored resume UUID', () 
     const s = sessionsRepo.getAllSessions()[0];
     expect(s.provider).toBe('claude');
     expect(s.claudeSessionId).toBeNull();
+  });
+});
+
+describe('working directories that are not on this machine', () => {
+  const present = '/present/checkout';
+  const gone = '/gone/checkout';
+  const probe = (dir: string) => dir === present;
+
+  beforeEach(() => {
+    sessionsRepo.createSession(makeSession({ id: 'here', workingDir: present }));
+    sessionsRepo.createSession(makeSession({ id: 'away', workingDir: gone }));
+  });
+
+  test('are reported per session, derived rather than stored', () => {
+    const byId = new Map(sessionsRepo.getAllSessions(probe).map((s) => [s.id, s]));
+    expect(byId.get('here')!.workingDirMissing).toBe(false);
+    expect(byId.get('away')!.workingDirMissing).toBe(true);
+  });
+
+  test('survive the bulk state reset every app start performs', () => {
+    sessionsRepo.markAllSessionsStopped();
+
+    const away = sessionsRepo.getAllSessions(probe).find((s) => s.id === 'away')!;
+    expect(away.state).toBe('stopped');
+    expect(away.workingDirMissing).toBe(true);
+  });
+
+  test('survive an ordinary state change the user causes', () => {
+    sessionsRepo.updateSession('away', { state: 'error' });
+
+    const away = sessionsRepo.getAllSessions(probe).find((s) => s.id === 'away')!;
+    expect(away.workingDirMissing).toBe(true);
+  });
+
+  test('clear the moment the directory is pointed somewhere real', () => {
+    sessionsRepo.updateSession('away', { workingDir: present, state: 'stopped' });
+
+    const away = sessionsRepo.getAllSessions(probe).find((s) => s.id === 'away')!;
+    expect(away.workingDir).toBe(present);
+    expect(away.workingDirMissing).toBe(false);
+  });
+
+  test('a blank working directory counts as missing', () => {
+    sessionsRepo.createSession(makeSession({ id: 'blank', workingDir: '' }));
+
+    const blank = sessionsRepo.getAllSessions(probe).find((s) => s.id === 'blank')!;
+    expect(blank.workingDirMissing).toBe(true);
+  });
+
+  test('one probe per distinct directory, however many sessions share it', () => {
+    sessionsRepo.createSession(makeSession({ id: 'here-too', workingDir: present }));
+    const asked: string[] = [];
+
+    sessionsRepo.getAllSessions((dir) => { asked.push(dir); return dir === present; });
+
+    // Three sessions, two directories: the third reused the cached answer.
+    expect(asked).toHaveLength(2);
+    expect(new Set(asked)).toEqual(new Set([present, gone]));
   });
 });

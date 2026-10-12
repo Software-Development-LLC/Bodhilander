@@ -62,6 +62,7 @@
 
 .claude-accounts-panel .account-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
@@ -70,35 +71,12 @@
   border-radius: 6px;
 }
 
-.claude-accounts-panel .account-row .swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex: 0 0 10px;
-}
-
-.claude-accounts-panel .account-row .label {
+/* The swatch/name/email markup this row used to hand-roll now comes from
+   <AccountChip>, whose own stylesheet uses the global design tokens. The rest
+   of this file deliberately stays on its local #69ADFF family — it is
+   internally consistent and is not being migrated here. */
+.claude-accounts-panel .account-row .account-chip {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.claude-accounts-panel .account-row .label .name {
-  font-size: 13px;
-  font-weight: 500;
-  color: #e0e0e0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.claude-accounts-panel .account-row .label .email {
-  font-size: 11px;
-  color: #888;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .claude-accounts-panel .account-row .default-tag {
@@ -109,6 +87,31 @@
   border: 1px solid #3a5a8f;
   padding: 1px 6px;
   border-radius: 10px;
+}
+
+/* Filled and lowercase where `default` is outlined and uppercase, and carrying
+   a count rather than a tint, so the two tags stay distinguishable from each
+   other with colour removed. */
+.claude-accounts-panel .account-row .in-use-tag {
+  font-size: 10px;
+  color: #9fd0ff;
+  background: rgba(105, 173, 255, 0.14);
+  border: 1px solid rgba(105, 173, 255, 0.3);
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* Amber where both other tags are blue, and stating the condition in words
+   rather than a tint, so a signed-out account stays legible without colour. */
+.claude-accounts-panel .account-row .signed-out-tag {
+  font-size: 10px;
+  color: #e5c07b;
+  background: rgba(229, 192, 123, 0.12);
+  border: 1px solid rgba(229, 192, 123, 0.35);
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
 }
 
 .claude-accounts-panel .account-row .row-actions {
@@ -279,4 +282,139 @@
 
 .claude-account-login-modal .danger:hover {
   background: #7a3c3c;
+}
+
+/* --- Failover (#207) ------------------------------------------ */
+
+.failover-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #3a3a3a);
+  border-radius: 4px;
+  background: var(--bg-secondary, #252526);
+}
+
+.failover-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary, #999);
+  cursor: pointer;
+}
+
+.failover-toggle strong {
+  color: var(--text-primary, #ddd);
+  font-weight: 600;
+}
+
+.failover-toggle input {
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+/* A disabled fail-back toggle is not broken — it is subordinate to the switch
+   above it, and dimming the whole line says that more clearly than dimming the
+   checkbox alone. */
+.failover-toggle input:disabled + span {
+  opacity: 0.5;
+}
+
+/* Queue position: the number is what makes "the order below" a real thing the
+   user can point at, so it reads as data, not decoration. */
+.failover-position {
+  flex: 0 0 auto;
+  min-width: 16px;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-secondary, #999);
+  opacity: 0.7;
+}
+
+.limited-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--warning-color, #d79c40);
+  border-radius: 10px;
+  font-size: 10px;
+  text-transform: lowercase;
+  color: var(--warning-color, #d79c40);
+  white-space: nowrap;
+}
+
+/* A limited account is still a real account — it keeps its sessions and can be
+   assigned by hand. Dimming it slightly says "not a failover candidate right
+   now" without implying it is disabled. */
+.account-row.limited .account-chip {
+  opacity: 0.7;
+}
+
+.move-btn {
+  min-width: 24px;
+  padding: 2px 6px;
+  line-height: 1;
+}
+
+.move-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.usage-meters {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding-left: 26px;
+  font-size: 11px;
+  color: var(--text-secondary, #9d9d9d);
+}
+
+.usage-meters-empty {
+  font-style: italic;
+}
+
+.usage-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-meter-bar {
+  position: relative;
+  width: 80px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary, #3c3c3c);
+  overflow: hidden;
+}
+
+.usage-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #3fb950;
+}
+
+.usage-warn .usage-meter-fill { background: #d29922; }
+.usage-critical .usage-meter-fill { background: #f85149; }
+.usage-meters-stale .usage-meter-fill { opacity: 0.5; }
+
+.usage-meta {
+  display: flex;
+  gap: 8px;
+}
+
+.usage-stale-tag,
+.usage-unavailable {
+  color: var(--warning-color, #d79c40);
+}
+
+.usage-threshold input {
+  width: 56px;
+  margin: 0 4px;
 }

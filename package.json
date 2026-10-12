@@ -1,6 +1,6 @@
 {
   "name": "bodhilander",
-  "version": "3.5.0",
+  "version": "3.5.1-beta.19",
   "description": "Cross-platform Claude Code session manager",
   "homepage": "https://github.com/Software-Development-LLC/Bodhilander",
   "author": {
@@ -19,13 +19,17 @@
   },
   "main": "dist/main/index.js",
   "scripts": {
-    "postinstall": "electron-rebuild -o better-sqlite3,node-pty && node node_modules/node-pty/scripts/post-install.js",
+    "postinstall": "electron-rebuild -o better-sqlite3 && node node_modules/node-pty/scripts/post-install.js",
+    "test": "bun test --isolate",
+    "build:console": "esbuild scripts/run-console.ts --bundle --platform=node --target=node18 --outfile=dist/run-console.js --format=cjs --external:electron --external:better-sqlite3",
+    "console": "bun run build:console && electron dist/run-console.js",
     "build:main": "tsc -p tsconfig.main.json",
-    "build:hooks": "esbuild src/hooks/bodhilander-hook.ts --bundle --platform=node --target=node18 --outfile=dist/hooks/bodhilander-hook.js --sourcemap --format=cjs",
+    "build:hooks": "esbuild src/hooks/bodhilander-hook.ts --bundle --platform=node --target=node18 --outfile=dist/hooks/bodhilander-hook.js --sourcemap --format=cjs && esbuild src/hooks/bodhilander-statusline.ts --bundle --platform=node --target=node18 --outfile=dist/hooks/bodhilander-statusline.js --format=cjs",
+    "build:broker": "esbuild scripts/permission-broker.js --bundle --platform=node --target=node18 --outfile=dist/scripts/permission-broker.js --format=cjs",
     "build:renderer": "webpack --mode production",
     "build:pwa": "vite build --config src/pwa/vite.config.ts",
     "dev:pwa": "vite --config src/pwa/vite.config.ts",
-    "build": "bun run build:main && bun run build:hooks && bun run build:renderer && bun run build:pwa",
+    "build": "bun run build:main && bun run build:hooks && bun run build:broker && bun run build:renderer && bun run build:pwa",
     "start": "bun run build && electron .",
     "dev": "bun run build && electron .",
     "clean:db": "node -e \"const p=require('path'),f=require('fs'),d=p.join(process.env.APPDATA||process.env.HOME,'bodhilander');['bodhilander.db','bodhilander.db-shm','bodhilander.db-wal'].forEach(n=>{const fp=p.join(d,n);try{f.unlinkSync(fp);console.log('Deleted:',fp)}catch(e){if(e.code!=='ENOENT')console.error('Failed:',fp,e.message)}})\"",
@@ -41,8 +45,11 @@
   "type": "commonjs",
   "dependencies": {
     "@tanstack/react-query": "^5.62.7",
+    "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/addon-webgl": "^0.19.0",
     "@xterm/headless": "^6.0.0",
+    "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^12.5.0",
     "bonjour-service": "^1.3.0",
     "cors": "^2.8.5",
@@ -52,7 +59,7 @@
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
     "idb": "^8.0.0",
-    "node-pty": "^1.1.0",
+    "node-pty": "1.2.0-beta.15",
     "qr-scanner": "^1.4.2",
     "qrcode": "^1.5.4",
     "react": "^19.2.3",
@@ -62,9 +69,7 @@
     "recharts": "^3.8.1",
     "web-push": "^3.6.7",
     "ws": "^8.19.0",
-    "xterm": "^5.3.0",
-    "xterm-addon-fit": "^0.8.0",
-    "xterm-addon-webgl": "^0.16.0"
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@electron/notarize": "^3.1.1",

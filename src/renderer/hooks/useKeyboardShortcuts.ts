@@ -67,6 +67,7 @@ interface ShortcutHandlers {
   onViewTerminal: () => void;
   onViewAnalytics: () => void;
   onViewArena: () => void;
+  onViewRuns: () => void;
   onNewSubGroup?: () => void;
   onNavigateUp?: () => void;
   onNavigateDown?: () => void;
@@ -284,6 +285,11 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
     if (appKey(e, '3', 'Digit3')) {
       e.preventDefault();
       handlers.onViewArena();
+      return;
+    }
+    if (appKey(e, '4', 'Digit4')) {
+      e.preventDefault();
+      handlers.onViewRuns();
       return;
     }
 

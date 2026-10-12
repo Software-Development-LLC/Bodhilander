@@ -5,7 +5,7 @@
  * Run with: bun test relay/web/src/reconnect.test.ts
  */
 import { describe, expect, test } from 'bun:test';
-import { createReconnectScheduler } from './reconnect';
+import { createReconnectScheduler, readyCommands } from './reconnect';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -59,5 +59,27 @@ describe('createReconnectScheduler', () => {
     s.schedule(10);
     await wait(25);
     expect(count).toBe(2);
+  });
+});
+
+describe('readyCommands', () => {
+  test('a channel with nothing open asks for the lists and no more', () => {
+    expect(readyCommands(null)).toEqual([{ type: 'groups:list' }, { type: 'sessions:list' }]);
+  });
+
+  test('an open terminal is re-subscribed on every ready, including a reconnect', () => {
+    // A reconnect is a NEW socket, and the agent's new client session holds no
+    // subscriptions. Without this the page reads connected — the strip clears,
+    // the dot goes green — while that terminal receives nothing ever again.
+    // A guest who landed straight in it has no row left to tap to fix it.
+    expect(readyCommands('s1')).toEqual([
+      { type: 'groups:list' },
+      { type: 'sessions:list' },
+      { type: 'terminal:subscribe', sessionId: 's1' },
+    ]);
+  });
+
+  test('the lists come first — the subscribe is the last thing sent', () => {
+    expect(readyCommands('s1').at(-1)).toEqual({ type: 'terminal:subscribe', sessionId: 's1' });
   });
 });

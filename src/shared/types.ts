@@ -31,6 +31,24 @@ export interface Session {
    * 'claude'; plain shell sessions keep the default.
    */
   provider: string;
+  /**
+   * Derived at read time, never stored: `workingDir` is not on this machine,
+   * so launching would throw. A stored flag could not survive the bulk state
+   * reset every app start performs.
+   */
+  workingDirMissing?: boolean;
+  /**
+   * The account this session was moved OFF when failover fired (#207), or null
+   * when it is running where it was put. Kept so the session can go back once
+   * that account's limit lifts, and so the UI can say why it moved.
+   */
+  failoverFromAccountId: string | null;
+  /**
+   * The value `claudeAccountId` held before failover overwrote it. NULL means
+   * "inherited from the group", which is why it cannot double as the "no
+   * failover in progress" signal — `failoverFromAccountId` is that signal.
+   */
+  failoverPrevAccountId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +147,72 @@ export interface RelayStatus {
   fingerprint: string | null;
   /** Keep this machine awake while remote hosting is on (so it stays reachable). */
   keepAwake: boolean;
+  /**
+   * The relay user id this machine's owner confirmed. Null until they have.
+   * Session sharing needs it: without a confirmed owner the agent cannot tell
+   * the owner apart from a guest.
+   */
+  ownerUserId: string | null;
+  /** An owner the relay asserted that is still waiting on a human decision. */
+  pendingOwner: { userId: string; displayName: string | null; email: string | null; isChange: boolean } | null;
+  /**
+   * Guests attached right now, and what each is watching.
+   *
+   * Presence is a hard requirement of session sharing: silent read access to a
+   * live terminal is the same class of harm as silent write access.
+   */
+  attachedGuests: RelayAttachedGuest[];
+  /** Share requests waiting on this machine's owner to answer. */
+  pendingShares: RelayPendingShare[];
+}
+
+/**
+ * A guest asking for a session to be resized to fit their screen. Mirrors the
+ * tunnel's `GuestResizeRequest`, and is a request and nothing else: it becomes
+ * a prompt the owner may decline, leaving the guest's view exactly as it was.
+ */
+export interface RelayResizeRequest {
+  sessionId: string;
+  cols: number;
+  rows: number;
+  /** Who is asking. Relay-asserted identity, never authorization. */
+  login: string | null;
+  displayName: string | null;
+}
+
+export interface RelayAttachedGuest {
+  clientId: string;
+  grantId: string | null;
+  role: string;
+  login: string | null;
+  displayName: string | null;
+  /** Sessions they are watching right now, not merely entitled to. */
+  sessionIds: string[];
+}
+
+/** An active or revoked share, as the owner's settings list shows it. */
+export interface RelayShare {
+  grantId: string;
+  role: string;
+  status: 'pending' | 'active' | 'revoked';
+  granteeLogin: string | null;
+  createdAt: number;
+  expiresAt: number | null;
+  /** True while a revocation is queued for a relay we could not reach. */
+  revokePending: boolean;
+  sessionIds: string[];
+}
+
+export interface RelayPendingShare {
+  grantId: string;
+  role: string;
+  /** The immutable handle. Shown instead of a display name, which is free text. */
+  granteeLogin: string | null;
+  granteeName: string | null;
+  createdAt: number;
+  /** The session the invite was offered for, if this machine still knows it. */
+  sessionId: string | null;
+  sessionName: string | null;
 }
 
 /** Result of probing one provider CLI's availability (#97). */
@@ -197,6 +281,14 @@ export interface Group {
    * inherit this unless they set their own claudeAccountId.
    */
   claudeAccountId: string | null;
+  /**
+   * Board-driven orchestration (CO-722, Phase 2B). Optionally associates this
+   * group with a GitHub Projects v2 board and the local clone root the run
+   * engine cuts worktrees from. All null = no board association.
+   */
+  githubProjectNumber: number | null;
+  githubProjectName: string | null;
+  cloneRoot: string | null;
 }
 
 /**
@@ -210,15 +302,178 @@ export interface ClaudeAccount {
   label: string;
   /** Absolute path to the account's isolated .claude directory. */
   configDir: string;
-  /** Email parsed from credentials after login, for display. */
+  /** Address last recorded for this account, for display. */
   email: string | null;
+  /**
+   * Whether a completed login was found — resolved from the config dir, and
+   * from a recorded address only where that dir could not be read. Undefined
+   * when nothing was consulted, so no surface may call the account logged out.
+   */
+  loggedIn?: boolean;
   /** Hex color for UI badge. */
   color: string;
   /** True for the single account used as the global default fallback. */
   isDefault: boolean;
   createdAt: Date;
   lastUsedAt: Date | null;
+  /**
+   * Position in the failover order (#207): when an account hits its usage
+   * limit, its live sessions move to the lowest-ranked healthy account. Null
+   * for accounts that have never been ranked, which sort after every ranked
+   * one in the list order the accounts panel already uses.
+   */
+  fallbackRank: number | null;
+  /**
+   * When this account's usage limit is expected to lift, or null when it is
+   * not currently limited (#207). An account is skipped as a failover target
+   * until this passes. Parsed out of the CLI's own "resets at" line where it
+   * says one, otherwise a conservative default window.
+   */
+  limitedUntil: Date | null;
+  /** When the limit was observed. Null whenever limitedUntil is null. */
+  limitedAt: Date | null;
 }
+
+/**
+ * One automatic account switch (#207), reported to the renderer so it can
+ * respawn the ptys and say what happened.
+ *
+ * `to` is null when there was nowhere to go: every other account is limited
+ * too, or none is registered. That is not a failure to report as an error —
+ * the session stays where it is and the user is told the wall is real.
+ */
+export interface AccountFailoverEvent {
+  /** 'limit' = moved off an exhausted account; 'failback' = returned to it. */
+  reason: 'limit' | 'failback';
+  from: ClaudeAccount | null;
+  to: ClaudeAccount | null;
+  /** Sessions whose pty must be respawned for the switch to take effect. */
+  sessionIds: string[];
+  /** When `from`'s limit lifts, for the notification copy. Null if unknown. */
+  resetAt: Date | null;
+  /** Why nothing moved, when `to` is null. */
+  blocked?: 'no-healthy-account';
+}
+
+/** One rate-limit window: percent used (0-100+), when it resets and when it was read (epoch ms). */
+export interface UsageWindow {
+  pct: number;
+  resetsAt: number | null;
+  observedAt: number;
+}
+
+/** Where the newest observation in a usage record came from. */
+export type UsageSource = 'poll' | 'statusline';
+
+/** Why an account has no current usage reading. */
+export type UsageUnavailableReason =
+  | 'reauth'
+  | 'error'
+  | 'no-credentials'
+  | 'no-keychain-credentials'
+  | 'keychain-unavailable';
+
+/**
+ * An account's merged usage record. A window is null when nothing has reported
+ * it; null is never 0%. `unavailable` describes the latest poll, and can sit
+ * beside windows a statusline observation still supplies.
+ */
+export interface AccountUsage {
+  accountId: string;
+  fiveHour: UsageWindow | null;
+  sevenDay: UsageWindow | null;
+  source: UsageSource | null;
+  /** Epoch ms of its newest window reading, or null when there has been none. */
+  observedAt: number | null;
+  unavailable: UsageUnavailableReason | null;
+}
+
+export type AccountUsageMap = Record<string, AccountUsage>;
+
+/**
+ * Outcome of reassigning a Claude account to a session or group (BDHLNDR-31).
+ * CLAUDE_CONFIG_DIR is fixed when a pty spawns, so the listed sessions must be
+ * restarted before the switch takes effect on them.
+ */
+export interface AccountSwitchResult {
+  affectedSessionIds: string[];
+  /**
+   * What the write did, beyond what needs restarting (#214).
+   *
+   * `affectedSessionIds` answers one question — which ptys to replace — and
+   * answers it with `[]` in two very different situations: nothing needed to
+   * move, and nothing could. Both reach the user as an unchanged screen,
+   * indistinguishable from a menu that never registered the click. This is
+   * what the renderer needs to say which one it was.
+   */
+  outcome: AccountSwitchOutcome;
+}
+
+/**
+ * Why an account switch moved what it moved (#214).
+ *
+ * Deliberately describes sessions rather than prescribing a message: "already
+ * on that account" and "pinned to its own account" are different facts about
+ * the user's setup, and only the renderer knows which of them is worth saying
+ * in the surface the click came from.
+ */
+export interface AccountSwitchOutcome {
+  /** The account the target resolves to after the write (null = legacy dir). */
+  account: ClaudeAccount | null;
+  /**
+   * Sessions whose effective account did not move. For a session switch this
+   * is the session itself, meaning the pick recorded an override to the
+   * account it was already inheriting.
+   */
+  unchangedSessionIds: string[];
+  /**
+   * Group switches only: sessions carrying their own account override, which
+   * a group-level change cannot move by design. Worth separating from the
+   * above because the reason is different and so is the remedy.
+   */
+  overriddenSessionIds: string[];
+}
+
+/**
+ * The Claude account a RUNNING pty actually launched under (#165).
+ *
+ * CLAUDE_CONFIG_DIR is baked into the pty when it spawns (PtyManager's
+ * buildAgentSpawn), so `Session.claudeAccountId` — and the group/default chain
+ * behind it — describes what a session WILL run under, never what it IS
+ * running under. The two disagree from the moment an account is switched until
+ * the pty respawns, and #164 made that gap invisible: switching a live session
+ * looked like a no-op while the old account kept being billed. This is the
+ * spawn-time truth, published so the UI can name the account actually in use.
+ */
+export interface LiveAccountBinding {
+  /**
+   * Registered account the pty spawned under, or null when it spawned with no
+   * CLAUDE_CONFIG_DIR at all — the legacy ~/.claude login that predates
+   * accounts (BDHLNDR-31). Consumers join this against the accounts list for
+   * label/email/color rather than reading a snapshot, so a rename shows up
+   * without waiting for a respawn.
+   */
+  accountId: string | null;
+  /**
+   * The config dir that actually reached the CLI. claude_accounts.config_dir is
+   * UNIQUE in the schema, so this still identifies the login even if the row
+   * was renamed or deleted after the pty spawned.
+   */
+  configDir: string;
+  /**
+   * Wall-clock spawn time (ms) of the pty this binding describes. Changes on
+   * every respawn — including the silent resume-failure respawn — so a viewer
+   * can tell "same pty, account renamed" from "new pty, new account".
+   */
+  spawnedAt: number;
+}
+
+/**
+ * Live account bindings for every session with a running agent pty, keyed by
+ * session id (#165). A session absent from the map has no pty running under
+ * any account: nothing is being billed for it right now.
+ */
+export type LiveAccountBindings = Record<string, LiveAccountBinding>;
 
 export interface AppState {
   groups: Group[];
@@ -295,3 +550,441 @@ export interface GlobalStats {
   eventsPerDay: { date: string; count: number }[];
   toolUseCounts: Record<string, number>;
 }
+
+export interface PortableExportResult {
+  success: boolean;
+  filePath?: string;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  /** Archive size as it was shown before the file was written; bundles only. */
+  sizeLabel?: string;
+}
+
+export interface PortableImportResult {
+  success: boolean;
+  error?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  skippedGroups?: number;
+  skippedSessions?: number;
+  /** Bundles only: transcripts landed, and sessions whose folder is missing. */
+  transcriptCount?: number;
+  needsRelinkCount?: number;
+}
+
+/**
+ * Largest sealed handoff this build will attempt, mirroring the relay's own
+ * `handoffMaxBytes` default so an oversized state is refused before it is
+ * uploaded. A cross-tree test fails when the two drift apart.
+ */
+export const HANDOFF_MAX_BYTES = 256 * 1024 * 1024;
+
+/** A prepared handoff waiting on the relay, as the relay describes it. */
+export interface HandoffOffer {
+  id: string;
+  sourceMachineId: string;
+  sourceMachineName: string | null;
+  byteSize: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** What a machine should do about the handoff its account is holding. */
+export interface HandoffOfferState {
+  /** Null when nothing waits, or when this machine is the one that prepared it. */
+  offer: HandoffOffer | null;
+  /** This machine has already turned that exact bundle down. */
+  declined: boolean;
+  /** Size as it is shown in the offer. */
+  sizeLabel?: string;
+}
+
+export interface HandoffPrepareResult {
+  success: boolean;
+  error?: string;
+  /** Shown once, on the machine being left behind. */
+  phrase?: string;
+  sizeLabel?: string;
+  groupCount?: number;
+  sessionCount?: number;
+  /** When the relay stops holding it. */
+  expiresAt?: number;
+}
+
+export interface TransferBundleCounts {
+  groups: number;
+  sessions: number;
+  sessionEvents: number;
+  chatEvents: number;
+  arenaRuns: number;
+  arenaResponses: number;
+  preferences: number;
+  accounts: number;
+  transcripts: number;
+}
+
+/** A session that arrived but cannot start until somebody says where it lives. */
+export interface ArrivalRelinkItem {
+  /**
+   * A group's directory is where its next session would start, so it goes
+   * missing quietly — nothing fails until someone creates a session in it.
+   * Only sessions bear on `resumable`.
+   *
+   * Optional because reports persisted before this existed carry no kind, and
+   * every one of those was a session. Readers default accordingly.
+   */
+  kind?: 'session' | 'group';
+  /** The session or group id, per `kind`. */
+  sessionId: string;
+  name: string;
+  /** The directory as it was remapped, i.e. where we looked and did not find it. */
+  workingDir: string;
+}
+
+export interface ArrivalAccountItem {
+  accountId: string;
+  label: string;
+  /**
+   * Undefined where the evidence could not be read, which is not the same as
+   * "never logged in" and is not reported as needing a sign-in.
+   */
+  loggedIn: boolean | undefined;
+}
+
+export interface ArrivalReport {
+  /** ISO 8601, stamped by the caller so this module stays a pure assembly. */
+  restoredAt: string;
+  /** How the state got here, for a report the user opens a week later. */
+  via: 'file' | 'handoff';
+  /** The machine that prepared it, when the transport knows. */
+  sourceLabel: string | null;
+  sourcePlatform: string | null;
+  groups: number;
+  sessions: number;
+  /** Sessions whose working directory is on this machine, so they can start. */
+  resumable: number;
+  transcripts: number;
+  skippedGroups: number;
+  skippedSessions: number;
+  needsRelink: ArrivalRelinkItem[];
+  accounts: ArrivalAccountItem[];
+  /**
+   * Providers that had a key on the source machine. The keys themselves are
+   * sealed to that machine's keychain and never travel; these are names, so
+   * the report can say which ones to re-enter rather than leaving the user to
+   * discover it when a launch fails.
+   */
+  providersNeedingKeys: string[];
+}
+
+export interface TransferBundleManifest {
+  formatVersion: number;
+  sourceApp: string;
+  sourceAppVersion: string;
+  sourcePlatform: string;
+  /** The userData root the bundle came from, recorded for diagnostics. */
+  sourceUserData: string;
+  exportedAt: string;
+  /** Distinct roots across every group and session working directory. */
+  workingDirRoots: string[];
+  /**
+   * Providers that had an API key stored on the source machine — **ids only**.
+   * The keys are sealed to that machine's OS keychain and are excluded from
+   * the bundle by `LOCAL_PREFERENCE_PREFIXES`; nothing here changes that.
+   *
+   * Carried so the destination can say which keys to re-enter instead of
+   * leaving the user to find out when a launch fails. Optional: bundles
+   * written before this existed simply do not say, and are read as "unknown"
+   * rather than as "none".
+   */
+  providersWithApiKeys?: string[];
+  counts: TransferBundleCounts;
+}
+
+/** What removing a Claude account destroys, so the confirmation can say it. */
+export interface AccountRemovalCost {
+  /** Sessions bound to the account, running or not. */
+  sessions: number;
+  /** Conversation transcripts stored under the account's config dir. */
+  conversations: number;
+}
+
+/**
+ * One tool call a gate is waiting for permission on (CO-722, #288).
+ *
+ * Mirrors `PermissionRequest` in the run engine. The input is carried whole:
+ * a person approving a Bash call is approving its command line, and a
+ * summary is not a thing to consent to.
+ */
+export interface RunPermissionRequest {
+  /** Which owner (repo) is blocked on this call (CO-722 multi-owner). */
+  repo: string;
+  toolUseId: string;
+  toolName: string;
+  input: unknown;
+  askedAt: string;
+}
+
+/** What arming a run reported: the run, or the list of things to fix (CO-722). */
+export type RunArmResult =
+  | {
+      status: 'armed';
+      runId: string;
+      initiativeKey: string;
+      owners: Record<string, string>;
+      /** The repos in merge order (display only); empty when none was declared. */
+      mergeOrder?: string[];
+    }
+  | { status: 'refused'; refusals: { what: string; fix: string }[] };
+
+/**
+ * The preference keys the run engine's machine config is stored under (CO-722).
+ *
+ * One place both the Settings form (renderer) and the resolver (main) name
+ * them, so a rename cannot leave the UI writing a key the engine never reads.
+ * Each is resolved preference → `BODHI_*` env → built-in default, so a machine
+ * with the env already set keeps working and Settings is the friendlier way in.
+ */
+export const RUN_ENGINE_PREF_KEYS = {
+  claudePath: 'runEngine.claudePath',
+  ghPath: 'runEngine.ghPath',
+  pythonPath: 'runEngine.pythonPath',
+  approvers: 'runEngine.approvers',
+  harnessPath: 'runEngine.harnessPath',
+  bodhiRoot: 'runEngine.bodhiRoot',
+  initiativesRoot: 'runEngine.initiativesRoot',
+  // How a run answers gate permission prompts: manual (a person answers each,
+  // the safe default), bypass (auto-approve — trusted autonomous runs), or
+  // denyOnPrompt (fail closed).
+  permissionPosture: 'runEngine.permissionPosture',
+  // Board-driven orchestration (Phase 1): the GitHub org whose Projects v2
+  // boards we read, and the default project number.
+  githubOrg: 'runEngine.githubOrg',
+  projectNumber: 'runEngine.projectNumber',
+  // Eligibility gates on the "Approved for Development" Issue Field: an
+  // initiative is eligible when that field's value is one of the eligible
+  // values (comma-separated; default "Approved"; a per-project override can
+  // live in the central config). The field name is configurable for boards
+  // that name their approval field differently. No board is migrated — this is
+  // the human-approval column the team already maintains.
+  approvalField: 'runEngine.approvalField',
+  eligibleApprovalValues: 'runEngine.eligibleApprovalValues',
+  // The central config repo (owner/repo) + the path to its JSON, fetched at
+  // runtime so project/owner policy needs no app release (Phase 2).
+  configRepo: 'runEngine.configRepo',
+  configPath: 'runEngine.configPath',
+  // Continuous auto-drive (CO-722 Workstream B): opt-in board watcher that
+  // starts runs for eligible initiatives on its own. Off by default; bounded by
+  // a per-day cap (0/unset = unlimited) and a max-concurrent-runs cap so it
+  // never spends more quota than the operator allows.
+  autoDriveEnabled: 'runEngine.autoDriveEnabled',
+  autoDrivePerDay: 'runEngine.autoDrivePerDay',
+  autoDriveMaxConcurrent: 'runEngine.autoDriveMaxConcurrent',
+} as const;
+
+/** What preparing an initiative reported: the armable directory, or why not (CO-722). */
+export type RunPrepareResult =
+  | { status: 'prepared'; initiativeDir: string; log: string }
+  | { status: 'refused'; refusals: { what: string; fix: string }[]; log?: string };
+
+/**
+ * What preparing a CROSS-REPO run reported (CO-722).
+ *
+ * Cross-repo prepare is loop-driven: it writes one run row and returns its id
+ * rather than an armable directory, because scoping, `arch` and spawn all happen
+ * later on the loop's timer. The run is watched in the Runs view from there.
+ */
+export type RunCrossRepoPrepareResult =
+  | { status: 'prepared'; runId: string }
+  | { status: 'refused'; refusals: { what: string; fix: string }[] };
+
+/**
+ * A cross-repo run's proposed seam manifest, for the approval panel (CO-722).
+ *
+ * The raw `seams.yaml` (human-readable as-is) plus its merge order pulled out
+ * for prominence. Shown so a person can approve before the worktrees are cut --
+ * "the cheap place to be wrong".
+ */
+export interface SeamManifest {
+  /** The repos in producer-before-consumer order; empty when none was declared. */
+  mergeOrder: string[];
+  /** The raw seams.yaml, shown verbatim for approval. */
+  seamsYaml: string;
+}
+
+/**
+ * One line of the run inbox (CO-722).
+ *
+ * Mirrors `InboxRow` in the run repository. Declared here because the
+ * renderer may not import from `src/main`, and duplicated deliberately rather
+ * than widened: the shape a window is allowed to see is a decision, and a
+ * type shared by reference makes every column added in main visible in a
+ * window by default.
+ */
+/**
+ * One owner's live status for the run card / inbox (CO-722 multi-owner).
+ *
+ * A cross-repo run has several tracks at once; this is the per-track snapshot
+ * so the UI can show "gate 2 · api · running" instead of a single opaque state.
+ */
+export interface RunOwnerSummary {
+  repo: string;
+  /** The role at this owner's active gate, or null before one is recorded. */
+  agent: string | null;
+  /** The owner's own state (running, waitingPermission, waitingReview, …), or null. */
+  state: string | null;
+  /** The gate number in flight for this owner, or null when none is open. */
+  gate: number | null;
+  /**
+   * The background session to `claude attach` — set ONLY when this owner is a
+   * bypass gate waiting on a person (answered out of band, not in the app), so
+   * the inbox can show the exact command. Null otherwise.
+   */
+  attachId: string | null;
+}
+
+export interface RunInboxRow {
+  id: string;
+  initiativeKey: string;
+  state: string;
+  /** Null when the run is waiting by design rather than stopped. */
+  blockedReason: string | null;
+  since: string;
+  repos: string[];
+  /** Per-owner live status (empty for a single run with no owners yet). */
+  owners: RunOwnerSummary[];
+}
+
+/**
+ * One line of the active-runs list (CO-722).
+ *
+ * The "what is the engine doing" surface, as distinct from the inbox's "what
+ * needs me": every in-flight run, including a cross-repo run scoping or driving
+ * `arch` (state `preparing`, which the inbox excludes). `kind`/`bootstrapState`
+ * are carried so the phase can be named -- "Architecting seams…" rather than a
+ * bare "preparing". Loose strings, like `state`, because the renderer maps them
+ * to labels and must not import the main-side unions.
+ */
+export interface RunActiveRow {
+  id: string;
+  initiativeKey: string;
+  state: string;
+  /** `'single'` or `'multi'`. */
+  kind: string;
+  /** `scoping | architecting | awaitingManifest | spawning | done`, or null. */
+  bootstrapState: string | null;
+  blockedReason: string | null;
+  since: string;
+  repos: string[];
+  /** Per-owner live status (empty for a single run with no owners yet). */
+  owners: RunOwnerSummary[];
+}
+
+/**
+ * Board-driven orchestration DTOs (Phase 1, read-only).
+ *
+ * The renderer-facing shape of a GitHub Projects v2 board. Loose strings
+ * (like `RunActiveRow.state`) so the renderer maps them to labels and never
+ * imports a main-side union. See docs/design-board-driven-orchestration.md.
+ */
+export interface BoardItem {
+  /** The issue number, in its own repo (child numbers are per-repo). */
+  number: number;
+  title: string;
+  repo: string;
+  /** GitHub issue state: `OPEN` | `CLOSED`. */
+  state: string;
+  /** The project Status value (e.g. In Progress, Done, or a backlog value), or null. */
+  status: string | null;
+  /** The "Approved for Development" Issue Field value (Approved / Not Approved / Needs Review), or null. */
+  approval: string | null;
+  /** The "Priority" Issue Field value (Urgent / High / Medium / Low), or null — used for ordering. */
+  priority: string | null;
+  url: string;
+  assignees: string[];
+}
+
+/**
+ * A top-level board initiative (an issue with no parent) and its cross-repo
+ * children. A single-repo item is just an initiative with no children.
+ */
+export interface BoardInitiative {
+  item: BoardItem;
+  /** Child issues across repos (via GitHub sub-issue links); empty for single-repo. */
+  children: BoardItem[];
+  /** Every repo this initiative touches (the item's repo + the children's). */
+  repos: string[];
+  /** The initiative's "Approved for Development" value marks it eligible to start. */
+  eligible: boolean;
+  /**
+   * True when a run for this initiative's key is already active locally (Phase 4).
+   * Annotated by the app after reading the board — GitHub doesn't know about the
+   * app's runs — so the board shows "In progress" instead of offering a second
+   * Initiate. Optional: the raw board read leaves it undefined.
+   */
+  inProgress?: boolean;
+}
+
+export interface BoardProject {
+  title: string;
+  number: number;
+  initiatives: BoardInitiative[];
+}
+
+/**
+ * What reading a board returned: the project, or a fixable reason (no org set,
+ * project not accessible, gh/GraphQL error). Mirrors the run engine's
+ * "problem, not a silent empty" discipline so the Board view never shows an
+ * empty board when the truth is "couldn't read it."
+ */
+export type BoardResult =
+  | { status: 'ok'; project: BoardProject }
+  | { status: 'problem'; problem: string };
+
+/**
+ * The central orchestration config (board-driven orchestration, Phase 2).
+ *
+ * The domain policy GitHub doesn't hold — which agent owns a repo, its
+ * integration branch / provision command / tracking-key prefix, and per-owner /
+ * per-project context. Lives in a config repo the app fetches at runtime and
+ * caches, so adding or updating a project never needs an app release. Only
+ * `version` + `repos` are required; every repo field is optional.
+ */
+export interface RepoConfig {
+  /** The `KEY-N` prefix used in this repo's issue titles/PRs (e.g. `CO`). */
+  keyPrefix?: string;
+  /** The branch worktrees are cut from; defaults to `development`. */
+  integrationBranch?: string;
+  /** A command run in a fresh worktree before an owner works (per repo/language). */
+  provision?: string;
+  /** The agent that owns gate 2 for this repo. */
+  ownerAgent?: string;
+  /** Free-text context injected into this repo's owner brief. */
+  context?: string;
+  /** CI check names that must be green — what "green" MEANS here. Omit = no bar. */
+  expectedChecks?: string[];
+  /** Checks owed only once a review is requested (e.g. `arbiter/review`). */
+  expectedChecksAfterReview?: string[];
+}
+
+export interface OrchestrationConfig {
+  version: number;
+  repos: Record<string, RepoConfig>;
+  /** Per-owner context; the generic role logic ships in the app. */
+  owners?: Record<string, { context?: string }>;
+  /**
+   * Per-project settings, keyed by the Projects v2 number (as a string).
+   * `eligibleApprovalValues` overrides the global default for this board — the
+   * "Approved for Development" values that mark an initiative eligible to start.
+   */
+  projects?: Record<string, { context?: string; eligibleApprovalValues?: string[] }>;
+}
+
+/**
+ * What loading the central config returned. `stale` marks a cached copy served
+ * because a fresh fetch failed — the config is still usable, just not just-read.
+ */
+export type ConfigResult =
+  | { status: 'ok'; config: OrchestrationConfig; fetchedAt: string; stale?: boolean }
+  | { status: 'problem'; problem: string };

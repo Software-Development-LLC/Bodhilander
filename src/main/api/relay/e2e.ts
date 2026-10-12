@@ -14,6 +14,16 @@
  * Nonces are a 96-bit big-endian counter, one sequence per direction, so a
  * (key, nonce) pair is never reused. Receivers must reject non-increasing
  * counters to prevent replay/reorder.
+ *
+ * The agent's half of the exchange is an EPHEMERAL keypair, freshly generated
+ * for every channel (see `deriveEphemeral`). This is what makes the counter
+ * discipline sound: with a long-lived agent key, ECDH(agent_static, client_pub)
+ * is a pure function of the client's public key, so anyone able to open a
+ * channel — notably the relay — could re-present a recorded `clientX25519Pub`,
+ * get the same session key back, and replay recorded frames into a fresh
+ * counter sequence. A per-channel key makes every channel's key unique, kills
+ * that replay, removes the two-time-pad risk when two channels share a client
+ * key, and buys forward secrecy for free.
  */
 
 import crypto from 'crypto';
@@ -27,6 +37,37 @@ const HKDF_SALT = 'bodhilander-relay-salt:v1';
 const HKDF_INFO = 'bodhilander-relay-e2e:v1';
 /** Handshake proof version — must match the web client exactly. */
 const HANDSHAKE_VERSION = 'e2e-handshake:v1';
+
+/** base64url (from a JWK field) → standard base64, for on-the-wire use. */
+function b64urlToB64(b64url: string): string {
+  return Buffer.from(b64url, 'base64url').toString('base64');
+}
+
+/**
+ * One channel's X25519 key agreement, using a keypair generated here and thrown
+ * away with the channel. Returns the shared secret plus the ephemeral public
+ * key to advertise to the client (which the caller signs with the machine's
+ * long-lived Ed25519 identity, so the client can still prove the key came from
+ * this machine).
+ *
+ * The private key never leaves this function, so a channel's key material is
+ * unrecoverable once the channel is gone.
+ */
+export function deriveEphemeral(peerX25519PubRaw: Uint8Array): {
+  sharedSecret: Buffer;
+  ephemeralPubB64: string;
+} {
+  if (peerX25519PubRaw.length !== 32) throw new Error('peer X25519 public key must be 32 bytes');
+
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('x25519');
+  const peerKey = crypto.createPublicKey({
+    key: { kty: 'OKP', crv: 'X25519', x: Buffer.from(peerX25519PubRaw).toString('base64url') },
+    format: 'jwk',
+  });
+  const sharedSecret = crypto.diffieHellman({ privateKey, publicKey: peerKey });
+  const { x } = publicKey.export({ format: 'jwk' }) as { x: string };
+  return { sharedSecret, ephemeralPubB64: b64urlToB64(x) };
+}
 
 /** Derive the 32-byte AES key from an X25519 shared secret (HKDF-SHA256). */
 export function deriveSessionKey(sharedSecret: Uint8Array): Buffer {

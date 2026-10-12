@@ -18,6 +18,7 @@ export function createDevRoutes(_config: RelayConfig, repos: Repositories) {
       const user = repos.upsertGithubUser({
         providerUserId: 'dev-user',
         displayName: 'Dev User',
+        login: 'devuser',
         email: 'dev@localhost',
         avatarUrl: null,
       });

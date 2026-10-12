@@ -8,6 +8,7 @@ window.onerror = (message, source, lineno, colno, error) => {
   const msg = typeof message === 'string' ? message : 'Unknown error';
   const loc = source ? `${source}:${lineno}:${colno}` : 'unknown';
   window.electronAPI?.logError?.('window.onerror', `${msg} at ${loc}`, error?.stack);
+  return undefined;
 };
 
 window.onunhandledrejection = (event: PromiseRejectionEvent) => {

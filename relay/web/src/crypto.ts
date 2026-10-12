@@ -15,7 +15,7 @@ const dec = (u: ArrayBuffer | Uint8Array) => new TextDecoder().decode(u);
 
 function toB64(u: Uint8Array): string {
   let s = '';
-  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]!);
+  for (const byte of u) s += String.fromCharCode(byte);
   return btoa(s);
 }
 function fromB64(s: string): Uint8Array {

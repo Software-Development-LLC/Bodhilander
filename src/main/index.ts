@@ -1,8 +1,9 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
 import { runGuardedShutdown } from './shutdown';
+import { withSpawnRetry, isTransientSpawnError } from './spawn-retry';
 import { isAppQuitting, markAppQuitting, shouldHideToTrayOnClose } from './quit-state';
 import { resolveLaunchProviderId } from './providers';
 import { startProviderInstall, cancelProviderInstall } from './provider-install';
@@ -10,6 +11,9 @@ import { detectProviders } from './provider-detector';
 import * as keyVault from './key-vault';
 import { getDatabase, closeDatabase } from './database';
 import * as groupsRepo from './repositories/groups';
+import * as runsRepo from './repositories/runs';
+import { startRunLoopService, stopRunLoopService, startBoardWatcherService, stopBoardWatcherService, listRunPermissions, answerRunPermission, armInitiativeDir, listHarnessRepos, prepareInitiativeFromApp, prepareCrossRepoRun, initiateFromBoard, getBoardWithRunState, readRunManifest, approveRunManifest, rejectRunManifest } from './run-engine/run-loop-service';
+import { loadOrchestrationConfig } from './github/orchestration-config';
 import * as sessionsRepo from './repositories/sessions';
 import * as prefsRepo from './repositories/preferences';
 import * as sessionEventsRepo from './repositories/session-events';
@@ -19,24 +23,54 @@ import * as chatEventsRepo from './repositories/chat-events';
 import { ChatParser } from './api/chat-parser';
 import * as accountsRepo from './repositories/accounts';
 import * as accountAuth from './account-auth';
+import { withAccountIdentity } from './account-identity';
+import * as accountSwitch from './account-switch';
+import * as accountFailover from './account-failover';
 import { exportSessions, ExportFormat } from './session-export';
 import { exportGroupsAndSessions, importGroupsAndSessions, importFromClaudeLander } from './group-import-export';
+import {
+  declineMachineHandoff,
+  prepareMachineHandoff,
+  readHandoffOffer,
+  restoreMachineHandoff,
+} from './machine-handoff';
+import { dismissArrival, readArrival, resolveRelink } from './arrival';
 import { StateMonitor } from './state-monitor';
 import { createApplicationMenu } from './menu';
-import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel } from './auto-updater';
+import { initAutoUpdater, checkForUpdatesManual, downloadUpdate, getUpdateChannel, setUpdateChannel, UpdateChannel, hasPendingMacUpdate, armPendingMacUpdateInstall } from './auto-updater';
 import { notificationManager } from './notification-manager';
 import { trayManager } from './tray-manager';
 import { soundManager, SoundEvent } from './sound-manager';
-import { Group, Session, SessionState } from '../shared/types';
+import { AccountFailoverEvent, Group, Session, SessionState } from '../shared/types';
+import { USAGE_SINK_PREF, USAGE_THRESHOLD_PREF } from '../shared/usage';
 import { teamsAuthService } from './teams/teams-auth';
 import { teamsNotifier } from './teams/teams-notifier';
-import { registerHooks, cleanupLegacyMcpServer } from './mcp-config';
+import { registerHooks, cleanupLegacyMcpServer, getStatuslineScriptPath } from './mcp-config';
+import { candidateAccountForGroup, resolveAccountForGroup } from './account-resolver';
+import { credentialStoreFor } from './credential-store';
+import { saveHeldRotations } from './token-refresh';
+import { QUIT_CLEANUP_BUDGET_MS, runQuitCleanup } from './quit-cleanup';
+import { restoreMainWindowBounds, watchMainWindowLoad } from './window-bounds';
+import { sinkLaunchFor } from './statusline-sink';
+import { routeNewSessionByUsage, sessionTokenRefreshSettled, setSessionRoutedListener } from './session-routing';
+import { createUsageService, UsageService } from './usage-service';
+import * as usageStore from './usage-store';
 import log from 'electron-log';
 import { getApiServer } from './api';
 import { getRelayClient } from './api/relay';
+import type { GuestResizeRequest } from './api/relay/session-tunnel';
 import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
+
+/**
+ * How often parked sessions are reconsidered for going home (#207).
+ *
+ * A minute is far finer than the thing it is waiting on — usage limits reset on
+ * the hour scale — and the sweep is a couple of indexed reads over a table with
+ * tens of rows, so the cost of checking often is not worth optimising away.
+ */
+const FAILBACK_SWEEP_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Logging & crash reporting configuration
@@ -339,6 +373,115 @@ function registerHooksEverywhere(): void {
   }
 }
 
+/**
+ * Tell the renderer and the user about one account switch (#207).
+ *
+ * The renderer gets the session ids because it is the only side that can act
+ * on them; the notification goes out regardless of whether a window is
+ * focused, because this happened without being asked for.
+ */
+function publishFailover(event: AccountFailoverEvent, sessionId?: string): void {
+  // The assignment rows moved under the renderer's feet. Without this its
+  // cached sessions keep the old claudeAccountId, and every account badge in
+  // the sidebar names the account the session just left.
+  if (event.sessionIds.length > 0) mainWindow?.webContents.send('sessions:refresh');
+  mainWindow?.webContents.send('accounts:failover', event);
+  const { title, body } = accountFailover.describeFailover(event);
+  notificationManager.showAccountNotification({ title, body, sessionId });
+}
+
+/**
+ * Return parked sessions to their own account once its limit lifts.
+ *
+ * Called from every state change AND from a timer, because the two miss
+ * different cases: a session that went idle an hour before the reset never
+ * emits another state change, and a session working straight through the reset
+ * never becomes eligible until it stops. Between them, every parked session is
+ * reconsidered at the first moment interrupting it is free.
+ */
+function sweepFailbacks(): void {
+  if (!accountFailover.isFailbackEnabled()) return;
+  try {
+    for (const candidate of accountFailover.failbackCandidates()) {
+      const session = sessionsRepo.getSession(candidate.sessionId);
+      if (!session) continue;
+      const idleSinceMs = Date.now() - session.lastActivityAt.getTime();
+      if (!accountFailover.canFailBackNow(session.state, idleSinceMs)) continue;
+      const event = accountFailover.failBackSession(candidate.sessionId);
+      if (event) publishFailover(event, candidate.sessionId);
+    }
+  } catch (err) {
+    log.error('[Failover] Fail-back sweep failed:', err);
+  }
+}
+
+/**
+ * Subscribe to usage limits and start the fail-back timer, exactly once.
+ *
+ * createWindow runs again on 'activate' and after a renderer crash, so wiring
+ * registered from inside it is wiring registered twice — and a second
+ * subscription here would run the whole failover for one limit twice, sending
+ * the user two notifications about a single event. The window is not this
+ * feature's lifetime; the app is.
+ */
+let failoverWired = false;
+function registerFailoverWiring(): void {
+  if (failoverWired) return;
+  failoverWired = true;
+
+  // The pty only reports the observation; where the work goes is
+  // account-failover's call, and applying the move is the renderer's — a switch
+  // reaches the CLI as CLAUDE_CONFIG_DIR, which is fixed at spawn, so it takes a
+  // respawn and only the renderer owns those.
+  ptyManager.on('usageLimit', ({ id, accountId, resetAt, rateLimitType }) => {
+    try {
+      const event = accountFailover.handleUsageLimit({
+        sessionId: id,
+        accountId,
+        resetAt,
+        rateLimitType,
+        liveAccounts: ptyManager.getLiveAccounts(),
+      });
+      if (event) publishFailover(event, id);
+    } catch (err) {
+      // A failed failover must never take the data pipeline down with it: the
+      // session is limited, not broken, and the user can still switch by hand.
+      log.error('[Failover] Could not handle a usage limit:', err);
+    }
+  });
+
+  const failbackTimer = setInterval(sweepFailbacks, FAILBACK_SWEEP_MS);
+  app.on('will-quit', () => clearInterval(failbackTimer));
+}
+
+let usageService: UsageService | null = null;
+
+function startUsagePolling(): void {
+  if (usageService) return;
+  const service = createUsageService({
+    listAccounts: () => accountsRepo.getAllAccounts(),
+    getPreference: key => prefsRepo.getPreference(key),
+    liveAccounts: () => ptyManager.getLiveAccounts(),
+    activeRuns: () => runsRepo.listActiveRuns(),
+    ownership: {
+      candidate: groupId => candidateAccountForGroup(groupId)?.id ?? null,
+      resolved: groupId => resolveAccountForGroup(groupId)?.id ?? null,
+      launchedDirs: runsRepo.runningGateConfigDirs,
+      accountIdForDir: dir => accountsRepo.getAccountByConfigDir(dir)?.id ?? null,
+    },
+    fetch: (url, init) => fetch(url, init),
+    credentials: credentialStoreFor(process.platform),
+    sink: sinkLaunchFor(getStatuslineScriptPath()),
+    publish: usage => mainWindow?.webContents.send('usage:updated', usage),
+    notify: (title, body) => notificationManager.showAccountNotification({ title, body }),
+  });
+  usageService = service;
+  service.start();
+  app.on('will-quit', () => service.stop());
+}
+
+setSessionRoutedListener(() => mainWindow?.webContents.send('sessions:refresh'));
+
 function createWindow(): void {
   // BDHLNDR-44: never construct a BrowserWindow before app 'ready' — defends
   // the rapid-relaunch race that produced "Cannot create BrowserWindow before
@@ -404,14 +547,26 @@ function createWindow(): void {
     logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
+    // A session that just went idle may be one parked off its own account,
+    // waiting for a free moment to go back (#207). In practice this handler
+    // is the dead half of the pair below: nothing currently connects to
+    // StateMonitor's socket and writes it a StateEvent, so `idle`/`working`
+    // state is driven entirely by the pty's own silence-timeout detection —
+    // see the sibling comment on the ptyManager 'stateChange' handler, and
+    // `canFailBackNow`'s idle-duration guard (#297), which exists because
+    // that silence timeout alone is not a reliable "between turns" signal.
+    sweepFailbacks();
   });
 
-  // Restore saved window bounds or use defaults
-  const savedBounds = prefsRepo.getWindowBounds();
+  const placement = restoreMainWindowBounds(
+    prefsRepo,
+    screen.getAllDisplays().map(display => display.workArea),
+    screen.getPrimaryDisplay().workArea,
+    log,
+  );
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     icon: path.join(__dirname, '../../build/icon.png'),
-    width: savedBounds?.width || 1200,
-    height: savedBounds?.height || 800,
+    ...placement.bounds,
     show: false, // shown on 'ready-to-show' to avoid a blank-window flash
     webPreferences: {
       nodeIntegration: false,
@@ -420,23 +575,16 @@ function createWindow(): void {
     },
   };
 
-  if (savedBounds?.x !== undefined && savedBounds?.y !== undefined) {
-    windowOptions.x = savedBounds.x;
-    windowOptions.y = savedBounds.y;
+  const win = new BrowserWindow(windowOptions);
+  mainWindow = win;
+  watchMainWindowLoad(win, log);
+
+  // maximize() can show the window, so it comes after the watcher that settles on 'show'.
+  if (placement.maximize) {
+    win.maximize();
   }
 
-  mainWindow = new BrowserWindow(windowOptions);
-
-  // Maximize if it was maximized before
-  if (savedBounds?.isMaximized) {
-    mainWindow.maximize();
-  }
-
-  mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-  });
+  win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   // Create custom application menu
   createApplicationMenu(mainWindow);
@@ -482,6 +630,45 @@ function createWindow(): void {
   }, 1500); // Defer 1.5s to prioritize UI rendering
 
   // Relay status forwarding
+  // A guest is asking to join. This deliberately bypasses shouldNotify(),
+  // which suppresses notifications precisely when the owner is at their desk —
+  // the opposite of what a consent prompt needs. It also fires an OS
+  // notification, because a renderer modal in a minimised window is invisible
+  // and the request would simply expire unanswered.
+  getRelayClient().on('join-request', (grant: { granteeLogin: string | null; granteeName: string | null }) => {
+    const who = grant.granteeLogin ? `@${grant.granteeLogin}` : (grant.granteeName ?? 'Someone');
+    try {
+      const notification = new Notification({
+        title: 'Someone wants to watch a session',
+        body: `${who} is asking to join. Open Bodhilander to decide.`,
+        silent: false,
+      });
+      // The codebase has no notification action buttons, so the click restores
+      // and focuses instead — otherwise the prompt stays unreachable.
+      notification.on('click', () => {
+        if (mainWindow) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      });
+      notification.show();
+    } catch (e) {
+      log.warn('[Relay] could not raise a join-request notification:', (e as Error).message);
+    }
+  });
+
+  getRelayClient().on('grants-changed', () => {
+    mainWindow?.webContents.send('relay:status', getRelayClient().getStatus());
+  });
+
+  // A guest asked for a session to be resized to fit their screen. No OS
+  // notification: unlike a join request this decides nothing about access,
+  // and the answer is a one-tap prompt on the terminal it is about.
+  getRelayClient().on('resize-request', (request: GuestResizeRequest) => {
+    mainWindow?.webContents.send('relay:resize-request', request);
+  });
+
   getRelayClient().on('status', (status) => {
     mainWindow?.webContents.send('relay:status', status);
   });
@@ -569,6 +756,16 @@ function createWindow(): void {
     }
   });
 
+  // Live account changes (#165): which account a pty ACTUALLY spawned under.
+  // The DB assignment can't answer that — CLAUDE_CONFIG_DIR is fixed at spawn —
+  // so the header would otherwise report a switch that has not happened yet.
+  ptyManager.on('liveAccount', ({ id, binding }) => {
+    mainWindow?.webContents.send('pty:live-account', id, binding);
+  });
+
+  registerFailoverWiring();
+  startUsagePolling();
+
   // PTY state detection forwarding
   ptyManager.on('stateChange', (event) => {
     mainWindow?.webContents.send('state:change', event);
@@ -585,6 +782,13 @@ function createWindow(): void {
     logSessionStateEvent(event.sessionId, event.state);
     // Handle notifications and tray updates
     handleStateChange(event.sessionId, event.state);
+    // The pty's own idle detection is the ONLY way a session becomes safe to
+    // move back to its own account (#207). The comment above this one, on the
+    // StateMonitor handler, used to claim a second "hook-driven" signal here
+    // as corroboration; investigating #297 found nothing wires Claude Code's
+    // Stop hook to that socket, so this silence-based detection alone is what
+    // `canFailBackNow`'s idle-duration guard exists to distrust.
+    sweepFailbacks();
     // Broadcast to mobile clients
     getApiServer().broadcastSessionState(event.sessionId, event.state, event.event);
   });
@@ -670,11 +874,27 @@ ipcMain.handle('pty:create', async (_, id: string, cwd: string, launchClaude: bo
     // only bridges first launches where the terminal mounted before the row
     // was persisted. Unknown ids degrade to the default inside
     // PtyManager.createSession (resolveProvider).
-    ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId));
+    //
+    // Wrapped in withSpawnRetry so a transient `posix_spawnp failed` (EAGAIN —
+    // the process/PTY limit momentarily hit under load) is ridden out rather
+    // than surfaced as a failed "new session". createSession throws before it
+    // registers the pty in its map, so a retry starts from a clean slate.
+    await sessionTokenRefreshSettled(id);
+    await withSpawnRetry(() =>
+      ptyManager.createSession(id, cwd, launchClaude, resolveLaunchProviderId(session?.provider, providerId)),
+    );
     // Play session start sound
     soundManager.playStartSound();
   } catch (error) {
     log.error('[Main] Failed to create PTY session:', error);
+    // A transient resource failure survived the retries: tell the renderer
+    // something the user can act on, instead of the raw node-pty string.
+    if (isTransientSpawnError(error)) {
+      throw new Error(
+        'Could not start a terminal — the system is temporarily out of process resources. ' +
+          'This usually clears in a few seconds; try again, or close some sessions.',
+      );
+    }
     throw error; // Re-throw so renderer knows it failed
   }
 });
@@ -687,9 +907,15 @@ safeOn('pty:resize', (id: string, cols: number, rows: number) => {
   ptyManager.resize(id, cols, rows);
 });
 
-safeOn('pty:kill', (id: string) => {
-  ptyManager.kill(id);
-});
+// Awaited (#164): the renderer restarts a session by killing the pty and
+// re-creating one under the SAME id. Fire-and-forget made that a race the
+// dying pty always won — its exit landed on the replacement. safeHandle
+// re-throws, so the renderer catches.
+safeHandle('pty:kill', (id: string) => ptyManager.kill(id));
+
+// Which account each running pty actually launched under (#165). The renderer
+// seeds its map from this on mount, then follows 'pty:live-account'.
+safeHandle('pty:get-live-accounts', () => ptyManager.getLiveAccounts());
 
 // Prime a deferred-emission pty (BDHLNDR-33): flushes any buffered scrollback
 // as a single 'data' event then unlocks live emission. Used by the Terminal
@@ -697,6 +923,62 @@ safeOn('pty:kill', (id: string) => {
 // after the pty has already started producing output.
 safeOn('pty:prime', (id: string) => {
   ptyManager.primePty(id);
+});
+
+// The run inbox (CO-722). Read-only: nothing here starts, stops or advances a
+// run. The engine ships dark until one real run has passed, and a read
+// channel is what lets somebody watch that happen without being able to
+// set it off from a window.
+safeHandle('db:runs:inbox', () => runsRepo.listInbox());
+safeHandle('db:runs:active', () => runsRepo.listActive());
+safeHandle('db:runs:abandon', (runId: string) => runsRepo.abandonRun(runId));
+safeHandle('db:projects:board', (projectNumber?: number) => getBoardWithRunState(projectNumber));
+safeHandle('db:config:load', (force?: boolean) => loadOrchestrationConfig({ force }));
+
+// The permission requests a run's gate is blocked on, and a person's answer
+// to one (CO-722, #288). Writing a reply is the one run-engine action the app
+// exposes -- a decision only a person can make -- so unlike the read-only
+// inbox above, `answer` mutates the channel the gate is polling.
+safeHandle('db:runs:permissions', (runId: string) =>
+  listRunPermissions(app.getPath('userData'), runId),
+);
+safeHandle(
+  'db:runs:permissions:answer',
+  (runId: string, repo: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) =>
+    answerRunPermission(app.getPath('userData'), runId, repo, toolUseId, verdict, message ?? ''),
+);
+
+// Arm a run from a prepared initiative directory (CO-722). Reading the
+// initiative and writing the run's rows -- armRun checks the machine first
+// and refuses with a list rather than writing a half-armed run.
+safeHandle('db:runs:arm', (initiativeDir: string) => armInitiativeDir(initiativeDir));
+
+// Prepare an initiative from the app (CO-722): run the harness's bootstrap
+// (init_task then spawn) so a person never drops to a terminal to start one.
+// The repo list feeds the picker; both refuse clearly when the machine config
+// is not yet set.
+safeHandle('db:runs:repos', () => listHarnessRepos());
+safeHandle('db:runs:prepare', (issueId: string, repo: string, budgetUsd?: number) =>
+  prepareInitiativeFromApp(issueId, repo, budgetUsd),
+);
+safeHandle('db:runs:prepareCrossRepo', (issueId: string, repos: string[], budgetUsd?: number) =>
+  prepareCrossRepoRun(issueId, repos, budgetUsd),
+);
+safeHandle('db:runs:initiateFromBoard', (projectNumber: number, repo: string, issueNumber: number) =>
+  initiateFromBoard(projectNumber, repo, issueNumber),
+);
+safeHandle('db:runs:bootstrap:manifest', (runId: string) => readRunManifest(runId));
+safeHandle('db:runs:bootstrap:approve', (runId: string) => approveRunManifest(runId));
+safeHandle('db:runs:bootstrap:reject', (runId: string, reason: string) => rejectRunManifest(runId, reason));
+
+// The directory picker arming uses. A cancel returns null; the renderer
+// treats that as "changed my mind", not an error.
+safeHandle('dialog:pickInitiative', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Pick a prepared initiative directory',
+    properties: ['openDirectory'],
+  });
+  return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
 });
 
 // Database IPC Handlers - Groups
@@ -742,6 +1024,7 @@ safeHandle('db:sessions:getAll', () => {
 
 safeHandle('db:sessions:create', (session: Session) => {
   sessionsRepo.createSession(session);
+  routeNewSessionByUsage(session.id);
   // Log session start event (BDHLNDR-17)
   try {
     sessionEventsRepo.createEvent(session.id, 'session_start', null);
@@ -762,14 +1045,29 @@ ipcMain.handle('db:sessions:delete', async (_, id: string) => {
 });
 
 // Claude account IPC handlers (BDHLNDR-31)
+// Login state is resolved from each config dir here rather than read off the
+// row: the stored email is a one-shot write from the login flow, so accounts
+// that logged in without producing one present as logged out forever.
 safeHandle('accounts:list', () => {
-  return accountsRepo.getAllAccounts();
+  // Failover order, not insertion order (#207). With no ranks set this is
+  // byte-for-byte the old ordering (default first, then oldest), so nothing
+  // moves for an estate whose owner has never touched the order — and once
+  // they have, the list they arranged is the list they see everywhere.
+  return accountsRepo.getAccountsInFallbackOrder().map(withAccountIdentity);
 });
 
 safeHandle('accounts:startLogin', (label: string) => {
   const trimmed = (label ?? '').toString().trim();
   if (!trimmed) throw new Error('Account label is required');
   return accountAuth.startLoginFlow(ptyManager, mainWindow, trimmed);
+});
+
+// Signing in to an account a restore brought back. Separate from startLogin
+// because that one MINTS an account and rolls it back on a spawn failure.
+safeHandle('accounts:resumeLogin', (accountId: string) => {
+  const id = (accountId ?? '').toString().trim();
+  if (!id) throw new Error('Account id is required');
+  return accountAuth.resumeLoginFlow(ptyManager, mainWindow, id);
 });
 
 safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {
@@ -779,6 +1077,8 @@ safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {
 safeHandle('accounts:confirmLoginMacOS', (ptyId: string) => {
   accountAuth.confirmLoginMacOS(mainWindow, ptyId);
 });
+
+safeHandle('accounts:removalCost', (id: string) => accountAuth.accountRemovalCost(id));
 
 safeHandle('accounts:delete', (id: string) => {
   accountAuth.deleteAccountAndDir(id);
@@ -792,7 +1092,62 @@ safeHandle('accounts:update', (
 });
 
 safeHandle('accounts:setDefault', (id: string) => {
-  accountsRepo.setDefaultAccount(id);
+  return accountsRepo.setDefaultAccount(id);
+});
+
+// Failover order and cooldowns (#207).
+safeHandle('accounts:setFallbackOrder', (orderedIds: string[]) => {
+  if (!Array.isArray(orderedIds) || orderedIds.some(id => typeof id !== 'string')) {
+    throw new Error('A fallback order must be a list of account ids');
+  }
+  accountsRepo.setFallbackOrder(orderedIds);
+});
+
+/**
+ * Hand an account back before its recorded cooldown expires.
+ *
+ * Worth having as a user action because the cooldown is a guess whenever the
+ * CLI's message named no reset time: five hours is the honest upper bound for a
+ * rolling window, not a measurement, and someone who knows their quota is back
+ * should not have to wait out an estimate.
+ */
+safeHandle('accounts:clearLimit', (id: string) => {
+  accountsRepo.clearAccountLimit(id);
+});
+
+// Usage meters: the merged record per account, and an immediate poll for the
+// accounts panel opening. Pushed updates arrive on 'usage:updated'.
+safeHandle('usage:list', () => usageStore.allUsage());
+
+safeHandle('usage:refresh', async () => {
+  await usageService?.poller.refreshNow();
+  return usageStore.allUsage();
+});
+
+/** Which account failover would pick next, for the accounts panel to show. */
+safeHandle('accounts:nextInLine', (excludeId: string | null) => {
+  return accountFailover.nextHealthyAccount(excludeId ?? null);
+});
+
+// Assigning an account is routed through account-switch (not db:sessions:update)
+// so the conversation transcript follows the session into the new account's
+// config dir, and the renderer learns which ptys to respawn — CLAUDE_CONFIG_DIR
+// is fixed at spawn time, so a live session ignores the column write otherwise.
+safeHandle('accounts:assignToSession', (sessionId: string, accountId: string | null) => {
+  const result = accountSwitch.assignSessionAccount(sessionId, accountId);
+  // The user has just said where this session belongs, which retires any
+  // pending fail-back: moving it again later, on the strength of a decision the
+  // app made hours ago, would be the app overruling them (#207).
+  accountFailover.clearFailoverRecord(sessionId);
+  getApiServer().broadcastSessionsUpdated();
+  return result;
+});
+
+safeHandle('accounts:assignToGroup', (groupId: string, accountId: string | null) => {
+  const result = accountSwitch.assignGroupAccount(groupId, accountId);
+  getApiServer().broadcastGroupsUpdated();
+  getApiServer().broadcastSessionsUpdated();
+  return result;
 });
 
 // Database IPC Handlers - Session Events (BDHLNDR-17)
@@ -822,6 +1177,31 @@ safeHandle('export:groups', () => exportGroupsAndSessions());
 safeHandle('import:groups', () => importGroupsAndSessions());
 safeHandle('import:fromClaudeLander', () => importFromClaudeLander());
 
+// Machine handoff, over the relay rather than a file
+safeHandle('handoff:prepare', () => prepareMachineHandoff(getRelayClient().handoffTransport()));
+safeHandle('handoff:peek', () => readHandoffOffer(getRelayClient().handoffTransport()));
+safeHandle('handoff:restore', (phrase: string) =>
+  restoreMachineHandoff(getRelayClient().handoffTransport(), phrase)
+);
+safeHandle('handoff:decline', (handoffId: string) =>
+  declineMachineHandoff(getRelayClient().handoffTransport(), handoffId)
+);
+
+// What the last restore left outstanding, kept so it can be opened again
+safeHandle('arrival:read', () => readArrival());
+safeHandle('arrival:dismiss', () => dismissArrival());
+safeHandle('arrival:resolveRelink', (sessionId: string, workingDir: string, kind?: 'session' | 'group') => {
+  const id = (sessionId ?? '').toString().trim();
+  const dir = (workingDir ?? '').toString().trim();
+  if (!id || !dir) throw new Error('A session id and a folder are both required');
+  const report = resolveRelink(id, dir, undefined, kind === 'group' ? 'group' : 'session');
+  // Every renderer's session list derives `workingDirMissing` in main, so a
+  // relink is only visible once they reload. This is the broadcast they
+  // already listen to.
+  mainWindow?.webContents.send('sessions:refresh');
+  return report;
+});
+
 // Preferences IPC Handlers
 safeHandle('prefs:get', (key: string) => {
   return prefsRepo.getPreference(key);
@@ -829,6 +1209,7 @@ safeHandle('prefs:get', (key: string) => {
 
 safeHandle('prefs:set', (key: string, value: string) => {
   prefsRepo.setPreference(key, value);
+  usageService?.preferenceChanged(key);
 });
 
 safeHandle('prefs:getAll', () => {
@@ -851,6 +1232,10 @@ safeHandle('prefs:getAll', () => {
     soundStartCustomPath: prefsRepo.getPreference('soundStartCustomPath') ?? '',
     soundCompleteEnabled: prefsRepo.getPreference('soundCompleteEnabled') ?? 'true',
     soundCompleteCustomPath: prefsRepo.getPreference('soundCompleteCustomPath') ?? '',
+    accountFailoverEnabled: prefsRepo.getPreference('accountFailoverEnabled') ?? 'true',
+    accountFailbackEnabled: prefsRepo.getPreference('accountFailbackEnabled') ?? 'true',
+    [USAGE_THRESHOLD_PREF]: prefsRepo.getPreference(USAGE_THRESHOLD_PREF) ?? '',
+    [USAGE_SINK_PREF]: prefsRepo.getPreference(USAGE_SINK_PREF) ?? 'true',
   };
   return settings;
 });
@@ -1107,6 +1492,48 @@ safeHandle('relay:setKeepAwake', (on: boolean) => {
   return getRelayClient().getStatus();
 });
 
+safeHandle('relay:getPendingOwner', () => getRelayClient().getPendingOwner());
+
+safeHandle('relay:confirmOwner', (userId: string) => {
+  getRelayClient().confirmOwner(userId);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:rejectOwner', () => {
+  getRelayClient().rejectOwner();
+  return getRelayClient().getStatus();
+});
+
+// --- session sharing (M5.2) ---
+
+safeHandle(
+  'relay:createShare',
+  async (input: {
+    sessionId: string;
+    expectedGithubLogin: string | null;
+    role: 'viewer' | 'operator';
+    grantTtlSeconds: number;
+    inviteTtlSeconds: number;
+  }) => getRelayClient().createShareInvite(input),
+);
+
+safeHandle('relay:approveShare', (grantId: string, sessionIds?: string[]) => {
+  getRelayClient().approveGrant(grantId, sessionIds);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:denyShare', (grantId: string) => {
+  getRelayClient().denyGrant(grantId);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:revokeShare', (grantId: string) => {
+  getRelayClient().revokeGrant(grantId);
+  return getRelayClient().getStatus();
+});
+
+safeHandle('relay:listShares', () => getRelayClient().listShares());
+
 // ============================================================================
 // Editor Integration IPC Handlers
 // ============================================================================
@@ -1232,6 +1659,21 @@ function getLocalAddresses(): string[] {
 
 app.whenReady().then(() => {
   createWindow();
+  // The run engine drives itself from here: a timer that advances every
+  // active run on its cadence, so no one has to type step/watch/answer. It
+  // spawns nothing on its own -- only runs that were armed -- and never
+  // answers a permission prompt, which is the inbox's job (CO-722).
+  try {
+    startRunLoopService();
+    // The auto-drive watcher starts alongside it but does nothing until a person
+    // turns auto-drive on in Settings (CO-722 Workstream B). Its own try/catch
+    // above the loop's would swallow the loop's failure, so keep them separate.
+    startBoardWatcherService();
+  } catch (error) {
+    // A loop that fails to start must not take the app down with it: the app
+    // is a session manager first, and the engine ships behind it.
+    log.error('[Main] Failed to start the run loop:', error);
+  }
 }).catch((error) => {
   log.error('[Main] Failed to initialize app:', error);
 });
@@ -1337,8 +1779,12 @@ let shuttingDown = false;
 // so macOS auto-updates downloaded but never installed (issue #133). The
 // teardown below can hang on a wedged native worker, so it MUST NOT gate the
 // process exit — runGuardedShutdown force-exits within the budget regardless.
-// Comfortably inside ShipIt's tolerance; better-sqlite3 WAL is crash-safe.
-const QUIT_CLEANUP_BUDGET_MS = 2000;
+// The budget lives in ./quit-cleanup; better-sqlite3 WAL is crash-safe.
+
+// After arming a pending macOS update install on quit, give electron-updater /
+// Squirrel this long to take over the process exit before we hard-exit anyway,
+// so a wedged install handoff can never strand the app running.
+const UPDATE_INSTALL_FALLBACK_MS = 3000;
 
 app.on('before-quit', (event) => {
   if (shuttingDown) return;
@@ -1356,22 +1802,45 @@ app.on('before-quit', (event) => {
     // notably ptyManager.killAll(), so child terminals may be orphaned to the
     // OS. That's an accepted tradeoff: a stuck teardown blocking the update
     // forever is worse, and the OS reaps orphaned PTYs on session end.
-    forceExit: () => app.exit(0),
-    cleanup: async () => {
-      try {
-        await ptyManager.killAll();
-      } catch (e) {
-        log.error('Error killing PTYs on quit:', e);
+    //
+    // EXCEPTION: a plain app.exit(0) skips electron-updater's
+    // autoInstallOnAppQuit, so a downloaded macOS update that the user didn't
+    // "Restart Now" into never installs — it loops in pending/ forever. When one
+    // is staged, arm Squirrel's install (mirroring the Restart-Now path) and let
+    // electron-updater manage the quit + relaunch, with a hard-exit fallback so a
+    // wedged handoff can't leave the app alive.
+    forceExit: () => {
+      if (hasPendingMacUpdate()) {
+        // Arm the hard-exit fallback FIRST, so even a synchronously-throwing
+        // quitAndInstall (e.g. the staged file was removed) can't strand the
+        // app running — the timer still fires. Then hand off to electron-updater.
+        setTimeout(() => app.exit(0), UPDATE_INSTALL_FALLBACK_MS).unref?.();
+        try {
+          armPendingMacUpdateInstall();
+        } catch (e) {
+          log.error('[quit] arming macOS update install failed; hard-exiting now', e);
+          app.exit(0);
+        }
+        return;
       }
-
-      trayManager.destroy();
-      stateMonitor?.stop();
-      try {
-        getRelayClient().stop();
-      } catch (e) {
-        log.error('Error stopping relay client on quit:', e);
-      }
-      closeDatabase();
+      app.exit(0);
     },
+    cleanup: () => runQuitCleanup({
+      saveHeldRotations,
+      killPtys: () => ptyManager.killAll(),
+      stopServices: () => {
+        trayManager.destroy();
+        stateMonitor?.stop();
+        try {
+          getRelayClient().stop();
+        } catch (e) {
+          log.error('Error stopping relay client on quit:', e);
+        }
+        stopBoardWatcherService();
+        stopRunLoopService();
+      },
+      closeDatabase,
+      logError: (message, err) => log.error(message, err),
+    }),
   });
 });

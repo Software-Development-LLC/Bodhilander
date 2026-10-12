@@ -1,8 +1,10 @@
 import { autoUpdater, UpdateInfo } from 'electron-updater';
-import { BrowserWindow, dialog, Notification } from 'electron';
+import { app, BrowserWindow, dialog, Notification } from 'electron';
 import * as log from 'electron-log';
-import { getPreference, setPreference } from './repositories/preferences';
+import { getPreference, setPreference, deletePreference } from './repositories/preferences';
 import { markAppQuitting } from './quit-state';
+import { checkPendingInstall } from './update-verify';
+import { createMacUpdateInstaller } from './mac-update-install';
 
 // Configure logging
 autoUpdater.logger = log;
@@ -23,6 +25,28 @@ let manualCheckResolver: ((result: { updateAvailable: boolean; version?: string;
 // channel published alongside stable from the development branch.
 export type UpdateChannel = 'stable' | 'beta';
 const UPDATE_CHANNEL_PREF_KEY = 'updateChannel';
+// Set when a download completes and checked on the next launch (see
+// ./update-verify) so a macOS install that silently fails to land is reported
+// instead of looping forever unnoticed (#294). Squirrel.Mac's ShipIt is the
+// only handoff this app has seen fail silently, so this stays mac-only —
+// Windows (NSIS) and Linux go through different install mechanisms entirely,
+// and the log line / notification below are worded for the mac case.
+const PENDING_UPDATE_VERSION_PREF_KEY = 'pendingUpdateVersion';
+const IS_MAC = process.platform === 'darwin';
+
+// Tracks a downloaded-but-not-yet-installed macOS update and arms its install on
+// quit (see mac-update-install.ts for the why). A NORMAL quit uses
+// quitAndInstall(false, false): install on the way out but do NOT force a
+// relaunch — the user asked to quit. The explicit "Restart Now" path below
+// keeps its own quitAndInstall(false, true) (relaunch is the whole point there)
+// and consumes the flag so this doesn't arm a second install on the re-entrant
+// before-quit.
+const macUpdateInstaller = createMacUpdateInstaller({
+  isMac: IS_MAC,
+  quitAndInstall: () => autoUpdater.quitAndInstall(false, false),
+  onArm: markAppQuitting,
+  log: (msg) => log.info(`[auto-updater] ${msg}`),
+});
 
 function parseChannel(raw: string | null): UpdateChannel {
   return raw === 'beta' ? 'beta' : 'stable';
@@ -80,8 +104,48 @@ function broadcastToAllWindows(channel: string, ...args: unknown[]): void {
   });
 }
 
+/**
+ * Compare the version a previous session restarted to install (#294) against
+ * the version actually running now, and report a mismatch instead of letting
+ * it go unnoticed. Runs once, early in `initAutoUpdater`, before the first
+ * background check can overwrite the pending marker. Mac-only — see
+ * `PENDING_UPDATE_VERSION_PREF_KEY`.
+ *
+ * The marker is set as soon as a download completes, not right before an
+ * install is actually attempted, so it can also be left behind if the user
+ * dismisses "Restart Now" and then quits abnormally (crash, force-quit)
+ * before ever restarting — a normal quit now arms the install itself (see
+ * `armPendingMacUpdateInstall`, called from the before-quit path), so this gap
+ * is abnormal termination only, and it self-clears (as a single false report)
+ * the next time the app runs.
+ */
+function verifyPendingInstall(): void {
+  if (!IS_MAC) return;
+
+  const { failedInstall } = checkPendingInstall(
+    getPreference(PENDING_UPDATE_VERSION_PREF_KEY),
+    app.getVersion()
+  );
+  deletePreference(PENDING_UPDATE_VERSION_PREF_KEY);
+
+  if (!failedInstall) return;
+
+  log.error(
+    `[auto-updater] Restarted to install ${failedInstall.expected} but is still running ${failedInstall.actual} — the macOS install did not take effect`
+  );
+
+  if (Notification.isSupported()) {
+    new Notification({
+      title: 'Update Did Not Install',
+      body: `Bodhilander ${failedInstall.expected} downloaded and restarted, but is still on ${failedInstall.actual}. Download it manually from GitHub if this keeps happening.`,
+    }).show();
+  }
+}
+
 export function initAutoUpdater(window: BrowserWindow): void {
   mainWindow = window;
+
+  verifyPendingInstall();
 
   // Honor the saved update channel preference before the first check so
   // existing beta opt-ins pick up beta.yml on startup (BDHLNDR-32).
@@ -219,6 +283,18 @@ autoUpdater.on('download-progress', (progress) => {
 // Update downloaded
 autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
   log.info('Update downloaded:', info.version);
+  // Record what we're about to restart into (#294) *before* any restart path
+  // (this dialog's "Restart Now", or the About dialog's restart button) can
+  // fire, so a silently-failed macOS install is caught on the next launch
+  // regardless of which path the user took. Mac-only — see
+  // `PENDING_UPDATE_VERSION_PREF_KEY`.
+  if (IS_MAC) {
+    setPreference(PENDING_UPDATE_VERSION_PREF_KEY, info.version);
+    // The quit path now arms the install itself for a NORMAL quit (see
+    // mac-update-install.ts); before this, autoInstallOnAppQuit was silently
+    // defeated by the guarded before-quit's app.exit(0).
+    macUpdateInstaller.markDownloaded();
+  }
   isDownloading = false;
   const wasFromAbout = isDownloadingFromAbout;
   isDownloadingFromAbout = false;
@@ -245,10 +321,29 @@ autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
       // main window's close-to-tray handler doesn't swallow the window close
       // and strand the app running — which blocks ShipIt from installing (#139).
       markAppQuitting();
+      // Consume the staged flag so the re-entrant before-quit (quitAndInstall
+      // calls app.quit) doesn't arm a SECOND install for the same update.
+      macUpdateInstaller.consume();
       autoUpdater.quitAndInstall(false, true);
     }
   });
 });
+
+/** Is a downloaded macOS update staged and waiting to install? (see mac-update-install.ts) */
+export function hasPendingMacUpdate(): boolean {
+  return macUpdateInstaller.hasPending();
+}
+
+/**
+ * Arm the staged macOS update install on a normal quit — the gap electron-updater's
+ * `autoInstallOnAppQuit` leaves once the guarded `before-quit` force-exits via
+ * `app.exit(0)`. No-op when nothing is pending. Returns whether it invoked the
+ * install; lets a thrown `quitAndInstall` propagate (the flag is already cleared)
+ * so the caller's hard-exit fallback can run. See mac-update-install.ts.
+ */
+export function armPendingMacUpdateInstall(): boolean {
+  return macUpdateInstaller.arm();
+}
 
 // Error handling
 autoUpdater.on('error', (err) => {

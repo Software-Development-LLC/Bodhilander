@@ -59,7 +59,7 @@ mock.module('../repositories/preferences', () => ({
 }));
 
 // Imported AFTER the mocks above so the module picks them up.
-const { registerHooks, cleanupLegacyMcpServer, getHooksStatus } = await import('../mcp-config');
+const { registerHooks, cleanupLegacyMcpServer, getHooksStatus, ensureDangerousModeAccepted } = await import('../mcp-config');
 
 const claudeJson = () => path.join(homeDir, '.claude.json');
 const settingsJson = () => path.join(homeDir, '.claude', 'settings.json');
@@ -199,6 +199,49 @@ describe('registerHooks', () => {
     expect(readJson(settingsJson()).hooks.PostToolUse).toHaveLength(1);
   });
 
+  test('leaves a settings.json it cannot parse byte-identical', () => {
+    createHookScript();
+    const dir = accountConfigDir('acct-torn');
+    const torn = '{ "model": "opus", "permissions": { "defaultMode": "au';
+    fs.writeFileSync(path.join(dir, 'settings.json'), torn);
+
+    const result = registerHooks(dir);
+
+    expect(result.action).toBe('error');
+    expect(result.error).toContain(dir);
+    expect(fs.readFileSync(path.join(dir, 'settings.json'), 'utf-8')).toBe(torn);
+  });
+
+  test('leaves a settings.json holding a non-object untouched', () => {
+    createHookScript();
+    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
+    fs.writeFileSync(settingsJson(), '[]');
+
+    expect(registerHooks().action).toBe('error');
+    expect(fs.readFileSync(settingsJson(), 'utf-8')).toBe('[]');
+  });
+
+  test('installs into an empty settings.json', () => {
+    createHookScript();
+    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
+    fs.writeFileSync(settingsJson(), '\uFEFF\n');
+
+    expect(registerHooks().success).toBe(true);
+    expect(readJson(settingsJson()).hooks.Stop).toHaveLength(1);
+  });
+
+  test('reads a settings.json that starts with a byte-order mark', () => {
+    createHookScript();
+    fs.mkdirSync(path.dirname(settingsJson()), { recursive: true });
+    fs.writeFileSync(settingsJson(), '\uFEFF' + JSON.stringify({ model: 'opus' }));
+
+    expect(registerHooks().success).toBe(true);
+
+    const settings = readJson(settingsJson());
+    expect(settings.model).toBe('opus');
+    expect(settings.hooks.PostToolUse).toHaveLength(1);
+  });
+
   test('reports not-configured when the hook script is missing', () => {
     const result = registerHooks();
     expect(result.success).toBe(false);
@@ -285,5 +328,81 @@ describe('cleanupLegacyMcpServer', () => {
     cleanupLegacyMcpServer();
 
     expect(fs.readdirSync(homeDir).filter(f => f.includes('.tmp'))).toEqual([]);
+  });
+});
+
+describe('ensureDangerousModeAccepted', () => {
+  // The account settings live at <configDir>/settings.json, the same file
+  // registerHooks writes; the seed must add its flag without disturbing it.
+  const accountSettings = (dir: string) => path.join(dir, 'settings.json');
+
+  test('writes skipDangerousModePermissionPrompt into a fresh config dir', () => {
+    const dir = accountConfigDir('acct-fresh');
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(true);
+
+    // Without this flag a `--bg` gate under the bypass posture exits 1 instead
+    // of launching -- the whole point of seeding it before the spawn.
+    expect(readJson(accountSettings(dir)).skipDangerousModePermissionPrompt).toBe(true);
+  });
+
+  test('preserves hooks and other keys already in the settings file', () => {
+    const dir = accountConfigDir('acct-with-hooks');
+    createHookScript();
+    registerHooks(dir); // lands the PostToolUse/Stop hooks first
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(true);
+
+    const after = readJson(accountSettings(dir));
+    expect(after.skipDangerousModePermissionPrompt).toBe(true);
+    // The account would run gates with NO analytics hook if the seed clobbered
+    // the file instead of merging into it.
+    expect(after.hooks.PostToolUse).toHaveLength(1);
+    expect(after.hooks.Stop).toHaveLength(1);
+  });
+
+  test('is idempotent: no rewrite once the flag is already set', () => {
+    const dir = accountConfigDir('acct-idempotent');
+    writeJson(accountSettings(dir), { skipDangerousModePermissionPrompt: true, theme: 'dark' });
+    const before = fs.readFileSync(accountSettings(dir), 'utf-8');
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(true);
+
+    // Byte-identical: repeated gate launches must not thrash the file (and a
+    // rewrite risks racing a session that is reading it).
+    expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe(before);
+  });
+
+  test('does not rewrite a settings file it cannot parse', () => {
+    const dir = accountConfigDir('acct-torn');
+    fs.writeFileSync(accountSettings(dir), '{ "hooks": ');
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(false);
+    expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe('{ "hooks": ');
+  });
+
+  test('does not rewrite a settings file holding a non-object', () => {
+    const dir = accountConfigDir('acct-array');
+    fs.writeFileSync(accountSettings(dir), '[]');
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(false);
+    expect(fs.readFileSync(accountSettings(dir), 'utf-8')).toBe('[]');
+  });
+
+  test('reports a failed write as not accepted', () => {
+    const dir = accountConfigDir('acct-unwritable');
+    writeJson(accountSettings(dir), { model: 'opus' });
+    fs.mkdirSync(`${accountSettings(dir)}.bodhilander.tmp`);
+
+    expect(ensureDangerousModeAccepted(dir)).toBe(false);
+    expect(readJson(accountSettings(dir))).toEqual({ model: 'opus' });
+  });
+
+  test('leaves no temp file behind (temp + atomic rename)', () => {
+    const dir = accountConfigDir('acct-atomic');
+
+    ensureDangerousModeAccepted(dir);
+
+    expect(fs.readdirSync(dir).filter(f => f.includes('.tmp'))).toEqual([]);
   });
 });

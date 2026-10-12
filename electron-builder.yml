@@ -24,6 +24,10 @@ asarUnpack:
   - node_modules/sodium-native/**/*
   # Native-module loader used by the remaining prebuilt addons (sodium-native).
   - node_modules/node-gyp-build/**/*
+  # The permission broker (CO-722) is spawned by `claude` as a real child
+  # process — an MCP server or a PreToolUse hook — so it must be a file on
+  # disk, not a path inside the asar archive.
+  - dist/scripts/**/*
 
 # Include icon files for tray icon and sound files
 extraResources:
@@ -73,6 +77,12 @@ dmg:
       path: /Applications
 
 # Windows configuration
+#
+# Code signing is NOT declared here on purpose: it is injected at release time
+# by release.yml (Azure Trusted Signing, via `-c.win.azureSignOptions.*` CLI
+# overrides) ONLY when the signing secrets/variables are configured. That keeps
+# an unsigned local `bun run pack` / dev build working with no Azure setup, and
+# lets a configured CI produce a signed installer. See docs/windows-signing.md.
 win:
   icon: build/icon.png
   target:

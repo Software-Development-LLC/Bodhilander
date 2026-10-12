@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -8,13 +8,19 @@ interface ElectronAPI {
   createSession: (id: string, cwd: string, launchClaude?: boolean, providerId?: string) => Promise<void>;
   writeToSession: (id: string, data: string) => void;
   resizeSession: (id: string, cols: number, rows: number) => void;
-  killSession: (id: string) => void;
+  killSession: (id: string) => Promise<void>;
   primePty: (id: string) => void;
+  /** Live account bindings for every running agent pty, keyed by session id (#165). */
+  getLiveAccounts: () => Promise<LiveAccountBindings>;
+  /** A pty's live account changed: spawned, respawned, or (binding === null) died. */
+  onPtyLiveAccount: (callback: (sessionId: string, binding: LiveAccountBinding | null) => void) => () => void;
 
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => () => void;
   onPtyExit: (callback: (id: string, exitCode: number) => void) => () => void;
   onPtyResize: (callback: (id: string, cols: number, rows: number) => void) => () => void;
+  /** A guest asked to be fitted to their screen — a request the owner answers. */
+  onRelayResizeRequest: (callback: (request: RelayResizeRequest) => void) => () => void;
   onStateChange: (callback: (event: { sessionId: string; state: string; event: string; timestamp: number }) => void) => () => void;
   onSessionsRefresh: (callback: () => void) => () => void;
   onGroupsRefresh: (callback: () => void) => () => void;
@@ -31,6 +37,7 @@ interface ElectronAPI {
   onMenuViewTerminal: (callback: () => void) => () => void;
   onMenuViewAnalytics: (callback: () => void) => () => void;
   onMenuViewArena: (callback: () => void) => () => void;
+  onMenuViewRuns: (callback: () => void) => () => void;
   onMenuFocusSidebar: (callback: () => void) => () => void;
 
   // Edit menu events
@@ -45,6 +52,26 @@ interface ElectronAPI {
 
   // Dialogs
   selectDirectory: (defaultPath?: string) => Promise<string | null>;
+
+  // The run inbox (CO-722). Read-only by design: there is no channel here
+  // that starts, stops or advances a run.
+  getRunInbox: () => Promise<RunInboxRow[]>;
+  getActiveRuns: () => Promise<RunActiveRow[]>;
+  /** Halt a run: mark it abandoned so it stops being driven and leaves the lists. */
+  abandonRun: (runId: string) => Promise<boolean>;
+  getProjectBoard: (projectNumber?: number) => Promise<BoardResult>;
+  getOrchestrationConfig: (force?: boolean) => Promise<ConfigResult>;
+  getRunPermissions: (runId: string) => Promise<RunPermissionRequest[]>;
+  answerRunPermission: (runId: string, repo: string, toolUseId: string, verdict: 'allow' | 'deny', message: string) => Promise<boolean>;
+  pickInitiativeDir: () => Promise<string | null>;
+  armRun: (initiativeDir: string) => Promise<RunArmResult>;
+  listHarnessRepos: () => Promise<string[]>;
+  prepareInitiative: (issueId: string, repo: string, budgetUsd?: number) => Promise<RunPrepareResult>;
+  prepareCrossRepoRun: (issueId: string, repos: string[], budgetUsd?: number) => Promise<RunCrossRepoPrepareResult>;
+  initiateFromBoard: (projectNumber: number, repo: string, issueNumber: number) => Promise<RunCrossRepoPrepareResult>;
+  readRunManifest: (runId: string) => Promise<SeamManifest | null>;
+  approveRunManifest: (runId: string) => Promise<boolean>;
+  rejectRunManifest: (runId: string, reason: string) => Promise<boolean>;
 
   // Database - Groups
   getAllGroups: () => Promise<Group[]>;
@@ -68,9 +95,19 @@ interface ElectronAPI {
   exportSessions: (format: 'csv' | 'json', since?: string) => Promise<{ success: boolean; filePath?: string; error?: string; sessionCount?: number; eventCount?: number }>;
 
   // Group & Session Import/Export
-  exportGroups: () => Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }>;
-  importGroups: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
-  importFromClaudeLander: () => Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }>;
+  exportGroups: () => Promise<PortableExportResult>;
+  importGroups: () => Promise<PortableImportResult>;
+  importFromClaudeLander: () => Promise<PortableImportResult>;
+
+  // Machine handoff, over the relay
+  handoffPrepare: () => Promise<HandoffPrepareResult>;
+  handoffPeek: () => Promise<HandoffOfferState>;
+  handoffRestore: (phrase: string) => Promise<PortableImportResult>;
+  arrivalRead: () => Promise<ArrivalReport | null>;
+  arrivalDismiss: () => Promise<void>;
+  arrivalResolveRelink: (sessionId: string, workingDir: string, kind?: 'session' | 'group') => Promise<ArrivalReport | null>;
+  resumeAccountLogin: (accountId: string) => Promise<{ account: ClaudeAccount; ptyId: string }>;
+  handoffDecline: (handoffId: string) => Promise<void>;
 
   // Preferences
   getPreference: (key: string) => Promise<string | null>;
@@ -103,6 +140,20 @@ interface ElectronAPI {
   relaySetUrl: (url: string) => Promise<RelayStatus>;
   relayGenerateLinkCode: (machineName: string) => Promise<{ code: string; expiresAt: number }>;
   relaySetKeepAwake: (on: boolean) => Promise<RelayStatus>;
+  relayGetPendingOwner: () => Promise<RelayStatus['pendingOwner']>;
+  relayConfirmOwner: (userId: string) => Promise<RelayStatus>;
+  relayRejectOwner: () => Promise<RelayStatus>;
+  relayCreateShare: (input: {
+    sessionId: string;
+    expectedGithubLogin: string | null;
+    role: 'viewer' | 'operator';
+    grantTtlSeconds: number;
+    inviteTtlSeconds: number;
+  }) => Promise<{ code: string; url: string; expiresAt: number }>;
+  relayApproveShare: (grantId: string, sessionIds?: string[]) => Promise<RelayStatus>;
+  relayDenyShare: (grantId: string) => Promise<RelayStatus>;
+  relayRevokeShare: (grantId: string) => Promise<RelayStatus>;
+  relayListShares: () => Promise<RelayShare[]>;
   onRelayStatus: (callback: (status: RelayStatus) => void) => () => void;
 
   // Sound notifications
@@ -154,11 +205,21 @@ interface ElectronAPI {
   startAccountLogin: (label: string) => Promise<{ account: ClaudeAccount; ptyId: string }>;
   cancelAccountLogin: (ptyId: string, deleteAccount: boolean) => Promise<void>;
   confirmAccountLoginMacOS: (ptyId: string) => Promise<void>;
+  accountRemovalCost: (id: string) => Promise<AccountRemovalCost>;
   deleteAccount: (id: string) => Promise<void>;
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }) => Promise<void>;
-  setDefaultAccount: (id: string) => Promise<void>;
-  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => () => void;
+  setDefaultAccount: (id: string) => Promise<boolean>;
+  setAccountFallbackOrder: (orderedIds: string[]) => Promise<void>;
+  clearAccountLimit: (id: string) => Promise<void>;
+  nextAccountInLine: (excludeId: string | null) => Promise<ClaudeAccount | null>;
+  assignAccountToSession: (sessionId: string, accountId: string | null) => Promise<AccountSwitchResult>;
+  assignAccountToGroup: (groupId: string, accountId: string | null) => Promise<AccountSwitchResult>;
+  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null; verified: boolean }) => void) => () => void;
   onAccountLoginExited: (callback: (data: { accountId: string; exitCode: number }) => void) => () => void;
+  onAccountFailover: (callback: (event: AccountFailoverEvent) => void) => () => void;
+  getAccountUsage: () => Promise<AccountUsageMap>;
+  refreshAccountUsage: () => Promise<AccountUsageMap>;
+  onAccountUsageUpdated: (callback: (usage: AccountUsageMap) => void) => () => void;
 
   // Update channel (BDHLNDR-32)
   getUpdateChannel: () => Promise<'stable' | 'beta'>;

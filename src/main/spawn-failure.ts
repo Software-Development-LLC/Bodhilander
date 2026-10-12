@@ -64,17 +64,46 @@ function stripAnsi(text: string): string {
     .replace(/\x1b\][^\x07]*\x07/g, ''); // NOSONAR(S6324) ESC/BEL delimit OSC sequences
 }
 
+export interface SpawnFailure {
+  kind: SpawnFailureKind;
+  /** The output line that matched, trimmed and capped, for the log. */
+  line: string;
+}
+
+const MAX_LOGGED_LINE = 300;
+
+function lineAround(text: string, index: number): string {
+  const start = text.lastIndexOf('\n', index) + 1;
+  const end = text.indexOf('\n', index);
+  const line = text.slice(start, end === -1 ? undefined : end).trim();
+  return line.length > MAX_LOGGED_LINE ? `${line.slice(0, MAX_LOGGED_LINE)}…` : line;
+}
+
+function firstMatch(patterns: readonly RegExp[], text: string): number {
+  for (const p of patterns) {
+    const m = p.exec(text);
+    if (m) return m.index;
+  }
+  return -1;
+}
+
+/**
+ * Detect a CLI launch failure in early session output, returning its kind and
+ * the line that matched, or null if it looks like a normal startup.
+ */
+export function detectSpawnFailure(command: string, output: string): SpawnFailure | null {
+  const text = stripAnsi(output);
+  const missingAt = firstMatch(missingPatterns(command), text);
+  if (missingAt !== -1) return { kind: 'missing', line: lineAround(text, missingAt) };
+  const brokenAt = firstMatch(BROKEN_PATTERNS, text);
+  if (brokenAt !== -1) return { kind: 'broken', line: lineAround(text, brokenAt) };
+  return null;
+}
+
 /**
  * Classify early session output as a CLI launch failure, or null if it looks
  * like a normal startup. `command` is the provider's CLI binary name.
  */
 export function classifySpawnFailure(command: string, output: string): SpawnFailureKind | null {
-  const text = stripAnsi(output);
-  if (missingPatterns(command).some((p) => p.test(text))) {
-    return 'missing';
-  }
-  if (BROKEN_PATTERNS.some((p) => p.test(text))) {
-    return 'broken';
-  }
-  return null;
+  return detectSpawnFailure(command, output)?.kind ?? null;
 }

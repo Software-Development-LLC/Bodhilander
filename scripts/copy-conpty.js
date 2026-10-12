@@ -16,8 +16,68 @@
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * chmod +x every node-pty `spawn-helper` in the packed macOS app.
+ *
+ * Walks the unpacked node-pty prebuilds (and build/Release, if a rebuild ever
+ * produces one) and sets 0o755 on each spawn-helper it finds. Idempotent and
+ * defensive: a missing directory or an already-executable file is fine.
+ */
+function chmodMacSpawnHelpers(appOutDir) {
+  const nodePty = path.join(
+    appOutDir,
+    'Bodhilander.app',
+    'Contents',
+    'Resources',
+    'app.asar.unpacked',
+    'node_modules',
+    'node-pty'
+  );
+
+  const candidates = [];
+  const prebuilds = path.join(nodePty, 'prebuilds');
+  if (fs.existsSync(prebuilds)) {
+    for (const entry of fs.readdirSync(prebuilds)) {
+      if (entry.startsWith('darwin-')) {
+        candidates.push(path.join(prebuilds, entry, 'spawn-helper'));
+      }
+    }
+  }
+  // Belt-and-suspenders for a build that did produce build/Release.
+  candidates.push(path.join(nodePty, 'build', 'Release', 'spawn-helper'));
+
+  let fixed = 0;
+  for (const helper of candidates) {
+    if (fs.existsSync(helper)) {
+      fs.chmodSync(helper, 0o755);
+      console.log(`  chmod +x ${helper}`);
+      fixed++;
+    }
+  }
+  if (fixed === 0) {
+    console.warn(`  WARNING: no node-pty spawn-helper found under ${nodePty} to chmod`);
+  } else {
+    console.log(`node-pty spawn-helper permissions set (${fixed} file(s)).`);
+  }
+}
+
 exports.default = async function copyConpty(context) {
   const { electronPlatformName, appOutDir } = context;
+
+  // macOS: make node-pty's prebuilt spawn-helper executable.
+  //
+  // The packaged app uses node-pty's `prebuilds/darwin-<arch>/` binaries
+  // (npmRebuild is false, so `build/Release` is never produced). node-pty execs
+  // a separate `spawn-helper` alongside pty.node; if that file lands without its
+  // +x bit — asar-unpack does not reliably preserve the exec bit on an
+  // extension-less binary — every pty.spawn fails with "posix_spawnp failed".
+  // Restore it here, BEFORE afterSign runs, so the (now executable) helper is
+  // also what gets code-signed. Runs on macOS packing only; Windows falls
+  // through to the conpty copy below.
+  if (electronPlatformName === 'darwin') {
+    chmodMacSpawnHelpers(appOutDir);
+    return;
+  }
 
   // Only needed for Windows builds
   if (electronPlatformName !== 'win32') {

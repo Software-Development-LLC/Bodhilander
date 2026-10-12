@@ -1,8 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
+
+/** `verified` is false when only the user's button says the login happened. */
+interface LoginCompleted {
+  accountId: string;
+  email: string | null;
+  verified: boolean;
+}
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
@@ -15,10 +22,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('pty:write', id, data),
   resizeSession: (id: string, cols: number, rows: number) =>
     ipcRenderer.send('pty:resize', id, cols, rows),
-  killSession: (id: string) =>
-    ipcRenderer.send('pty:kill', id),
+  killSession: (id: string): Promise<void> =>
+    ipcRenderer.invoke('pty:kill', id),
   primePty: (id: string) =>
     ipcRenderer.send('pty:prime', id),
+  getLiveAccounts: (): Promise<LiveAccountBindings> =>
+    ipcRenderer.invoke('pty:get-live-accounts'),
+  onPtyLiveAccount: (callback: (sessionId: string, binding: LiveAccountBinding | null) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, sessionId: string, binding: LiveAccountBinding | null) =>
+      callback(sessionId, binding);
+    ipcRenderer.on('pty:live-account', listener);
+    return () => ipcRenderer.removeListener('pty:live-account', listener);
+  },
 
   // PTY events
   onPtyData: (callback: (id: string, data: string) => void) => {
@@ -33,6 +48,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('pty:exit', listener);
     return () => {
       ipcRenderer.removeListener('pty:exit', listener);
+    };
+  },
+  // A guest asked for a session to be resized to fit their screen. A request,
+  // not a resize: the prompt it raises is what decides, and declining changes
+  // nothing on either end.
+  onRelayResizeRequest: (callback: (request: RelayResizeRequest) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, request: RelayResizeRequest) => callback(request);
+    ipcRenderer.on('relay:resize-request', listener);
+    return () => {
+      ipcRenderer.removeListener('relay:resize-request', listener);
     };
   },
   // Dynamic sizing: the PTY was resized (possibly by a remote/mobile viewer).
@@ -102,6 +127,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('menu:view-arena', callback);
     return () => ipcRenderer.removeListener('menu:view-arena', callback);
   },
+  onMenuViewRuns: (callback: () => void) => {
+    ipcRenderer.on('menu:view-runs', callback);
+    return () => ipcRenderer.removeListener('menu:view-runs', callback);
+  },
   onMenuFocusSidebar: (callback: () => void) => {
     ipcRenderer.on('menu:focus-sidebar', callback);
     return () => ipcRenderer.removeListener('menu:focus-sidebar', callback);
@@ -143,6 +172,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectDirectory: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectDirectory', defaultPath),
 
+  // The run inbox (CO-722). Read-only by design -- see the handler.
+  getRunInbox: (): Promise<RunInboxRow[]> =>
+    ipcRenderer.invoke('db:runs:inbox'),
+  getActiveRuns: (): Promise<RunActiveRow[]> =>
+    ipcRenderer.invoke('db:runs:active'),
+  abandonRun: (runId: string): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:abandon', runId),
+  getProjectBoard: (projectNumber?: number): Promise<BoardResult> =>
+    ipcRenderer.invoke('db:projects:board', projectNumber),
+  getOrchestrationConfig: (force?: boolean): Promise<ConfigResult> =>
+    ipcRenderer.invoke('db:config:load', force),
+  getRunPermissions: (runId: string): Promise<RunPermissionRequest[]> =>
+    ipcRenderer.invoke('db:runs:permissions', runId),
+  answerRunPermission: (
+    runId: string,
+    repo: string,
+    toolUseId: string,
+    verdict: 'allow' | 'deny',
+    message: string,
+  ): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:permissions:answer', runId, repo, toolUseId, verdict, message),
+  pickInitiativeDir: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:pickInitiative'),
+  armRun: (initiativeDir: string): Promise<RunArmResult> =>
+    ipcRenderer.invoke('db:runs:arm', initiativeDir),
+  listHarnessRepos: (): Promise<string[]> =>
+    ipcRenderer.invoke('db:runs:repos'),
+  prepareInitiative: (issueId: string, repo: string, budgetUsd?: number): Promise<RunPrepareResult> =>
+    ipcRenderer.invoke('db:runs:prepare', issueId, repo, budgetUsd),
+  prepareCrossRepoRun: (issueId: string, repos: string[], budgetUsd?: number): Promise<RunCrossRepoPrepareResult> =>
+    ipcRenderer.invoke('db:runs:prepareCrossRepo', issueId, repos, budgetUsd),
+  initiateFromBoard: (projectNumber: number, repo: string, issueNumber: number): Promise<RunCrossRepoPrepareResult> =>
+    ipcRenderer.invoke('db:runs:initiateFromBoard', projectNumber, repo, issueNumber),
+  readRunManifest: (runId: string): Promise<SeamManifest | null> =>
+    ipcRenderer.invoke('db:runs:bootstrap:manifest', runId),
+  approveRunManifest: (runId: string): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:bootstrap:approve', runId),
+  rejectRunManifest: (runId: string, reason: string): Promise<boolean> =>
+    ipcRenderer.invoke('db:runs:bootstrap:reject', runId, reason),
+
   // Database - Groups
   getAllGroups: (): Promise<Group[]> =>
     ipcRenderer.invoke('db:groups:getAll'),
@@ -178,12 +247,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('export:sessions', format, since),
 
   // Group & Session Import/Export
-  exportGroups: (): Promise<{ success: boolean; filePath?: string; error?: string; groupCount?: number; sessionCount?: number }> =>
+  exportGroups: (): Promise<PortableExportResult> =>
     ipcRenderer.invoke('export:groups'),
-  importGroups: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+  importGroups: (): Promise<PortableImportResult> =>
     ipcRenderer.invoke('import:groups'),
-  importFromClaudeLander: (): Promise<{ success: boolean; error?: string; groupCount?: number; sessionCount?: number; skippedGroups?: number; skippedSessions?: number }> =>
+  importFromClaudeLander: (): Promise<PortableImportResult> =>
     ipcRenderer.invoke('import:fromClaudeLander'),
+
+  // Machine handoff, over the relay
+  handoffPrepare: (): Promise<HandoffPrepareResult> =>
+    ipcRenderer.invoke('handoff:prepare'),
+  handoffPeek: (): Promise<HandoffOfferState> =>
+    ipcRenderer.invoke('handoff:peek'),
+  handoffRestore: (phrase: string): Promise<PortableImportResult> =>
+    ipcRenderer.invoke('handoff:restore', phrase),
+  handoffDecline: (handoffId: string): Promise<void> =>
+    ipcRenderer.invoke('handoff:decline', handoffId),
+
+  // What the last restore left for a person to finish
+  arrivalRead: (): Promise<ArrivalReport | null> =>
+    ipcRenderer.invoke('arrival:read'),
+  arrivalDismiss: (): Promise<void> =>
+    ipcRenderer.invoke('arrival:dismiss'),
+  arrivalResolveRelink: (
+    sessionId: string,
+    workingDir: string,
+    kind?: 'session' | 'group',
+  ): Promise<ArrivalReport | null> =>
+    ipcRenderer.invoke('arrival:resolveRelink', sessionId, workingDir, kind),
 
   // Preferences
   getPreference: (key: string): Promise<string | null> =>
@@ -259,6 +350,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   relayGenerateLinkCode: (machineName: string): Promise<{ code: string; expiresAt: number }> =>
     ipcRenderer.invoke('relay:generateLinkCode', machineName),
   relaySetKeepAwake: (on: boolean): Promise<RelayStatus> => ipcRenderer.invoke('relay:setKeepAwake', on),
+  relayGetPendingOwner: (): Promise<RelayStatus['pendingOwner']> => ipcRenderer.invoke('relay:getPendingOwner'),
+  relayConfirmOwner: (userId: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:confirmOwner', userId),
+  relayRejectOwner: (): Promise<RelayStatus> => ipcRenderer.invoke('relay:rejectOwner'),
+  relayCreateShare: (input: {
+    sessionId: string;
+    expectedGithubLogin: string | null;
+    role: 'viewer' | 'operator';
+    grantTtlSeconds: number;
+    inviteTtlSeconds: number;
+  }): Promise<{ code: string; url: string; expiresAt: number }> => ipcRenderer.invoke('relay:createShare', input),
+  relayApproveShare: (grantId: string, sessionIds?: string[]): Promise<RelayStatus> =>
+    ipcRenderer.invoke('relay:approveShare', grantId, sessionIds),
+  relayDenyShare: (grantId: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:denyShare', grantId),
+  relayRevokeShare: (grantId: string): Promise<RelayStatus> => ipcRenderer.invoke('relay:revokeShare', grantId),
+  relayListShares: (): Promise<RelayShare[]> => ipcRenderer.invoke('relay:listShares'),
   onRelayStatus: (callback: (status: RelayStatus) => void) => {
     const listener = (_: Electron.IpcRendererEvent, status: RelayStatus) => callback(status);
     ipcRenderer.on('relay:status', listener);
@@ -309,20 +415,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Claude accounts (BDHLNDR-31)
   listAccounts: (): Promise<ClaudeAccount[]> =>
     ipcRenderer.invoke('accounts:list'),
+  resumeAccountLogin: (accountId: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
+    ipcRenderer.invoke('accounts:resumeLogin', accountId),
   startAccountLogin: (label: string): Promise<{ account: ClaudeAccount; ptyId: string }> =>
     ipcRenderer.invoke('accounts:startLogin', label),
   cancelAccountLogin: (ptyId: string, deleteAccount: boolean): Promise<void> =>
     ipcRenderer.invoke('accounts:cancelLogin', ptyId, deleteAccount),
   confirmAccountLoginMacOS: (ptyId: string): Promise<void> =>
     ipcRenderer.invoke('accounts:confirmLoginMacOS', ptyId),
+  accountRemovalCost: (id: string): Promise<AccountRemovalCost> =>
+    ipcRenderer.invoke('accounts:removalCost', id),
   deleteAccount: (id: string): Promise<void> =>
     ipcRenderer.invoke('accounts:delete', id),
   updateAccount: (id: string, updates: { label?: string; color?: string; email?: string | null }): Promise<void> =>
     ipcRenderer.invoke('accounts:update', id, updates),
-  setDefaultAccount: (id: string): Promise<void> =>
+  setDefaultAccount: (id: string): Promise<boolean> =>
     ipcRenderer.invoke('accounts:setDefault', id),
-  onAccountLoginCompleted: (callback: (data: { accountId: string; email: string | null }) => void) => {
-    const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; email: string | null }) => callback(data);
+  setAccountFallbackOrder: (orderedIds: string[]): Promise<void> =>
+    ipcRenderer.invoke('accounts:setFallbackOrder', orderedIds),
+  clearAccountLimit: (id: string): Promise<void> =>
+    ipcRenderer.invoke('accounts:clearLimit', id),
+  nextAccountInLine: (excludeId: string | null): Promise<ClaudeAccount | null> =>
+    ipcRenderer.invoke('accounts:nextInLine', excludeId),
+  assignAccountToSession: (sessionId: string, accountId: string | null): Promise<AccountSwitchResult> =>
+    ipcRenderer.invoke('accounts:assignToSession', sessionId, accountId),
+  assignAccountToGroup: (groupId: string, accountId: string | null): Promise<AccountSwitchResult> =>
+    ipcRenderer.invoke('accounts:assignToGroup', groupId, accountId),
+  onAccountLoginCompleted: (callback: (data: LoginCompleted) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: LoginCompleted) => callback(data);
     ipcRenderer.on('accounts:login-completed', listener);
     return () => ipcRenderer.removeListener('accounts:login-completed', listener);
   },
@@ -330,6 +450,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_: Electron.IpcRendererEvent, data: { accountId: string; exitCode: number }) => callback(data);
     ipcRenderer.on('accounts:login-exited', listener);
     return () => ipcRenderer.removeListener('accounts:login-exited', listener);
+  },
+  // An account hit its usage limit and its sessions were moved (or couldn't be).
+  onAccountFailover: (callback: (event: AccountFailoverEvent) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, event: AccountFailoverEvent) => callback(event);
+    ipcRenderer.on('accounts:failover', listener);
+    return () => ipcRenderer.removeListener('accounts:failover', listener);
+  },
+
+  // Usage meters: the merged record per account, keyed by account id.
+  getAccountUsage: (): Promise<AccountUsageMap> =>
+    ipcRenderer.invoke('usage:list'),
+  refreshAccountUsage: (): Promise<AccountUsageMap> =>
+    ipcRenderer.invoke('usage:refresh'),
+  onAccountUsageUpdated: (callback: (usage: AccountUsageMap) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, usage: AccountUsageMap) => callback(usage);
+    ipcRenderer.on('usage:updated', listener);
+    return () => ipcRenderer.removeListener('usage:updated', listener);
   },
 
   // Update channel (BDHLNDR-32) — opt-in beta builds

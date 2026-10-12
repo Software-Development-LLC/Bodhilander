@@ -1,12 +1,20 @@
 import Database from 'better-sqlite3';
+import { RUN_TABLES_SQL } from './run-tables-sql';
 import * as path from 'path';
-import { app } from 'electron';
 import log from 'electron-log';
+import { RELAY_SHARING_SCHEMA } from './api/relay/grant-sql';
 
 let db: Database.Database | null = null;
 export function getDatabase(): Database.Database {
   if (db) return db;
 
+  // Required here rather than imported at the top, so this module can be
+  // loaded outside Electron -- by a tool, or by a test that supplies its own
+  // handle. `electron` throws on import in a plain Node or bun process, and
+  // an import that only one line needs should not decide who may read this
+  // file. Inside the app it resolves exactly as before.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const { app } = require('electron') as typeof import('electron');
   const userDataPath = app.getPath('userData');
   const dbPath = path.join(userDataPath, 'bodhilander.db');
 
@@ -16,6 +24,8 @@ export function getDatabase(): Database.Database {
 
   initializeTables(db);
   initializeArenaTables(db);
+  initializeRunTables(db);
+  clearCooldownsFromOutputScanning(db);
 
   // Reclaim for the removed code-indexing and memory features. Each drop
   // records its own completion marker, so this branch — including the
@@ -49,6 +59,7 @@ const LEGACY_CODE_SEARCH_TABLES = ['code_chunks', 'symbols', 'indexed_files', 'c
  * work forever and re-run a full VACUUM on every single launch.
  */
 const CODE_SEARCH_CLEANUP_PREF = 'legacyCodeSearchCleanupDone';
+const QUOTA_COOLDOWN_CLEANUP_PREF = 'quotaCooldownsCleared';
 
 function cleanupAlreadyRan(database: Database.Database, pref: string): boolean {
   try {
@@ -362,11 +373,16 @@ function initializeTables(database: Database.Database): void {
       color TEXT DEFAULT '#888888',
       is_default INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      last_used_at TEXT
+      last_used_at TEXT,
+      fallback_rank INTEGER DEFAULT NULL,
+      limited_until TEXT DEFAULT NULL,
+      limited_at TEXT DEFAULT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_accounts_single_default
       ON claude_accounts(is_default) WHERE is_default = 1;
   `);
+
+  database.exec(RELAY_SHARING_SCHEMA);
 
   // Migration: Add working_dir column to groups if it doesn't exist
   const columns = database.prepare("PRAGMA table_info(groups)").all() as { name: string }[];
@@ -413,6 +429,43 @@ function initializeTables(database: Database.Database): void {
   }
   if (!sessionColsBdhlndr17.includes('claude_account_id')) {
     database.exec("ALTER TABLE sessions ADD COLUMN claude_account_id TEXT DEFAULT NULL");
+  }
+
+  // Migration: board-driven orchestration (CO-722, Phase 2B). A group may
+  // optionally map to a GitHub Projects v2 board (number + display name) and a
+  // local clone root the run engine cuts worktrees from. All NULL = no board
+  // association, which is the default and the only state pre-migration groups have.
+  if (!columns.some(col => col.name === 'github_project_number')) {
+    database.exec("ALTER TABLE groups ADD COLUMN github_project_number INTEGER DEFAULT NULL");
+  }
+  if (!columns.some(col => col.name === 'github_project_name')) {
+    database.exec("ALTER TABLE groups ADD COLUMN github_project_name TEXT DEFAULT NULL");
+  }
+  if (!columns.some(col => col.name === 'clone_root')) {
+    database.exec("ALTER TABLE groups ADD COLUMN clone_root TEXT DEFAULT NULL");
+  }
+
+  // Migration: automatic failover between Claude accounts.
+  //
+  // Three facts the pre-failover schema had nowhere to put:
+  //   fallback_rank  — the order accounts are tried in. NULL sorts last, so an
+  //                    unranked estate keeps the panel's existing order.
+  //   limited_until  — when a recorded usage limit lifts. NULL = healthy. No
+  //                    sweeper clears it; expiry is decided at read time.
+  //   limited_at     — when the limit was seen, for the UI's "since" copy.
+  // On sessions, the two columns that make the move reversible: which account
+  // we moved OFF, and what the session's own override held before we wrote to
+  // it (NULL there means "inherit from the group", which is why it can't also
+  // mean "not failed over" — failover_from_account_id carries that).
+  const accountColumns = database.prepare('PRAGMA table_info(claude_accounts)').all() as { name: string }[];
+  if (!accountColumns.some(col => col.name === 'fallback_rank')) {
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN fallback_rank INTEGER DEFAULT NULL');
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN limited_until TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE claude_accounts ADD COLUMN limited_at TEXT DEFAULT NULL');
+  }
+  if (!sessionColsBdhlndr17.includes('failover_from_account_id')) {
+    database.exec('ALTER TABLE sessions ADD COLUMN failover_from_account_id TEXT DEFAULT NULL');
+    database.exec('ALTER TABLE sessions ADD COLUMN failover_prev_account_id TEXT DEFAULT NULL');
   }
 
   // Migration: Add provider column to sessions (#96, epic #94).
@@ -543,6 +596,105 @@ function initializeArenaTables(database: Database.Database): void {
     database.exec('ALTER TABLE arena_responses ADD COLUMN round INTEGER NOT NULL DEFAULT 0');
     database.exec('ALTER TABLE arena_responses ADD COLUMN prompt TEXT DEFAULT NULL');
     database.exec('ALTER TABLE arena_responses ADD COLUMN session_ref TEXT DEFAULT NULL');
+  }
+}
+
+// Run engine tables (CO-722). A run supervises the gates for one work item:
+// spawn.sh cuts the worktrees, the engine decides which agent runs next, and
+// every transition is recorded before it is acted on, so a run survives a
+// restart or a rate limit.
+//
+// team.yaml and seams.yaml stay the source of truth on disk -- `--resume`, the
+// gate agents and a person with an editor all read them. These tables index
+// that, plus the orchestration state those files do not carry.
+// Exported so the real schema is what tests execute. A test that builds its
+// own CREATE TABLE proves the repository's SQL matches ITSELF, not this.
+export function initializeRunTables(database: Database.Database): void {
+  // The SQL lives in its own module so a test can build the real schema
+  // without importing this one -- repository tests mock it wholesale, and a
+  // fixture that re-declares the tables by hand passes against a schema
+  // nobody ships.
+  database.exec(RUN_TABLES_SQL);
+
+  // CREATE TABLE IF NOT EXISTS leaves an older table alone, so a column added
+  // to the SQL above reaches a fresh install and nobody else. These guarded
+  // ALTERs reach the existing installs.
+  const addColumn = (table: string, column: string, ddl: string): void => {
+    const cols = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((col) => col.name === column)) {
+      database.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
+  };
+
+  // Migration: run_owners.agent, for databases created before it existed.
+  addColumn('run_owners', 'agent', 'agent TEXT DEFAULT NULL');
+
+  // Migration: per-owner gate state (CO-722 multi-owner). One run drives each
+  // repo's owner track; `runs.state` becomes a rollup of `run_owners.state`.
+  addColumn('run_owners', 'state', 'state TEXT DEFAULT NULL');
+  addColumn('run_owners', 'blocked_reason', 'blocked_reason TEXT DEFAULT NULL');
+  addColumn('run_owners', 'merge_order', 'merge_order INTEGER DEFAULT NULL');
+  addColumn('run_gates', 'repo', 'repo TEXT DEFAULT NULL');
+  addColumn('run_gates', 'config_dir', 'config_dir TEXT DEFAULT NULL');
+
+  // Migration: in-app cross-repo bootstrap (CO-722). A multi run is created with
+  // no owners and driven through bootstrap_state before the per-owner machine
+  // takes over. Every existing run is single -- the NOT NULL DEFAULT 'single'
+  // backfills them, and bootstrap_state/scope_repos stay NULL, so nothing that
+  // reads these columns treats an old run as mid-bootstrap.
+  addColumn('runs', 'kind', "kind TEXT NOT NULL DEFAULT 'single'");
+  addColumn('runs', 'bootstrap_state', 'bootstrap_state TEXT DEFAULT NULL');
+  addColumn('runs', 'scope_repos', 'scope_repos TEXT DEFAULT NULL');
+
+  // Backfill, correctness-critical (unlike the nullable `agent` above): once
+  // the per-owner paths read these, a NULL would strand an in-flight run.
+  //   run_gates.repo: a gate written before the column belongs to the run's
+  //     sole owner -- multi-owner runs were skipped, so they have no gate rows.
+  //   run_owners.state: seed active owners from the run's current state so the
+  //     rollup equals what it was -- AND its paired blocked_reason, or a run
+  //     blocked at migration time (inconclusive, waitingPermission, ...) would
+  //     keep its state but lose the reason the inbox shows. Prelude/terminal
+  //     runs (preparing, provisioning, failed) stay run-level, so their owners
+  //     keep a NULL state.
+  // Idempotent: both only touch NULLs, so re-running the migration is a no-op.
+  database.exec(`
+    UPDATE run_gates
+       SET repo = (SELECT repo FROM run_owners o WHERE o.run_id = run_gates.run_id)
+     WHERE repo IS NULL
+       AND (SELECT COUNT(*) FROM run_owners o WHERE o.run_id = run_gates.run_id) = 1;
+
+    UPDATE run_owners
+       SET state = (SELECT state FROM runs r WHERE r.id = run_owners.run_id),
+           blocked_reason = (SELECT blocked_reason FROM runs r WHERE r.id = run_owners.run_id)
+     WHERE state IS NULL
+       AND (SELECT state FROM runs r WHERE r.id = run_owners.run_id)
+             NOT IN ('preparing', 'provisioning', 'failed');
+  `);
+}
+
+/**
+ * Clear every account cooldown once.
+ *
+ * Cooldowns only ever existed under the detector that read them off rendered
+ * terminal output, and that detector marked healthy accounts limited — 86
+ * times on one machine, on text that merely discussed a usage limit. Every row
+ * it left is therefore suspect, and none is worth keeping: an account that is
+ * genuinely out of quota gets marked again within seconds of its next refusal,
+ * now from the CLI's own record rather than from pixels.
+ *
+ * Guarded by a preference rather than a schema check, because nothing about
+ * the columns changed — only the trustworthiness of what was written into them.
+ */
+export function clearCooldownsFromOutputScanning(database: Database.Database): void {
+  if (cleanupAlreadyRan(database, QUOTA_COOLDOWN_CLEANUP_PREF)) return;
+
+  const { changes } = database.prepare(
+    'UPDATE claude_accounts SET limited_until = NULL, limited_at = NULL WHERE limited_until IS NOT NULL'
+  ).run();
+  markCleanupRan(database, QUOTA_COOLDOWN_CLEANUP_PREF, 'quota cooldown');
+
+  if (changes > 0) {
+    log.info(`[Accounts] Cleared ${changes} account cooldown(s) left by the previous detector.`);
   }
 }
 

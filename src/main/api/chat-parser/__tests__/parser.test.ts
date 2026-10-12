@@ -424,6 +424,23 @@ describe('ChatParser wrap-space recovery (BDHLNDR-73 #40)', () => {
   });
 });
 
+/**
+ * Ceiling for the real-corpus test (#233).
+ *
+ * bun's default is 5000ms, and this test overran it in the full-repo run under
+ * coverage instrumentation — `5016.05ms`, i.e. it did not assert wrong, it ran
+ * out of clock. Measured: ~2s wall in isolation under `--coverage` with every
+ * core saturated, so the default left only about 2x headroom, which an 88-file
+ * parallel run consumes.
+ *
+ * Raised rather than making the test cheaper on purpose. It parses a 340KB real
+ * PTY capture, and the size of that corpus is the point of the regression —
+ * trimming it to fit a timeout would quietly weaken the only test that has ever
+ * caught this class of parser bug. This number is a backstop against a hang,
+ * not a performance budget: if it is ever reached, something is genuinely wrong.
+ */
+const REAL_CORPUS_TIMEOUT_MS = 30_000;
+
 describe('ChatParser real-corpus regression (BDHLNDR-72)', () => {
   test('5-min real Claude session captures: extracts real content, suppresses noise', async () => {
     // Real PTY capture from one of @Will Long's Bodhilander sessions on
@@ -502,5 +519,5 @@ describe('ChatParser real-corpus regression (BDHLNDR-72)', () => {
     expect(allText).toContain('memory usage');
     expect(allText).toContain('concerns (windows');
     expect(allText).toContain('Slack, and Figma');
-  });
+  }, REAL_CORPUS_TIMEOUT_MS);
 });

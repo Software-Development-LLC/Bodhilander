@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ClaudeAccount } from '../../shared/types';
+import { AccountRemovalCost, AccountUsage, AccountUsageMap, ClaudeAccount, LiveAccountBindings } from '../../shared/types';
+import {
+  DEFAULT_USAGE_WARN_THRESHOLD,
+  isSinkEnabled,
+  parseUsageThreshold,
+  USAGE_SINK_PREF,
+  USAGE_THRESHOLD_PREF,
+  usageLevel,
+} from '../../shared/usage';
 import Terminal from './Terminal';
+import { AccountChip } from './AccountChip';
+import { UsageMeters } from './UsageMeters';
 import './ClaudeAccountsModal.css';
 
 // -----------------------------------------------------------------------------
@@ -12,16 +22,59 @@ import './ClaudeAccountsModal.css';
 // (menu:open-accounts), which deep-links Settings to this tab.
 // -----------------------------------------------------------------------------
 
+/**
+ * What the delete costs. The transcripts live in the config directory this
+ * removes and nothing else on disk records them, so the confirmation names
+ * them rather than only listing what it unsets. A null cost means we could not
+ * measure it, and silence beats a number we do not have.
+ */
+export function removalWarning(cost: AccountRemovalCost | null): string {
+  if (!cost) return '';
+  if (cost.conversations === 0) return '\n\nIt has no saved conversations, so nothing is lost.';
+
+  const conversations = cost.conversations === 1
+    ? '1 saved conversation'
+    : `${cost.conversations} saved conversations`;
+  const deletes = `\n\nThis permanently deletes ${conversations}.`;
+
+  if (cost.sessions === 0) return deletes;
+  if (cost.sessions === 1) {
+    return `${deletes} The session bound to this account stays in the sidebar, but its `
+      + 'history is gone and it cannot be resumed.';
+  }
+  return `${deletes} The ${cost.sessions} sessions bound to this account stay in the sidebar, `
+    + 'but their history is gone and they cannot be resumed.';
+}
+
+/** Live ptys lose the directory underneath them, which is a different loss. */
+export function runningWarning(runningSessions: number): string {
+  if (runningSessions === 0) return '';
+  if (runningSessions === 1) {
+    return '\n\n1 session is using it right now. It keeps running, but its account directory '
+      + 'goes away underneath it.';
+  }
+  return `\n\n${runningSessions} sessions are using it right now. They keep running, but their `
+    + 'account directory goes away underneath them.';
+}
+
 export const ClaudeAccountsPanel: React.FC = () => {
   const [accounts, setAccounts] = useState<ClaudeAccount[]>([]);
+  const [liveAccounts, setLiveAccounts] = useState<LiveAccountBindings>({});
   const [loading, setLoading] = useState(false);
   const [loginFlow, setLoginFlow] = useState<{ account: ClaudeAccount; ptyId: string } | null>(null);
+  const [usage, setUsage] = useState<AccountUsageMap>({});
+  const [threshold, setThreshold] = useState(DEFAULT_USAGE_WARN_THRESHOLD);
+  const [now, setNow] = useState(() => Date.now());
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await window.electronAPI.listAccounts();
+      const [list, live] = await Promise.all([
+        window.electronAPI.listAccounts(),
+        window.electronAPI.getLiveAccounts(),
+      ]);
       setAccounts(list);
+      setLiveAccounts(live);
     } finally {
       setLoading(false);
     }
@@ -31,12 +84,42 @@ export const ClaudeAccountsPanel: React.FC = () => {
     refresh();
   }, [refresh]);
 
+  // Opening the panel asks for a fresh poll; pushed updates keep it current,
+  // and the clock ticks so countdowns and "as of" stay honest while it is open.
+  useEffect(() => {
+    let cancelled = false;
+    const show = (map: AccountUsageMap) => { if (!cancelled) setUsage(map); };
+    window.electronAPI.getAccountUsage().then(show).catch(() => {})
+      .then(() => window.electronAPI.refreshAccountUsage()).then(map => { if (map) show(map); }).catch(() => {});
+    const off = window.electronAPI.onAccountUsageUpdated(setUsage);
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => {
+      cancelled = true;
+      off();
+      clearInterval(tick);
+    };
+  }, []);
+
   useEffect(() => {
     const off = window.electronAPI.onAccountLoginCompleted(() => {
       refresh();
     });
     return off;
   }, [refresh]);
+
+  // Ptys come and go while the panel is open — a session started, stopped, or
+  // restarted to apply a switch — and a stale usage count is the one thing that
+  // would make this panel less trustworthy than no count at all.
+  useEffect(() => {
+    return window.electronAPI.onPtyLiveAccount((sessionId, binding) => {
+      setLiveAccounts(prev => {
+        const next = { ...prev };
+        if (binding) next[sessionId] = binding;
+        else delete next[sessionId];
+        return next;
+      });
+    });
+  }, []);
 
   const handleAdd = useCallback(async (label: string) => {
     const result = await window.electronAPI.startAccountLogin(label);
@@ -49,9 +132,47 @@ export const ClaudeAccountsPanel: React.FC = () => {
     await refresh();
   }, [refresh]);
 
-  const handleDelete = useCallback(async (id: string, label: string) => {
+  /**
+   * Move an account up or down the failover queue.
+   *
+   * Buttons rather than drag-and-drop. The list is three or four rows on any
+   * real setup, keyboard and screen-reader users get the same affordance as
+   * everyone else for free, and the whole order is rewritten on each move so
+   * an estate that was half-ranked comes out fully ranked.
+   */
+  const handleMove = useCallback(async (id: string, direction: -1 | 1) => {
+    const index = accounts.findIndex(a => a.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= accounts.length) return;
+
+    const reordered = [...accounts];
+    [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+    // Optimistic: the reorder is instant and local, and a failed write is
+    // corrected by the refresh that follows.
+    setAccounts(reordered);
+    await window.electronAPI.setAccountFallbackOrder(reordered.map(a => a.id));
+    await refresh();
+  }, [accounts, refresh]);
+
+  const handleClearLimit = useCallback(async (id: string) => {
+    await window.electronAPI.clearAccountLimit(id);
+    await refresh();
+  }, [refresh]);
+
+  const handleDelete = useCallback(async (id: string, label: string, runningSessions: number) => {
+    // A cost we could not compute must not block the delete, so a failure here
+    // falls through to a confirmation that claims no number rather than one
+    // that claims a wrong one.
+    let cost: AccountRemovalCost | null = null;
+    try {
+      cost = await window.electronAPI.accountRemovalCost(id);
+    } catch (err) {
+      console.error('Could not measure what deleting this account costs', err);
+    }
+
     const confirmed = window.confirm(
-      `Delete account "${label}"?\n\nThis removes its saved credentials and unsets any sessions or groups that were bound to it. Sessions themselves are kept.`
+      `Delete account "${label}"?\n\nThis removes its saved credentials and unsets any sessions or `
+      + `groups that were bound to it.${removalWarning(cost)}${runningWarning(runningSessions)}`
     );
     if (!confirmed) return;
     await window.electronAPI.deleteAccount(id);
@@ -92,6 +213,12 @@ export const ClaudeAccountsPanel: React.FC = () => {
     }
   }, []);
 
+  // Both empty states render the same box, so the only question is which
+  // sentence goes in it — "still fetching" or "there are genuinely none".
+  const emptyText = loading
+    ? 'Loading…'
+    : 'No accounts yet. Click "Add account" to log in for the first time.';
+
   return (
     <div className="claude-accounts-panel">
       <p className="subtitle">
@@ -99,32 +226,37 @@ export const ClaudeAccountsPanel: React.FC = () => {
         login, so sessions assigned to different accounts can run at the same time.
       </p>
 
-      {loading && accounts.length === 0 ? (
-        <div className="empty">Loading…</div>
-      ) : accounts.length === 0 ? (
-        <div className="empty">No accounts yet. Click "Add account" to log in for the first time.</div>
+      <FailoverSettings threshold={threshold} onThresholdChange={setThreshold} />
+
+      {accounts.length === 0 ? (
+        <div className="empty">{emptyText}</div>
       ) : (
         <ul className="account-list">
-          {accounts.map(acc => (
-            <li key={acc.id} className="account-row">
-              <span className="swatch" style={{ background: acc.color || '#888888' }} />
-              <div className="label">
-                <span className="name">{acc.label}</span>
-                <span className="email">{acc.email || 'Not yet logged in'}</span>
-              </div>
-              {acc.isDefault && <span className="default-tag">default</span>}
-              <div className="row-actions">
-                {!acc.isDefault && (
-                  <button onClick={() => handleSetDefault(acc.id)} title="Use as the default account when a group or session doesn't specify one">
-                    Make default
-                  </button>
-                )}
-                <button className="delete-btn" onClick={() => handleDelete(acc.id, acc.label)}>
-                  Delete
-                </button>
-              </div>
-            </li>
-          ))}
+          {accounts.map((acc, index) => {
+            // Live ptys, not DB assignments — an unapplied switch must not be
+            // reported as usage, and this keeps the panel and the session
+            // header telling the same story.
+            const runningSessions = Object.values(liveAccounts)
+              .filter(b => b.accountId === acc.id).length;
+            return (
+              <AccountRow
+                key={acc.id}
+                account={acc}
+                runningSessions={runningSessions}
+                usage={usage[acc.id] ?? null}
+                usageThreshold={threshold}
+                now={now}
+                position={index + 1}
+                canMoveUp={index > 0}
+                canMoveDown={index < accounts.length - 1}
+                onMoveUp={() => handleMove(acc.id, -1)}
+                onMoveDown={() => handleMove(acc.id, 1)}
+                onClearLimit={() => handleClearLimit(acc.id)}
+                onMakeDefault={() => handleSetDefault(acc.id)}
+                onDelete={() => handleDelete(acc.id, acc.label, runningSessions)}
+              />
+            );
+          })}
         </ul>
       )}
 
@@ -147,6 +279,303 @@ export const ClaudeAccountsPanel: React.FC = () => {
 };
 
 // -----------------------------------------------------------------------------
+// One account in the list. Pure — the panel above owns every fetch — so it can
+// be rendered straight from a test without stubbing the account IPC surface.
+// -----------------------------------------------------------------------------
+
+export interface AccountRowProps {
+  account: ClaudeAccount;
+  /** Running ptys currently spawned under this account (#165). 0 renders no badge. */
+  runningSessions: number;
+  /** The merged usage record; omitted renders no meters. */
+  usage?: AccountUsage | null;
+  usageThreshold?: number;
+  now?: number;
+  /** 1-based place in the failover queue (#207). */
+  position: number;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  /** Hand the account back before its recorded cooldown expires. */
+  onClearLimit: () => void;
+  onMakeDefault: () => void;
+  onDelete: () => void;
+}
+
+/**
+ * Whether a recorded cooldown is still in force.
+ *
+ * Decided against the clock here rather than trusted from the row, because
+ * nothing sweeps the column when a limit expires — a stale `limitedUntil` is
+ * the normal state of a healthy account, not a bug.
+ */
+export function isLimited(account: ClaudeAccount, now: Date = new Date()): boolean {
+  return account.limitedUntil !== null && new Date(account.limitedUntil).getTime() > now.getTime();
+}
+
+/** "9:30 PM", or "Tue 9:30 PM" when it is not today. */
+function formatReset(resetAt: Date, now: Date = new Date()): string {
+  const time = resetAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (resetAt.toDateString() === now.toDateString()) return time;
+  return `${resetAt.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+}
+
+/**
+ * "Which of these am I actually using?" was unanswerable from this list (#165):
+ * every row looked alike whether it had five sessions on it or none, so the
+ * only way to find out what deleting an account would disturb was to delete it.
+ *
+ * The in-use pill answers it with a number rather than a tint, and is filled
+ * where `default` is outlined, so the two read apart at a glance and still read
+ * apart with colour removed entirely.
+ */
+export const AccountRow: React.FC<AccountRowProps> = ({
+  account,
+  runningSessions,
+  usage,
+  usageThreshold = DEFAULT_USAGE_WARN_THRESHOLD,
+  now = Date.now(),
+  position,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+  onClearLimit,
+  onMakeDefault,
+  onDelete,
+}) => {
+  const plural = runningSessions === 1 ? 'session' : 'sessions';
+  const limited = isLimited(account);
+  return (
+    <li className={`account-row ${limited ? 'limited' : ''}`}>
+      {/* The queue position is the whole point of the ordering, so it is text
+          in the row and not a tooltip on an arrow. */}
+      <span className="failover-position" aria-hidden="true">{position}</span>
+      <AccountChip
+        account={account}
+        size="md"
+        usageLevel={usage === undefined ? undefined : usageLevel(usage, usageThreshold, now)}
+      />
+      {/* The status is a tag beside the address, not a replacement for it: the
+          address is what says WHICH account this is, and the one surface where
+          a signed-out account can be acted on is the one that must still name
+          it. Only an explicit false speaks — undefined means nothing was read,
+          and a working account may never be accused on a failed read. */}
+      {account.loggedIn === false && (
+        <span
+          className="signed-out-tag"
+          title="No completed login found in this account's config directory — log in again before using it"
+          aria-label="Not signed in"
+        >
+          not signed in
+        </span>
+      )}
+      {account.isDefault && <span className="default-tag">default</span>}
+      {runningSessions > 0 && (
+        <span
+          className="in-use-tag"
+          title={`${runningSessions} running ${runningSessions === 1 ? 'session is' : 'sessions are'} using this account right now`}
+          aria-label={`In use by ${runningSessions} running ${plural}`}
+        >
+          in use · {runningSessions}
+        </span>
+      )}
+      {limited && account.limitedUntil && (
+        <span
+          className="limited-tag"
+          title="This account hit its usage limit. It won't be picked for failover until then."
+        >
+          limited · back {formatReset(new Date(account.limitedUntil))}
+        </span>
+      )}
+      <div className="row-actions">
+        <button
+          className="move-btn"
+          onClick={onMoveUp}
+          disabled={!canMoveUp}
+          title="Try this account earlier when another one runs out"
+          aria-label={`Move ${account.label} up the failover order`}
+        >
+          ↑
+        </button>
+        <button
+          className="move-btn"
+          onClick={onMoveDown}
+          disabled={!canMoveDown}
+          title="Try this account later when another one runs out"
+          aria-label={`Move ${account.label} down the failover order`}
+        >
+          ↓
+        </button>
+        {limited && (
+          <button
+            onClick={onClearLimit}
+            title="Mark this account available again — use it if the reset time was a guess and your quota is already back"
+          >
+            Clear limit
+          </button>
+        )}
+        {!account.isDefault && (
+          <button onClick={onMakeDefault} title="Use as the default account when a group or session doesn't specify one">
+            Make default
+          </button>
+        )}
+        <button className="delete-btn" onClick={onDelete}>
+          Delete
+        </button>
+      </div>
+      {usage !== undefined && <UsageMeters usage={usage} threshold={usageThreshold} now={now} />}
+    </li>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// Failover switches (#207).
+// -----------------------------------------------------------------------------
+
+/** Preference keys, matching account-failover.ts. Absent means enabled. */
+const FAILOVER_PREF = 'accountFailoverEnabled';
+const FAILBACK_PREF = 'accountFailbackEnabled';
+export const THRESHOLD_SAVE_DEBOUNCE_MS = 500;
+
+interface FailoverSettingsProps {
+  threshold: number;
+  onThresholdChange: (threshold: number) => void;
+}
+
+/**
+ * The two things a user might want to turn off about automatic switching.
+ *
+ * They are separate switches because they answer different worries. Failover
+ * spends a second subscription without being asked; fail-back restarts a
+ * session that was working fine. Somebody can reasonably want the first and
+ * not the second, and collapsing them into one control would make refusing the
+ * restart cost them the whole feature.
+ */
+export const FailoverSettings: React.FC<FailoverSettingsProps> = ({ threshold, onThresholdChange }) => {
+  const [failover, setFailover] = useState(true);
+  const [failback, setFailback] = useState(true);
+  const [sink, setSink] = useState(true);
+  const [thresholdDraft, setThresholdDraft] = useState(String(threshold));
+  const pendingSave = useRef<{ timer: ReturnType<typeof setTimeout>; save: () => void } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI.getAllPreferences().then(prefs => {
+      if (cancelled) return;
+      setFailover(prefs[FAILOVER_PREF] !== 'false');
+      setFailback(prefs[FAILBACK_PREF] !== 'false');
+      setSink(isSinkEnabled(prefs[USAGE_SINK_PREF]));
+      const saved = parseUsageThreshold(prefs[USAGE_THRESHOLD_PREF]);
+      onThresholdChange(saved);
+      setThresholdDraft(String(saved));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [onThresholdChange]);
+
+  const saveThreshold = useCallback((next: number) => {
+    onThresholdChange(next);
+    window.electronAPI.setPreference(USAGE_THRESHOLD_PREF, String(next)).catch(() => {});
+  }, [onThresholdChange]);
+
+  const cancelPendingSave = () => {
+    if (pendingSave.current) clearTimeout(pendingSave.current.timer);
+    pendingSave.current = null;
+  };
+
+  useEffect(() => () => {
+    const pending = pendingSave.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pending.save();
+  }, []);
+
+  const changeThreshold = (draft: string) => {
+    setThresholdDraft(draft);
+    cancelPendingSave();
+    const typed = Number(draft);
+    if (draft.trim() === '' || !(typed >= 1 && typed <= 100)) return;
+    const save = () => {
+      pendingSave.current = null;
+      saveThreshold(parseUsageThreshold(draft));
+    };
+    pendingSave.current = { timer: setTimeout(save, THRESHOLD_SAVE_DEBOUNCE_MS), save };
+  };
+
+  const commitThreshold = () => {
+    cancelPendingSave();
+    const next = parseUsageThreshold(thresholdDraft);
+    setThresholdDraft(String(next));
+    saveThreshold(next);
+  };
+
+  const toggle = (key: string, next: boolean, apply: (value: boolean) => void) => {
+    apply(next);
+    window.electronAPI.setPreference(key, next ? 'true' : 'false').catch(() => {});
+  };
+
+  return (
+    <div className="failover-settings">
+      <label className="failover-toggle">
+        <input
+          type="checkbox"
+          checked={failover}
+          onChange={e => toggle(FAILOVER_PREF, e.target.checked, setFailover)}
+        />
+        <span>
+          <strong>Switch accounts when one hits its usage limit.</strong>{' '}
+          Every session running on the spent account moves to the next one in the
+          order below and resumes its conversation.
+        </span>
+      </label>
+      <label className="failover-toggle">
+        <input
+          type="checkbox"
+          checked={failback}
+          disabled={!failover}
+          onChange={e => toggle(FAILBACK_PREF, e.target.checked, setFailback)}
+        />
+        <span>
+          <strong>Move them back when the limit lifts.</strong>{' '}
+          Only while a session is idle, so a switch back never interrupts a turn
+          in progress. Without this, sessions stay on the backup account.
+        </span>
+      </label>
+      <label className="failover-toggle usage-threshold">
+        <span>
+          <strong>Avoid accounts above</strong>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            aria-label="Usage warning threshold, percent"
+            value={thresholdDraft}
+            onChange={e => changeThreshold(e.target.value)}
+            onBlur={commitThreshold}
+          />
+          <strong>% of either limit.</strong>{' '}
+          New sessions and failover pick an account below this when one exists,
+          and you are told once when an account crosses it.
+        </span>
+      </label>
+      <label className="failover-toggle">
+        <input
+          type="checkbox"
+          checked={sink}
+          onChange={e => toggle(USAGE_SINK_PREF, e.target.checked, setSink)}
+        />
+        <span>
+          <strong>Read usage from the Claude status line.</strong>{' '}
+          Keeps the meters current between polls. Turning it off puts back any
+          status line of your own.
+        </span>
+      </label>
+    </div>
+  );
+};
+
+// -----------------------------------------------------------------------------
 // Add-account button — inline label prompt before starting the login flow.
 // -----------------------------------------------------------------------------
 
@@ -155,7 +584,7 @@ const AddAccountButton: React.FC<{ onAdd: (label: string) => Promise<void>; disa
   const [label, setLabel] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
+  const submit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     const trimmed = label.trim();
     if (!trimmed || submitting) return;
@@ -208,25 +637,76 @@ const AddAccountButton: React.FC<{ onAdd: (label: string) => Promise<void>; disa
 };
 
 // -----------------------------------------------------------------------------
-// Login modal — embeds a Terminal attached to the login pty. Auto-closes when
-// the credentials file appears (Linux/Windows). On macOS, shows an explicit
-// "I'm logged in" button since tokens go to Keychain.
+// Login modal — embeds a Terminal attached to the login pty, and reports the
+// login as soon as main sees one land in the config dir. macOS also gets an
+// explicit "I'm logged in" button, as the platform whose token store is the
+// one main cannot read directly.
 // -----------------------------------------------------------------------------
 
-interface ClaudeAccountLoginModalProps {
+export interface ClaudeAccountLoginModalProps {
   account: ClaudeAccount;
   ptyId: string;
   onDone: () => void;
   onCancel: (deleteAccount: boolean) => void;
 }
 
-const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
+export interface LoginHintProps {
+  completed: boolean;
+  /** Whether main saw the login in the config dir, rather than being told. */
+  verified: boolean;
+  exited: boolean;
+  isMac: boolean;
+}
+
+/**
+ * What the overlay is allowed to claim. An unverified completion is the user
+ * pressing the button before OAuth finished, and saying "signed in" there
+ * contradicts the panel behind it, which reads the same config dir we just did.
+ */
+export const LoginHint: React.FC<LoginHintProps> = ({ completed, verified, exited, isMac }) => {
+  if (completed && verified) {
+    return <>Login detected{' — '}this account is signed in. You can close this window.</>;
+  }
+  if (completed) {
+    return (
+      <>
+        Recorded{' — '}but no login was found in this account's config directory yet.
+        If OAuth hasn't finished, run <code>/login</code> again before closing.
+      </>
+    );
+  }
+  if (exited) {
+    return <>The login process exited before credentials were saved. Abort and try again, or close this window to keep the empty account.</>;
+  }
+  if (isMac) {
+    return <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window closes itself once the login lands; macOS keeps the tokens in Keychain, so click "I'm logged in" if it doesn't.</>;
+  }
+  return <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>;
+};
+
+export interface LoginBannerProps {
+  completed: boolean;
+  verified: boolean;
+}
+
+/**
+ * The most emphatic thing the overlay says, extracted so its gate sits where a
+ * test can hold it: only a login main found in the config dir may be called
+ * saved, because the panel behind reads that same dir.
+ */
+export const LoginBanner: React.FC<LoginBannerProps> = ({ completed, verified }) => {
+  if (!completed || !verified) return null;
+  return <div className="completion-banner">Login saved. It's safe to close this window.</div>;
+};
+
+export const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
   account,
   ptyId,
   onDone,
   onCancel,
 }) => {
   const [completed, setCompleted] = useState(false);
+  const [verified, setVerified] = useState(false);
   const [exited, setExited] = useState(false);
   const isMac = useMemo(() => window.electronAPI.platform === 'darwin', []);
 
@@ -234,6 +714,7 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
     const offCompleted = window.electronAPI.onAccountLoginCompleted((data) => {
       if (data.accountId === account.id) {
         setCompleted(true);
+        setVerified(data.verified);
       }
     });
     const offExited = window.electronAPI.onAccountLoginExited((data) => {
@@ -275,18 +756,10 @@ const ClaudeAccountLoginModal: React.FC<ClaudeAccountLoginModalProps> = ({
       >
         <h3 id="claude-account-login-title">Log in to "{account.label}"</h3>
         <p className="hint">
-          {completed ? (
-            <>Login detected{' — '}credentials were saved to this account's isolated config directory. You can close this window.</>
-          ) : exited ? (
-            <>The login process exited before credentials were saved. Abort and try again, or close this window to keep the empty account.</>
-          ) : isMac ? (
-            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. Because macOS stores tokens in Keychain, click "I'm logged in" once you see "Logged in" in the terminal.</>
-          ) : (
-            <>Run <code>/login</code> in the terminal below and complete OAuth in your browser. This window will close itself once your credentials are saved.</>
-          )}
+          <LoginHint completed={completed} verified={verified} exited={exited} isMac={isMac} />
         </p>
 
-        {completed && <div className="completion-banner">Login saved. It's safe to close this window.</div>}
+        <LoginBanner completed={completed} verified={verified} />
 
         <div className="terminal-host">
           <Terminal

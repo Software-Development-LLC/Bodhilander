@@ -15,6 +15,9 @@ import { describe, expect, test, afterEach } from 'bun:test';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { ViewSwitcher, ContentView, VIEW_TABS } from '../ViewSwitcher';
 
+/** The last tab, derived. A test that names it is a test about the list. */
+const LAST = VIEW_TABS[VIEW_TABS.length - 1];
+
 afterEach(cleanup);
 
 /** Mirrors how App.tsx owns the value, so tests exercise the real interaction. */
@@ -86,18 +89,21 @@ describe('ViewSwitcher', () => {
   });
 
   test('ArrowLeft moves backwards and wraps', () => {
+    // The LAST tab, whichever it is. Naming one made this a test about the
+    // tab list rather than about wrapping, and it broke when a fourth
+    // destination was added -- which is not a wrapping regression.
     render(<Harness />);
     tab('Terminal').focus();
     fireEvent.keyDown(tab('Terminal'), { key: 'ArrowLeft' });
 
-    expect(current()).toBe('arena');
-    expect(document.activeElement).toBe(tab('Arena'));
+    expect(current()).toBe(LAST.id);
+    expect(document.activeElement).toBe(tab(LAST.label));
   });
 
   test('ArrowRight wraps from the last tab back to the first', () => {
-    render(<Harness initial="arena" />);
-    tab('Arena').focus();
-    fireEvent.keyDown(tab('Arena'), { key: 'ArrowRight' });
+    render(<Harness initial={LAST.id} />);
+    tab(LAST.label).focus();
+    fireEvent.keyDown(tab(LAST.label), { key: 'ArrowRight' });
 
     expect(current()).toBe('terminal');
     expect(document.activeElement).toBe(tab('Terminal'));
@@ -108,10 +114,10 @@ describe('ViewSwitcher', () => {
     tab('Analytics').focus();
 
     fireEvent.keyDown(tab('Analytics'), { key: 'End' });
-    expect(current()).toBe('arena');
-    expect(document.activeElement).toBe(tab('Arena'));
+    expect(current()).toBe(LAST.id);
+    expect(document.activeElement).toBe(tab(LAST.label));
 
-    fireEvent.keyDown(tab('Arena'), { key: 'Home' });
+    fireEvent.keyDown(tab(LAST.label), { key: 'Home' });
     expect(current()).toBe('terminal');
     expect(document.activeElement).toBe(tab('Terminal'));
   });

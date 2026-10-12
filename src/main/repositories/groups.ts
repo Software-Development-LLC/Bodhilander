@@ -15,14 +15,17 @@ export function getAllGroups(): Group[] {
     parentId: row.parent_id || null,
     collapsed: Boolean(row.collapsed),
     claudeAccountId: row.claude_account_id ?? null,
+    githubProjectNumber: row.github_project_number ?? null,
+    githubProjectName: row.github_project_name ?? null,
+    cloneRoot: row.clone_root ?? null,
   }));
 }
 
 export function createGroup(group: Group): void {
   const db = getDatabase();
   db.prepare(`
-    INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO groups (id, name, color, working_dir, "order", created_at, parent_id, collapsed, claude_account_id, github_project_number, github_project_name, clone_root)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     group.id,
     group.name,
@@ -32,7 +35,10 @@ export function createGroup(group: Group): void {
     group.createdAt.toISOString(),
     group.parentId || null,
     group.collapsed ? 1 : 0,
-    group.claudeAccountId ?? null
+    group.claudeAccountId ?? null,
+    group.githubProjectNumber ?? null,
+    group.githubProjectName ?? null,
+    group.cloneRoot ?? null
   );
 }
 
@@ -68,6 +74,18 @@ export function updateGroup(id: string, updates: Partial<Group>): void {
   if (updates.claudeAccountId !== undefined) {
     fields.push('claude_account_id = ?');
     values.push(updates.claudeAccountId);
+  }
+  if (updates.githubProjectNumber !== undefined) {
+    fields.push('github_project_number = ?');
+    values.push(updates.githubProjectNumber);
+  }
+  if (updates.githubProjectName !== undefined) {
+    fields.push('github_project_name = ?');
+    values.push(updates.githubProjectName);
+  }
+  if (updates.cloneRoot !== undefined) {
+    fields.push('clone_root = ?');
+    values.push(updates.cloneRoot);
   }
 
   if (fields.length > 0) {

@@ -1,0 +1,375 @@
+/**
+ * The PTY teardown routes await kill() and answer from its outcome — a
+ * rejection becomes the route's 500, never an unhandled one. Real router,
+ * in-memory bun:sqlite; the singleton's getSession/kill shadowed per test.
+ */
+
+// Run with: bun test src/main/api
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { randomUUID } from 'node:crypto';
+import * as os from 'node:os';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import express from 'express';
+import type { PairedDevice } from '../../pairing/pairing-manager';
+
+let db: Database;
+mock.module('../../../database', () => ({
+  getDatabase: () => db,
+}));
+mock.module('electron-log', () => ({
+  default: { info() {}, warn() {}, error() {} },
+}));
+mock.module('electron', () => ({
+  app: { getPath: () => '/nonexistent-bodhilander-test-userdata' },
+  safeStorage: { isEncryptionAvailable: () => false },
+}));
+mock.module('../../../repositories/preferences', () => ({
+  getPreference: () => null,
+  setPreference: () => {},
+  deletePreference: () => {},
+}));
+const routedIds: string[] = [];
+let onRoute: (id: string) => void = () => {};
+let refreshSettled: (id: string) => Promise<void> = async () => {};
+mock.module('../../../session-routing', () => ({
+  routeNewSessionByUsage: (id: string) => {
+    routedIds.push(id);
+    onRoute(id);
+  },
+  sessionTokenRefreshSettled: (id: string) => refreshSettled(id),
+}));
+// Keeps node-pty's native binding out of the test process; nothing here spawns.
+mock.module('node-pty', () => ({
+  spawn: () => { throw new Error('no pty spawns in these tests'); },
+}));
+
+const { createSessionsRouter } = await import('../sessions');
+const { ptyManager } = await import('../../../pty-manager');
+
+/**
+ * Per-test shadows over the singleton's prototype methods. getSession only
+ * feeds truthiness checks in the routes, so a bare object stands in for a
+ * live session.
+ */
+const patchable = ptyManager as unknown as {
+  getSession?: (id: string) => unknown;
+  kill?: (id: string) => Promise<void>;
+  createSession?: (id: string, cwd: string) => void;
+};
+
+function freshDb(): Database {
+  const d = new Database(':memory:');
+  d.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      working_dir TEXT,
+      state TEXT,
+      shell_type TEXT DEFAULT 'bash',
+      "order" INTEGER DEFAULT 0,
+      created_at TEXT,
+      last_activity_at TEXT,
+      claude_session_id TEXT DEFAULT NULL,
+      ended_at TEXT DEFAULT NULL,
+      duration_seconds REAL DEFAULT 0,
+      claude_account_id TEXT DEFAULT NULL,
+      provider TEXT NOT NULL DEFAULT 'claude',
+      failover_from_account_id TEXT DEFAULT NULL,
+      failover_prev_account_id TEXT DEFAULT NULL
+    )
+  `);
+  return d;
+}
+
+/** /start refuses a session whose folder is gone, so this has to exist. */
+const PRESENT_DIR = os.tmpdir();
+
+function insertSession(id: string, workingDir = PRESENT_DIR): void {
+  db.prepare(`
+    INSERT INTO sessions (id, group_id, name, working_dir, state, shell_type, "order", created_at, last_activity_at)
+    VALUES (?, 'g1', 'test', ?, 'idle', 'claude', 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+  `).run(id, workingDir);
+}
+
+/**
+ * Wait until `predicate` holds rather than for a fixed number of milliseconds.
+ * This one waits for an in-flight fetch to reach the route. The deadline is a
+ * backstop; it returns as soon as the condition holds, and missing it fails on
+ * the assertion that follows rather than on a bare timeout.
+ */
+async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
+
+function sessionRowCount(id: string): number {
+  return (db.prepare('SELECT COUNT(*) AS c FROM sessions WHERE id = ?').get(id) as { c: number }).c;
+}
+
+const device: PairedDevice = {
+  id: 'device-1',
+  name: 'test-phone',
+  platform: 'ios',
+  canControl: true,
+  canModify: true,
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  lastUsedAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+let server: Server;
+let baseUrl = '';
+
+beforeAll(() => new Promise<void>((resolve) => {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.device = device;
+    next();
+  });
+  app.use('/sessions', createSessionsRouter());
+  server = app.listen(0, '127.0.0.1', () => {
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    resolve();
+  });
+}));
+
+afterAll(() => {
+  server?.close();
+});
+
+beforeEach(() => {
+  db = freshDb();
+  routedIds.length = 0;
+  onRoute = () => {};
+});
+
+afterEach(() => {
+  delete patchable.getSession;
+  delete patchable.kill;
+  delete patchable.createSession;
+  refreshSettled = async () => {};
+});
+
+describe('POST /sessions', () => {
+  const groupId = randomUUID();
+
+  test('routes the new session by usage before its pty spawns, and answers with the routed row', async () => {
+    const spawnedWhenRouted: boolean[] = [];
+    let spawned = false;
+    patchable.createSession = () => { spawned = true; };
+    onRoute = (id) => {
+      spawnedWhenRouted.push(spawned);
+      db.prepare('UPDATE sessions SET claude_account_id = ? WHERE id = ?').run('acct-relief', id);
+    };
+
+    const res = await fetch(`${baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId, name: 'routed', workingDir: PRESENT_DIR, launchClaude: true }),
+    });
+    const body = await res.json() as { session: { id: string; claudeAccountId: string | null } };
+
+    expect(res.status).toBe(201);
+    expect(routedIds).toEqual([body.session.id]);
+    expect(spawnedWhenRouted).toEqual([false]);
+    expect(spawned).toBe(true);
+    expect(body.session.claudeAccountId).toBe('acct-relief');
+  });
+});
+
+describe('POST /sessions/:id/stop', () => {
+  test('the response waits on kill() and reports success only once it settles', async () => {
+    const id = randomUUID();
+    patchable.getSession = () => ({});
+    let resolveKill: () => void = () => {};
+    const killCalls: string[] = [];
+    patchable.kill = (killedId: string) => {
+      killCalls.push(killedId);
+      return new Promise<void>((resolve) => { resolveKill = resolve; });
+    };
+
+    const pending = fetch(`${baseUrl}/sessions/${id}/stop`, { method: 'POST' });
+    let settled = false;
+    const tracked = pending.then((r) => { settled = true; return r; });
+    // Wait for the route to actually ask for the kill, not for 25ms and hope.
+    await until(() => killCalls.length > 0);
+    // The kill has been asked for but has not settled: no response yet, so
+    // success can only ever mean the process is really gone.
+    expect(killCalls).toEqual([id]);
+    expect(settled).toBe(false);
+
+    resolveKill();
+    const res = await tracked;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true });
+  });
+
+  test('a kill rejection surfaces as the route 500, not an unhandled rejection', async () => {
+    const id = randomUUID();
+    patchable.getSession = () => ({});
+    patchable.kill = () => Promise.reject(new Error('teardown exploded'));
+
+    const escaped: unknown[] = [];
+    const onUnhandled = (err: unknown) => { escaped.push(err); };
+    process.on('unhandledRejection', onUnhandled);
+    let status = 0;
+    let body: unknown = null;
+    try {
+      const res = await fetch(`${baseUrl}/sessions/${id}/stop`, { method: 'POST' });
+      status = res.status;
+      body = await res.json();
+      await new Promise((r) => setTimeout(r, 10));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    expect(status).toBe(500);
+    expect(body).toEqual({ error: 'Failed to stop session' });
+    expect(escaped).toEqual([]);
+  });
+});
+
+describe('DELETE /sessions/:id', () => {
+  test('with no running pty, deletes the record without touching kill()', async () => {
+    const id = randomUUID();
+    insertSession(id);
+    const killCalls: string[] = [];
+    patchable.kill = (killedId: string) => {
+      killCalls.push(killedId);
+      return Promise.resolve();
+    };
+
+    const res = await fetch(`${baseUrl}/sessions/${id}`, { method: 'DELETE' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true });
+    expect(killCalls).toEqual([]);
+    expect(sessionRowCount(id)).toBe(0);
+  });
+
+  test('a kill rejection aborts the delete with a 500, and a retry completes it', async () => {
+    const id = randomUUID();
+    insertSession(id);
+    patchable.getSession = () => ({});
+    patchable.kill = () => Promise.reject(new Error('teardown exploded'));
+
+    const escaped: unknown[] = [];
+    const onUnhandled = (err: unknown) => { escaped.push(err); };
+    process.on('unhandledRejection', onUnhandled);
+    let status = 0;
+    let body: unknown = null;
+    try {
+      const res = await fetch(`${baseUrl}/sessions/${id}`, { method: 'DELETE' });
+      status = res.status;
+      body = await res.json();
+      await new Promise((r) => setTimeout(r, 10));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+
+    expect(status).toBe(500);
+    expect(body).toEqual({ error: 'Failed to delete session' });
+    expect(escaped).toEqual([]);
+    // The record survives the failed attempt rather than half-vanishing.
+    expect(sessionRowCount(id)).toBe(1);
+
+    // kill() empties its session slot before anything can throw, so the retry
+    // finds no live pty and goes straight to removing the record.
+    delete patchable.getSession;
+    const retry = await fetch(`${baseUrl}/sessions/${id}`, { method: 'DELETE' });
+    expect(retry.status).toBe(200);
+    expect(sessionRowCount(id)).toBe(0);
+  });
+});
+
+describe('launching waits for a token refresh on the session’s account', () => {
+  async function spawnOrder(request: (id: string) => Promise<Response>, id: string): Promise<string[]> {
+    const order: string[] = [];
+    patchable.createSession = () => { order.push('spawn'); };
+    refreshSettled = async () => {
+      await Bun.sleep(5);
+      order.push('settled');
+    };
+    await request(id);
+    return order;
+  }
+
+  test('POST /sessions', async () => {
+    const order = await spawnOrder(() => fetch(`${baseUrl}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupId: randomUUID(), name: 'waits', workingDir: PRESENT_DIR, launchClaude: true }),
+    }), '');
+    expect(order).toEqual(['settled', 'spawn']);
+  });
+
+  test('POST /sessions/:id/start', async () => {
+    const id = randomUUID();
+    insertSession(id, PRESENT_DIR);
+    patchable.getSession = () => undefined;
+    const order = await spawnOrder(sid => fetch(`${baseUrl}/sessions/${sid}/start`, { method: 'POST' }), id);
+    expect(order).toEqual(['settled', 'spawn']);
+  });
+});
+
+describe('POST /sessions/:id/start', () => {
+  test('a session whose folder is not on this machine is refused, by name', async () => {
+    const id = randomUUID();
+    insertSession(id, '/gone/from/this/machine');
+    const spawned: string[] = [];
+    patchable.getSession = () => undefined;
+    patchable.createSession = (startedId: string) => { spawned.push(startedId); };
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, { method: 'POST' });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain('/gone/from/this/machine');
+    // The point of the guard: createSession is where the unactionable throw is.
+    expect(spawned).toEqual([]);
+  });
+
+  test('a session whose folder is present still starts', async () => {
+    const id = randomUUID();
+    insertSession(id, PRESENT_DIR);
+    const spawned: string[] = [];
+    patchable.getSession = () => undefined;
+    patchable.createSession = (startedId: string) => { spawned.push(startedId); };
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ launchClaude: true }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(spawned).toEqual([id]);
+  });
+
+  test('a spawn failure reports what actually went wrong', async () => {
+    const id = randomUUID();
+    insertSession(id, PRESENT_DIR);
+    patchable.getSession = () => undefined;
+    patchable.createSession = () => { throw new Error('Shell not found: /bin/nope'); };
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, { method: 'POST' });
+
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe('Shell not found: /bin/nope');
+  });
+
+  test('an already-running session is still refused before the folder check', async () => {
+    const id = randomUUID();
+    insertSession(id, '/gone/from/this/machine');
+    patchable.getSession = () => ({});
+
+    const res = await fetch(`${baseUrl}/sessions/${id}/start`, { method: 'POST' });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('Session is already running');
+  });
+});

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Group } from '../../shared/types';
+import { AccountSwitchResult, Group } from '../../shared/types';
 
 const DEFAULT_COLORS = ['#e06c75', '#98c379', '#e5c07b', '#61afef', '#c678dd', '#56b6c2'];
 
@@ -58,6 +58,10 @@ export function useGroups() {
           parentId: parentId || null,
           collapsed: false,
           claudeAccountId: parentGroup?.claudeAccountId ?? null,
+          // Board association is set explicitly via the picker, never inherited.
+          githubProjectNumber: null,
+          githubProjectName: null,
+          cloneRoot: null,
         };
 
         window.electronAPI.createGroup(group)
@@ -82,6 +86,28 @@ export function useGroups() {
     } catch (error) {
       console.error('Failed to update group:', error);
       // Don't update state - DB failed
+    }
+  }, []);
+
+  /**
+   * Reassign a group's Claude account (BDHLNDR-31). Returns the sessions that
+   * inherited the change and therefore need a pty restart — see
+   * useSessions().setSessionAccount for why the plain updateGroup path isn't
+   * enough.
+   */
+  const setGroupAccount = useCallback(async (
+    id: string,
+    accountId: string | null,
+  ): Promise<AccountSwitchResult | null> => {
+    try {
+      const result = await window.electronAPI.assignAccountToGroup(id, accountId);
+      setGroups(prev => prev.map(g =>
+        g.id === id ? { ...g, claudeAccountId: accountId } : g
+      ));
+      return result;
+    } catch (error) {
+      console.error('Failed to assign account to group:', error);
+      return null; // See useSessions().setSessionAccount for why not an empty result.
     }
   }, []);
 
@@ -172,6 +198,7 @@ export function useGroups() {
     loading,
     createGroup,
     updateGroup,
+    setGroupAccount,
     removeGroup,
     reorderGroup,
     toggleCollapse,

@@ -1,0 +1,259 @@
+/**
+ * One reconciliation pass over one run (CO-722).
+ *
+ * Reconciliation is the engine's ONLY state path. Events from a webhook, a
+ * relay reconnect or a timer may trigger a pass; none of them is ever parsed
+ * for state. That rule is what makes a missed, replayed or out-of-order
+ * delivery cost at worst a redundant `gh` call, and it is why this module
+ * asks GitHub rather than being told.
+ *
+ * Everything it decides with is already merged and pure — `evaluateChecks`,
+ * `readReviews`, and the translators in `pr-snapshot`. What is left here is
+ * the part that touches the world, so what is left to get wrong is: which
+ * processes run, in what order, and what a failure of each one MEANS.
+ *
+ * The meanings are the interesting part, and they are not uniform:
+ *
+ * - **`gh` failed.** Nothing was established, and nothing is wrong with the
+ *   branch. No event: the next pass asks again. Escalating a transient
+ *   network failure into a run state would park runs on a flaky connection.
+ * - **The repo records no check set.** Something IS wrong, it is a
+ *   configuration fault, and no number of retries fixes it. That becomes
+ *   `checksUndriveable`, which stops the run and tells a person.
+ * - **A review carries unreadable markers.** Same: `reviewUndriveable`.
+ *
+ * The difference is whether asking again could change the answer. Problems
+ * that retrying cannot fix are events; problems that retrying might fix are
+ * reported to the caller and left for the next pass.
+ */
+import type { RunEvent, RunState } from './transitions';
+import { checksEvent, evaluateChecks, type ChecksPhase } from './checks';
+import { readReviews, reviewEvent, type MarkerReading, type ReviewRow } from './reviews';
+import { readReviewMarkers } from './review-markers';
+import type { ConfigResult } from '../../shared/types';
+import {
+  flattenRollup,
+  prSnapshotArgv,
+  toExpectedChecks,
+  toReviewRows,
+  type RawReview,
+  type RawRollupEntry,
+} from './pr-snapshot';
+
+/** What a spawned command answered. Supplied by the caller, so this is testable. */
+export interface CommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface ReconcileDeps {
+  /** `gh`, already located. */
+  gh(argv: readonly string[]): Promise<CommandResult>;
+  /** Any plugin script, as python + path + args. `stdin` for the review body. */
+  plugin(argv: readonly string[], stdin?: string): Promise<CommandResult>;
+}
+
+export interface ReconcileTarget {
+  /** `owner/name`, as `gh --repo` takes it. */
+  repo: string;
+  /** The name `registry.yaml` spells, which is not always the same string. */
+  registryRepo: string;
+  prNumber: number;
+  /** Where the run is. This decides the check PHASE — see `phaseFor`. */
+  state: RunState;
+  approvers: readonly string[];
+  harnessPath: string;
+  pythonPath: string;
+}
+
+export interface ReconcileResult {
+  /** In order. The caller applies each through `transition`. */
+  events: RunEvent[];
+  /**
+   * What went wrong in a way that asking again might fix, and what was
+   * dropped on the way. Not a state: the caller logs these, and a loop that
+   * sees the same one repeatedly is the thing that should escalate.
+   */
+  problems: string[];
+}
+
+interface Snapshot {
+  statusCheckRollup?: RawRollupEntry[] | null;
+  reviews?: RawReview[] | null;
+  state?: string | null;
+  mergedAt?: string | null;
+  isDraft?: boolean | null;
+}
+
+/**
+ * Which checks are owed right now.
+ *
+ * Read from the RUN, not from GitHub. The engine performs the review request
+ * itself, so it already knows whether it has happened — and `reviewRequests`
+ * on the PR would not answer this anyway: GitHub clears a pending request the
+ * moment the review lands, so a PR that has been reviewed looks exactly like
+ * one that was never asked.
+ */
+export function phaseFor(state: RunState): ChecksPhase {
+  return state === 'waitingChecks' || state === 'reviewNotRequested'
+    ? 'beforeReviewRequest'
+    : 'afterReviewRequest';
+}
+
+function parseJson<T>(text: string): T | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    return value && typeof value === 'object' ? (value as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A review body's arbiter markers, read in TS (Phase 3 — `review-markers.ts`).
+ *
+ * Only ever called for an approver's own row. The parser reads markers, cannot
+ * authenticate them, and where the body came from is the caller's problem —
+ * this is the caller, and `readReviews` filters to approvers before anything
+ * reaches here. The `read_review.py` exit-code contract (0/1/2/3) is preserved.
+ */
+function readMarkers(body: string): MarkerReading {
+  const { code, payload } = readReviewMarkers(body);
+  return { arbiter: payload.arbiter, highest: payload.highest, code };
+}
+
+/**
+ * What the expected-check-set lookup established (Phase 3 — from the central
+ * config, not `registry_entry.py`).
+ *
+ * Three answers, and the split is the same one the whole module turns on:
+ * whether asking again could change it.
+ *
+ * - **recorded** — the repo has `expectedChecks` in the config.
+ * - **noBar** — the repo has no check set (not in the config, or records none).
+ *   Configuration, and no number of retries defines a bar.
+ * - **retry** — the config could not be read (fetch failure, malformed). Not
+ *   evidence about the repo, so it's re-attempted rather than parked, exactly
+ *   as a `gh` failure is.
+ */
+export type ChecksLookup =
+  | { kind: 'recorded'; expected: ReturnType<typeof toExpectedChecks> }
+  | { kind: 'noBar'; reason: string }
+  | { kind: 'retry'; reason: string };
+
+/**
+ * Resolve a repo's expected checks from the loaded central config. Pure, so the
+ * recorded/noBar/retry split is a value a test asserts on. A repo with an
+ * `expectedChecks` list is `recorded` (its `expectedChecksAfterReview` become
+ * the after-review-only checks); one without is `noBar`; an unloadable config is
+ * `retry`.
+ */
+export function expectedChecksLookup(config: ConfigResult | null, repo: string): ChecksLookup {
+  if (!config || config.status !== 'ok') {
+    return {
+      kind: 'retry',
+      reason: config && config.status === 'problem'
+        ? `orchestration config could not be read: ${config.problem}`
+        : 'orchestration config could not be loaded',
+    };
+  }
+  const entry = config.config.repos[repo];
+  if (!entry?.expectedChecks || entry.expectedChecks.length === 0) {
+    return { kind: 'noBar', reason: `${repo} records no expectedChecks in the config, so nothing defines green for it` };
+  }
+  return {
+    kind: 'recorded',
+    expected: toExpectedChecks({ ci: entry.expectedChecks, afterReviewRequest: entry.expectedChecksAfterReview ?? [] }),
+  };
+}
+
+/** One pass. Never throws for a run that went badly — that is an outcome. */
+export async function reconcileOnce(
+  target: ReconcileTarget,
+  /** The repo's expected checks, resolved from the central config by the caller. */
+  checks: ChecksLookup,
+  deps: ReconcileDeps,
+): Promise<ReconcileResult> {
+  const events: RunEvent[] = [];
+  const problems: string[] = [];
+
+  const pr = await deps.gh(prSnapshotArgv(target.repo, target.prNumber));
+  if (pr.code !== 0) {
+    // Retrying might fix it, so it is not a state. A run parked on a flaky
+    // connection is worse than a run that is simply a minute behind.
+    const why = pr.stderr.trim() || `exit ${pr.code}`;
+    problems.push(`gh could not read ${target.repo}#${target.prNumber}: ${why}`);
+    return { events, problems };
+  }
+  const snapshot = parseJson<Snapshot>(pr.stdout);
+  if (!snapshot) {
+    problems.push(`gh returned output that is not JSON for ${target.repo}#${target.prNumber}`);
+    return { events, problems };
+  }
+
+  // Merged first and alone. Everything below it is a question about a PR that
+  // is still open, and asking them about a merged one invites a late check
+  // result to move a finished run.
+  if (snapshot.mergedAt) {
+    events.push({ kind: 'merged' });
+    return { events, problems };
+  }
+
+  const lookup = checks;
+  if (lookup.kind === 'retry') {
+    // The same rule as `gh` above, applied to the same kind of failure: the
+    // tool did not answer within its own contract, which says nothing about
+    // the repo's configuration. Folding this into "nobody defined a bar"
+    // would stop a run for a crash, and a crash is the thing most likely to
+    // be gone on the next pass.
+    problems.push(lookup.reason);
+  } else {
+    const expected = lookup.kind === 'recorded' ? lookup.expected : [];
+    const phase = phaseFor(target.state);
+    const verdict = evaluateChecks(
+      expected,
+      flattenRollup(snapshot.statusCheckRollup ?? []),
+      phase,
+    );
+    const checks = checksEvent(verdict);
+    if (checks) {
+      // The plugin's own sentence beats anything this module could write
+      // about a file it does not own, so it is preferred when present.
+      events.push(
+        checks.kind === 'checksUndriveable' && lookup.kind === 'noBar'
+          ? { kind: 'checksUndriveable', reason: lookup.reason }
+          : checks,
+      );
+    }
+  }
+
+  const { rows, dropped } = toReviewRows(snapshot.reviews ?? []);
+  for (const row of dropped) {
+    // A review that vanished silently is the failure this reports. Naming the
+    // author is what makes it actionable.
+    problems.push(`review by ${row.author || 'an unreadable author'} ignored: ${row.why}`);
+  }
+
+  const approvers = new Set(target.approvers.map((a) => a.toLowerCase()));
+  const withMarkers: ReviewRow[] = [];
+  for (const row of rows) {
+    if (!approvers.has(row.author.toLowerCase())) {
+      // Not read at all, let alone parsed. A marker in a stranger's body must
+      // never reach the parser: a 0 from it says "the markers say so" and
+      // nothing whatever about who wrote them.
+      withMarkers.push(row);
+      continue;
+    }
+    // row.body, never snapshot.reviews[i]. A dropped row shifts every index
+    // after it, so matching back by position reads one person's body as
+    // another's -- and a marker in it would be attributed to whoever happened
+    // to be next in the list.
+    withMarkers.push({ ...row, marker: readMarkers(row.body) });
+  }
+
+  const review = reviewEvent(readReviews({ rows: withMarkers, approvers: target.approvers }));
+  if (review) events.push(review);
+
+  return { events, problems };
+}
