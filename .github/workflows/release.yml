@@ -90,16 +90,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - runs-on: ubuntu-latest
             platform: linux
           # Pinned to windows-2022 (VS 2022) deliberately (#109). GitHub moved
           # the `windows-latest` label to windows-2025-vs2026 (Visual Studio
           # 2026), which the project's node-gyp doesn't yet detect — the
           # postinstall electron-rebuild fails with "Could not find any Visual
           # Studio installation to use". Same build-reproducibility reasoning as
-          # the pinned macOS runners below. Revisit when node-gyp/node-pty gain
+          # the pinned macos-14 runner below. Revisit when node-gyp/node-pty gain
           # VS 2026 support (or if windows-2022 is retired).
-          - os: windows-2022
+          - runs-on: windows-2022
             platform: win
           # BDHLNDR-38: build each Mac arch on its native runner so postinstall
           # (electron-rebuild) and sharp's optional-dep resolution produce
@@ -108,14 +108,17 @@ jobs:
           # Intel Mac users to hang at the splash screen when better-sqlite3
           # failed to load.
           #
-          # macos-15-intel is GitHub's current Intel x64 12-core larger runner
-          # (retired macos-13 replacement). It's a paid tier (~$0.077/min, ~$1
-          # per release) — larger runners don't use the public-repo free quota.
-          - os: macos-14
+          # mac-x64 runs on the org's self-hosted Intel Macs (macOS 15), whose
+          # workspace and home persist between runs. It builds with the box's
+          # Command Line Tools python3, not setup-python. Labels never fall
+          # back: if those Macs are offline, edit this entry back to
+          # `macos-15-intel`.
+          - runs-on: macos-14
             platform: mac-arm64
-          - os: macos-15-intel
+          - runs-on: [self-hosted, macOS, X64, intel]
             platform: mac-x64
-    runs-on: ${{ matrix.os }}
+            self-hosted: true
+    runs-on: ${{ matrix.runs-on }}
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -132,9 +135,22 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Setup Python (for native module builds)
+        if: ${{ !matrix.self-hosted }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
+
+      - name: Check the self-hosted Mac toolchain
+        if: ${{ matrix.self-hosted }}
+        run: |
+          if ! xcode-select -p >/dev/null 2>&1; then
+            echo "::error::Xcode Command Line Tools are not installed on $RUNNER_NAME (run xcode-select --install)."
+            exit 1
+          fi
+          if ! command -v python3 >/dev/null 2>&1 || ! python3 --version; then
+            echo "::error::python3 is not available on $RUNNER_NAME; node-gyp needs it for the native module rebuild."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: bun install
@@ -207,11 +223,22 @@ jobs:
         run: bunx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Puts the temporary signing keychain where the cleanup step finds it.
+          APP_BUILDER_TMP_DIR: ${{ runner.temp }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Remove the temporary signing keychain
+        if: always() && startsWith(matrix.platform, 'mac')
+        run: |
+          for k in "$RUNNER_TEMP"/*.keychain "$RUNNER_TEMP"/*.keychain-db; do
+            [[ -e "$k" ]] || continue
+            echo "Deleting $k"
+            security delete-keychain "$k" || echo "::warning::could not delete keychain $k"
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
