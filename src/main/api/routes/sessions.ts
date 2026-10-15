@@ -4,6 +4,7 @@
  * CRUD operations for sessions.
  */
 
+import * as fs from 'fs';
 import { Router, Request, Response } from 'express';
 import log from 'electron-log';
 import * as sessionsRepo from '../../repositories/sessions';
@@ -70,11 +71,20 @@ function parseLimitParam(raw: string | undefined): number | null {
   return Math.min(Math.floor(parsed), CHAT_EVENTS_MAX_LIMIT);
 }
 
+function isDirectory(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** A Claude Desktop session always runs Claude Code, in a known repo's own group. */
 function claudeDesktopTarget(workingDir: unknown): { groupId: string; workingDir: string; launchClaude: true } | null {
   if (typeof workingDir !== 'string') return null;
   const repo = findKnownRepo(workingDir, groupsRepo.getAllGroups(), sessionsRepo.getAllSessions(), process.platform);
-  return repo ? { groupId: repo.groupId, workingDir: repo.dir, launchClaude: true } : null;
+  if (!repo || !isDirectory(repo.dir)) return null;
+  return { groupId: repo.groupId, workingDir: repo.dir, launchClaude: true };
 }
 
 export function createSessionsRouter(): Router {

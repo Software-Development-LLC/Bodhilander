@@ -135,7 +135,9 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
     return status();
   }
 
-  function disable(): ClaudeDesktopStatus {
+  /** Waits out an enable in flight, so it cannot pair a device after access was turned off. */
+  async function disable(): Promise<ClaudeDesktopStatus> {
+    await enabling?.catch(() => undefined);
     for (const device of ourDevices()) deps.unpair(device.id);
     forgetClaudeDesktopSessions();
     removeFiles();

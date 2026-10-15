@@ -194,6 +194,13 @@ describe('POST /sessions from Claude Desktop', () => {
     expect(spawned).toEqual([]);
   });
 
+  test('refuses a known repo whose folder is gone', async () => {
+    const gone = `${REPO}/bodhi-deleted-repo-${randomUUID()}`;
+    db.prepare(`INSERT INTO groups (id, name, working_dir, created_at) VALUES (?, 'Gone', ?, '2026-01-01')`).run(randomUUID(), gone);
+    expect((await startAsDesktop(gone)).status).toBe(403);
+    expect(spawned).toEqual([]);
+  });
+
   test('a plain shell\'s folder is not a known repo', async () => {
     const shellDir = os.homedir();
     insertSession(randomUUID(), shellDir, 'bash');

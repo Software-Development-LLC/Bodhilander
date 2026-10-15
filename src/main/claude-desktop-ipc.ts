@@ -44,7 +44,7 @@ export function registerClaudeDesktopIpc(deps: ClaudeDesktopIpcDeps): void {
     }));
 
   deps.handle('claudeDesktop:disable', () =>
-    attempt(async () => ({ success: true, status: deps.access().disable() })));
+    attempt(async () => ({ success: true, status: await deps.access().disable() })));
 
   deps.handle('claudeDesktop:install', () =>
     attempt(async () => {

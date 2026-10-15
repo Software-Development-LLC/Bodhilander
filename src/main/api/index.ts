@@ -80,7 +80,6 @@ class ApiServer extends EventEmitter {
   }
 
   private async listen(): Promise<{ port: number; addresses: string[] }> {
-
     log.info('[ApiServer] Starting API server...');
 
     try {

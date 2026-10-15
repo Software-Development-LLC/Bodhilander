@@ -620,7 +620,7 @@ function createWindow(): void {
     // hook callbacks that feed session_events. Claude Desktop access listens
     // first, and drops any discovery file a crash left, so the extension only
     // ever sees the port this start lands on.
-    claudeDesktopAccess().onApiStopped();
+    if (!getApiServer().isRunning) claudeDesktopAccess().onApiStopped();
     getApiServer().start().then(({ port }) => {
       log.info(`[Main] API server auto-started on port ${port}`);
     }).catch((err) => {

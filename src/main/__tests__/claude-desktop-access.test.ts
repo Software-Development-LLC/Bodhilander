@@ -142,7 +142,7 @@ describe('disable and unpair', () => {
   test('disable unpairs the device, revokes the token and removes both files', async () => {
     await access().enable();
     const { token } = read();
-    const status = access().disable();
+    const status = await access().disable();
     expect(status.enabled).toBe(false);
     expect(ours()).toHaveLength(0);
     expect(pairing.validateToken(token)).toBeNull();
@@ -171,6 +171,34 @@ describe('disable and unpair', () => {
   });
 });
 
+describe('disable during an enable', () => {
+  test('waits for it, so access ends up off', async () => {
+    api.running = false;
+    api.port = null;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const a = createClaudeDesktopAccess({
+      userData,
+      pairing,
+      api: {
+        isRunning: () => api.running,
+        port: () => api.port,
+        start: async () => { await gate; api.running = true; api.port = 8450; return { port: 8450 }; },
+      },
+      unpair: (id) => pairing.unpairDevice(id),
+      extensionPath: () => null,
+    });
+    const enabling = a.enable();
+    const disabling = a.disable();
+    release();
+    await enabling;
+    const status = await disabling;
+    expect(status.enabled).toBe(false);
+    expect(ours()).toHaveLength(0);
+    expect(fs.existsSync(credentialPath(userData))).toBe(false);
+  });
+});
+
 describe('overlapping enables', () => {
   test('pair exactly one device', async () => {
     const a = access();
@@ -186,7 +214,7 @@ describe('turning access off forgets the sessions it started', () => {
     await a.enable();
     recordClaudeDesktopSession(SESSION);
     expect(claudeDesktopRefusal('POST', '127.0.0.1', `/api/v1/terminal/${SESSION}/input`)).toBeNull();
-    a.disable();
+    await a.disable();
     expect(claudeDesktopRefusal('POST', '127.0.0.1', `/api/v1/terminal/${SESSION}/input`)).not.toBeNull();
   });
 });
@@ -195,7 +223,7 @@ describe('unpairing goes through the API server', () => {
   test('disable unpairs through the injected path, never the pairing manager directly', async () => {
     await access().enable();
     const id = ours()[0].id;
-    access().disable();
+    await access().disable();
     expect(unpaired).toEqual([id]);
   });
 });
