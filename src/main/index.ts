@@ -1498,7 +1498,13 @@ function claudeDesktopAccess(): ClaudeDesktopAccess {
       },
       extensionPath: claudeDesktopExtensionPath,
     });
-    apiServer.on('deviceUnpaired', () => claudeDesktopAccessInstance?.onDeviceUnpaired());
+    apiServer.on('deviceUnpaired', () => {
+      try {
+        claudeDesktopAccessInstance?.onDeviceUnpaired();
+      } catch (err) {
+        log.error('[ClaudeDesktop] Failed to remove the extension files after an unpair:', err);
+      }
+    });
     apiServer.on('started', ({ port }: { port: number }) => {
       try {
         claudeDesktopAccessInstance?.onApiStarted(port);

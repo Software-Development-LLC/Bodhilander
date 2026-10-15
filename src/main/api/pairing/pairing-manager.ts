@@ -192,6 +192,7 @@ export class PairingManager {
       lastUsedAt: new Date(now),
     };
 
+    log.info(`[PairingManager] Device created: ${deviceName} (${platform})`);
     return { device, token };
   }
 

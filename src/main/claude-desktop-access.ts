@@ -5,6 +5,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import log from 'electron-log';
 import type { PairedDevice } from './api/pairing/pairing-manager';
 import type { ClaudeDesktopStatus } from '../shared/types';
 import {
@@ -48,6 +49,7 @@ export interface AccessDeps {
 function writePrivate(file: string, contents: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp-${process.pid}`;
+  fs.rmSync(tmp, { force: true });
   fs.writeFileSync(tmp, contents, { encoding: 'utf8', mode: 0o600 });
   try {
     fs.renameSync(tmp, file);
@@ -117,12 +119,14 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
       writePrivate(credFile, token);
     }
     writeDiscovery(port);
+    log.info(`[ClaudeDesktop] Access enabled on port ${port}`);
     return status();
   }
 
   function disable(): ClaudeDesktopStatus {
     for (const device of ourDevices()) deps.pairing.unpairDevice(device.id);
     removeFiles();
+    log.info('[ClaudeDesktop] Access disabled');
     return status();
   }
 
@@ -133,7 +137,9 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
 
   /** Unpairing from the device list leaves nothing behind for the extension to read. */
   function onDeviceUnpaired(): void {
-    if (ourDevices().length === 0) removeFiles();
+    if (ourDevices().length > 0) return;
+    removeFiles();
+    log.info('[ClaudeDesktop] Device unpaired; extension files removed');
   }
 
   return { status, enable, disable, onApiStarted, onDeviceUnpaired, dir: claudeDesktopDir(deps.userData) };
