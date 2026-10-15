@@ -1,10 +1,7 @@
 /**
- * The contract between Bodhilander, which writes the discovery file when
- * Claude Desktop access is enabled, and the Claude Desktop extension, which
- * reads it. Both sides import this module so the two cannot drift.
- *
- * The extension runs under Claude Desktop's own Node runtime, so it must not
- * import anything from Electron or from src/main.
+ * The discovery-file contract between Bodhilander (the writer) and the Claude
+ * Desktop extension (the reader). The extension runs under Claude Desktop's
+ * Node, so nothing here may import Electron or src/main.
  */
 import * as path from 'path';
 

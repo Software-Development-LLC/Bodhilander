@@ -1,10 +1,7 @@
 /**
  * Claude Desktop access: a dedicated paired device whose credential, and the
  * API port, are written where the Claude Desktop extension looks for them.
- *
- * The raw token lives only in a user-only file under userData. Unpairing the
- * device invalidates it at once, because the API checks every request against
- * the paired_devices table.
+ * The token lives only in a user-only file; unpairing invalidates it at once.
  */
 import * as fs from 'fs';
 import * as path from 'path';

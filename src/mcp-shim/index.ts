@@ -3,56 +3,76 @@
  * its own Node runtime and speaks MCP to it over stdio.
  */
 import * as fs from 'fs';
-import { createApiClient, defaultDeps } from './api-client';
-import { handleMessage, lineReader } from './rpc';
+import { ApiClientDeps, createApiClient, defaultDeps } from './api-client';
+import { handleMessage, lineReader, RpcDeps } from './rpc';
 import { callTool, ToolContext } from './tools';
 
 declare const __BODHILANDER_VERSION__: string;
 
-const ctx: ToolContext = {
-  api: createApiClient(defaultDeps()),
-  platform: process.platform,
-  dirExists: (dir) => {
-    try {
-      return fs.statSync(dir).isDirectory();
-    } catch {
-      return false;
-    }
-  },
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  now: () => Date.now(),
-  readyTimeoutMs: 60_000,
-  pollMs: 1_500,
-  settleMs: 3_000,
-};
+export function createContext(apiDeps: ApiClientDeps = defaultDeps()): ToolContext {
+  return {
+    api: createApiClient(apiDeps),
+    platform: process.platform,
+    dirExists: (dir) => {
+      try {
+        return fs.statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+    readyTimeoutMs: 60_000,
+    pollMs: 1_500,
+    settleMs: 3_000,
+  };
+}
 
-const deps = {
-  version: typeof __BODHILANDER_VERSION__ === 'string' ? __BODHILANDER_VERSION__ : '0.0.0',
-  callTool: (name: string, args: unknown) => callTool(ctx, name, args),
-};
+export interface Stdio {
+  input: NodeJS.ReadableStream;
+  write: (line: string) => void;
+  log: (line: string) => void;
+  /** Called once input has ended and every request it carried has been answered. */
+  done: () => void;
+}
 
-let pending = 0;
-let closed = false;
-const exitWhenIdle = () => {
-  if (closed && pending === 0) process.exit(0);
-};
+export function serve(io: Stdio, ctx: ToolContext = createContext()): void {
+  const deps: RpcDeps = {
+    version: typeof __BODHILANDER_VERSION__ === 'string' ? __BODHILANDER_VERSION__ : '0.0.0',
+    callTool: (name, args) => callTool(ctx, name, args),
+  };
+  let pending = 0;
+  let closed = false;
+  const finishWhenIdle = () => {
+    if (closed && pending === 0) io.done();
+  };
 
-const read = lineReader((message) => {
-  pending++;
-  handleMessage(message, deps)
-    .then((response) => {
-      if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
-    })
-    .catch((err) => process.stderr.write(`bodhilander-mcp: ${String(err)}\n`))
-    .finally(() => {
-      pending--;
-      exitWhenIdle();
-    });
-});
+  const read = lineReader((message) => {
+    pending++;
+    handleMessage(message, deps)
+      .then((response) => {
+        if (response) io.write(`${JSON.stringify(response)}\n`);
+      })
+      .catch((err) => io.log(`bodhilander-mcp: ${String(err)}\n`))
+      .finally(() => {
+        pending--;
+        finishWhenIdle();
+      });
+  });
 
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk: string) => read(chunk));
-process.stdin.on('end', () => {
-  closed = true;
-  exitWhenIdle();
-});
+  io.input.setEncoding('utf8');
+  io.input.on('data', (chunk: string) => read(chunk));
+  io.input.on('end', () => {
+    closed = true;
+    finishWhenIdle();
+  });
+}
+
+if (typeof module !== 'undefined' && require.main === module) {
+  serve({
+    input: process.stdin,
+    write: (line) => process.stdout.write(line),
+    log: (line) => process.stderr.write(line),
+    done: () => process.exit(0),
+  });
+}

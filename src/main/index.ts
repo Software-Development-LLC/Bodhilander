@@ -64,7 +64,7 @@ import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } fr
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
 import { createClaudeDesktopAccess, ClaudeDesktopAccess } from './claude-desktop-access';
 import { MCPB_FILE_NAME } from '../shared/claude-desktop';
-import type { ClaudeDesktopActionResult } from '../shared/types';
+import { registerClaudeDesktopIpc } from './claude-desktop-ipc';
 
 /**
  * How often parked sessions are reconsidered for going home (#207).
@@ -1505,52 +1505,17 @@ function claudeDesktopAccess(): ClaudeDesktopAccess {
   return claudeDesktopAccessInstance;
 }
 
-async function claudeDesktopAction(
-  action: () => Promise<ClaudeDesktopActionResult> | ClaudeDesktopActionResult,
-): Promise<ClaudeDesktopActionResult> {
-  try {
-    return await action();
-  } catch (error) {
-    log.error('[ClaudeDesktop] Action failed:', error);
-    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
-  }
-}
-
-safeHandle('claudeDesktop:getStatus', () => claudeDesktopAccess().status());
-
-ipcMain.handle('claudeDesktop:enable', () =>
-  claudeDesktopAction(async () => ({ success: true, status: await claudeDesktopAccess().enable() })),
-);
-
-ipcMain.handle('claudeDesktop:disable', () =>
-  claudeDesktopAction(() => ({ success: true, status: claudeDesktopAccess().disable() })),
-);
-
-ipcMain.handle('claudeDesktop:install', () =>
-  claudeDesktopAction(async () => {
-    const file = claudeDesktopExtensionPath();
-    if (!file) return { success: false, error: 'This build does not include the Claude Desktop extension.' };
-    const failure = await shell.openPath(file);
-    if (failure) return { success: false, error: `Could not open the extension: ${failure}` };
-    return { success: true, status: claudeDesktopAccess().status() };
-  }),
-);
-
-ipcMain.handle('claudeDesktop:saveExtension', () =>
-  claudeDesktopAction(async () => {
-    const file = claudeDesktopExtensionPath();
-    if (!file) return { success: false, error: 'This build does not include the Claude Desktop extension.' };
-    const options = {
-      defaultPath: MCPB_FILE_NAME,
-      filters: [{ name: 'Claude Desktop Extension', extensions: ['mcpb'] }],
-    };
+registerClaudeDesktopIpc({
+  handle: (channel, handler) => safeHandle(channel, handler),
+  access: claudeDesktopAccess,
+  extensionPath: claudeDesktopExtensionPath,
+  openPath: (file) => shell.openPath(file),
+  chooseSavePath: async (defaultName) => {
+    const options = { defaultPath: defaultName, filters: [{ name: 'Claude Desktop Extension', extensions: ['mcpb'] }] };
     const choice = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
-    const status = claudeDesktopAccess().status();
-    if (choice.canceled || !choice.filePath) return { success: true, status };
-    fs.copyFileSync(file, choice.filePath);
-    return { success: true, status, message: `Saved to ${choice.filePath}` };
-  }),
-);
+    return choice.canceled || !choice.filePath ? null : choice.filePath;
+  },
+});
 
 // ============================================================================
 // Remote Hosting (Relay) IPC Handlers
