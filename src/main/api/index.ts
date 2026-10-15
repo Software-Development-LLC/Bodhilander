@@ -73,11 +73,9 @@ class ApiServer extends EventEmitter {
     if (this._isRunning) {
       return Promise.reject(new Error('API server is already running'));
     }
-    if (!this.starting) {
-      this.starting = this.listen().finally(() => {
-        this.starting = null;
-      });
-    }
+    this.starting ??= this.listen().finally(() => {
+      this.starting = null;
+    });
     return this.starting;
   }
 

@@ -58,6 +58,11 @@ export function ClaudeDesktopSettings() {
         Let Claude Desktop on this computer list your sessions, read them, start new Claude Code sessions in repos
         Bodhilander knows, and check run status. It connects only to this computer, as its own paired device.
       </p>
+      <p className="settings-hint">
+        That device has Control and Modify permission, so any program running as you that reads its credential can
+        do what a fully trusted paired device can. Text Claude Desktop reads from one session can shape the prompt it
+        sends to another.
+      </p>
 
       <div className="settings-group">
         <h4>Access</h4>

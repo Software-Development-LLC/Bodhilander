@@ -209,7 +209,7 @@ export function validatePairingConfirm(req: Request, res: Response, next: NextFu
     return;
   }
 
-  if (platform === CLAUDE_DESKTOP_PLATFORM) {
+  if (platform.toLowerCase() === CLAUDE_DESKTOP_PLATFORM) {
     validationError(res, 'platform', 'This platform is reserved for Claude Desktop access');
     return;
   }

@@ -1444,7 +1444,11 @@ ipcMain.handle('api:unpairDevice', (_, deviceId: string) => {
   try {
     const apiServer = getApiServer();
     const success = apiServer.pairingManager.unpairDevice(deviceId);
-    claudeDesktopAccess().onDeviceUnpaired();
+    try {
+      claudeDesktopAccess().onDeviceUnpaired();
+    } catch (err) {
+      log.error('[ClaudeDesktop] Failed to remove the extension files after an unpair:', err);
+    }
     return { success };
   } catch (error) {
     log.error('[ApiHandlers] Failed to unpair device:', error);

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 let listens = 0;
 let releaseListen: () => void = () => {};
+let failListen: (err: Error) => void = () => {};
 let unpairHook: ((deviceId: string) => void) | undefined;
 
 mock.module('electron-log', () => ({ default: { info() {}, warn() {}, error() {}, debug() {} } }));
@@ -15,7 +16,7 @@ mock.module('../http-server', () => ({
   createHttpServer: async (config: { onDeviceUnpaired?: (id: string) => void }) => {
     listens++;
     unpairHook = config.onDeviceUnpaired;
-    await new Promise<void>((resolve) => { releaseListen = resolve; });
+    await new Promise<void>((resolve, reject) => { releaseListen = resolve; failListen = reject; });
     return { server: { close: (cb: () => void) => cb() }, port: 8443 };
   },
 }));
@@ -58,5 +59,17 @@ describe('ApiServer.start', () => {
     server.on('deviceUnpaired', (id: string) => seen.push(id));
     unpairHook?.('device-9');
     expect(seen).toEqual(['device-9']);
+  });
+
+  test('a failed start can be retried', async () => {
+    const failed = server.start();
+    await Promise.resolve();
+    failListen(new Error('EADDRINUSE'));
+    await expect(failed).rejects.toThrow('EADDRINUSE');
+    const retried = server.start();
+    await Promise.resolve();
+    releaseListen();
+    expect((await retried).port).toBe(8443);
+    expect(listens).toBe(2);
   });
 });

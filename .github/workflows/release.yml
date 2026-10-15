@@ -313,6 +313,12 @@ jobs:
             echo "Renamed: $f → $newname"
           done
 
+      - name: Check the Claude Desktop extension is present
+        run: |
+          if ! ls artifacts/dist-mcpb/*.mcpb >/dev/null 2>&1; then
+            echo "::warning::bodhilander.mcpb is missing (the Linux build leg failed?); this release will ship without it."
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:

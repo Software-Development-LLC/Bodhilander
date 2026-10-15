@@ -24,5 +24,6 @@ describe('validatePairingConfirm', () => {
     expect(result.passed).toBe(false);
     expect(result.status).toBe(400);
     expect(result.payload).toMatchObject({ field: 'platform' });
+    expect(confirm({ code: '123456', deviceName: 'Sneaky', platform: 'Claude-Desktop' }).passed).toBe(false);
   });
 });
