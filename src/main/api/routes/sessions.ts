@@ -10,6 +10,7 @@ import * as sessionsRepo from '../../repositories/sessions';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as chatEventsRepo from '../../repositories/chat-events';
 import { ptyManager } from '../../pty-manager';
+import { remoteSessionEvents } from '../remote-session-events';
 import { routeNewSessionByUsage, sessionTokenRefreshSettled } from '../../session-routing';
 import { requireControlPermission, requireModifyPermission } from '../middleware/auth';
 import {
@@ -218,8 +219,11 @@ export function createSessionsRouter(): Router {
           ptyManager.createSession(id, session.workingDir, true, session.provider);
         }
 
+        const created = sessionsRepo.getSession(id) ?? session;
+        remoteSessionEvents.emit('created', created);
+
         log.info(`[SessionsAPI] Created session: ${id}`);
-        res.status(201).json({ session: sessionsRepo.getSession(id) ?? session });
+        res.status(201).json({ session: created });
       } catch (error) {
         log.error('[SessionsAPI] Error creating session:', error);
         res.status(500).json({ error: 'Failed to create session' });

@@ -272,6 +272,17 @@ export function hasRunForKey(initiativeKey: string): boolean {
   return row != null;
 }
 
+/** The newest run for an initiative key, in any state. Keys compare case-insensitively. */
+export function getLatestRunForKey(initiativeKey: string): RunRow | null {
+  const row = getDatabase()
+    .prepare(
+      `SELECT * FROM runs WHERE initiative_key = ? COLLATE NOCASE
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+    )
+    .get(initiativeKey) as RawRun | undefined;
+  return row ? toRun(row) : null;
+}
+
 /** What an event may carry beyond its kind. */
 export interface EventDetail {
   gate?: number;

@@ -62,6 +62,9 @@ import type { GuestResizeRequest } from './api/relay/session-tunnel';
 import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
+import { createClaudeDesktopAccess, ClaudeDesktopAccess } from './claude-desktop-access';
+import { MCPB_FILE_NAME } from '../shared/claude-desktop';
+import type { ClaudeDesktopActionResult } from '../shared/types';
 
 /**
  * How often parked sessions are reconsidered for going home (#207).
@@ -614,7 +617,9 @@ function createWindow(): void {
     teamsAuthService.initialize();
 
     // Auto-start the API server — it serves the relay/PWA clients and the
-    // hook callbacks that feed session_events.
+    // hook callbacks that feed session_events. Claude Desktop access listens
+    // first, so an enabled extension follows the port this start lands on.
+    claudeDesktopAccess();
     getApiServer().start().then(({ port }) => {
       log.info(`[Main] API server auto-started on port ${port}`);
     }).catch((err) => {
@@ -1439,6 +1444,7 @@ ipcMain.handle('api:unpairDevice', (_, deviceId: string) => {
   try {
     const apiServer = getApiServer();
     const success = apiServer.pairingManager.unpairDevice(deviceId);
+    claudeDesktopAccess().onDeviceUnpaired();
     return { success };
   } catch (error) {
     log.error('[ApiHandlers] Failed to unpair device:', error);
@@ -1461,6 +1467,90 @@ safeHandle('api:hasPairingCode', () => {
   const apiServer = getApiServer();
   return { active: apiServer.pairingManager.hasActivePairingCode() };
 });
+
+// ============================================================================
+// Claude Desktop IPC Handlers
+// ============================================================================
+
+function claudeDesktopExtensionPath(): string | null {
+  const file = app.isPackaged
+    ? path.join(process.resourcesPath, MCPB_FILE_NAME)
+    : path.join(app.getAppPath(), 'dist', 'mcpb', MCPB_FILE_NAME);
+  return fs.existsSync(file) ? file : null;
+}
+
+let claudeDesktopAccessInstance: ClaudeDesktopAccess | null = null;
+
+function claudeDesktopAccess(): ClaudeDesktopAccess {
+  if (!claudeDesktopAccessInstance) {
+    const apiServer = getApiServer();
+    claudeDesktopAccessInstance = createClaudeDesktopAccess({
+      userData: app.getPath('userData'),
+      pairing: apiServer.pairingManager,
+      api: {
+        isRunning: () => apiServer.isRunning,
+        port: () => apiServer.port,
+        start: () => apiServer.start(),
+      },
+      extensionPath: claudeDesktopExtensionPath,
+    });
+    apiServer.on('started', ({ port }: { port: number }) => {
+      try {
+        claudeDesktopAccessInstance?.onApiStarted(port);
+      } catch (err) {
+        log.error('[ClaudeDesktop] Failed to refresh the discovery file:', err);
+      }
+    });
+  }
+  return claudeDesktopAccessInstance;
+}
+
+async function claudeDesktopAction(
+  action: () => Promise<ClaudeDesktopActionResult> | ClaudeDesktopActionResult,
+): Promise<ClaudeDesktopActionResult> {
+  try {
+    return await action();
+  } catch (error) {
+    log.error('[ClaudeDesktop] Action failed:', error);
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+  }
+}
+
+safeHandle('claudeDesktop:getStatus', () => claudeDesktopAccess().status());
+
+ipcMain.handle('claudeDesktop:enable', () =>
+  claudeDesktopAction(async () => ({ success: true, status: await claudeDesktopAccess().enable() })),
+);
+
+ipcMain.handle('claudeDesktop:disable', () =>
+  claudeDesktopAction(() => ({ success: true, status: claudeDesktopAccess().disable() })),
+);
+
+ipcMain.handle('claudeDesktop:install', () =>
+  claudeDesktopAction(async () => {
+    const file = claudeDesktopExtensionPath();
+    if (!file) return { success: false, error: 'This build does not include the Claude Desktop extension.' };
+    const failure = await shell.openPath(file);
+    if (failure) return { success: false, error: `Could not open the extension: ${failure}` };
+    return { success: true, status: claudeDesktopAccess().status() };
+  }),
+);
+
+ipcMain.handle('claudeDesktop:saveExtension', () =>
+  claudeDesktopAction(async () => {
+    const file = claudeDesktopExtensionPath();
+    if (!file) return { success: false, error: 'This build does not include the Claude Desktop extension.' };
+    const options = {
+      defaultPath: MCPB_FILE_NAME,
+      filters: [{ name: 'Claude Desktop Extension', extensions: ['mcpb'] }],
+    };
+    const choice = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+    const status = claudeDesktopAccess().status();
+    if (choice.canceled || !choice.filePath) return { success: true, status };
+    fs.copyFileSync(file, choice.filePath);
+    return { success: true, status, message: `Saved to ${choice.filePath}` };
+  }),
+);
 
 // ============================================================================
 // Remote Hosting (Relay) IPC Handlers

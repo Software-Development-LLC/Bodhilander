@@ -137,6 +137,25 @@ export class PairingManager {
       return null;
     }
 
+    const paired = this.createDevice(deviceName, platform, pairingInfo.permissions);
+
+    // Clear the pairing code after successful use
+    this.activePairingCode = null;
+
+    log.info(`[PairingManager] Device paired: ${deviceName} (${platform})`);
+
+    return paired;
+  }
+
+  /**
+   * Create a paired device directly, for a local client the app registers
+   * itself rather than one that proves possession of a pairing code.
+   */
+  createDevice(
+    deviceName: string,
+    platform: string,
+    permissions: { canControl: boolean; canModify: boolean }
+  ): { device: PairedDevice; token: string } {
     // Generate device ID and secret
     const deviceId = this.generateUUID();
     const secret = randomBytes(TOKEN_SECRET_LENGTH);
@@ -157,26 +176,21 @@ export class PairingManager {
       deviceName,
       secretHash,
       platform,
-      pairingInfo.permissions.canControl ? 1 : 0,
-      pairingInfo.permissions.canModify ? 1 : 0,
+      permissions.canControl ? 1 : 0,
+      permissions.canModify ? 1 : 0,
       now,
       now
     );
-
-    // Clear the pairing code after successful use
-    this.activePairingCode = null;
 
     const device: PairedDevice = {
       id: deviceId,
       name: deviceName,
       platform,
-      canControl: pairingInfo.permissions.canControl,
-      canModify: pairingInfo.permissions.canModify,
+      canControl: permissions.canControl,
+      canModify: permissions.canModify,
       createdAt: new Date(now),
       lastUsedAt: new Date(now),
     };
-
-    log.info(`[PairingManager] Device paired: ${deviceName} (${platform})`);
 
     return { device, token };
   }

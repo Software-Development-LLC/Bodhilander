@@ -21,6 +21,7 @@ import { createPairingRouter } from './routes/pairing';
 import { createTerminalRouter } from './routes/terminal';
 import { createHooksRouter } from './routes/hooks';
 import { createWebPushRouter } from './routes/web-push';
+import { createRunsRouter } from './routes/runs';
 
 export interface HttpServerConfig {
   port: number;
@@ -223,6 +224,7 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   app.use('/api/v1/groups', generalLimiter, authMiddleware, createGroupsRouter());
   app.use('/api/v1/system', generalLimiter, authMiddleware, createSystemRouter());
   app.use('/api/v1/terminal', generalLimiter, authMiddleware, createTerminalRouter());
+  app.use('/api/v1/runs', generalLimiter, authMiddleware, createRunsRouter());
 
   // Error handling middleware
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

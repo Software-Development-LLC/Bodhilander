@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -187,6 +187,13 @@ interface ElectronAPI {
   apiUnpairDevice: (deviceId: string) => Promise<any>;
   apiUpdateDevicePermissions: (deviceId: string, permissions: { canControl?: boolean; canModify?: boolean }) => Promise<any>;
   apiHasPairingCode: () => Promise<{ active: boolean }>;
+
+  // Claude Desktop
+  claudeDesktopGetStatus: () => Promise<ClaudeDesktopStatus>;
+  claudeDesktopEnable: () => Promise<ClaudeDesktopActionResult>;
+  claudeDesktopDisable: () => Promise<ClaudeDesktopActionResult>;
+  claudeDesktopInstall: () => Promise<ClaudeDesktopActionResult>;
+  claudeDesktopSaveExtension: () => Promise<ClaudeDesktopActionResult>;
 
   // Vector Search
 

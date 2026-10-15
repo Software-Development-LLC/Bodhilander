@@ -11,7 +11,7 @@
 
 import crypto from 'crypto';
 import os from 'os';
-import { EventEmitter } from 'events';
+import { remoteSessionEvents } from '../remote-session-events';
 import log from 'electron-log';
 import type { Session, Group } from '../../../shared/types';
 import * as sessionsRepo from '../../repositories/sessions';
@@ -24,9 +24,7 @@ import { soundManager } from '../../sound-manager';
 import { resolveLaunchProviderId } from '../../providers';
 import { routeNewSessionByUsage, sessionTokenRefreshPending, sessionTokenRefreshSettled } from '../../session-routing';
 
-/** Emits 'created' (Session) / 'groupsChanged' when sessions or groups are
- *  created remotely, so the main process can refresh the desktop renderer. */
-export const remoteSessionEvents = new EventEmitter();
+export { remoteSessionEvents };
 
 export interface CreateGroupOptions {
   name: string;

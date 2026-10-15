@@ -257,6 +257,17 @@ jobs:
             release/latest*.yml
           if-no-files-found: ignore
 
+      # The extension is the same file on every platform, so one job ships it;
+      # four same-named copies would race in the release upload.
+      - name: Upload the Claude Desktop extension
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-mcpb
+          retention-days: 1
+          path: dist/mcpb/bodhilander.mcpb
+          if-no-files-found: error
+
   release:
     needs: [check-version, build]
     if: always() && needs.check-version.outputs.should_release == 'true' && !cancelled()
@@ -320,5 +331,6 @@ jobs:
             artifacts/**/*.zip
             artifacts/**/*.blockmap
             artifacts/**/*.yml
+            artifacts/**/*.mcpb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
