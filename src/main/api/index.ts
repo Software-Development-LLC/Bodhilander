@@ -42,6 +42,7 @@ class ApiServer extends EventEmitter {
   private config: ApiServerConfig;
   private _isRunning = false;
   private _port: number | null = null;
+  private starting: Promise<{ port: number; addresses: string[] }> | null = null;
 
   public readonly pairingManager: PairingManager;
 
@@ -67,10 +68,20 @@ class ApiServer extends EventEmitter {
     return this.wsServer?.getClientCount() ?? 0;
   }
 
-  async start(): Promise<{ port: number; addresses: string[] }> {
+  /** Callers that overlap with a start already under way share its outcome. */
+  start(): Promise<{ port: number; addresses: string[] }> {
     if (this._isRunning) {
-      throw new Error('API server is already running');
+      return Promise.reject(new Error('API server is already running'));
     }
+    if (!this.starting) {
+      this.starting = this.listen().finally(() => {
+        this.starting = null;
+      });
+    }
+    return this.starting;
+  }
+
+  private async listen(): Promise<{ port: number; addresses: string[] }> {
 
     log.info('[ApiServer] Starting API server...');
 
@@ -86,6 +97,7 @@ class ApiServer extends EventEmitter {
         pairingManager: this.pairingManager,
         onDeviceUnpaired: (deviceId) => {
           this.wsServer?.closeConnectionsForDevice(deviceId);
+          this.emit('deviceUnpaired', deviceId);
         },
       });
 

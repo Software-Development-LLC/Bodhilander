@@ -122,11 +122,12 @@ function statusError(status: number, body: unknown): ToolError {
   if (status === 403) {
     return new ToolError(
       `Bodhilander refused this action (${detail ?? 'permission denied'}). ` +
-        'Check the Claude Desktop device under Settings → Mobile → Paired Devices.',
+        'Check the Claude Desktop device under Settings → Mobile App → Paired Devices.',
     );
   }
   if (status === 429) return new ToolError('Bodhilander is rate-limiting requests; try again in a minute.');
-  return new ToolError(`Bodhilander answered ${status}${detail ? `: ${detail}` : ''}`);
+  const reason = detail ? `: ${detail}` : '';
+  return new ToolError(`Bodhilander answered ${status}${reason}`);
 }
 
 export function createApiClient(deps: ApiClientDeps): ApiClient {
@@ -152,7 +153,7 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
       }
       throw new ToolError(
         `Bodhilander isn't reachable at ${LOOPBACK}:${port}. Make sure Bodhilander is running and its ` +
-          'local API server is on (Settings → Mobile → API Server).',
+          'local API server is on (Settings → Mobile App → API Server).',
       );
     }
     let parsed: unknown = null;

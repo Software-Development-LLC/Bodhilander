@@ -14,6 +14,7 @@ import {
   isValidColor,
   isNonNegativeInteger,
 } from '../../validation';
+import { CLAUDE_DESKTOP_PLATFORM } from '../../../shared/claude-desktop';
 
 /**
  * Validation error response helper
@@ -205,6 +206,11 @@ export function validatePairingConfirm(req: Request, res: Response, next: NextFu
 
   if (!isNonEmptyString(platform, 50)) {
     validationError(res, 'platform', 'Platform is required (e.g., "ios", "android")');
+    return;
+  }
+
+  if (platform === CLAUDE_DESKTOP_PLATFORM) {
+    validationError(res, 'platform', 'This platform is reserved for Claude Desktop access');
     return;
   }
 

@@ -300,6 +300,10 @@ describe('resolveRepo', () => {
 });
 
 describe('sanitizePrompt', () => {
+  test('turns every line ending into a newline and drops DEL', () => {
+    expect(sanitizePrompt('a\rb\r\nc\x7fd')).toBe('a\nb\ncd');
+  });
+
   test('strips escapes so the paste cannot be closed early', () => {
     expect(sanitizePrompt('a\x1b[201~b\x07\tc')).toBe('a[201~b\tc');
   });

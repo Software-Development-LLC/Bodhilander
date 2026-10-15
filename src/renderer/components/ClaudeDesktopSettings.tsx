@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ClaudeDesktopActionResult, ClaudeDesktopStatus } from '../../shared/types';
 
+const STATUS_REFRESH_MS = 5000;
+
+function accessLabel(status: ClaudeDesktopStatus): string {
+  if (!status.enabled) return 'Off';
+  return status.apiRunning ? 'Enabled' : 'Enabled — API server stopped';
+}
+
 /**
  * Settings → Claude Desktop. Access is a paired device of its own; the
  * extension is installed by Claude Desktop's installer, which opening the
@@ -13,7 +20,12 @@ export function ClaudeDesktopSettings() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    window.electronAPI.claudeDesktopGetStatus().then(setStatus).catch(() => setError('Could not read Claude Desktop status.'));
+    const load = () => window.electronAPI.claudeDesktopGetStatus()
+      .then(setStatus)
+      .catch(() => setError('Could not read Claude Desktop status.'));
+    load();
+    const timer = setInterval(load, STATUS_REFRESH_MS);
+    return () => clearInterval(timer);
   }, []);
 
   const run = useCallback(async (action: () => Promise<ClaudeDesktopActionResult>) => {
@@ -62,7 +74,7 @@ export function ClaudeDesktopSettings() {
             <span>Allow Claude Desktop to use Bodhilander</span>
           </label>
           <span className={`api-status ${status.enabled && status.apiRunning ? 'running' : 'stopped'}`}>
-            {status.enabled ? (status.apiRunning ? 'Enabled' : 'Enabled — API server stopped') : 'Off'}
+            {accessLabel(status)}
           </span>
         </div>
         {status.enabled && !status.apiRunning && (

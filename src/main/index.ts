@@ -1494,6 +1494,7 @@ function claudeDesktopAccess(): ClaudeDesktopAccess {
       },
       extensionPath: claudeDesktopExtensionPath,
     });
+    apiServer.on('deviceUnpaired', () => claudeDesktopAccessInstance?.onDeviceUnpaired());
     apiServer.on('started', ({ port }: { port: number }) => {
       try {
         claudeDesktopAccessInstance?.onApiStarted(port);

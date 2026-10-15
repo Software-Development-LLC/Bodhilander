@@ -1,0 +1,62 @@
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
+
+let listens = 0;
+let releaseListen: () => void = () => {};
+let unpairHook: ((deviceId: string) => void) | undefined;
+
+mock.module('electron-log', () => ({ default: { info() {}, warn() {}, error() {}, debug() {} } }));
+mock.module('../pairing/pairing-manager', () => ({
+  PairingManager: class { getDeviceCount() { return 0; } },
+}));
+mock.module('../ws-server', () => ({
+  createWsServer: () => ({ close() {}, getClientCount: () => 0, closeConnectionsForDevice() {} }),
+}));
+mock.module('../http-server', () => ({
+  createHttpServer: async (config: { onDeviceUnpaired?: (id: string) => void }) => {
+    listens++;
+    unpairHook = config.onDeviceUnpaired;
+    await new Promise<void>((resolve) => { releaseListen = resolve; });
+    return { server: { close: (cb: () => void) => cb() }, port: 8443 };
+  },
+}));
+
+const { createApiServer } = await import('../index');
+const server = createApiServer();
+
+beforeEach(async () => {
+  await server.stop();
+  listens = 0;
+});
+
+describe('ApiServer.start', () => {
+  test('a start that overlaps one in flight shares it instead of failing', async () => {
+    const first = server.start();
+    const second = server.start();
+    await Promise.resolve();
+    releaseListen();
+    const [a, b] = await Promise.all([first, second]);
+    expect(listens).toBe(1);
+    expect(a.port).toBe(8443);
+    expect(b.port).toBe(8443);
+    expect(server.isRunning).toBe(true);
+  });
+
+  test('starting a running server is still refused', async () => {
+    const started = server.start();
+    await Promise.resolve();
+    releaseListen();
+    await started;
+    await expect(server.start()).rejects.toThrow('already running');
+  });
+
+  test('an unpair through the HTTP routes is announced', async () => {
+    const started = server.start();
+    await Promise.resolve();
+    releaseListen();
+    await started;
+    const seen: string[] = [];
+    server.on('deviceUnpaired', (id: string) => seen.push(id));
+    unpairHook?.('device-9');
+    expect(seen).toEqual(['device-9']);
+  });
+});

@@ -22,7 +22,7 @@ export function createContext(apiDeps: ApiClientDeps = defaultDeps()): ToolConte
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
-    readyTimeoutMs: 60_000,
+    readyTimeoutMs: 40_000,
     pollMs: 1_500,
     settleMs: 3_000,
   };

@@ -41,12 +41,20 @@ export interface AccessDeps {
   extensionPath: () => string | null;
 }
 
-/** Temp file then rename, so the extension never reads a half-written file. */
+/**
+ * Temp file then rename, so the extension never reads a half-written file.
+ * The modes are ignored on Windows, where %APPDATA% is already per-user.
+ */
 function writePrivate(file: string, contents: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, contents, { encoding: 'utf8', mode: 0o600 });
-  fs.renameSync(tmp, file);
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 function readOrNull(file: string): string | null {

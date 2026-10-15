@@ -133,15 +133,20 @@ async function listSessions(ctx: ToolContext): Promise<unknown> {
   };
 }
 
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 function eventText(event: PersistedChatEvent): string {
   const p = event.payload as Record<string, unknown>;
-  if (event.type === 'tool_call') return `${String(p.tool)} ${String(p.argsBrief ?? '')}`.trim();
+  if (event.type === 'tool_call') return `${asText(p.tool)} ${asText(p.argsBrief)}`.trim();
   if (event.type === 'prompt_options') {
     const options = Array.isArray(p.options) ? p.options as { key: string; label: string }[] : [];
-    return `${String(p.question)} ${options.map((o) => `[${o.key}] ${o.label}`).join(' ')}`.trim();
+    const choices = options.map((o) => '[' + asText(o.key) + '] ' + asText(o.label)).join(' ');
+    return `${asText(p.question)} ${choices}`.trim();
   }
-  if (event.type === 'prompt_yes_no') return String(p.question);
-  return String(p.text ?? '');
+  if (event.type === 'prompt_yes_no') return asText(p.question);
+  return asText(p.text);
 }
 
 /** Newest events win when the whole page would be too large to hand back. */
@@ -185,7 +190,7 @@ interface KnownRepo {
 
 function normalize(dir: string, platform: NodeJS.Platform): string {
   const p = platform === 'win32' ? path.win32 : path.posix;
-  const resolved = p.resolve(dir).replace(/[\\/]+$/, '');
+  const resolved = p.resolve(dir);
   return platform === 'win32' || platform === 'darwin' ? resolved.toLowerCase() : resolved;
 }
 
@@ -278,7 +283,7 @@ async function startSession(ctx: ToolContext, args: Record<string, unknown>): Pr
 
   const { session } = await ctx.api.post<{ session: Session }>('/sessions', {
     groupId: target.groupId,
-    name: name || `Claude Desktop: ${path.basename(target.dir)}`,
+    name: name ?? `Claude Desktop: ${path.basename(target.dir)}`,
     workingDir: target.dir,
     launchClaude: true,
   });
@@ -324,7 +329,11 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown): P
     const result = await handler(ctx, input);
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
   } catch (err) {
-    const message = err instanceof ToolError ? err.message : `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
-    return { content: [{ type: 'text', text: message }], isError: true };
+    return { content: [{ type: 'text', text: errorMessage(err) }], isError: true };
   }
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof ToolError) return err.message;
+  return `Unexpected error: ${err instanceof Error ? err.message : String(err)}`;
 }

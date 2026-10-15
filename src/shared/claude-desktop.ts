@@ -51,11 +51,11 @@ export function userDataCandidates(
   const p = platform === 'win32' ? path.win32 : path.posix;
   let base: string;
   if (platform === 'win32') {
-    base = env.APPDATA || p.join(home, 'AppData', 'Roaming');
+    base = env.APPDATA ?? p.join(home, 'AppData', 'Roaming');
   } else if (platform === 'darwin') {
     base = p.join(home, 'Library', 'Application Support');
   } else {
-    base = env.XDG_CONFIG_HOME || p.join(home, '.config');
+    base = env.XDG_CONFIG_HOME ?? p.join(home, '.config');
   }
   const installed = APP_DIR_NAMES.map((name) => p.join(base, name));
   return [...installed, ...installed.map((dir) => p.join(dir, DEV_SUBDIR))];
