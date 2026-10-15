@@ -28,6 +28,7 @@ beforeEach(() => {
     enable: async () => { if (enableError) throw enableError; return STATUS; },
     disable: () => ({ ...STATUS, enabled: false }),
     onApiStarted: () => {},
+    onApiStopped: () => {},
     onDeviceUnpaired: () => {},
     dir: '/u/claude-desktop',
   };
@@ -92,5 +93,32 @@ describe('Claude Desktop IPC', () => {
       expect(await invoke(channel)).toEqual({ success: false, error: 'This build does not include the Claude Desktop extension.' });
     }
     expect(opened).toEqual([]);
+  });
+});
+
+describe('enabling with the API server stopped', () => {
+  test('says the server was started', async () => {
+    const own = new Map<string, () => unknown>();
+    let running = false;
+    const access = {
+      status: () => ({ ...STATUS, apiRunning: running }),
+      enable: async () => { running = true; return { ...STATUS, apiRunning: true }; },
+      disable: () => STATUS,
+      onApiStarted: () => {},
+      onApiStopped: () => {},
+      onDeviceUnpaired: () => {},
+      dir: '/u/claude-desktop',
+    };
+    registerClaudeDesktopIpc({
+      handle: (channel, handler) => own.set(channel, handler),
+      access: () => access,
+      extensionPath: () => null,
+      openPath: async () => '',
+      chooseSavePath: async () => null,
+    });
+    const result = await own.get('claudeDesktop:enable')!() as { message?: string };
+    expect(result.message).toContain('has been started');
+    running = true;
+    expect((await own.get('claudeDesktop:enable')!() as { message?: string }).message).toBeUndefined();
   });
 });

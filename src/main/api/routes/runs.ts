@@ -10,6 +10,7 @@ import * as runsRepo from '../../repositories/runs';
 import { getStringParam } from '../middleware/validation';
 
 const INITIATIVE_KEY = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+const ISSUE_NUMBER = /^\d{1,9}$/;
 
 export interface RunStatusGate {
   gate: number;
@@ -109,12 +110,20 @@ export function createRunsRouter(): Router {
    * GET /runs/:key/status - Gate progress and PR links for an initiative's newest run
    */
   router.get('/:key/status', (req: Request, res: Response) => {
-    const key = getStringParam(req.params.key);
-    if (key.length > 64 || !INITIATIVE_KEY.test(key)) {
-      res.status(400).json({ error: 'Validation error', field: 'key', message: 'Expected an initiative key such as ABC-123' });
+    let key = getStringParam(req.params.key);
+    if (!ISSUE_NUMBER.test(key) && (key.length > 64 || !INITIATIVE_KEY.test(key))) {
+      res.status(400).json({ error: 'Validation error', field: 'key', message: 'Expected an initiative key such as ABC-123, or its number' });
       return;
     }
     try {
+      if (ISSUE_NUMBER.test(key)) {
+        const keys = runsRepo.findInitiativeKeysByNumber(key);
+        if (keys.length > 1) {
+          res.status(409).json({ error: `Several initiatives are numbered ${key}: ${keys.join(', ')}. Pass the full key.` });
+          return;
+        }
+        key = keys[0] ?? key;
+      }
       const run = runsRepo.getLatestRunForKey(key);
       if (!run) {
         res.status(404).json({ error: `No run found for ${key}` });

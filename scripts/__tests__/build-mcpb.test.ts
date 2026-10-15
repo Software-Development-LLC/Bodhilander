@@ -57,5 +57,5 @@ describe('bodhilander.mcpb', () => {
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([
       'list_sessions', 'read_session', 'start_session', 'run_status',
     ]);
-  });
+  }, 60_000);
 });

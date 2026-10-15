@@ -3,14 +3,22 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 let listens = 0;
 let releaseListen: () => void = () => {};
 let failListen: (err: Error) => void = () => {};
+const closedSockets: string[] = [];
 let unpairHook: ((deviceId: string) => void) | undefined;
 
 mock.module('electron-log', () => ({ default: { info() {}, warn() {}, error() {}, debug() {} } }));
 mock.module('../pairing/pairing-manager', () => ({
-  PairingManager: class { getDeviceCount() { return 0; } },
+  PairingManager: class {
+    getDeviceCount() { return 0; }
+    unpairDevice(id: string) { return id === 'device-9'; }
+  },
 }));
 mock.module('../ws-server', () => ({
-  createWsServer: () => ({ close() {}, getClientCount: () => 0, closeConnectionsForDevice() {} }),
+  createWsServer: () => ({
+    close() {},
+    getClientCount: () => 0,
+    closeConnectionsForDevice(id: string) { closedSockets.push(id); },
+  }),
 }));
 mock.module('../http-server', () => ({
   createHttpServer: async (config: { onDeviceUnpaired?: (id: string) => void }) => {
@@ -71,5 +79,24 @@ describe('ApiServer.start', () => {
     releaseListen();
     expect((await retried).port).toBe(8443);
     expect(listens).toBe(2);
+  });
+
+  test('unpairDevice closes the device\'s WebSockets and announces it', async () => {
+    const started = server.start();
+    await Promise.resolve();
+    releaseListen();
+    await started;
+    closedSockets.length = 0;
+    const seen: string[] = [];
+    server.on('deviceUnpaired', (id: string) => seen.push(id));
+    expect(server.unpairDevice('device-9')).toBe(true);
+    expect(closedSockets).toEqual(['device-9']);
+    expect(seen).toEqual(['device-9']);
+  });
+
+  test('unpairing a device that does not exist closes nothing', async () => {
+    closedSockets.length = 0;
+    expect(server.unpairDevice('nobody')).toBe(false);
+    expect(closedSockets).toEqual([]);
   });
 });

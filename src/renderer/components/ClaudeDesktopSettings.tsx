@@ -59,9 +59,10 @@ export function ClaudeDesktopSettings() {
         Bodhilander knows, and check run status. It connects only to this computer, as its own paired device.
       </p>
       <p className="settings-hint">
-        That device has Control and Modify permission, so any program running as you that reads its credential can
-        do what a fully trusted paired device can. Text Claude Desktop reads from one session can shape the prompt it
-        sends to another.
+        Its device is accepted only from this computer, and only for those actions: it cannot change, stop or delete
+        sessions, manage paired devices, or open a live connection, and it can type only into sessions it started.
+        Any program running as you can read its credential, and text Claude Desktop reads from one session can shape
+        the prompt it sends to another.
       </p>
 
       <div className="settings-group">

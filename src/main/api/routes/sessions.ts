@@ -7,6 +7,9 @@
 import { Router, Request, Response } from 'express';
 import log from 'electron-log';
 import * as sessionsRepo from '../../repositories/sessions';
+import * as groupsRepo from '../../repositories/groups';
+import { findKnownRepo } from '../../../shared/known-repos';
+import { isClaudeDesktopDevice, recordClaudeDesktopSession } from '../claude-desktop-scope';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as chatEventsRepo from '../../repositories/chat-events';
 import { ptyManager } from '../../pty-manager';
@@ -65,6 +68,13 @@ function parseLimitParam(raw: string | undefined): number | null {
     return null;
   }
   return Math.min(Math.floor(parsed), CHAT_EVENTS_MAX_LIMIT);
+}
+
+/** A Claude Desktop session always runs Claude Code, in a known repo's own group. */
+function claudeDesktopTarget(workingDir: unknown): { groupId: string; workingDir: string; launchClaude: true } | null {
+  if (typeof workingDir !== 'string') return null;
+  const repo = findKnownRepo(workingDir, groupsRepo.getAllGroups(), sessionsRepo.getAllSessions(), process.platform);
+  return repo ? { groupId: repo.groupId, workingDir: repo.dir, launchClaude: true } : null;
 }
 
 export function createSessionsRouter(): Router {
@@ -177,7 +187,14 @@ export function createSessionsRouter(): Router {
     validateCreateSession,
     async (req: Request, res: Response) => {
       try {
-        const { groupId, name, workingDir, launchClaude } = req.body;
+        const fromDesktop = isClaudeDesktopDevice(req.device);
+        const target = fromDesktop ? claudeDesktopTarget(req.body.workingDir) : req.body;
+        if (!target) {
+          res.status(403).json({ error: 'Claude Desktop can only start sessions in a repo Bodhilander knows' });
+          return;
+        }
+        const { groupId, workingDir, launchClaude } = target;
+        const { name } = req.body;
 
         // Generate UUID for new session
         const id = generateUUID();
@@ -204,6 +221,7 @@ export function createSessionsRouter(): Router {
         };
 
         sessionsRepo.createSession(session);
+        if (fromDesktop) recordClaudeDesktopSession(id);
         routeNewSessionByUsage(id);
 
         // Log session start event (BDHLNDR-17)

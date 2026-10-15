@@ -2,8 +2,8 @@
  * The four tools Claude Desktop sees, each a thin mapping onto routes the
  * local API already serves. Nothing here reaches the shell directly.
  */
-import * as path from 'path';
 import type { Group, Session } from '../shared/types';
+import { KnownRepo, knownRepos, normalizeRepoPath, pathApi } from '../shared/known-repos';
 import type { PersistedChatEvent } from '../main/api/chat-parser/types';
 import { ApiClient, ToolError } from './api-client';
 
@@ -77,7 +77,7 @@ export const TOOLS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        issue: { type: 'string', description: 'The initiative key, e.g. "BDHLNDR-401".' },
+        issue: { type: 'string', description: 'The initiative key, e.g. "BDHLNDR-401", or just its number, e.g. "401".' },
       },
       required: ['issue'],
       additionalProperties: false,
@@ -87,6 +87,7 @@ export const TOOLS: ToolDefinition[] = [
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INITIATIVE_KEY = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+const ISSUE_NUMBER = /^#?(\d{1,9})$/;
 const AGENT_NAME = /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,99}$/;
 const EVENT_TEXT_MAX = 2000;
 const READ_OUTPUT_MAX = 40_000;
@@ -94,6 +95,8 @@ const PROMPT_MAX = 50_000;
 const TRUST_DIALOG = /trust (the files|this folder)|Do you trust/i;
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
+const PROMPT_LEAD = 'Task from Claude Desktop:\n\n';
+const INPUT_BOX = /\? for shortcuts|^[\s│|]*[>❯]\s/m;
 
 function stringArg(args: Record<string, unknown>, key: string, required: true): string;
 function stringArg(args: Record<string, unknown>, key: string, required: false): string | undefined;
@@ -182,33 +185,6 @@ async function readSession(ctx: ToolContext, args: Record<string, unknown>): Pro
   };
 }
 
-interface KnownRepo {
-  dir: string;
-  groupId: string;
-  groupName: string | null;
-}
-
-function normalize(dir: string, platform: NodeJS.Platform): string {
-  const p = platform === 'win32' ? path.win32 : path.posix;
-  const resolved = p.resolve(dir);
-  return platform === 'win32' || platform === 'darwin' ? resolved.toLowerCase() : resolved;
-}
-
-function knownRepos(groups: Group[], sessions: Session[], platform: NodeJS.Platform): KnownRepo[] {
-  const seen = new Map<string, KnownRepo>();
-  for (const g of groups) {
-    if (!g.workingDir) continue;
-    const key = normalize(g.workingDir, platform);
-    if (!seen.has(key)) seen.set(key, { dir: g.workingDir, groupId: g.id, groupName: g.name });
-  }
-  for (const s of sessions) {
-    if (!s.workingDir) continue;
-    const key = normalize(s.workingDir, platform);
-    if (!seen.has(key)) seen.set(key, { dir: s.workingDir, groupId: s.groupId, groupName: null });
-  }
-  return [...seen.values()];
-}
-
 export function resolveRepo(
   repo: string,
   groups: Group[],
@@ -216,10 +192,10 @@ export function resolveRepo(
   platform: NodeJS.Platform,
 ): KnownRepo {
   const known = knownRepos(groups, sessions, platform);
-  const p = platform === 'win32' ? path.win32 : path.posix;
+  const p = pathApi(platform);
   const wanted = repo.toLowerCase();
   const matches = /[\\/]/.test(repo)
-    ? known.filter((k) => normalize(k.dir, platform) === normalize(repo, platform))
+    ? known.filter((k) => normalizeRepoPath(k.dir, platform) === normalizeRepoPath(repo, platform))
     : known.filter((k) => p.basename(k.dir).toLowerCase() === wanted || k.groupName?.toLowerCase() === wanted);
   if (matches.length === 1) return matches[0];
   const listing = (matches.length > 1 ? matches : known).slice(0, 20).map((k) => k.dir).join(', ');
@@ -235,11 +211,29 @@ export function sanitizePrompt(prompt: string): string {
   return prompt
     .replace(/\r\n?/g, '\n')
     // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
 }
+
+/**
+ * What is pasted into Claude Code. The fixed first line means the caller's
+ * text never starts the input, where `!` would run a shell command and `/` a
+ * slash command.
+ */
+export function composePrompt(prompt: string, agent?: string): string {
+  const handoff = agent ? `Use the ${agent} subagent for this task.\n\n` : '';
+  return `${PROMPT_LEAD}${handoff}${prompt}`;
+}
+
+// eslint-disable-next-line no-control-regex
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g;
 
 type Readiness = { ready: true } | { ready: false; reason: string };
 
+/**
+ * A new session reads 'idle' before anything has run, so idle alone proves
+ * nothing. Ready means the state has moved since creation and Claude Code's
+ * input box is on screen.
+ */
 async function waitForPrompt(ctx: ToolContext, id: string): Promise<Readiness> {
   const started = ctx.now();
   await ctx.sleep(ctx.settleMs);
@@ -248,15 +242,17 @@ async function waitForPrompt(ctx: ToolContext, id: string): Promise<Readiness> {
     if (session.state === 'error' || session.state === 'stopped') {
       return { ready: false, reason: `the session ${session.state === 'error' ? 'hit an error' : 'stopped'} while starting` };
     }
-    if (session.state === 'idle' || session.state === 'waiting') {
+    const moved = new Date(session.lastActivityAt).getTime() > new Date(session.createdAt).getTime();
+    if (moved && (session.state === 'idle' || session.state === 'waiting')) {
       const { buffer } = await ctx.api.get<{ buffer: string }>(`/terminal/${id}/buffer`);
-      if (TRUST_DIALOG.test(buffer.slice(-4000))) {
+      const screen = buffer.slice(-4000).replace(ANSI, '');
+      if (TRUST_DIALOG.test(screen)) {
         return { ready: false, reason: 'Claude Code is asking whether to trust this folder; answer it in Bodhilander' };
       }
-      if (session.state === 'idle' && buffer.trim().length > 0) return { ready: true };
       if (session.state === 'waiting') {
         return { ready: false, reason: 'Claude Code is waiting on a question; answer it in Bodhilander' };
       }
+      if (INPUT_BOX.test(screen)) return { ready: true };
     }
     if (ctx.now() - started >= ctx.readyTimeoutMs) {
       return { ready: false, reason: `Claude Code was not ready within ${Math.round(ctx.readyTimeoutMs / 1000)}s` };
@@ -283,7 +279,7 @@ async function startSession(ctx: ToolContext, args: Record<string, unknown>): Pr
 
   const { session } = await ctx.api.post<{ session: Session }>('/sessions', {
     groupId: target.groupId,
-    name: name ?? `Claude Desktop: ${path.basename(target.dir)}`,
+    name: name ?? `Claude Desktop: ${pathApi(ctx.platform).basename(target.dir)}`,
     workingDir: target.dir,
     launchClaude: true,
   });
@@ -293,7 +289,7 @@ async function startSession(ctx: ToolContext, args: Record<string, unknown>): Pr
   if (!readiness.ready) {
     return { session: summary, promptDelivered: false, reason: `${readiness.reason}. The prompt was not sent.` };
   }
-  const text = agent ? `Use the ${agent} subagent for this task.\n\n${prompt}` : prompt;
+  const text = composePrompt(prompt, agent);
   await ctx.api.post(`/terminal/${session.id}/input`, { data: `${PASTE_START}${text}${PASTE_END}` });
   // Enter arrives as its own keystroke; inside the paste it would be a newline.
   await ctx.sleep(300);
@@ -303,8 +299,10 @@ async function startSession(ctx: ToolContext, args: Record<string, unknown>): Pr
 
 async function runStatus(ctx: ToolContext, args: Record<string, unknown>): Promise<unknown> {
   const issue = stringArg(args, 'issue', true);
+  const number = ISSUE_NUMBER.exec(issue);
+  if (number) return ctx.api.get(`/runs/${number[1]}/status`);
   if (!INITIATIVE_KEY.test(issue)) {
-    throw new ToolError(`"${issue}" is not an initiative key. Pass it in KEY-123 form, e.g. "BDHLNDR-401".`);
+    throw new ToolError(`"${issue}" is not an initiative key. Pass it as "BDHLNDR-401", "401" or "#401".`);
   }
   return ctx.api.get(`/runs/${encodeURIComponent(issue)}/status`);
 }

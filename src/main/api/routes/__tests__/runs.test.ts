@@ -67,7 +67,7 @@ function snapshot(): string {
 beforeAll(async () => {
   db = new Database(':memory:');
   const pairingManager = new PairingManager();
-  token = pairingManager.createDevice('Claude Desktop', 'claude-desktop', { canControl: false, canModify: false }).token;
+  token = pairingManager.createDevice('Phone', 'ios', { canControl: false, canModify: false }).token;
   const result = await createHttpServer({ port: 0, bindAddress: '127.0.0.1', pairingManager });
   server = result.server;
   baseUrl = `http://127.0.0.1:${result.port}/api/v1/runs`;
@@ -123,6 +123,26 @@ describe('GET /runs/:key/status', () => {
     const before = snapshot();
     await get('/ABC-7/status');
     expect(snapshot()).toBe(before);
+  });
+
+  test('a bare number resolves to the one initiative carrying it', async () => {
+    const body = await (await get('/7/status')).json();
+    expect(body.initiative).toBe('ABC-7');
+    expect(body.run.id).toBe('run-new');
+  });
+
+  test('a number several initiatives share is refused, naming them', async () => {
+    db.prepare(
+      `INSERT INTO runs (id, initiative_key, initiative_dir, harness_path, bodhi_root, state)
+       VALUES ('run-x', 'XYZ-7', '/i', '/h', '/r', 'done')`,
+    ).run();
+    const res = await get('/7/status');
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain('ABC-7, XYZ-7');
+  });
+
+  test('a number that ends no key is 404, and 17 does not match 7', async () => {
+    expect((await get('/17/status')).status).toBe(404);
   });
 
   test('an unknown initiative is 404', async () => {

@@ -150,6 +150,16 @@ class ApiServer extends EventEmitter {
     }
   }
 
+  /** Every unpair goes through here, so the device's WebSockets close with it. */
+  unpairDevice(deviceId: string): boolean {
+    const removed = this.pairingManager.unpairDevice(deviceId);
+    if (removed) {
+      this.wsServer?.closeConnectionsForDevice(deviceId);
+      this.emit('deviceUnpaired', deviceId);
+    }
+    return removed;
+  }
+
   getStatus(): ApiServerStatus {
     return {
       running: this._isRunning,

@@ -283,6 +283,14 @@ export function getLatestRunForKey(initiativeKey: string): RunRow | null {
   return row ? toRun(row) : null;
 }
 
+/** Every initiative key whose number is `issueNumber` (`ABC-401` for 401), in key order. */
+export function findInitiativeKeysByNumber(issueNumber: string): string[] {
+  const rows = getDatabase()
+    .prepare("SELECT DISTINCT initiative_key AS k FROM runs WHERE initiative_key LIKE ? ORDER BY initiative_key")
+    .all(`%-${issueNumber}`) as { k: string }[];
+  return rows.map((r) => r.k).filter((k) => k.endsWith(`-${issueNumber}`));
+}
+
 /** What an event may carry beyond its kind. */
 export interface EventDetail {
   gate?: number;

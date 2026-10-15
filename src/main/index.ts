@@ -1443,12 +1443,7 @@ safeHandle('api:getPairedDevices', () => {
 ipcMain.handle('api:unpairDevice', (_, deviceId: string) => {
   try {
     const apiServer = getApiServer();
-    const success = apiServer.pairingManager.unpairDevice(deviceId);
-    try {
-      claudeDesktopAccess().onDeviceUnpaired();
-    } catch (err) {
-      log.error('[ClaudeDesktop] Failed to remove the extension files after an unpair:', err);
-    }
+    const success = apiServer.unpairDevice(deviceId);
     return { success };
   } catch (error) {
     log.error('[ApiHandlers] Failed to unpair device:', error);
@@ -1496,7 +1491,15 @@ function claudeDesktopAccess(): ClaudeDesktopAccess {
         port: () => apiServer.port,
         start: () => apiServer.start(),
       },
+      unpair: (deviceId) => apiServer.unpairDevice(deviceId),
       extensionPath: claudeDesktopExtensionPath,
+    });
+    apiServer.on('stopped', () => {
+      try {
+        claudeDesktopAccessInstance?.onApiStopped();
+      } catch (err) {
+        log.error('[ClaudeDesktop] Failed to remove the discovery file:', err);
+      }
     });
     apiServer.on('deviceUnpaired', () => {
       try {
@@ -1904,6 +1907,11 @@ app.on('before-quit', (event) => {
         }
         stopBoardWatcherService();
         stopRunLoopService();
+        try {
+          claudeDesktopAccessInstance?.onApiStopped();
+        } catch (e) {
+          log.error('Error removing the Claude Desktop discovery file on quit:', e);
+        }
       },
       closeDatabase,
       logError: (message, err) => log.error(message, err),

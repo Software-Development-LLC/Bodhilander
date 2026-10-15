@@ -1,7 +1,8 @@
 /**
  * Claude Desktop access: a dedicated paired device whose credential, and the
  * API port, are written where the Claude Desktop extension looks for them.
- * The token lives only in a user-only file; unpairing invalidates it at once.
+ * The server confines the token to loopback and the extension's routes, and
+ * the discovery file exists only while the API is up.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -25,7 +26,6 @@ export interface AccessPairing {
     platform: string,
     permissions: { canControl: boolean; canModify: boolean },
   ): { device: PairedDevice; token: string };
-  unpairDevice(deviceId: string): boolean;
   validateToken(token: string): PairedDevice | null;
 }
 
@@ -39,6 +39,8 @@ export interface AccessDeps {
   userData: string;
   pairing: AccessPairing;
   api: AccessApi;
+  /** Unpairs through the API server, so the device's open connections close too. */
+  unpair: (deviceId: string) => boolean;
   extensionPath: () => string | null;
 }
 
@@ -91,9 +93,9 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
   }
 
   function status(): ClaudeDesktopStatus {
-    const device = ourDevices()[0] ?? null;
+    const device = currentDevice();
     return {
-      enabled: device !== null && fs.existsSync(discoveryFile),
+      enabled: device !== null,
       deviceId: device?.id ?? null,
       apiRunning: deps.api.isRunning(),
       port: deps.api.port(),
@@ -111,7 +113,7 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
       }
     }
     if (!currentDevice()) {
-      for (const stale of ourDevices()) deps.pairing.unpairDevice(stale.id);
+      for (const stale of ourDevices()) deps.unpair(stale.id);
       const { token } = deps.pairing.createDevice(CLAUDE_DESKTOP_DEVICE_NAME, CLAUDE_DESKTOP_PLATFORM, {
         canControl: true,
         canModify: true,
@@ -124,7 +126,7 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
   }
 
   function disable(): ClaudeDesktopStatus {
-    for (const device of ourDevices()) deps.pairing.unpairDevice(device.id);
+    for (const device of ourDevices()) deps.unpair(device.id);
     removeFiles();
     log.info('[ClaudeDesktop] Access disabled');
     return status();
@@ -132,7 +134,12 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
 
   /** The API can come back on a different port; an enabled extension follows it. */
   function onApiStarted(port: number): void {
-    if (fs.existsSync(discoveryFile) && currentDevice()) writeDiscovery(port);
+    if (currentDevice()) writeDiscovery(port);
+  }
+
+  /** A port nothing of ours listens on must not be advertised: another process could take it. */
+  function onApiStopped(): void {
+    fs.rmSync(discoveryFile, { force: true });
   }
 
   /** Unpairing from the device list leaves nothing behind for the extension to read. */
@@ -142,7 +149,7 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
     log.info('[ClaudeDesktop] Device unpaired; extension files removed');
   }
 
-  return { status, enable, disable, onApiStarted, onDeviceUnpaired, dir: claudeDesktopDir(deps.userData) };
+  return { status, enable, disable, onApiStarted, onApiStopped, onDeviceUnpaired, dir: claudeDesktopDir(deps.userData) };
 }
 
 export type ClaudeDesktopAccess = ReturnType<typeof createClaudeDesktopAccess>;

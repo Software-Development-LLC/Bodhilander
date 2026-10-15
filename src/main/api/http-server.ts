@@ -14,6 +14,7 @@ import rateLimit from 'express-rate-limit';
 import log from 'electron-log';
 import { PairingManager } from './pairing/pairing-manager';
 import { authenticateDevice } from './middleware/auth';
+import { getClientIp, isLoopbackIp } from './client-ip';
 import { createSessionsRouter } from './routes/sessions';
 import { createGroupsRouter } from './routes/groups';
 import { createSystemRouter } from './routes/system';
@@ -46,7 +47,7 @@ export interface HttpServerResult {
  */
 function isLocalNetworkIp(ip: string): boolean {
   // Allow loopback
-  if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') {
+  if (isLoopbackIp(ip)) {
     return true;
   }
 
@@ -65,16 +66,6 @@ function isLocalNetworkIp(ip: string): boolean {
   ];
 
   return privateRanges.some(range => range.test(ip));
-}
-
-/**
- * Extract client IP from request
- */
-function getClientIp(req: Request): string {
-  // Don't trust X-Forwarded-For - we're not behind a proxy
-  const ip = req.socket.remoteAddress || '';
-  // Handle IPv4-mapped IPv6 addresses
-  return ip.replace(/^::ffff:/, '');
 }
 
 /**

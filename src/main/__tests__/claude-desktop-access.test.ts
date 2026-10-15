@@ -25,6 +25,7 @@ const {
 } = await import('../../shared/claude-desktop');
 
 let userData: string;
+let unpaired: string[];
 let pairing: InstanceType<typeof PairingManager>;
 let api: { running: boolean; port: number | null; startPort: number; startError: Error | null; starts: number };
 
@@ -43,6 +44,10 @@ function access() {
         return { port: api.startPort };
       },
     },
+    unpair: (id) => {
+      unpaired.push(id);
+      return pairing.unpairDevice(id);
+    },
     extensionPath: () => null,
   });
 }
@@ -55,6 +60,7 @@ beforeEach(() => {
   pairing = new PairingManager();
   userData = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-cd-'));
   api = { running: true, port: 8443, startPort: 8450, startError: null, starts: 0 };
+  unpaired = [];
 });
 
 afterEach(() => {
@@ -160,6 +166,37 @@ describe('disable and unpair', () => {
     pairing.unpairDevice(phone.device.id);
     a.onDeviceUnpaired();
     expect(read().port).toBe(8443);
+  });
+});
+
+describe('unpairing goes through the API server', () => {
+  test('disable unpairs through the injected path, never the pairing manager directly', async () => {
+    await access().enable();
+    const id = ours()[0].id;
+    access().disable();
+    expect(unpaired).toEqual([id]);
+  });
+});
+
+describe('the discovery file follows the API server', () => {
+  test('stopping the API removes the discovery file but keeps the credential and the device', async () => {
+    const a = access();
+    await a.enable();
+    const { token } = read();
+    a.onApiStopped();
+    expect(fs.existsSync(discoveryPath(userData))).toBe(false);
+    expect(fs.existsSync(credentialPath(userData))).toBe(true);
+    expect(() => read()).toThrow(NOT_ENABLED_MESSAGE);
+    expect(a.status().enabled).toBe(true);
+    expect(pairing.validateToken(token)).not.toBeNull();
+  });
+
+  test('starting again rewrites it with the new port', async () => {
+    const a = access();
+    await a.enable();
+    a.onApiStopped();
+    a.onApiStarted(9100);
+    expect(read().port).toBe(9100);
   });
 });
 

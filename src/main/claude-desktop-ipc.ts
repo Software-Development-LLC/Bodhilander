@@ -17,6 +17,8 @@ export interface ClaudeDesktopIpcDeps {
   copyFile?: (from: string, to: string) => void;
 }
 
+const STARTED_API =
+  'The local API server was stopped, so it has been started: Claude Desktop reaches Bodhilander through it.';
 const NO_EXTENSION = 'This build does not include the Claude Desktop extension.';
 
 async function attempt(action: () => Promise<ClaudeDesktopActionResult>): Promise<ClaudeDesktopActionResult> {
@@ -34,7 +36,12 @@ export function registerClaudeDesktopIpc(deps: ClaudeDesktopIpcDeps): void {
   deps.handle('claudeDesktop:getStatus', () => deps.access().status());
 
   deps.handle('claudeDesktop:enable', () =>
-    attempt(async () => ({ success: true, status: await deps.access().enable() })));
+    attempt(async () => {
+      const wasRunning = deps.access().status().apiRunning;
+      const status = await deps.access().enable();
+      if (wasRunning || !status.apiRunning) return { success: true, status };
+      return { success: true, status, message: STARTED_API };
+    }));
 
   deps.handle('claudeDesktop:disable', () =>
     attempt(async () => ({ success: true, status: deps.access().disable() })));
