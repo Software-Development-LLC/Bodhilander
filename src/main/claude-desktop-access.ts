@@ -1,14 +1,14 @@
 /**
- * Claude Desktop access: a dedicated paired device whose credential, and the
- * API port, are written where the Claude Desktop extension looks for them.
- * The server confines the token to loopback and the extension's routes, and
- * the discovery file exists only while the API is up.
+ * Claude Desktop access: a dedicated paired device, its credential, and a
+ * discovery file holding the API port that exists only while the API is up.
+ * The server confines the token to loopback and the extension's routes.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import log from 'electron-log';
 import type { PairedDevice } from './api/pairing/pairing-manager';
 import type { ClaudeDesktopStatus } from '../shared/types';
+import { forgetClaudeDesktopSessions } from './api/claude-desktop-scope';
 import {
   CLAUDE_DESKTOP_DEVICE_NAME,
   CLAUDE_DESKTOP_PLATFORM,
@@ -103,7 +103,17 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
     };
   }
 
-  async function enable(): Promise<ClaudeDesktopStatus> {
+  let enabling: Promise<ClaudeDesktopStatus> | null = null;
+
+  /** Overlapping calls share one run, so two devices are never paired at once. */
+  function enable(): Promise<ClaudeDesktopStatus> {
+    enabling ??= enableOnce().finally(() => {
+      enabling = null;
+    });
+    return enabling;
+  }
+
+  async function enableOnce(): Promise<ClaudeDesktopStatus> {
     let port = deps.api.port();
     if (!deps.api.isRunning() || port === null) {
       try {
@@ -127,6 +137,7 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
 
   function disable(): ClaudeDesktopStatus {
     for (const device of ourDevices()) deps.unpair(device.id);
+    forgetClaudeDesktopSessions();
     removeFiles();
     log.info('[ClaudeDesktop] Access disabled');
     return status();
@@ -145,6 +156,7 @@ export function createClaudeDesktopAccess(deps: AccessDeps) {
   /** Unpairing from the device list leaves nothing behind for the extension to read. */
   function onDeviceUnpaired(): void {
     if (ourDevices().length > 0) return;
+    forgetClaudeDesktopSessions();
     removeFiles();
     log.info('[ClaudeDesktop] Device unpaired; extension files removed');
   }

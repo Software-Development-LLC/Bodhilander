@@ -96,7 +96,6 @@ const TRUST_DIALOG = /trust (the files|this folder)|Do you trust/i;
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 const PROMPT_LEAD = 'Task from Claude Desktop:\n\n';
-const INPUT_BOX = /\? for shortcuts|^[\s│|]*[>❯]\s/m;
 
 function stringArg(args: Record<string, unknown>, key: string, required: true): string;
 function stringArg(args: Record<string, unknown>, key: string, required: false): string | undefined;
@@ -227,6 +226,12 @@ export function composePrompt(prompt: string, agent?: string): string {
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g;
 
+/** Claude Code's prompt: its footer hint, or a line that opens with its `>` marker. */
+function showsInputBox(screen: string): boolean {
+  if (screen.includes('? for shortcuts')) return true;
+  return screen.split('\n').some((line) => /^[│|]?\s?[>❯]\s/.test(line.trimStart()));
+}
+
 type Readiness = { ready: true } | { ready: false; reason: string };
 
 /**
@@ -252,7 +257,7 @@ async function waitForPrompt(ctx: ToolContext, id: string): Promise<Readiness> {
       if (session.state === 'waiting') {
         return { ready: false, reason: 'Claude Code is waiting on a question; answer it in Bodhilander' };
       }
-      if (INPUT_BOX.test(screen)) return { ready: true };
+      if (showsInputBox(screen)) return { ready: true };
     }
     if (ctx.now() - started >= ctx.readyTimeoutMs) {
       return { ready: false, reason: `Claude Code was not ready within ${Math.round(ctx.readyTimeoutMs / 1000)}s` };

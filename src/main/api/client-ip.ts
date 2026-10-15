@@ -9,7 +9,7 @@ export function isLoopbackIp(ip: string): boolean {
  */
 export function getClientIp(req: Request): string {
   // Don't trust X-Forwarded-For - we're not behind a proxy
-  const ip = req.socket.remoteAddress || '';
+  const ip = req.socket.remoteAddress ?? '';
   // Handle IPv4-mapped IPv6 addresses
   return ip.replace(/^::ffff:/, '');
 }

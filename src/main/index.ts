@@ -618,8 +618,9 @@ function createWindow(): void {
 
     // Auto-start the API server — it serves the relay/PWA clients and the
     // hook callbacks that feed session_events. Claude Desktop access listens
-    // first, so an enabled extension follows the port this start lands on.
-    claudeDesktopAccess();
+    // first, and drops any discovery file a crash left, so the extension only
+    // ever sees the port this start lands on.
+    claudeDesktopAccess().onApiStopped();
     getApiServer().start().then(({ port }) => {
       log.info(`[Main] API server auto-started on port ${port}`);
     }).catch((err) => {

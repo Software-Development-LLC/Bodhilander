@@ -15,6 +15,8 @@ mock.module('electron-log', () => ({ default: { info() {}, warn() {}, error() {}
 const { PairingManager } = await import('../api/pairing/pairing-manager');
 const { createClaudeDesktopAccess } = await import('../claude-desktop-access');
 const { loadConnection, readFileOrNull } = await import('../../mcp-shim/api-client');
+const { claudeDesktopRefusal, recordClaudeDesktopSession } = await import('../api/claude-desktop-scope');
+const SESSION = '11111111-2222-4333-8444-555555555555';
 const {
   CLAUDE_DESKTOP_DEVICE_NAME,
   CLAUDE_DESKTOP_PLATFORM,
@@ -166,6 +168,26 @@ describe('disable and unpair', () => {
     pairing.unpairDevice(phone.device.id);
     a.onDeviceUnpaired();
     expect(read().port).toBe(8443);
+  });
+});
+
+describe('overlapping enables', () => {
+  test('pair exactly one device', async () => {
+    const a = access();
+    await Promise.all([a.enable(), a.enable()]);
+    expect(ours()).toHaveLength(1);
+    expect(pairing.validateToken(read().token)?.id).toBe(ours()[0].id);
+  });
+});
+
+describe('turning access off forgets the sessions it started', () => {
+  test('a re-enabled device cannot type into sessions the old one started', async () => {
+    const a = access();
+    await a.enable();
+    recordClaudeDesktopSession(SESSION);
+    expect(claudeDesktopRefusal('POST', '127.0.0.1', `/api/v1/terminal/${SESSION}/input`)).toBeNull();
+    a.disable();
+    expect(claudeDesktopRefusal('POST', '127.0.0.1', `/api/v1/terminal/${SESSION}/input`)).not.toBeNull();
   });
 });
 

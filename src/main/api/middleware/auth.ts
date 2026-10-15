@@ -51,7 +51,7 @@ export function authenticateDevice(pairingManager: PairingManager) {
     if (isClaudeDesktopDevice(device)) {
       const refusal = claudeDesktopRefusal(req.method, getClientIp(req), req.originalUrl);
       if (refusal) {
-        log.warn(`[Auth] Claude Desktop request refused: ${req.method} ${req.originalUrl.split('?')[0]}`);
+        log.warn(`[Auth] Claude Desktop request refused from ${getClientIp(req)}: ${req.method} ${req.originalUrl.split('?')[0]}`);
         res.status(403).json({ error: refusal });
         return;
       }
