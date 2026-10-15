@@ -226,10 +226,14 @@ export function composePrompt(prompt: string, agent?: string): string {
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g;
 
-/** Claude Code's prompt: its footer hint, or a line that opens with its `>` marker. */
-function showsInputBox(screen: string): boolean {
-  if (screen.includes('? for shortcuts')) return true;
-  return screen.split('\n').some((line) => /^[│|]?\s?[>❯]\s/.test(line.trimStart()));
+/**
+ * Claude Code's input box: its permission-mode footer, or its `❯` marker. At
+ * full width the rule above the input fills the line, so the terminal emits
+ * no newline and the marker follows the rule directly.
+ */
+export function showsInputBox(screen: string): boolean {
+  if (screen.includes('shift+tab to cycle') || screen.includes(' mode on')) return true;
+  return /(^|─)[>❯]\s/m.test(screen);
 }
 
 type Readiness = { ready: true } | { ready: false; reason: string };

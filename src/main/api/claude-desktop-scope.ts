@@ -40,6 +40,19 @@ export function forgetClaudeDesktopSessions(): void {
   ownedSessions.clear();
 }
 
+interface ExitSource {
+  on(event: 'exit', listener: (event: { id: string }) => void): unknown;
+}
+
+const watchedSources = new WeakSet<ExitSource>();
+
+/** Ownership ends with the Claude Code it started: a later restart may be a plain shell. */
+export function forgetSessionsOnExit(source: ExitSource): void {
+  if (watchedSources.has(source)) return;
+  watchedSources.add(source);
+  source.on('exit', ({ id }) => ownedSessions.delete(id.toLowerCase()));
+}
+
 /** Why this request is refused, or null when the Claude Desktop device may make it. */
 export function claudeDesktopRefusal(method: string, clientIp: string, url: string): string | null {
   if (!isLoopbackIp(clientIp)) return 'Claude Desktop access is only accepted from this computer';

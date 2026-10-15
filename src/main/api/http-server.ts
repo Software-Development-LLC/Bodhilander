@@ -15,6 +15,8 @@ import log from 'electron-log';
 import { PairingManager } from './pairing/pairing-manager';
 import { authenticateDevice } from './middleware/auth';
 import { getClientIp, isLoopbackIp } from './client-ip';
+import { forgetSessionsOnExit } from './claude-desktop-scope';
+import { ptyManager } from '../pty-manager';
 import { createSessionsRouter } from './routes/sessions';
 import { createGroupsRouter } from './routes/groups';
 import { createSystemRouter } from './routes/system';
@@ -88,6 +90,7 @@ function localNetworkOnly(req: Request, res: Response, next: NextFunction): void
  */
 export async function createHttpServer(config: HttpServerConfig): Promise<HttpServerResult> {
   const app = express();
+  forgetSessionsOnExit(ptyManager);
 
   // Security middleware
   app.use(helmet({

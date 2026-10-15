@@ -106,7 +106,7 @@ beforeEach(() => {
   written = [];
   forgetClaudeDesktopSessions();
   patchable.createSession = (id, cwd, launch) => { spawned.push({ id, cwd, launch }); };
-  patchable.getSession = () => ({});
+  patchable.getSession = () => ({ provider: { id: 'claude' } });
   patchable.write = (id, data) => { written.push({ id, data }); };
   patchable.getBuffer = () => '> ';
 });
@@ -208,6 +208,29 @@ describe('terminal access', () => {
     expect((await call('POST', `/terminal/${id}/input`, desktopToken, { data: 'hi' })).status).toBe(200);
     expect((await call('GET', `/terminal/${id}/buffer`, desktopToken)).status).toBe(200);
     expect(written).toEqual([{ id, data: 'hi' }]);
+  });
+
+  test('ends when that Claude Code exits', async () => {
+    const created = await (await startAsDesktop()).json() as { session: { id: string } };
+    const id = created.session.id;
+    (ptyManager as unknown as { emit(event: string, payload: unknown): boolean }).emit('exit', { id, exitCode: 0 });
+    expect((await call('POST', `/terminal/${id}/input`, desktopToken, { data: 'hi' })).status).toBe(403);
+    expect(written).toEqual([]);
+  });
+
+  test('is refused while the session runs a plain shell, even one it started', async () => {
+    const created = await (await startAsDesktop()).json() as { session: { id: string } };
+    patchable.getSession = () => ({ provider: null });
+    const res = await call('POST', `/terminal/${created.session.id}/input`, desktopToken, { data: 'whoami\r' });
+    expect(res.status).toBe(403);
+    expect(written).toEqual([]);
+  });
+
+  test('a phone may still type into a shell', async () => {
+    const id = randomUUID();
+    insertSession(id, REPO);
+    patchable.getSession = () => ({ provider: null });
+    expect((await call('POST', `/terminal/${id}/input`, phoneToken, { data: 'ls\r' })).status).toBe(200);
   });
 
   test('is refused for any other session', async () => {

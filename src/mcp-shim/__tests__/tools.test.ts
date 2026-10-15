@@ -3,9 +3,14 @@
  * what it sends, and how it shapes what comes back.
  */
 import { describe, expect, test } from 'bun:test';
-import { callTool, resolveRepo, sanitizePrompt, TOOLS, ToolContext } from '../tools';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { callTool, resolveRepo, sanitizePrompt, showsInputBox, TOOLS, ToolContext } from '../tools';
 import { ApiClient, ToolError } from '../api-client';
 import type { Group, Session } from '../../shared/types';
+
+/** Real Claude Code v2.1.300 screens captured under ConPTY at 120x30, ANSI intact; some trimmed to one cue. */
+const screen = (name: string) => fs.readFileSync(path.join(__dirname, 'fixtures', 'claude-code', `${name}.ansi`), 'utf8');
 
 const SESSION_ID = '11111111-2222-4333-8444-555555555555';
 const GROUP_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -162,6 +167,18 @@ describe('read_session', () => {
   });
 });
 
+/** A start_session whose new session is idle after activity, showing `buffer`. */
+function fakeApiFor(buffer: string) {
+  return fakeApi({
+    'GET /sessions': { sessions: [] },
+    'GET /groups': { groups: [group()] },
+    'POST /sessions': { session: session() },
+    [`GET /sessions/${SESSION_ID}`]: { session: session({ createdAt: new Date(1000), lastActivityAt: new Date(5000) }) },
+    [`GET /terminal/${SESSION_ID}/buffer`]: { buffer },
+    [`POST /terminal/${SESSION_ID}/input`]: { success: true },
+  });
+}
+
 describe('start_session', () => {
   const known = {
     'GET /sessions': {
@@ -172,7 +189,7 @@ describe('start_session', () => {
     },
     'GET /groups': { groups: [group()] },
   };
-  const CLAUDE_PROMPT = '\x1b[2mWelcome to Claude Code\x1b[0m\n╭────╮\n│ > \x1b[7m \x1b[0m│\n╰────╯\n  ? for shortcuts';
+  const CLAUDE_PROMPT = screen('manual-mode');
   const LEAD = 'Task from Claude Desktop:\n\n';
 
   /** 'fresh' is a session that still reads as created: idle, and nothing has happened since. */
@@ -306,6 +323,43 @@ describe('start_session', () => {
     const { json } = await call(context(api), 'start_session', { repo: 'bodhi-api', prompt: 'x' });
     expect(json.promptDelivered).toBe(false);
     expect(json.reason).toContain('hit an error');
+  });
+});
+
+describe('Claude Code input box detection, on real screens', () => {
+  async function delivered(buffer: string): Promise<boolean> {
+    const { api } = fakeApiFor(buffer);
+    const { json } = await call(context(api), 'start_session', { repo: 'bodhi-api', prompt: 'x' });
+    return json.promptDelivered;
+  }
+
+  test.each(['auto-mode', 'manual-mode'])('the full %s screen is ready', async (name) => {
+    expect(await delivered(screen(name))).toBe(true);
+  });
+
+  test('the marker straight after the full-width rule, with no footer, is ready', async () => {
+    const s = screen('input-after-rule');
+    expect(s).not.toContain('mode on');
+    expect(await delivered(s)).toBe(true);
+  });
+
+  test('the marker opening a line, with no footer, is ready', async () => {
+    expect(await delivered(screen('input-at-line-start'))).toBe(true);
+  });
+
+  test('the permission-mode footer alone is ready', async () => {
+    const s = screen('mode-footer-only');
+    expect(s).not.toContain('\u276f');
+    expect(await delivered(s)).toBe(true);
+  });
+
+  test('the startup banner, before the input box is drawn, is not ready', async () => {
+    expect(await delivered(screen('startup-no-input'))).toBe(false);
+  });
+
+  test('the marker is only recognised once the escape codes are stripped', () => {
+    const raw = screen('input-after-rule');
+    expect(showsInputBox(raw)).toBe(false);
   });
 });
 

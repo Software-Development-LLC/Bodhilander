@@ -64,6 +64,10 @@ export function ClaudeDesktopSettings() {
         Any program running as you can read its credential, and text Claude Desktop reads from one session can shape
         the prompt it sends to another.
       </p>
+      <p className="settings-hint">
+        Reading is not limited to sessions Claude Desktop started: it can read every session, under every Claude
+        account, and whatever it reads goes into Claude Desktop&apos;s context.
+      </p>
 
       <div className="settings-group">
         <h4>Access</h4>

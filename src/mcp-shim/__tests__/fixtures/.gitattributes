@@ -1,0 +1,2 @@
+# Captured terminal output: bytes are the fixture, so never convert line endings.
+*.ansi -text
