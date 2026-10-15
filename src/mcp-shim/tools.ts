@@ -232,7 +232,7 @@ const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g;
  * no newline and the marker follows the rule directly.
  */
 export function showsInputBox(screen: string): boolean {
-  if (screen.includes('shift+tab to cycle') || screen.includes(' mode on')) return true;
+  if (screen.includes(' mode on')) return true;
   return /(^|─)[>❯]\s/m.test(screen);
 }
 
