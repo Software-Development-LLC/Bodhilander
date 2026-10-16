@@ -353,6 +353,12 @@ describe('Claude Code input box detection, on real screens', () => {
     expect(await delivered(s)).toBe(true);
   });
 
+  test('a screen whose title escape ends with ST rather than BEL is ready', async () => {
+    const s = screen('title-st-terminator');
+    expect(s).toContain('\x1b]0;claude\x1b\\');
+    expect(await delivered(s)).toBe(true);
+  });
+
   test('the startup banner, before the input box is drawn, is not ready', async () => {
     expect(await delivered(screen('startup-no-input'))).toBe(false);
   });
