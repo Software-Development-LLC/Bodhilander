@@ -62,6 +62,9 @@ import type { GuestResizeRequest } from './api/relay/session-tunnel';
 import { remoteSessionEvents } from './api/relay/remote-sessions';
 import { openInEditor, detectAvailableEditors, getEditorOptions, EditorType } from './editor-launcher';
 import { dispatchAttentionPush } from './api/web-push/dispatcher';
+import { createClaudeDesktopAccess, ClaudeDesktopAccess } from './claude-desktop-access';
+import { MCPB_FILE_NAME } from '../shared/claude-desktop';
+import { registerClaudeDesktopIpc } from './claude-desktop-ipc';
 
 /**
  * How often parked sessions are reconsidered for going home (#207).
@@ -614,7 +617,10 @@ function createWindow(): void {
     teamsAuthService.initialize();
 
     // Auto-start the API server — it serves the relay/PWA clients and the
-    // hook callbacks that feed session_events.
+    // hook callbacks that feed session_events. Claude Desktop access listens
+    // first, and drops any discovery file a crash left, so the extension only
+    // ever sees the port this start lands on.
+    if (!getApiServer().isRunning) claudeDesktopAccess().onApiStopped();
     getApiServer().start().then(({ port }) => {
       log.info(`[Main] API server auto-started on port ${port}`);
     }).catch((err) => {
@@ -1438,7 +1444,7 @@ safeHandle('api:getPairedDevices', () => {
 ipcMain.handle('api:unpairDevice', (_, deviceId: string) => {
   try {
     const apiServer = getApiServer();
-    const success = apiServer.pairingManager.unpairDevice(deviceId);
+    const success = apiServer.unpairDevice(deviceId);
     return { success };
   } catch (error) {
     log.error('[ApiHandlers] Failed to unpair device:', error);
@@ -1460,6 +1466,70 @@ ipcMain.handle('api:updateDevicePermissions', (_, deviceId: string, permissions:
 safeHandle('api:hasPairingCode', () => {
   const apiServer = getApiServer();
   return { active: apiServer.pairingManager.hasActivePairingCode() };
+});
+
+// ============================================================================
+// Claude Desktop IPC Handlers
+// ============================================================================
+
+function claudeDesktopExtensionPath(): string | null {
+  const file = app.isPackaged
+    ? path.join(process.resourcesPath, MCPB_FILE_NAME)
+    : path.join(app.getAppPath(), 'dist', 'mcpb', MCPB_FILE_NAME);
+  return fs.existsSync(file) ? file : null;
+}
+
+let claudeDesktopAccessInstance: ClaudeDesktopAccess | null = null;
+
+function claudeDesktopAccess(): ClaudeDesktopAccess {
+  if (!claudeDesktopAccessInstance) {
+    const apiServer = getApiServer();
+    claudeDesktopAccessInstance = createClaudeDesktopAccess({
+      userData: app.getPath('userData'),
+      pairing: apiServer.pairingManager,
+      api: {
+        isRunning: () => apiServer.isRunning,
+        port: () => apiServer.port,
+        start: () => apiServer.start(),
+      },
+      unpair: (deviceId) => apiServer.unpairDevice(deviceId),
+      extensionPath: claudeDesktopExtensionPath,
+    });
+    apiServer.on('stopped', () => {
+      try {
+        claudeDesktopAccessInstance?.onApiStopped();
+      } catch (err) {
+        log.error('[ClaudeDesktop] Failed to remove the discovery file:', err);
+      }
+    });
+    apiServer.on('deviceUnpaired', () => {
+      try {
+        claudeDesktopAccessInstance?.onDeviceUnpaired();
+      } catch (err) {
+        log.error('[ClaudeDesktop] Failed to remove the extension files after an unpair:', err);
+      }
+    });
+    apiServer.on('started', ({ port }: { port: number }) => {
+      try {
+        claudeDesktopAccessInstance?.onApiStarted(port);
+      } catch (err) {
+        log.error('[ClaudeDesktop] Failed to refresh the discovery file:', err);
+      }
+    });
+  }
+  return claudeDesktopAccessInstance;
+}
+
+registerClaudeDesktopIpc({
+  handle: (channel, handler) => safeHandle(channel, handler),
+  access: claudeDesktopAccess,
+  extensionPath: claudeDesktopExtensionPath,
+  openPath: (file) => shell.openPath(file),
+  chooseSavePath: async (defaultName) => {
+    const options = { defaultPath: defaultName, filters: [{ name: 'Claude Desktop Extension', extensions: ['mcpb'] }] };
+    const choice = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options);
+    return choice.canceled || !choice.filePath ? null : choice.filePath;
+  },
 });
 
 // ============================================================================
@@ -1838,6 +1908,11 @@ app.on('before-quit', (event) => {
         }
         stopBoardWatcherService();
         stopRunLoopService();
+        try {
+          claudeDesktopAccessInstance?.onApiStopped();
+        } catch (e) {
+          log.error('Error removing the Claude Desktop discovery file on quit:', e);
+        }
       },
       closeDatabase,
       logError: (message, err) => log.error(message, err),

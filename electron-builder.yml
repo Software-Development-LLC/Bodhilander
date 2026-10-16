@@ -8,6 +8,8 @@ directories:
 
 files:
   - dist/**/*
+  # Shipped once, as an extraResource below.
+  - "!dist/mcpb/**/*"
   - package.json
 
 # Unpack hooks and native modules from asar
@@ -35,6 +37,9 @@ extraResources:
     to: icon.png
   - from: resources/sounds
     to: sounds
+  # The Claude Desktop extension, opened by Settings → Claude Desktop.
+  - from: dist/mcpb/bodhilander.mcpb
+    to: bodhilander.mcpb
 
 # Auto-update configuration
 publish:

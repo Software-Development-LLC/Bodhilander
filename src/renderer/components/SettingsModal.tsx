@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ApiServerStatus, ArrivalReport, HANDOFF_MAX_BYTES, PairedDevice, PairingCode, PortableExportResult, PortableImportResult } from '../../shared/types';
 import { ProviderSettings } from './ProviderSettings';
 import { RemoteHostingSettings } from './RemoteHostingSettings';
+import { ClaudeDesktopSettings } from './ClaudeDesktopSettings';
 import { RunEngineSettings } from './RunEngineSettings';
 import { ClaudeAccountsPanel } from './ClaudeAccountsModal';
 import { HandoffPreparePanel } from './MachineHandoff';
@@ -18,6 +19,7 @@ export type SettingsTab =
   | 'accounts'
   | 'mobile'
   | 'remoteHosting'
+  | 'claudeDesktop'
   | 'runEngine'
   | 'updates';
 
@@ -441,6 +443,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
               Remote Hosting
             </button>
             <button
+              className={navClass('claudeDesktop')}
+              onClick={() => setActiveTab('claudeDesktop')}
+            >
+              Claude Desktop
+            </button>
+            <button
               className={navClass('sound')}
               onClick={() => setActiveTab('sound')}
             >
@@ -826,6 +834,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
             )}
 
             {activeTab === 'remoteHosting' && <RemoteHostingSettings />}
+
+            {activeTab === 'claudeDesktop' && <ClaudeDesktopSettings />}
 
             {activeTab === 'runEngine' && <RunEngineSettings />}
 
