@@ -67,12 +67,3 @@ export function serve(io: Stdio, ctx: ToolContext = createContext()): void {
     finishWhenIdle();
   });
 }
-
-if (typeof module !== 'undefined' && require.main === module) {
-  serve({
-    input: process.stdin,
-    write: (line) => process.stdout.write(line),
-    log: (line) => process.stderr.write(line),
-    done: () => process.exit(0),
-  });
-}

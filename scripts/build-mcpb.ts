@@ -18,7 +18,7 @@ export async function buildMcpb(root: string, outDir: string): Promise<string> {
   fs.mkdirSync(stage, { recursive: true });
 
   await build({
-    entryPoints: [path.join(root, 'src', 'mcp-shim', 'index.ts')],
+    entryPoints: [path.join(root, 'src', 'mcp-shim', 'main.ts')],
     bundle: true,
     platform: 'node',
     target: 'node18',

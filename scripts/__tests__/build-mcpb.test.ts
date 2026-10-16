@@ -41,21 +41,30 @@ describe('bodhilander.mcpb', () => {
     expect(manifest.version).toBe(pkg.version);
   });
 
+  const requests = [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+  ];
+  const runServer = (args: string[]) => spawnSync('node', args, {
+    input: requests.map((r) => JSON.stringify(r)).join('\n') + '\n',
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+
   test('the unpacked server answers MCP under node, with only node built-ins', () => {
-    const requests = [
-      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
-      { jsonrpc: '2.0', id: 2, method: 'tools/list' },
-    ];
-    const run = spawnSync('node', [path.join(unpacked, 'server', 'index.js')], {
-      input: requests.map((r) => JSON.stringify(r)).join('\n') + '\n',
-      encoding: 'utf8',
-      timeout: 30_000,
-    });
+    const run = runServer([path.join(unpacked, 'server', 'index.js')]);
     expect(run.status).toBe(0);
     const [init, list] = run.stdout.trim().split('\n').map((l) => JSON.parse(l));
     expect(init.result.serverInfo).toEqual({ name: 'bodhilander', version: pkg.version });
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([
       'list_sessions', 'read_session', 'start_session', 'run_status',
     ]);
+  }, 60_000);
+
+  test('it also answers when loaded by a wrapper rather than run as the main module', () => {
+    const run = runServer(['-e', 'require(process.argv[1])', path.join(unpacked, 'server', 'index.js')]);
+    expect(run.status).toBe(0);
+    const [init] = run.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    expect(init.result.serverInfo.name).toBe('bodhilander');
   }, 60_000);
 });
