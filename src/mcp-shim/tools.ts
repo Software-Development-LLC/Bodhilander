@@ -224,7 +224,7 @@ export function composePrompt(prompt: string, agent?: string): string {
 }
 
 // eslint-disable-next-line no-control-regex
-const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g;
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 
 /**
  * Claude Code's input box: its permission-mode footer, or its `❯` marker. At
