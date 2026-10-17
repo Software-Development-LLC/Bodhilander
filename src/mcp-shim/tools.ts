@@ -70,6 +70,23 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'send_prompt',
+    description:
+      'Send a follow-up prompt to a Claude Code session that start_session created, once it is idle at its ' +
+      'prompt. Refuses, without typing anything, if the session is busy, waiting on a question, or was not ' +
+      'started from Claude Desktop.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Session id returned by start_session.' },
+        prompt: { type: 'string', description: 'What to tell Claude Code.' },
+        agent: { type: 'string', description: 'Optional subagent to hand the prompt to, e.g. "code-reviewer".' },
+      },
+      required: ['id', 'prompt'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'run_status',
     description:
       "Read-only status of a Bodhilander run-engine initiative: the run's state, each repo's gate progress, " +
@@ -243,26 +260,31 @@ type Readiness = { ready: true } | { ready: false; reason: string };
  * nothing. Ready means the state has moved since creation and Claude Code's
  * input box is on screen.
  */
+/** One look at the session: a verdict, or null while Claude Code is still getting to its prompt. */
+async function inspectPrompt(ctx: ToolContext, id: string): Promise<Readiness | null> {
+  const { session } = await ctx.api.get<{ session: Session }>(`/sessions/${id}`);
+  if (session.state === 'error' || session.state === 'stopped') {
+    return { ready: false, reason: `the session ${session.state === 'error' ? 'hit an error' : 'has stopped'}` };
+  }
+  const moved = new Date(session.lastActivityAt).getTime() > new Date(session.createdAt).getTime();
+  if (!moved || (session.state !== 'idle' && session.state !== 'waiting')) return null;
+  const { buffer } = await ctx.api.get<{ buffer: string }>(`/terminal/${id}/buffer`);
+  const screen = buffer.slice(-4000).replace(ANSI, '');
+  if (TRUST_DIALOG.test(screen)) {
+    return { ready: false, reason: 'Claude Code is asking whether to trust this folder; answer it in Bodhilander' };
+  }
+  if (session.state === 'waiting') {
+    return { ready: false, reason: 'Claude Code is waiting on a question; answer it in Bodhilander' };
+  }
+  return showsInputBox(screen) ? { ready: true } : null;
+}
+
 async function waitForPrompt(ctx: ToolContext, id: string): Promise<Readiness> {
   const started = ctx.now();
   await ctx.sleep(ctx.settleMs);
   for (;;) {
-    const { session } = await ctx.api.get<{ session: Session }>(`/sessions/${id}`);
-    if (session.state === 'error' || session.state === 'stopped') {
-      return { ready: false, reason: `the session ${session.state === 'error' ? 'hit an error' : 'stopped'} while starting` };
-    }
-    const moved = new Date(session.lastActivityAt).getTime() > new Date(session.createdAt).getTime();
-    if (moved && (session.state === 'idle' || session.state === 'waiting')) {
-      const { buffer } = await ctx.api.get<{ buffer: string }>(`/terminal/${id}/buffer`);
-      const screen = buffer.slice(-4000).replace(ANSI, '');
-      if (TRUST_DIALOG.test(screen)) {
-        return { ready: false, reason: 'Claude Code is asking whether to trust this folder; answer it in Bodhilander' };
-      }
-      if (session.state === 'waiting') {
-        return { ready: false, reason: 'Claude Code is waiting on a question; answer it in Bodhilander' };
-      }
-      if (showsInputBox(screen)) return { ready: true };
-    }
+    const verdict = await inspectPrompt(ctx, id);
+    if (verdict) return verdict;
     if (ctx.now() - started >= ctx.readyTimeoutMs) {
       return { ready: false, reason: `Claude Code was not ready within ${Math.round(ctx.readyTimeoutMs / 1000)}s` };
     }
@@ -270,13 +292,26 @@ async function waitForPrompt(ctx: ToolContext, id: string): Promise<Readiness> {
   }
 }
 
-async function startSession(ctx: ToolContext, args: Record<string, unknown>): Promise<unknown> {
-  const repo = stringArg(args, 'repo', true);
+async function typePrompt(ctx: ToolContext, id: string, prompt: string, agent?: string): Promise<void> {
+  const text = composePrompt(prompt, agent);
+  await ctx.api.post(`/terminal/${id}/input`, { data: `${PASTE_START}${text}${PASTE_END}` });
+  // Enter arrives as its own keystroke; inside the paste it would be a newline.
+  await ctx.sleep(300);
+  await ctx.api.post(`/terminal/${id}/input`, { data: '\r' });
+}
+
+function promptArgs(args: Record<string, unknown>): { prompt: string; agent?: string } {
   const prompt = sanitizePrompt(stringArg(args, 'prompt', true));
   const agent = stringArg(args, 'agent', false);
-  const name = stringArg(args, 'name', false);
   if (prompt.length > PROMPT_MAX) throw new ToolError(`"prompt" is longer than ${PROMPT_MAX} characters.`);
   if (agent !== undefined && !AGENT_NAME.test(agent)) throw new ToolError(`"${agent}" is not a valid agent name.`);
+  return { prompt, agent };
+}
+
+async function startSession(ctx: ToolContext, args: Record<string, unknown>): Promise<unknown> {
+  const repo = stringArg(args, 'repo', true);
+  const { prompt, agent } = promptArgs(args);
+  const name = stringArg(args, 'name', false);
   if (name !== undefined && name.length > 200) throw new ToolError('"name" is longer than 200 characters.');
 
   const [{ sessions }, { groups }] = await Promise.all([
@@ -296,14 +331,43 @@ async function startSession(ctx: ToolContext, args: Record<string, unknown>): Pr
   const readiness = await waitForPrompt(ctx, session.id);
   const summary = { id: session.id, name: session.name, repo: target.dir };
   if (!readiness.ready) {
-    return { session: summary, promptDelivered: false, reason: `${readiness.reason}. The prompt was not sent.` };
+    return {
+      session: summary,
+      promptDelivered: false,
+      reason: `${readiness.reason}. The prompt was not sent; retry it with send_prompt once the session is idle.`,
+    };
   }
-  const text = composePrompt(prompt, agent);
-  await ctx.api.post(`/terminal/${session.id}/input`, { data: `${PASTE_START}${text}${PASTE_END}` });
-  // Enter arrives as its own keystroke; inside the paste it would be a newline.
-  await ctx.sleep(300);
-  await ctx.api.post(`/terminal/${session.id}/input`, { data: '\r' });
+  await typePrompt(ctx, session.id, prompt, agent);
   return { session: summary, promptDelivered: true };
+}
+
+const NOT_OWNED = 'sessions it started';
+
+async function sendPrompt(ctx: ToolContext, args: Record<string, unknown>): Promise<unknown> {
+  const id = stringArg(args, 'id', true);
+  if (!UUID.test(id)) throw new ToolError(`"${id}" is not a session id.`);
+  const { prompt, agent } = promptArgs(args);
+
+  let verdict: Readiness | null;
+  try {
+    // The buffer is owner-only, so a session Desktop did not start is refused here whatever its state.
+    await ctx.api.get(`/terminal/${id}/buffer`);
+    verdict = await inspectPrompt(ctx, id);
+  } catch (err) {
+    if (err instanceof ToolError && err.message.includes(NOT_OWNED)) {
+      throw new ToolError(
+        'Claude Desktop can only send prompts to sessions it started with start_session since Bodhilander last ' +
+          'started. Use the Bodhilander window for this one, or start a new session.',
+      );
+    }
+    throw err;
+  }
+  if (!verdict) {
+    return { promptDelivered: false, reason: 'Claude Code is busy or not at its prompt yet; try again once read_session shows it idle.' };
+  }
+  if (!verdict.ready) return { promptDelivered: false, reason: `${verdict.reason}. The prompt was not sent.` };
+  await typePrompt(ctx, id, prompt, agent);
+  return { promptDelivered: true };
 }
 
 async function runStatus(ctx: ToolContext, args: Record<string, unknown>): Promise<unknown> {
@@ -320,6 +384,7 @@ const HANDLERS: Record<string, (ctx: ToolContext, args: Record<string, unknown>)
   list_sessions: listSessions,
   read_session: readSession,
   start_session: startSession,
+  send_prompt: sendPrompt,
   run_status: runStatus,
 };
 

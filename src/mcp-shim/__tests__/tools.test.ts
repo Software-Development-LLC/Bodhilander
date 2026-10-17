@@ -369,6 +369,63 @@ describe('Claude Code input box detection, on real screens', () => {
   });
 });
 
+describe('send_prompt', () => {
+  const READY = screen('manual-mode');
+  const inputPath = `POST /terminal/${SESSION_ID}/input`;
+
+  function routes(state: string, buffer: unknown = { buffer: READY }) {
+    return {
+      [`GET /sessions/${SESSION_ID}`]: { session: session({ state, createdAt: new Date(1000), lastActivityAt: new Date(5000) }) },
+      [`GET /terminal/${SESSION_ID}/buffer`]: buffer,
+      [inputPath]: { success: true },
+    } as Record<string, unknown>;
+  }
+
+  test('types the prompt behind the lead line into an idle session, then presses Enter', async () => {
+    const { api, calls } = fakeApi(routes('idle'));
+    const { json } = await call(context(api), 'send_prompt', { id: SESSION_ID, prompt: '!rm -rf ~' });
+    expect(json).toEqual({ promptDelivered: true });
+    const typed = calls.filter((c) => `${c.method} ${c.path}` === inputPath).map((c) => (c.body as { data: string }).data);
+    expect(typed).toEqual(['\x1b[200~Task from Claude Desktop:\n\n!rm -rf ~\x1b[201~', '\r']);
+  });
+
+  test.each([
+    ['working', 'busy'],
+    ['waiting', 'waiting on a question'],
+    ['stopped', 'has stopped'],
+    ['error', 'hit an error'],
+  ])('a %s session is refused and nothing is typed', async (state, reason) => {
+    const { api, calls } = fakeApi(routes(state));
+    const { json } = await call(context(api), 'send_prompt', { id: SESSION_ID, prompt: 'go on' });
+    expect(json.promptDelivered).toBe(false);
+    expect(json.reason).toContain(reason);
+    expect(calls.some((c) => `${c.method} ${c.path}` === inputPath)).toBe(false);
+  });
+
+  test('an idle session not yet at its input box is refused', async () => {
+    const { api, calls } = fakeApi(routes('idle', { buffer: screen('startup-no-input') }));
+    const { json } = await call(context(api), 'send_prompt', { id: SESSION_ID, prompt: 'go on' });
+    expect(json.promptDelivered).toBe(false);
+    expect(calls.some((c) => `${c.method} ${c.path}` === inputPath)).toBe(false);
+  });
+
+  test('a session Claude Desktop did not start is refused before anything else is read', async () => {
+    const refused = new ToolError('Bodhilander refused this action (Claude Desktop can only use the terminal of sessions it started).');
+    const { api, calls } = fakeApi(routes('idle', refused));
+    const { result, text } = await call(context(api), 'send_prompt', { id: SESSION_ID, prompt: 'go on' });
+    expect(result.isError).toBe(true);
+    expect(text).toContain('since Bodhilander last started');
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([`GET /terminal/${SESSION_ID}/buffer`]);
+  });
+
+  test('refuses an id that is not a session id, without calling the API', async () => {
+    const { api, calls } = fakeApi({});
+    const { result } = await call(context(api), 'send_prompt', { id: '../pairing/devices', prompt: 'x' });
+    expect(result.isError).toBe(true);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('run_status', () => {
   test('reads the run route for the key', async () => {
     const body = { initiative: 'BDHLNDR-401', owners: [], gates: [] };
@@ -441,6 +498,6 @@ describe('sanitizePrompt', () => {
 });
 
 test('every tool declares an object input schema', () => {
-  expect(TOOLS.map((t) => t.name)).toEqual(['list_sessions', 'read_session', 'start_session', 'run_status']);
+  expect(TOOLS.map((t) => t.name)).toEqual(['list_sessions', 'read_session', 'start_session', 'send_prompt', 'run_status']);
   for (const tool of TOOLS) expect(tool.inputSchema.type).toBe('object');
 });
