@@ -57,7 +57,7 @@ describe('bodhilander.mcpb', () => {
     const [init, list] = run.stdout.trim().split('\n').map((l) => JSON.parse(l));
     expect(init.result.serverInfo).toEqual({ name: 'bodhilander', version: pkg.version });
     expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual([
-      'list_sessions', 'read_session', 'start_session', 'run_status',
+      'list_sessions', 'read_session', 'start_session', 'send_prompt', 'run_status',
     ]);
   }, 60_000);
 
