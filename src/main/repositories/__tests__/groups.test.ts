@@ -116,3 +116,30 @@ describe('board association', () => {
     expect(g!.cloneRoot).toBe('/k');
   });
 });
+
+describe('parent links', () => {
+  const parentOf = (id: string) => groupsRepo.getAllGroups().find(g => g.id === id)!.parentId;
+
+  test('deleting a group moves its sub-groups up to its own parent', () => {
+    groupsRepo.createGroup(makeGroup({ id: 'top' }));
+    groupsRepo.createGroup(makeGroup({ id: 'mid', parentId: 'top' }));
+    groupsRepo.createGroup(makeGroup({ id: 'leaf', parentId: 'mid' }));
+    groupsRepo.deleteGroup('mid');
+    expect(parentOf('leaf')).toBe('top');
+  });
+
+  test('deleting a top-level group makes its sub-groups top-level', () => {
+    groupsRepo.createGroup(makeGroup({ id: 'top' }));
+    groupsRepo.createGroup(makeGroup({ id: 'sub', parentId: 'top' }));
+    groupsRepo.deleteGroup('top');
+    expect(parentOf('sub')).toBeNull();
+  });
+
+  test('a group whose parent row is missing reads back as top-level', () => {
+    groupsRepo.createGroup(makeGroup({ id: 'kept' }));
+    groupsRepo.createGroup(makeGroup({ id: 'orphan', parentId: 'gone' }));
+    groupsRepo.createGroup(makeGroup({ id: 'child', parentId: 'kept' }));
+    expect(parentOf('orphan')).toBeNull();
+    expect(parentOf('child')).toBe('kept');
+  });
+});
