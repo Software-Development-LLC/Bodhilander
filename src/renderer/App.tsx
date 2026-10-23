@@ -53,13 +53,13 @@ export function respawnable(sessionIds: string[], sessions: Session[]): string[]
   return sessionIds.filter(id => !stopped.has(id));
 }
 
-/** Offered only while the session has a pty; a missing working dir already holds it stopped. */
+/** Offered unless the session is already stopped or held stopped by a missing working dir. */
 export function stopSessionMenuItem(
   session: Session | undefined,
-  updateSession: (id: string, updates: Partial<Session>) => unknown,
+  updateSession: (id: string, updates: Partial<Session>) => void,
 ): MenuItem | null {
   if (!session || session.state === 'stopped' || session.workingDirMissing) return null;
-  return { label: 'Stop Session', onClick: () => { void updateSession(session.id, { state: 'stopped' }); } };
+  return { label: 'Stop Session', onClick: () => updateSession(session.id, { state: 'stopped' }) };
 }
 
 /**

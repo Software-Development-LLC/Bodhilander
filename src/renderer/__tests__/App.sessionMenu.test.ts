@@ -27,16 +27,9 @@ describe('stopSessionMenuItem', () => {
     expect(stopSessionMenuItem(undefined, () => {})).toBeNull();
   });
 
-  test('stops the session and leaves it in the list', () => {
-    let sessions = [session(), session({ id: 's2' })];
-    const updateSession = (id: string, updates: Partial<Session>) => {
-      sessions = sessions.map(s => (s.id === id ? { ...s, ...updates } : s));
-    };
-
-    stopSessionMenuItem(sessions[0], updateSession)!.onClick();
-
-    expect(sessions.map(s => s.id)).toEqual(['s1', 's2']);
-    expect(sessions[0].state).toBe('stopped');
-    expect(sessions[1].state).toBe('working');
+  test('clicking it marks the session stopped rather than removing it', () => {
+    const calls: Array<[string, Partial<Session>]> = [];
+    stopSessionMenuItem(session(), (id, updates) => { calls.push([id, updates]); })!.onClick();
+    expect(calls).toEqual([['s1', { state: 'stopped' }]]);
   });
 });
