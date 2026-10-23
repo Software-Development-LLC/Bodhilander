@@ -53,6 +53,15 @@ export function respawnable(sessionIds: string[], sessions: Session[]): string[]
   return sessionIds.filter(id => !stopped.has(id));
 }
 
+/** Offered only while the session has a pty; a missing working dir already holds it stopped. */
+export function stopSessionMenuItem(
+  session: Session | undefined,
+  updateSession: (id: string, updates: Partial<Session>) => unknown,
+): MenuItem | null {
+  if (!session || session.state === 'stopped' || session.workingDirMissing) return null;
+  return { label: 'Stop Session', onClick: () => { void updateSession(session.id, { state: 'stopped' }); } };
+}
+
 /**
  * Collapse-chevron labels. While a filter is active every row is force-expanded,
  * so the control is disabled and says so rather than lying about state (#141).
@@ -805,6 +814,8 @@ const App: React.FC = () => {
     }
 
     items.push({ label: 'separator', onClick: () => {}, separator: true });
+    const stopItem = stopSessionMenuItem(session, updateSession);
+    if (stopItem) items.push(stopItem);
     items.push({ label: 'Close Session', onClick: () => handleRemoveSession(sessionId), danger: true });
 
     setContextMenu({ x: e.clientX, y: e.clientY, items });
