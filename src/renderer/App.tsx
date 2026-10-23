@@ -62,6 +62,20 @@ export function stopSessionMenuItem(
   return { label: 'Stop Session', onClick: () => updateSession(session.id, { state: 'stopped' }) };
 }
 
+/** The session menu's final group: a separator, Stop when offered, then Close. */
+export function sessionMenuTail(
+  sessions: Session[],
+  sessionId: string,
+  updateSession: (id: string, updates: Partial<Session>) => void,
+  removeSession: (id: string) => void,
+): MenuItem[] {
+  const items: MenuItem[] = [{ label: 'separator', onClick: () => {}, separator: true }];
+  const stopItem = stopSessionMenuItem(sessions.find(s => s.id === sessionId), updateSession);
+  if (stopItem) items.push(stopItem);
+  items.push({ label: 'Close Session', onClick: () => removeSession(sessionId), danger: true });
+  return items;
+}
+
 /**
  * Collapse-chevron labels. While a filter is active every row is force-expanded,
  * so the control is disabled and says so rather than lying about state (#141).
@@ -813,10 +827,7 @@ const App: React.FC = () => {
       }
     }
 
-    items.push({ label: 'separator', onClick: () => {}, separator: true });
-    const stopItem = stopSessionMenuItem(session, updateSession);
-    if (stopItem) items.push(stopItem);
-    items.push({ label: 'Close Session', onClick: () => handleRemoveSession(sessionId), danger: true });
+    items.push(...sessionMenuTail(sessions, sessionId, updateSession, handleRemoveSession));
 
     setContextMenu({ x: e.clientX, y: e.clientY, items });
   };
