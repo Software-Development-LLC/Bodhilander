@@ -138,7 +138,7 @@ async function handleNotification(input: HookInput, sessionId?: string): Promise
  */
 async function handleSessionStart(input: HookInput): Promise<void> {
   const tabId = process.env.BODHILANDER_SESSION_ID;
-  if (!tabId || !input.session_id) return;
+  if (!tabId || !input.session_id || input.source === 'startup') return;
   await callApi('/session-start', {
     session_id: tabId,
     claude_session_id: input.session_id,

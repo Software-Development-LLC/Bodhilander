@@ -64,6 +64,13 @@ describe('SessionStart', () => {
     ]);
   });
 
+  test('posts nothing at startup, which only repeats the launch id', async () => {
+    const code = await runHook('SessionStart', { session_id: 'conv-2', source: 'startup' }, 'tab-1');
+
+    expect(code).toBe(0);
+    expect(posts).toEqual([]);
+  });
+
   test('posts nothing for a Claude that Bodhilander did not launch', async () => {
     const code = await runHook('SessionStart', { session_id: 'conv-2', source: 'resume' }, null);
 

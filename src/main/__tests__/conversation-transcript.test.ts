@@ -308,6 +308,23 @@ describe('the conversation dir travels with the transcript', () => {
     },
   );
 
+  test("a target filed under another slug gets the dir beside its own copy", () => {
+    const target = configDir('target');
+    const source = configDir('source');
+    const strandedFile = writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"sub":1}\n');
+    writeTranscript(target, '-Users-x-other', 'uuid-1', '{"t":1}\n');
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(strandedFile, past, past);
+
+    expect(ensureTranscriptInConfigDir('uuid-1', target, [source])).toBe('present');
+
+    expect(tree(target)).toEqual([
+      'projects/-Users-x-other/uuid-1.jsonl',
+      'projects/-Users-x-other/uuid-1/subagents/agent-a.jsonl',
+    ]);
+  });
+
   test('a conversation with no dir carries just the .jsonl', () => {
     const target = configDir('target');
     const source = configDir('source');

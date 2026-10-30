@@ -81,23 +81,23 @@ function copyTranscriptInto(
   const targetDir = path.join(toDir, 'projects', slug);
   const target = path.join(targetDir, `${uuid}.jsonl`);
   if (!overwrite && fs.existsSync(target)) {
-    copyConversationDir(source, toDir, uuid, false);
+    copyConversationDir(source, target, uuid, false);
     return;
   }
 
   fs.mkdirSync(targetDir, { recursive: true });
   fs.copyFileSync(source, target);
-  copyConversationDir(source, toDir, uuid, overwrite);
+  copyConversationDir(source, target, uuid, overwrite);
   log.info(`[Accounts] Carried conversation ${uuid} to ${targetDir}`);
 }
 
 /**
- * Copy the `<uuid>/` dir beside a transcript into `toDir`. Nothing in the
+ * Copy the `<uuid>/` dir beside one transcript to beside another. Nothing in the
  * target is deleted, and a failure is only logged: the `.jsonl` can resume alone.
  */
-function copyConversationDir(source: string, toDir: string, uuid: string, overwrite: boolean): void {
+function copyConversationDir(source: string, target: string, uuid: string, overwrite: boolean): void {
   const sourceDir = path.join(path.dirname(source), uuid);
-  const targetDir = path.join(toDir, 'projects', path.basename(path.dirname(source)), uuid);
+  const targetDir = path.join(path.dirname(target), uuid);
   try {
     if (!fs.existsSync(sourceDir)) return;
     fs.cpSync(sourceDir, targetDir, { recursive: true, force: overwrite, errorOnExist: false });
@@ -208,7 +208,7 @@ export function ensureTranscriptInConfigDir(
     // unstattable target is left alone: overwriting the file the CLI is about
     // to read, on the strength of a stat that failed, is the worse gamble.
     if (existingStat === null || existingStat.mtimeMs >= winnerStat.mtimeMs) {
-      return fillConversationDir(winner, targetDir, uuid);
+      return fillConversationDir(winner, existing, uuid);
     }
 
     // mtime alone must not authorise a destructive write. Nothing in this
@@ -226,7 +226,7 @@ export function ensureTranscriptInConfigDir(
         `smaller (${winnerStat.size} < ${existingStat.size} bytes), which an appended-to ` +
         `transcript cannot be. Keeping what is already staged.`
       );
-      return fillConversationDir(winner, targetDir, uuid);
+      return fillConversationDir(winner, existing, uuid);
     }
   }
 
@@ -245,10 +245,9 @@ export function ensureTranscriptInConfigDir(
  * Keep the target's transcript, and give it the `<uuid>/` dir only when it has
  * none: a conversation carried before the dir travelled gets its subagents back.
  */
-function fillConversationDir(winner: string, targetDir: string, uuid: string): 'present' {
-  const slug = path.basename(path.dirname(winner));
-  if (!fs.existsSync(path.join(targetDir, 'projects', slug, uuid))) {
-    copyConversationDir(winner, targetDir, uuid, false);
+function fillConversationDir(winner: string, existing: string, uuid: string): 'present' {
+  if (!fs.existsSync(path.join(path.dirname(existing), uuid))) {
+    copyConversationDir(winner, existing, uuid, false);
   }
   return 'present';
 }
