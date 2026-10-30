@@ -15,6 +15,15 @@ export function baseSessionEnv(config: ProviderLaunchConfig): NodeJS.ProcessEnv 
 }
 
 /**
+ * `process.env` without the session vars. A CLI Bodhilander starts outside a
+ * pty must not report hooks as the tab the app itself was launched from.
+ */
+export function envWithoutSessionVars(): NodeJS.ProcessEnv {
+  const { BODHILANDER_SESSION_ID: _id, BODHILANDER_SOCKET: _socket, ...rest } = process.env;
+  return rest;
+}
+
+/**
  * A provider whose CLI is launched bare: no resume/session flags, no hooks,
  * no system-prompt injection, no account isolation. Auth and conversation
  * management stay entirely inside the CLI itself.

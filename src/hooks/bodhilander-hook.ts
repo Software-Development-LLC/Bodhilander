@@ -8,7 +8,7 @@
  *
  * Usage: node bodhilander-hook.js <hook-type> [--session-id <id>]
  *
- * Hook types: PostToolUse, Stop, Notification
+ * Hook types: PostToolUse, Stop, Notification, SessionStart
  */
 
 const API_BASE = process.env.BODHILANDER_API_URL || 'http://127.0.0.1:8443';
@@ -27,6 +27,9 @@ interface HookInput {
   // Notification fields
   type?: string;
   message?: string;
+
+  // SessionStart: startup | resume | clear | compact
+  source?: string;
 
   // Session context (if available)
   session_id?: string;
@@ -130,6 +133,20 @@ async function handleNotification(input: HookInput, sessionId?: string): Promise
 }
 
 /**
+ * Process SessionStart hook: report the conversation the tab is now running.
+ * The tab comes only from the env; a Claude launched elsewhere has none.
+ */
+async function handleSessionStart(input: HookInput): Promise<void> {
+  const tabId = process.env.BODHILANDER_SESSION_ID;
+  if (!tabId || !input.session_id) return;
+  await callApi('/session-start', {
+    session_id: tabId,
+    claude_session_id: input.session_id,
+    source: input.source,
+  });
+}
+
+/**
  * Parse command line arguments
  */
 function parseArgs(): { hookType: string; sessionId?: string } {
@@ -183,6 +200,9 @@ async function main(): Promise<void> {
       break;
     case 'Notification':
       await handleNotification(input, sessionId);
+      break;
+    case 'SessionStart':
+      await handleSessionStart(input);
       break;
     default:
       console.error(`[Bodhilander Hook] Unknown hook type: ${hookType}`);

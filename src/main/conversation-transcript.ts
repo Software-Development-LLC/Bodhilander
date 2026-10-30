@@ -57,9 +57,11 @@ export function carryTranscript(uuid: string, fromDir: string, toDir: string): b
 }
 
 /**
- * Copy one transcript file into `toDir`, mirroring its project-slug dir. The
- * slug is derived from the session cwd, which neither a switch nor a respawn
- * changes, so reusing the source's slug is exact and needs no recomputation.
+ * Copy one transcript into `toDir`, mirroring its project-slug dir. The slug is
+ * derived from the session cwd, which neither a switch nor a respawn changes,
+ * so reusing the source's slug is exact and needs no recomputation. The
+ * sibling `<uuid>/` dir (subagent transcripts, persisted tool results) travels
+ * with it under the same overwrite decision.
  *
  * `overwrite` is off by default because most callers only want to fill a gap.
  * Only the launch-time carry turns it on, and only once it has established by
@@ -79,11 +81,32 @@ function copyTranscriptInto(
   const slug = path.basename(path.dirname(source));
   const targetDir = path.join(toDir, 'projects', slug);
   const target = path.join(targetDir, `${uuid}.jsonl`);
-  if (!overwrite && fs.existsSync(target)) return;
+  if (!overwrite && fs.existsSync(target)) {
+    copyConversationDir(source, toDir, uuid, false);
+    return;
+  }
 
   fs.mkdirSync(targetDir, { recursive: true });
   fs.copyFileSync(source, target);
+  copyConversationDir(source, toDir, uuid, overwrite);
   log.info(`[Accounts] Carried conversation ${uuid} to ${targetDir}`);
+}
+
+/**
+ * Copy the `<uuid>/` dir beside a transcript into `toDir`. Most conversations
+ * have none. Nothing in the target is ever deleted; `overwrite` only decides
+ * whether a file already there is replaced. A failure here is logged, not
+ * thrown: the `.jsonl` alone is enough to resume.
+ */
+function copyConversationDir(source: string, toDir: string, uuid: string, overwrite: boolean): void {
+  const sourceDir = path.join(path.dirname(source), uuid);
+  const targetDir = path.join(toDir, 'projects', path.basename(path.dirname(source)), uuid);
+  try {
+    if (!fs.existsSync(sourceDir)) return;
+    fs.cpSync(sourceDir, targetDir, { recursive: true, force: overwrite, errorOnExist: false });
+  } catch (err) {
+    log.warn(`[Accounts] Could not carry ${sourceDir} to ${targetDir}:`, err);
+  }
 }
 
 /** mtime + size, or null when the file can't be stat'd (raced away, unreadable). */
@@ -187,7 +210,9 @@ export function ensureTranscriptInConfigDir(
     // which is what keeps the steady state down to no copy at all. An
     // unstattable target is left alone: overwriting the file the CLI is about
     // to read, on the strength of a stat that failed, is the worse gamble.
-    if (existingStat === null || existingStat.mtimeMs >= winnerStat.mtimeMs) return 'present';
+    if (existingStat === null || existingStat.mtimeMs >= winnerStat.mtimeMs) {
+      return fillConversationDir(winner, targetDir, uuid);
+    }
 
     // mtime alone must not authorise a destructive write. Nothing in this
     // pipeline preserves timestamps (copyFileSync here, fs.cp in
@@ -204,7 +229,7 @@ export function ensureTranscriptInConfigDir(
         `smaller (${winnerStat.size} < ${existingStat.size} bytes), which an appended-to ` +
         `transcript cannot be. Keeping what is already staged.`
       );
-      return 'present';
+      return fillConversationDir(winner, targetDir, uuid);
     }
   }
 
@@ -217,4 +242,13 @@ export function ensureTranscriptInConfigDir(
     // never had one is actually missing.
     return existing ? 'present' : 'missing';
   }
+}
+
+/**
+ * Keep the target's transcript but add any `<uuid>/` files it lacks, so a
+ * conversation carried before the dir travelled gets its subagents back.
+ */
+function fillConversationDir(winner: string, targetDir: string, uuid: string): 'present' {
+  copyConversationDir(winner, targetDir, uuid, false);
+  return 'present';
 }

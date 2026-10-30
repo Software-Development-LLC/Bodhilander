@@ -10,7 +10,11 @@ import { Router, Request, Response } from 'express';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as sessionsRepo from '../../repositories/sessions';
 import { SessionEventType } from '../../../shared/types';
+import { isPathSafeConversationId } from '../../conversation-transcript';
 import log from 'electron-log';
+
+/** `startup` is the id the tab was launched with, or a nested Claude's own. */
+const CONVERSATION_CHANGE_SOURCES = new Set(['resume', 'clear', 'compact']);
 
 /**
  * Try to log a session event. Only writes if session_id references a valid session.
@@ -127,6 +131,46 @@ export function createHooksRouter(): Router {
   });
 
   /**
+   * POST /hooks/session-start
+   * Called by Claude Code SessionStart hook; keeps the tab's stored
+   * conversation id on the one actually running in it
+   */
+  router.post('/session-start', (req: Request, res: Response) => {
+    try {
+      const { session_id, claude_session_id, source } = req.body ?? {};
+
+      if (
+        typeof session_id !== 'string'
+        || typeof claude_session_id !== 'string'
+        || !CONVERSATION_CHANGE_SOURCES.has(source)
+        || !isPathSafeConversationId(claude_session_id)
+      ) {
+        res.json({ updated: false });
+        return;
+      }
+
+      const session = sessionsRepo.getSession(session_id);
+      if (!session || session.provider !== 'claude') {
+        res.json({ updated: false });
+        return;
+      }
+
+      if (session.claudeSessionId !== claude_session_id) {
+        sessionsRepo.setClaudeSessionId(session_id, claude_session_id);
+        log.info(
+          `[HooksAPI] SessionStart (${source}): session ${sanitizeLogValue(session_id)} now runs ` +
+          `conversation ${claude_session_id}`
+        );
+      }
+
+      res.json({ updated: true });
+    } catch (error) {
+      log.error('[HooksAPI] Error processing SessionStart hook:', error);
+      res.status(500).json({ error: 'Failed to process hook' });
+    }
+  });
+
+  /**
    * GET /hooks/status
    * Check if hook API is available
    */
@@ -134,7 +178,7 @@ export function createHooksRouter(): Router {
     res.json({
       status: 'ok',
       version: '1.0.0',
-      endpoints: ['post-tool-use', 'stop', 'notification']
+      endpoints: ['post-tool-use', 'stop', 'notification', 'session-start']
     });
   });
 

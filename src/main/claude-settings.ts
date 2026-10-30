@@ -34,6 +34,7 @@ export interface ClaudeSettingsConfig {
     PostToolUse?: HookConfig[];
     Stop?: HookConfig[];
     Notification?: HookConfig[];
+    SessionStart?: HookConfig[];
     [key: string]: HookConfig[] | undefined;
   };
   /**

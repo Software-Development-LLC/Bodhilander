@@ -17,7 +17,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const { ensureTranscriptInConfigDir } = await import('../conversation-transcript');
+const { carryTranscript, ensureTranscriptInConfigDir } = await import('../conversation-transcript');
 
 let tmp: string;
 
@@ -40,6 +40,14 @@ function writeTranscript(dir: string, slug: string, uuid: string, body: string):
   const projectDir = path.join(dir, 'projects', slug);
   fs.mkdirSync(projectDir, { recursive: true });
   const file = path.join(projectDir, `${uuid}.jsonl`);
+  fs.writeFileSync(file, body);
+  return file;
+}
+
+/** A file inside the conversation's `<uuid>/` dir, as Claude writes subagents and tool results. */
+function writeConversationFile(dir: string, slug: string, uuid: string, rel: string, body: string): string {
+  const file = path.join(dir, 'projects', slug, uuid, rel);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, body);
   return file;
 }
@@ -212,5 +220,81 @@ describe('ensureTranscriptInConfigDir', () => {
     expect(
       fs.readFileSync(path.join(target, 'projects', '-Users-x-repo', 'uuid-1.jsonl'), 'utf-8'),
     ).toBe('{"type":"newer"}\n');
+  });
+});
+
+describe('the conversation dir travels with the transcript', () => {
+  const slug = '-Users-x-repo';
+  const read = (dir: string, rel: string) => fs.readFileSync(path.join(dir, 'projects', slug, rel), 'utf-8');
+
+  test('a carry copies subagents and tool results beside the .jsonl', () => {
+    const target = configDir('target');
+    const source = configDir('source');
+    writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"sub":1}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'tool-results/r1.txt', 'big output');
+
+    expect(ensureTranscriptInConfigDir('uuid-1', target, [source])).toBe('carried');
+
+    expect(tree(target)).toEqual([
+      `projects/${slug}/uuid-1.jsonl`,
+      `projects/${slug}/uuid-1/subagents/agent-a.jsonl`,
+      `projects/${slug}/uuid-1/tool-results/r1.txt`,
+    ]);
+  });
+
+  test('a refresh replaces stale dir files and deletes nothing', () => {
+    const target = configDir('target');
+    const source = configDir('source');
+    writeTranscript(source, slug, 'uuid-1', '{"t":1}\n{"t":2}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"sub":1}\n{"sub":2}\n');
+    const staleJsonl = writeTranscript(target, slug, 'uuid-1', '{"t":1}\n');
+    writeConversationFile(target, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"sub":1}\n');
+    writeConversationFile(target, slug, 'uuid-1', 'tool-results/only-here.txt', 'kept');
+    const stale = new Date(Date.now() - 60_000);
+    fs.utimesSync(staleJsonl, stale, stale);
+
+    expect(ensureTranscriptInConfigDir('uuid-1', target, [source])).toBe('carried');
+
+    expect(read(target, 'uuid-1/subagents/agent-a.jsonl')).toBe('{"sub":1}\n{"sub":2}\n');
+    expect(read(target, 'uuid-1/tool-results/only-here.txt')).toBe('kept');
+  });
+
+  test('a current target gains the dir files it lacks and keeps its own', () => {
+    const target = configDir('target');
+    const source = configDir('source');
+    const strandedFile = writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"from":"source"}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'subagents/agent-b.jsonl', '{"from":"source"}\n');
+    writeTranscript(target, slug, 'uuid-1', '{"t":1}\n');
+    writeConversationFile(target, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"from":"target"}\n');
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(strandedFile, past, past);
+
+    expect(ensureTranscriptInConfigDir('uuid-1', target, [source])).toBe('present');
+
+    expect(read(target, 'uuid-1/subagents/agent-a.jsonl')).toBe('{"from":"target"}\n');
+    expect(read(target, 'uuid-1/subagents/agent-b.jsonl')).toBe('{"from":"source"}\n');
+  });
+
+  test('a conversation with no dir carries just the .jsonl', () => {
+    const target = configDir('target');
+    const source = configDir('source');
+    writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
+
+    expect(carryTranscript('uuid-1', source, target)).toBe(true);
+
+    expect(tree(target)).toEqual([`projects/${slug}/uuid-1.jsonl`]);
+  });
+
+  test('the switch-time carry brings the dir too', () => {
+    const target = configDir('target');
+    const source = configDir('source');
+    writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"sub":1}\n');
+
+    expect(carryTranscript('uuid-1', source, target)).toBe(true);
+
+    expect(read(target, 'uuid-1/subagents/agent-a.jsonl')).toBe('{"sub":1}\n');
   });
 });
