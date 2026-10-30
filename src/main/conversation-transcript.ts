@@ -57,11 +57,10 @@ export function carryTranscript(uuid: string, fromDir: string, toDir: string): b
 }
 
 /**
- * Copy one transcript into `toDir`, mirroring its project-slug dir. The slug is
- * derived from the session cwd, which neither a switch nor a respawn changes,
- * so reusing the source's slug is exact and needs no recomputation. The
- * sibling `<uuid>/` dir (subagent transcripts, persisted tool results) travels
- * with it under the same overwrite decision.
+ * Copy one transcript file into `toDir`, mirroring its project-slug dir. The
+ * slug is derived from the session cwd, which neither a switch nor a respawn
+ * changes, so reusing the source's slug is exact and needs no recomputation.
+ * Its `<uuid>/` dir follows under the same overwrite decision.
  *
  * `overwrite` is off by default because most callers only want to fill a gap.
  * Only the launch-time carry turns it on, and only once it has established by
