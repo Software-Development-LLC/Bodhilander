@@ -92,10 +92,8 @@ function copyTranscriptInto(
 }
 
 /**
- * Copy the `<uuid>/` dir beside a transcript into `toDir`. Most conversations
- * have none. Nothing in the target is ever deleted; `overwrite` only decides
- * whether a file already there is replaced. A failure here is logged, not
- * thrown: the `.jsonl` alone is enough to resume.
+ * Copy the `<uuid>/` dir beside a transcript into `toDir`. Nothing in the
+ * target is deleted, and a failure is only logged: the `.jsonl` can resume alone.
  */
 function copyConversationDir(source: string, toDir: string, uuid: string, overwrite: boolean): void {
   const sourceDir = path.join(path.dirname(source), uuid);
@@ -244,10 +242,13 @@ export function ensureTranscriptInConfigDir(
 }
 
 /**
- * Keep the target's transcript but add any `<uuid>/` files it lacks, so a
- * conversation carried before the dir travelled gets its subagents back.
+ * Keep the target's transcript, and give it the `<uuid>/` dir only when it has
+ * none: a conversation carried before the dir travelled gets its subagents back.
  */
 function fillConversationDir(winner: string, targetDir: string, uuid: string): 'present' {
-  copyConversationDir(winner, targetDir, uuid, false);
+  const slug = path.basename(path.dirname(winner));
+  if (!fs.existsSync(path.join(targetDir, 'projects', slug, uuid))) {
+    copyConversationDir(winner, targetDir, uuid, false);
+  }
   return 'present';
 }

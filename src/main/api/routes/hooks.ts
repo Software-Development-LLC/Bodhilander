@@ -155,15 +155,16 @@ export function createHooksRouter(): Router {
         return;
       }
 
-      if (session.claudeSessionId !== claude_session_id) {
+      const changed = session.claudeSessionId !== claude_session_id;
+      if (changed) {
         sessionsRepo.setClaudeSessionId(session_id, claude_session_id);
         log.info(
-          `[HooksAPI] SessionStart (${source}): session ${sanitizeLogValue(session_id)} now runs ` +
-          `conversation ${claude_session_id}`
+          `[HooksAPI] SessionStart (${source}): session ${sanitizeLogValue(session_id)} moved from ` +
+          `conversation ${session.claudeSessionId ?? 'none'} to ${claude_session_id}`
         );
       }
 
-      res.json({ updated: true });
+      res.json({ updated: changed });
     } catch (error) {
       log.error('[HooksAPI] Error processing SessionStart hook:', error);
       res.status(500).json({ error: 'Failed to process hook' });

@@ -260,7 +260,21 @@ describe('the conversation dir travels with the transcript', () => {
     expect(read(target, 'uuid-1/tool-results/only-here.txt')).toBe('kept');
   });
 
-  test('a current target gains the dir files it lacks and keeps its own', () => {
+  test('a current target without the dir gains it', () => {
+    const target = configDir('target');
+    const source = configDir('source');
+    const strandedFile = writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
+    writeConversationFile(source, slug, 'uuid-1', 'subagents/agent-a.jsonl', '{"from":"source"}\n');
+    writeTranscript(target, slug, 'uuid-1', '{"t":1}\n');
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(strandedFile, past, past);
+
+    expect(ensureTranscriptInConfigDir('uuid-1', target, [source])).toBe('present');
+
+    expect(read(target, 'uuid-1/subagents/agent-a.jsonl')).toBe('{"from":"source"}\n');
+  });
+
+  test('a current target that has the dir is left exactly as it is', () => {
     const target = configDir('target');
     const source = configDir('source');
     const strandedFile = writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
@@ -273,8 +287,8 @@ describe('the conversation dir travels with the transcript', () => {
 
     expect(ensureTranscriptInConfigDir('uuid-1', target, [source])).toBe('present');
 
+    expect(tree(target)).toEqual([`projects/${slug}/uuid-1.jsonl`, `projects/${slug}/uuid-1/subagents/agent-a.jsonl`]);
     expect(read(target, 'uuid-1/subagents/agent-a.jsonl')).toBe('{"from":"target"}\n');
-    expect(read(target, 'uuid-1/subagents/agent-b.jsonl')).toBe('{"from":"source"}\n');
   });
 
   test('a conversation with no dir carries just the .jsonl', () => {

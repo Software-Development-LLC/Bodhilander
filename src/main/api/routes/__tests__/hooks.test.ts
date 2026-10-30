@@ -165,6 +165,15 @@ describe('POST /hooks/session-start', () => {
     });
   }
 
+  test('a compaction that keeps the stored id writes nothing', async () => {
+    addSession('tab-1');
+
+    const body = await sessionStart({ session_id: 'tab-1', claude_session_id: SPAWNED, source: 'compact' });
+
+    expect(body.updated).toBe(false);
+    expect(stored('tab-1')).toBe(SPAWNED);
+  });
+
   test('a startup is ignored: it is the launch id, or a nested Claude inheriting the tab env', async () => {
     addSession('tab-1');
 

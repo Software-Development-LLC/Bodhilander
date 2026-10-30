@@ -17,7 +17,7 @@ let posts: { url: string; body: Record<string, unknown> }[] = [];
 beforeAll(() => new Promise<void>((resolve) => {
   server = http.createServer((req, res) => {
     let raw = '';
-    req.on('data', (c) => { raw += c; });
+    req.on('data', (chunk) => { raw += chunk; });
     req.on('end', () => {
       posts.push({ url: req.url ?? '', body: JSON.parse(raw) });
       res.setHeader('Content-Type', 'application/json');
