@@ -47,6 +47,8 @@ export interface ProviderLaunchConfig {
   agentSession?: AgentSessionLaunch;
   /** Isolated config dir for multi-account providers (BDHLNDR-31). */
   configDir?: string;
+  /** Port the local API server bound, which the hook script posts to; null while it is down. */
+  apiPort?: number | null;
 }
 
 export interface ProviderCommand {

@@ -19,16 +19,20 @@
  *
  * Run with: bun test src/main/__tests__
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
+import { Database } from 'bun:sqlite';
 import { ProviderInstallHint } from '../../shared/types';
+import { freshDb } from '../transfer/__tests__/db-fixture';
 
 interface FakePty {
   pid: number;
   spawnFile: string;
   spawnArgs: string[];
   /** Options node-pty was spawned with — the initial cols/rows live here (#164). */
-  spawnOpts: { cols: number; rows: number };
+  spawnOpts: { cols: number; rows: number; env?: Record<string, string> };
   dataCb: ((data: string) => void) | null;
   exitCb: ((event: { exitCode: number }) => void) | null;
   /** Signals delivered through the handle; undefined is the default kill(). */
@@ -42,7 +46,7 @@ interface FakePty {
 
 const spawned: FakePty[] = [];
 
-function fakeSpawn(file: string, args: string[], opts: { cols: number; rows: number }): FakePty {
+function fakeSpawn(file: string, args: string[], opts: FakePty['spawnOpts']): FakePty {
   const p: FakePty = {
     pid: 1000 + spawned.length,
     spawnFile: file,
@@ -79,10 +83,15 @@ mock.module('node-pty', () => ({ spawn: fakeSpawn }));
 mock.module('electron-log', () => ({
   default: { info() {}, warn() {}, error() {} },
 }));
+// Only the claude spawn below writes under userData (its hook script).
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-pty-userdata-'));
 mock.module('electron', () => ({
-  app: { getPath: () => '/nonexistent-bodhilander-test-userdata' },
+  app: { getPath: () => userData },
   safeStorage: { isEncryptionAvailable: () => false },
 }));
+// codex never reaches the database; the claude resume spec seeds its own.
+let db: Database = freshDb();
+mock.module('../database', () => ({ getDatabase: () => db }));
 // null (not '') so the real key-vault sees "no key stored / opt-in off".
 mock.module('../repositories/preferences', () => ({
   getPreference: () => null,
@@ -107,6 +116,10 @@ beforeEach(() => {
 
 afterEach(() => {
   Date.now = realDateNow;
+});
+
+afterAll(() => {
+  fs.rmSync(userData, { recursive: true, force: true });
 });
 
 function createAgentSession(manager: InstanceType<typeof PtyManager>, id = 'session-1') {
@@ -780,5 +793,70 @@ describe('getSerializedBufferSince (the window a guest is entitled to)', () => {
     const manager = new PtyManager();
     expect(manager.scrollbackMark('nope')).toBeNull();
     expect(await manager.getSerializedBufferSince('nope', 0)).toBe('');
+  });
+});
+
+describe('agent session env', () => {
+  test('carries the port the API server bound, not the default', () => {
+    const manager = new PtyManager();
+    manager.setApiPortSource(() => 51234);
+    const { ptyProc } = createAgentSession(manager);
+
+    expect(ptyProc.spawnOpts.env?.BODHILANDER_API_URL).toBe('http://127.0.0.1:51234');
+  });
+
+  test("does not inherit the URL of the app's own launch while the API is down", () => {
+    const saved = process.env.BODHILANDER_API_URL;
+    process.env.BODHILANDER_API_URL = 'http://127.0.0.1:9999';
+    try {
+      const { ptyProc } = createAgentSession(new PtyManager());
+      expect(ptyProc.spawnOpts.env?.BODHILANDER_API_URL).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.BODHILANDER_API_URL;
+      else process.env.BODHILANDER_API_URL = saved;
+    }
+  });
+});
+
+describe('launch-time transcript carry', () => {
+  test("a resume finds its transcript in another account's dir and lands it in the effective one", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-pty-carry-'));
+    const savedHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = process.env.USERPROFILE = path.join(tmp, 'home');
+    const uuid = '7a3f1c2e-0b4d-4e5f-8a9b-0c1d2e3f4a5b';
+    const slug = '-work-repo';
+    const otherDir = path.join(tmp, 'acct-a', '.claude');
+    const effectiveDir = path.join(tmp, 'acct-b', '.claude');
+    try {
+      db = freshDb();
+      const account = db.prepare(
+        'INSERT INTO claude_accounts (id, label, config_dir, is_default) VALUES (?, ?, ?, ?)',
+      );
+      account.run('acct-a', 'Other', otherDir, 0);
+      account.run('acct-b', 'Effective', effectiveDir, 1);
+      db.prepare(
+        `INSERT INTO sessions (id, name, working_dir, claude_session_id, claude_account_id, provider)
+         VALUES ('s-carry', 'carry', ?, ?, 'acct-b', 'claude')`,
+      ).run(cwd, uuid);
+
+      const sourceDir = path.join(otherDir, 'projects', slug);
+      fs.mkdirSync(path.join(sourceDir, uuid, 'subagents'), { recursive: true });
+      fs.writeFileSync(path.join(sourceDir, `${uuid}.jsonl`), '{"type":"user"}\n');
+      fs.writeFileSync(path.join(sourceDir, uuid, 'subagents', 'agent-1.jsonl'), '{"type":"user"}\n');
+
+      new PtyManager().createSession('s-carry', cwd, true, 'claude');
+
+      const targetDir = path.join(effectiveDir, 'projects', slug);
+      expect(spawned[spawned.length - 1].spawnOpts.env?.CLAUDE_CONFIG_DIR).toBe(effectiveDir);
+      expect(fs.readFileSync(path.join(targetDir, `${uuid}.jsonl`), 'utf-8')).toBe('{"type":"user"}\n');
+      expect(fs.existsSync(path.join(targetDir, uuid, 'subagents', 'agent-1.jsonl'))).toBe(true);
+    } finally {
+      db = freshDb();
+      for (const [key, value] of Object.entries(savedHome)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
