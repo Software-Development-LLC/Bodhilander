@@ -291,6 +291,23 @@ describe('the conversation dir travels with the transcript', () => {
     expect(read(target, 'uuid-1/subagents/agent-a.jsonl')).toBe('{"from":"target"}\n');
   });
 
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a dir that cannot be copied still leaves the transcript carried',
+    () => {
+      const target = configDir('target');
+      const source = configDir('source');
+      writeTranscript(source, slug, 'uuid-1', '{"t":1}\n');
+      const unreadable = writeConversationFile(source, slug, 'uuid-1', 'tool-results/r1.txt', 'x');
+      fs.chmodSync(unreadable, 0o000);
+      try {
+        expect(ensureTranscriptInConfigDir('uuid-1', target, [source])).toBe('carried');
+        expect(read(target, 'uuid-1.jsonl')).toBe('{"t":1}\n');
+      } finally {
+        fs.chmodSync(unreadable, 0o600);
+      }
+    },
+  );
+
   test('a conversation with no dir carries just the .jsonl', () => {
     const target = configDir('target');
     const source = configDir('source');
