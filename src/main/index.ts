@@ -206,9 +206,6 @@ soundManager.setSessionStateLookup((sessionId: string) => {
   return sessionStates.get(sessionId)?.state;
 });
 
-// The hook script posts to the API, which may not be on its default port.
-ptyManager.setApiPortSource(() => getApiServer().port);
-
 // Track which sessions have already had their state logged in this tick,
 // to deduplicate when both stateMonitor and ptyManager fire for the same transition.
 const recentlyLoggedStates: Map<string, { state: string; timestamp: number }> = new Map();
