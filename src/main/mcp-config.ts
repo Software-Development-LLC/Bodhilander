@@ -232,7 +232,9 @@ export function getStatuslineScriptPath(): string | null {
  * registration CONVERGE: change a matcher here and existing installs get
  * rewritten on next launch instead of keeping whatever they were first given.
  */
-function desiredHookConfigs(hookScriptPath: string): { postToolUse: HookConfig; stop: HookConfig } {
+function desiredHookConfigs(
+  hookScriptPath: string,
+): { postToolUse: HookConfig; stop: HookConfig; sessionStart: HookConfig } {
   return {
     // Match ALL tools. The old 'Bash' matcher was a memory-feature artifact —
     // it existed only to sniff `git commit` invocations for auto-saved
@@ -246,6 +248,11 @@ function desiredHookConfigs(hookScriptPath: string): { postToolUse: HookConfig; 
     stop: {
       matcher: '',
       hooks: [{ type: 'command', command: `node "${hookScriptPath}" Stop` }],
+    },
+    // Runs before the CLI accepts input, so it must not be able to stall it.
+    sessionStart: {
+      matcher: '',
+      hooks: [{ type: 'command', command: `node "${hookScriptPath}" SessionStart`, timeout: 10 }],
     },
   };
 }
@@ -275,12 +282,15 @@ function areHooksConfigured(settings: ClaudeSettingsConfig, hookScriptPath: stri
   if (!hooks) return false;
 
   const desired = desiredHookConfigs(hookScriptPath);
-  return hasHookConfig(hooks.PostToolUse, desired.postToolUse) && hasHookConfig(hooks.Stop, desired.stop);
+  return hasHookConfig(hooks.PostToolUse, desired.postToolUse)
+    && hasHookConfig(hooks.Stop, desired.stop)
+    && hasHookConfig(hooks.SessionStart, desired.sessionStart);
 }
 
 /**
  * Register Bodhilander hooks with Claude Code.
- * Adds hooks for PostToolUse (git commits) and Stop (session summaries).
+ * Adds hooks for PostToolUse and Stop (analytics) and SessionStart (which
+ * conversation a tab is running).
  *
  * Stale entries from prior installs (including the former "ClaudeLander"
  * name) are purged from ALL hook types before any file-existence check, so
@@ -319,7 +329,7 @@ export function registerHooks(configDir?: string): { success: boolean; action: '
     // Determine if we're adding or updating
     const action = settings.hooks ? 'updated' : 'added';
 
-    const { postToolUse: postToolUseHook, stop: stopHook } = desiredHookConfigs(hookScriptPath);
+    const desired = desiredHookConfigs(hookScriptPath);
 
     // Drop any of OUR entries still present before appending the desired ones.
     // The earlier purge kept current-path entries to avoid thrashing settings
@@ -337,8 +347,9 @@ export function registerHooks(configDir?: string): { success: boolean; action: '
     }
 
     // Append to any existing (non-ours) entries on these hook types.
-    settings.hooks.PostToolUse = [...(settings.hooks.PostToolUse ?? []), postToolUseHook];
-    settings.hooks.Stop = [...(settings.hooks.Stop ?? []), stopHook];
+    settings.hooks.PostToolUse = [...(settings.hooks.PostToolUse ?? []), desired.postToolUse];
+    settings.hooks.Stop = [...(settings.hooks.Stop ?? []), desired.stop];
+    settings.hooks.SessionStart = [...(settings.hooks.SessionStart ?? []), desired.sessionStart];
 
     // Write the updated settings
     if (writeClaudeSettings(settings, configDir)) {

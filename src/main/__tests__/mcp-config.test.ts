@@ -199,6 +199,25 @@ describe('registerHooks', () => {
     expect(readJson(settingsJson()).hooks.PostToolUse).toHaveLength(1);
   });
 
+  test('an install with only PostToolUse and Stop is rewritten to add SessionStart', () => {
+    const hookPath = createHookScript();
+    writeJson(settingsJson(), {
+      hooks: {
+        PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: `node "${hookPath}" PostToolUse` }] }],
+        Stop: [{ matcher: '', hooks: [{ type: 'command', command: `node "${hookPath}" Stop` }] }],
+      },
+    });
+
+    expect(registerHooks().action).toBe('updated');
+
+    const hooks = readJson(settingsJson()).hooks;
+    expect(hooks.SessionStart).toHaveLength(1);
+    expect(hooks.SessionStart[0].hooks[0].command).toBe(`node "${hookPath}" SessionStart`);
+    expect(hooks.PostToolUse).toHaveLength(1);
+    expect(hooks.Stop).toHaveLength(1);
+    expect(registerHooks().action).toBe('unchanged');
+  });
+
   test('leaves a settings.json it cannot parse byte-identical', () => {
     createHookScript();
     const dir = accountConfigDir('acct-torn');

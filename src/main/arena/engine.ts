@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import log from 'electron-log';
 import { getProvider } from '../providers';
+import { envWithoutSessionVars } from '../providers/passthrough';
 import { getShellLaunch } from '../shell-launch';
 import { detectShell } from '../shell-detector';
 import { getPreference } from '../repositories/preferences';
@@ -266,7 +267,7 @@ export class ArenaEngine extends EventEmitter {
       log.info(`[Arena] API-key auth enabled for '${providerId}':`, redactEnv(vaultEnv));
     }
     const child = spawn(shellLaunch.shell, shellLaunch.wrap(cmd), {
-      env: { ...process.env, ARENA_PROMPT: entry.prompt, ...vaultEnv },
+      env: { ...envWithoutSessionVars(), ARENA_PROMPT: entry.prompt, ...vaultEnv },
       // Scoped runs put the CLI inside the project folder, exactly like a
       // terminal session there. A vanished dir surfaces via the 'error'
       // handler below (spawn ENOENT), settling the column as an error.

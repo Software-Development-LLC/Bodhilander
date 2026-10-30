@@ -331,6 +331,42 @@ describe('what the child inherits', () => {
     expect(outcome.structuredOutput).toEqual({ inherited: 'from the parent', root: '/root' });
   });
 
+  test("the gate never inherits the tab identity of the app's own launch", async () => {
+    const saved = {
+      id: process.env.BODHILANDER_SESSION_ID,
+      socket: process.env.BODHILANDER_SOCKET,
+      api: process.env.BODHILANDER_API_URL,
+    };
+    process.env.BODHILANDER_SESSION_ID = 'tab-the-app-was-started-from';
+    process.env.BODHILANDER_SOCKET = '/tmp/bodhilander.sock';
+    process.env.BODHILANDER_API_URL = 'http://127.0.0.1:8444';
+    try {
+      const command = printGate('unused');
+      command.argv = [
+        '-e',
+        'process.stdout.write(JSON.stringify({type:"result",subtype:"success",is_error:false,' +
+          'structured_output:{tab:process.env.BODHILANDER_SESSION_ID??null,' +
+          'socket:process.env.BODHILANDER_SOCKET??null,api:process.env.BODHILANDER_API_URL??null}}))',
+        '--json-schema',
+        '{}',
+        '--session-id',
+        SESSION,
+      ];
+      const outcome = await run(command);
+      if (outcome.status !== 'completed') throw new Error(`gate did not complete: ${outcome.status}`);
+      expect(outcome.structuredOutput).toEqual({ tab: null, socket: null, api: null });
+    } finally {
+      for (const [key, value] of [
+        ['BODHILANDER_SESSION_ID', saved.id],
+        ['BODHILANDER_SOCKET', saved.socket],
+        ['BODHILANDER_API_URL', saved.api],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test('the prompt reaches the gate on stdin, not in argv', async () => {
     const command = printGate('unused');
     command.argv = [

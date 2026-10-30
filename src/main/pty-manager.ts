@@ -19,6 +19,7 @@ import { detectShell, ShellInfo } from './shell-detector';
 import { detectSpawnFailure } from './spawn-failure';
 import { LiveAccountBinding, LiveAccountBindings, ProviderInstallHint } from '../shared/types';
 import { getShellLaunch } from './shell-launch';
+import { envWithoutSessionVars } from './providers/passthrough';
 import {
   ensureTranscriptInConfigDir,
   isPathSafeConversationId,
@@ -253,6 +254,7 @@ export class PtyManager extends EventEmitter {
   private readonly exitWaiters: Map<pty.IPty, () => void> = new Map();
   /** Queued ptys not yet signalled, so killAll can signal them out of turn. */
   private readonly queuedSignals: Map<pty.IPty, () => void> = new Map();
+  private apiPortSource: () => number | null = () => null;
 
   constructor(opts?: { killGraceMs?: number; serializeTeardown?: boolean }) {
     super();
@@ -272,6 +274,11 @@ export class PtyManager extends EventEmitter {
 
   getSocketPath(): string {
     return this.socketPath;
+  }
+
+  /** Where agent sessions learn the API's bound port, read at each spawn. */
+  setApiPortSource(source: () => number | null): void {
+    this.apiPortSource = source;
   }
 
   getDefaultShellInfo(): ShellInfo {
@@ -673,6 +680,7 @@ export class PtyManager extends EventEmitter {
         ? { id: agentSessionId, mode: agentSessionMode }
         : undefined,
       configDir: account?.configDir,
+      apiPort: this.apiPortSource(),
     });
 
     // Suffix appended to every shell's agent command. UUIDs are alphanumeric
@@ -690,7 +698,7 @@ export class PtyManager extends EventEmitter {
       // Visibility that key auth is active; values scrubbed via redactEnv.
       log.info(`[PTY] API-key auth enabled for '${provider.id}':`, redactEnv(vaultEnv));
     }
-    const processEnv = { ...process.env, ...launch.env, ...vaultEnv } as { [key: string]: string };
+    const processEnv = { ...envWithoutSessionVars(), ...launch.env, ...vaultEnv } as { [key: string]: string };
 
     // The agent command interpolates no env values — everything the CLI needs
     // travels in processEnv — so cmd.exe can host it unchanged (#106).
