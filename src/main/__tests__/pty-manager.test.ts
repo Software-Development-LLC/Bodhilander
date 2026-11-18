@@ -288,6 +288,14 @@ describe('createInstallSession', () => {
     }
   });
 
+  test('a WSL shell never hands a command to PowerShell', () => {
+    setPlatform('win32');
+    shellInfoStub = { ...defaultShellInfo, args: ['-d', 'Ubuntu'], isWSL: true };
+    new PtyManager().createInstallSession('__install-kimi', 'curl x | bash', { powershell: true });
+    expect(spawned[0].spawnFile).toBe('wsl.exe');
+    expect(spawned[0].spawnArgs).toEqual(['-d', 'Ubuntu', '--', 'bash', '-c', 'curl x | bash']);
+  });
+
   test('defers output until primed, then streams live', () => {
     const manager = new PtyManager();
     const events: Array<{ id: string; data: string }> = [];

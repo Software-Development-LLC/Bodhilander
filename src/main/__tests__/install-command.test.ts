@@ -1,9 +1,6 @@
 /**
- * Install-command resolution: which registry variant a provider shows and
- * runs under each platform/shell. Platform branches are asserted with
- * process.platform stubbed, so every branch runs on any machine.
- *
- * Run with: bun test --isolate src/main/__tests__/install-command.test.ts
+ * Which registry install variant a provider shows and runs per platform and
+ * shell; process.platform is stubbed so every branch runs on any machine.
  */
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 

@@ -786,7 +786,8 @@ export class PtyManager extends EventEmitter {
 
     const cwd = os.homedir();
     // Static registry string (never user input) with no env interpolation.
-    const shellLaunch = options.powershell
+    // A WSL shell runs the POSIX variant; PowerShell is never reached from it.
+    const shellLaunch = options.powershell && !shellInfo.isWSL
       ? getPowershellLaunch(shellInfo)
       : getShellLaunch(shellInfo, { needsEnvRef: false });
 

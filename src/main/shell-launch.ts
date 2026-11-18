@@ -69,10 +69,9 @@ function isPowershell(shellInfo: ShellInfo): boolean {
 }
 
 /**
- * Launch for a PowerShell-syntax command (a vendor's `irm ... | iex`
- * installer). A user-configured PowerShell runs it as-is; any other native
- * Windows shell hands it to Windows PowerShell directly, never nested inside
- * `bash -c` or `cmd /c`.
+ * Launch for a PowerShell-syntax command (`irm ... | iex`). A configured
+ * PowerShell runs it as-is; any other Windows shell hands it to Windows
+ * PowerShell directly, never nested inside `bash -c` or `cmd /c`.
  */
 export function getPowershellLaunch(shellInfo: ShellInfo): ShellLaunch {
   if (isPowershell(shellInfo)) {

@@ -10,9 +10,8 @@ export interface ResolvedInstall {
 
 /**
  * The install hint and command a provider shows and runs under the given
- * shell. The one place the platform variant is chosen, so the command the
- * Settings row, the launch-failure banner and the install pty see is the same
- * string. Pure: never touches the filesystem.
+ * shell. The only place the platform variant is chosen, so Settings, the
+ * launch-failure banner and the install pty agree. Never touches the disk.
  */
 export function resolveInstall(
   setup: ProviderDefinition['setup'],
