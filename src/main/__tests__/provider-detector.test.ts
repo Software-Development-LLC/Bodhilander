@@ -70,6 +70,26 @@ describe('detectProviders', () => {
       }
     }
   }, 30_000);
+
+  test('native Windows statuses carry the Windows install variant', async () => {
+    setPlatform('win32');
+    shellInfoOverride = { shell: 'C:\\Windows\\System32\\cmd.exe', args: [], isWSL: false };
+    const byId = new Map((await detectProviders()).map((s) => [s.id, s]));
+
+    expect(byId.get('grok')).toMatchObject({
+      installHint: 'irm https://x.ai/cli/install.ps1 | iex',
+      installCommand: 'irm https://x.ai/cli/install.ps1 | iex',
+    });
+    expect(byId.get('opencode')!.installCommand).toBe('npm install -g opencode-ai');
+  }, 30_000);
+
+  test('POSIX statuses carry the registry install command', async () => {
+    setPlatform('linux');
+    shellInfoOverride = { shell: '/nonexistent/zsh', args: [], isWSL: false };
+    const byId = new Map((await detectProviders()).map((s) => [s.id, s]));
+
+    expect(byId.get('grok')!.installCommand).toBe('curl -fsSL https://x.ai/cli/install.sh | bash');
+  }, 30_000);
 });
 
 describe('buildProbe platform branches', () => {

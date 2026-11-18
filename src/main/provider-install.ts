@@ -11,6 +11,7 @@
 // not drag in node-pty.
 import type { PtyManager } from './pty-manager';
 import { listProviders } from './providers';
+import { resolveInstall } from './install-command';
 
 /**
  * Namespace prefix for install ptys. cancelProviderInstall only kills ids
@@ -37,14 +38,15 @@ export async function startProviderInstall(
     throw new Error('Invalid providerId');
   }
   const provider = listProviders().find((p) => p.id === providerId);
-  const command = provider?.setup.installCommand;
-  if (!provider || !command) {
+  const install = provider ? resolveInstall(provider.setup, ptyManager.getDefaultShellInfo()) : null;
+  const command = install?.installCommand;
+  if (!install || !command) {
     throw new Error(`Provider '${providerId}' has no runnable install command`);
   }
   const ptyId = `${INSTALL_PTY_PREFIX}${providerId}`;
   // A previous run's pty may still be around (user reopened the modal).
   await ptyManager.kill(ptyId);
-  ptyManager.createInstallSession(ptyId, command);
+  ptyManager.createInstallSession(ptyId, command, { powershell: install.powershell });
   return { ptyId, command };
 }
 

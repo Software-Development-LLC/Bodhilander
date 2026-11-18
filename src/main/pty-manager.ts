@@ -18,7 +18,8 @@ import {
 import { detectShell, ShellInfo } from './shell-detector';
 import { detectSpawnFailure } from './spawn-failure';
 import { LiveAccountBinding, LiveAccountBindings, ProviderInstallHint } from '../shared/types';
-import { getShellLaunch } from './shell-launch';
+import { getPowershellLaunch, getShellLaunch } from './shell-launch';
+import { resolveInstall } from './install-command';
 import { envWithoutSessionVars } from './providers/passthrough';
 import {
   ensureTranscriptInConfigDir,
@@ -752,7 +753,9 @@ export class PtyManager extends EventEmitter {
 
     session.spawnFailureNotified = true;
     session.launchOutput = '';
-    const { setup } = session.provider;
+    // Resolved against the current shell, which is what the banner's install
+    // button will run under, not the one this session launched in.
+    const install = resolveInstall(session.provider.setup, this.getShellInfo());
     log.warn(`[PTY] ${session.provider.name} launch failure (${kind}) detected for session ${id}: ${failure.line}`);
     const hint: ProviderInstallHint = {
       sessionId: id,
@@ -760,9 +763,9 @@ export class PtyManager extends EventEmitter {
       providerName: session.provider.name,
       command: session.provider.command,
       kind,
-      installHint: setup.installHint,
-      installCommand: setup.installCommand ?? null,
-      docsUrl: setup.docsUrl,
+      installHint: install.installHint,
+      installCommand: install.installCommand,
+      docsUrl: session.provider.setup.docsUrl,
     };
     this.emit('providerHint', hint);
   }
@@ -772,9 +775,10 @@ export class PtyManager extends EventEmitter {
    * instead of copy-pasting into their own terminal (follow-up to #97's
    * install hints). Runs through the user's shell like sessions do, defers
    * emission until the renderer primes it (BDHLNDR-33), and exits when the
-   * install command does — the pty's exit code is the install's.
+   * install command does — the pty's exit code is the install's. A
+   * `powershell` command bypasses the user's shell for PowerShell.
    */
-  createInstallSession(id: string, installCommand: string): void {
+  createInstallSession(id: string, installCommand: string, options: { powershell?: boolean } = {}): void {
     const shellInfo = this.getShellInfo();
     if (!shellInfo.shell || !fs.existsSync(shellInfo.shell)) {
       throw new Error(`Shell not found: ${shellInfo.shell || '(empty)'}`);
@@ -782,7 +786,9 @@ export class PtyManager extends EventEmitter {
 
     const cwd = os.homedir();
     // Static registry string (never user input) with no env interpolation.
-    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
+    const shellLaunch = options.powershell
+      ? getPowershellLaunch(shellInfo)
+      : getShellLaunch(shellInfo, { needsEnvRef: false });
 
     log.info(`[PTY] Starting install pty ${id}: ${installCommand}`);
 

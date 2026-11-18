@@ -99,9 +99,17 @@ mock.module('../repositories/preferences', () => ({
   deletePreference: () => {},
 }));
 // Any real, existing executable path works — the pty spawn is mocked.
+const defaultShellInfo = { shell: process.execPath, args: ['-l', '-i'], isWSL: false };
+let shellInfoStub = defaultShellInfo;
 mock.module('../shell-detector', () => ({
-  detectShell: () => ({ shell: process.execPath, args: ['-l', '-i'], isWSL: false }),
+  detectShell: () => shellInfoStub,
 }));
+
+const realPlatform = process.platform;
+const realSystemRoot = process.env.SystemRoot;
+function setPlatform(platform: string): void {
+  Object.defineProperty(process, 'platform', { value: platform });
+}
 
 const { PtyManager } = await import('../pty-manager');
 const { getProvider } = await import('../providers');
@@ -116,6 +124,10 @@ beforeEach(() => {
 
 afterEach(() => {
   Date.now = realDateNow;
+  setPlatform(realPlatform);
+  shellInfoStub = defaultShellInfo;
+  if (realSystemRoot === undefined) delete process.env.SystemRoot;
+  else process.env.SystemRoot = realSystemRoot;
 });
 
 afterAll(() => {
@@ -197,6 +209,34 @@ describe('checkSpawnFailure (via session data flow)', () => {
     expect(hints.length).toBe(0);
   });
 
+  test('resolves the hint against the current shell: native Windows gets the PowerShell installer', () => {
+    setPlatform('win32');
+    const manager = new PtyManager();
+    const hints: ProviderInstallHint[] = [];
+    manager.on('providerHint', (hint: ProviderInstallHint) => hints.push(hint));
+    manager.createSession('session-kimi', cwd, true, 'kimi');
+    const ptyProc = spawned[spawned.length - 1];
+
+    ptyProc.dataCb!("'kimi' is not recognized as an internal or external command\n");
+    expect(hints.length).toBe(1);
+    expect(hints[0].installHint).toBe('irm https://code.kimi.com/kimi-code/install.ps1 | iex');
+    expect(hints[0].installCommand).toBe('irm https://code.kimi.com/kimi-code/install.ps1 | iex');
+  });
+
+  test('resolves the hint to the POSIX installer under WSL', () => {
+    setPlatform('win32');
+    shellInfoStub = { ...defaultShellInfo, isWSL: true };
+    const manager = new PtyManager();
+    const hints: ProviderInstallHint[] = [];
+    manager.on('providerHint', (hint: ProviderInstallHint) => hints.push(hint));
+    manager.createSession('session-kimi', cwd, true, 'kimi');
+    const ptyProc = spawned[spawned.length - 1];
+
+    ptyProc.dataCb!('bash: kimi: command not found\n');
+    expect(hints.length).toBe(1);
+    expect(hints[0].installCommand).toBe('curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash');
+  });
+
   test('normal startup output emits nothing', () => {
     const manager = new PtyManager();
     const { hints, ptyProc } = createAgentSession(manager);
@@ -214,6 +254,38 @@ describe('createInstallSession', () => {
     const ptyProc = spawned[0];
     expect(ptyProc.spawnFile).toBe(process.execPath);
     expect(ptyProc.spawnArgs[ptyProc.spawnArgs.length - 1]).toBe('npm install -g --force @openai/codex');
+  });
+
+  test('a powershell command runs in a configured PowerShell as-is', () => {
+    setPlatform('win32');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-pwsh-'));
+    const pwsh = path.join(dir, 'PowerShell', 'pwsh.exe');
+    fs.mkdirSync(path.dirname(pwsh));
+    fs.writeFileSync(pwsh, '');
+    shellInfoStub = { shell: pwsh, args: [], isWSL: false };
+    try {
+      new PtyManager().createInstallSession('__install-kimi', 'irm x | iex', { powershell: true });
+      expect(spawned[0].spawnFile).toBe(pwsh);
+      expect(spawned[0].spawnArgs).toEqual(['-NoLogo', '-Command', 'irm x | iex']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a powershell command from a non-PowerShell shell spawns Windows PowerShell directly', () => {
+    setPlatform('win32');
+    const systemRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-sysroot-'));
+    const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    fs.mkdirSync(path.dirname(powershell), { recursive: true });
+    fs.writeFileSync(powershell, '');
+    process.env.SystemRoot = systemRoot;
+    try {
+      new PtyManager().createInstallSession('__install-kimi', 'irm x | iex', { powershell: true });
+      expect(spawned[0].spawnFile).toBe(powershell);
+      expect(spawned[0].spawnArgs).toEqual(['-NoLogo', '-Command', 'irm x | iex']);
+    } finally {
+      fs.rmSync(systemRoot, { recursive: true, force: true });
+    }
   });
 
   test('defers output until primed, then streams live', () => {

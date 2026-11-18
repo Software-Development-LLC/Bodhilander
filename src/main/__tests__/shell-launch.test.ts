@@ -25,7 +25,7 @@ mock.module('fs', () => ({
     String(p).includes('WindowsPowerShell') ? powershellExists : realExistsSync(p),
 }));
 
-const { getShellLaunch } = await import('../shell-launch');
+const { getPowershellLaunch, getShellLaunch } = await import('../shell-launch');
 
 const realPlatform = process.platform;
 function setPlatform(platform: string): void {
@@ -116,6 +116,38 @@ describe('getShellLaunch branches', () => {
       setPlatform(platform);
       expect(getShellLaunch(info, ENV_REF).envRef('VAR').includes('%')).toBe(false);
     }
+  });
+});
+
+describe('getPowershellLaunch', () => {
+  test('a configured PowerShell is used as-is, pwsh included', () => {
+    setPlatform('win32');
+    for (const configured of [
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    ]) {
+      const launch = getPowershellLaunch(shell({ shell: configured }));
+      expect(launch.shell).toBe(configured);
+      expect(launch.wrap('irm x | iex')).toEqual(['-NoLogo', '-Command', 'irm x | iex']);
+    }
+  });
+
+  test('cmd.exe and Git Bash hand the command to Windows PowerShell directly', () => {
+    setPlatform('win32');
+    for (const configured of ['C:\\Windows\\System32\\cmd.exe', 'C:\\Program Files\\Git\\bin\\bash.exe']) {
+      const launch = getPowershellLaunch(shell({ shell: configured }));
+      expect(launch.shell.toLowerCase()).toContain('windowspowershell');
+      expect(path_isAbsoluteWin(launch.shell)).toBe(true);
+      // Never nested inside the user's shell: no `-c` or `/c` wrapper.
+      expect(launch.wrap('irm x | iex')).toEqual(['-NoLogo', '-Command', 'irm x | iex']);
+    }
+  });
+
+  test('throws a clear error when Windows PowerShell is absent', () => {
+    setPlatform('win32');
+    powershellExists = false;
+    expect(() => getPowershellLaunch(shell({ shell: 'C:\\Program Files\\Git\\bin\\bash.exe' })))
+      .toThrow(/PowerShell not found.*installer/);
   });
 });
 

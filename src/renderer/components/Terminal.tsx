@@ -272,7 +272,7 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     if (!installHint?.installCommand) return;
     // Install commands run remote scripts / global npm installs — show the
     // exact command before executing anything.
-    if (!window.confirm(`This will run in your shell:\n\n${installHint.installCommand}\n\nContinue?`)) return;
+    if (!window.confirm(`This will run on your machine:\n\n${installHint.installCommand}\n\nContinue?`)) return;
     try {
       const flow = await window.electronAPI.runProviderInstall(installHint.providerId);
       setInstallFlow(flow);
