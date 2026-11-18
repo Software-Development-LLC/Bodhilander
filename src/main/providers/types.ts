@@ -120,6 +120,17 @@ export interface ProviderDefinition {
      * Omit when installation needs manual steps (e.g. a GUI download).
      */
     installCommand?: string;
+    /**
+     * Native Windows (non-WSL) replacement for installHint/installCommand,
+     * for vendors whose POSIX one-liner cannot run there. Absent = the POSIX
+     * values apply on every platform.
+     */
+    windows?: {
+      installHint: string;
+      installCommand?: string;
+      /** Runs under PowerShell whatever the user's shell (`irm ... | iex`). */
+      powershell?: boolean;
+    };
     /** Official installation/authentication documentation URL. */
     docsUrl: string;
     /** How to authenticate after installing. */

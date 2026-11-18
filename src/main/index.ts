@@ -1624,8 +1624,8 @@ safeHandle('providers:detect', async () => {
 // Run a provider's install command in a visible pty the renderer attaches a
 // Terminal to (Settings → Providers "Install" button / launch-failure
 // banner). Validation + orchestration live in provider-install.ts.
-safeHandle('providers:run-install', (providerId: unknown) =>
-  startProviderInstall(ptyManager, providerId));
+safeHandle('providers:run-install', (providerId: unknown, confirmedCommand: unknown) =>
+  startProviderInstall(ptyManager, providerId, confirmedCommand));
 
 safeHandle('providers:cancel-install', (ptyId: unknown) =>
   cancelProviderInstall(ptyManager, ptyId));
