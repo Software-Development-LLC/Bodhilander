@@ -39,6 +39,7 @@ export const ProviderSettings: React.FC = () => {
       setInstallFlow({ name: p.name, ptyId, command });
     } catch (error) {
       console.error('Failed to start provider install:', error);
+      window.alert(`Install did not start: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
 
