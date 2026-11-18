@@ -18,8 +18,9 @@ mock.module('electron', () => ({
   app: { getPath: () => '/nonexistent-bodhilander-test-userdata' },
 }));
 // preferences pulls in better-sqlite3 via the database module — stub it.
+let customShellPref = '';
 mock.module('../repositories/preferences', () => ({
-  getPreference: () => '',
+  getPreference: () => customShellPref,
 }));
 
 // Stub the shell detector: importing the real module AND mock.module-ing the
@@ -29,8 +30,12 @@ const defaultShellInfo: ShellInfo = process.platform === 'win32'
   ? { shell: process.env.ComSpec ?? 'cmd.exe', args: [], isWSL: false }
   : { shell: process.env.SHELL ?? '/bin/zsh', args: ['-l', '-i'], isWSL: false };
 let shellInfoOverride: ShellInfo | null = null;
+const detectedFor: string[] = [];
 mock.module('../shell-detector', () => ({
-  detectShell: () => shellInfoOverride ?? defaultShellInfo,
+  detectShell: (customShellPath: string) => {
+    detectedFor.push(customShellPath);
+    return shellInfoOverride ?? defaultShellInfo;
+  },
 }));
 
 const { detectProviders, buildProbe, extractVersion } = await import('../provider-detector');
@@ -44,6 +49,8 @@ function setPlatform(platform: string): void {
 afterEach(() => {
   setPlatform(realPlatform);
   shellInfoOverride = null;
+  customShellPref = '';
+  detectedFor.length = 0;
 });
 
 describe('detectProviders', () => {
@@ -81,6 +88,12 @@ describe('detectProviders', () => {
       installCommand: 'irm https://x.ai/cli/install.ps1 | iex',
     });
     expect(byId.get('opencode')!.installCommand).toBe('npm install -g opencode-ai');
+  }, 30_000);
+
+  test('resolves install commands against the configured shell preference', async () => {
+    customShellPref = '/opt/custom/shell';
+    await detectProviders();
+    expect(detectedFor[0]).toBe('/opt/custom/shell');
   }, 30_000);
 
   test('POSIX statuses carry the registry install command', async () => {
