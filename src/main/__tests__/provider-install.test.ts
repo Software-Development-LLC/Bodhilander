@@ -18,7 +18,7 @@ mock.module('electron', () => ({
   app: { getPath: () => '/nonexistent-bodhilander-test-userdata' },
 }));
 
-const { startProviderInstall, cancelProviderInstall, INSTALL_PTY_PREFIX } =
+const { startProviderInstall, cancelProviderInstall, INSTALL_PTY_PREFIX, INSTALL_COMMAND_CHANGED } =
   await import('../provider-install');
 const { listProviders } = await import('../providers');
 
@@ -52,12 +52,11 @@ function stubPtyManager(shellInfo: ShellInfo = nativeShell): { manager: PtyManag
 describe('startProviderInstall', () => {
   test('spawns the registry install command under the install namespace', async () => {
     const { manager, calls } = stubPtyManager();
-    const result = await startProviderInstall(manager, 'codex');
+    const codexCommand = listProviders().find((p) => p.id === 'codex')!.setup.installCommand!;
+    const result = await startProviderInstall(manager, 'codex', codexCommand);
 
     expect(result.ptyId).toBe(`${INSTALL_PTY_PREFIX}codex`);
-    expect(result.command).toBe(
-      listProviders().find((p) => p.id === 'codex')!.setup.installCommand!
-    );
+    expect(result.command).toBe(codexCommand);
     // Stale pty from a previous run is killed before the new spawn.
     expect(calls.killed).toEqual([result.ptyId]);
     expect(calls.created).toEqual([
@@ -68,7 +67,7 @@ describe('startProviderInstall', () => {
   test('native Windows runs the PowerShell installer under PowerShell', async () => {
     setPlatform('win32');
     const { manager, calls } = stubPtyManager();
-    const result = await startProviderInstall(manager, 'grok');
+    const result = await startProviderInstall(manager, 'grok', 'irm https://x.ai/cli/install.ps1 | iex');
 
     expect(result.command).toBe('irm https://x.ai/cli/install.ps1 | iex');
     expect(calls.created).toEqual([
@@ -79,7 +78,7 @@ describe('startProviderInstall', () => {
   test('native Windows runs opencode through npm in the user shell', async () => {
     setPlatform('win32');
     const { manager, calls } = stubPtyManager();
-    const result = await startProviderInstall(manager, 'opencode');
+    const result = await startProviderInstall(manager, 'opencode', 'npm install -g opencode-ai');
 
     expect(result.command).toBe('npm install -g opencode-ai');
     expect(calls.created[0].options).toEqual({ powershell: false });
@@ -88,10 +87,30 @@ describe('startProviderInstall', () => {
   test('WSL keeps the POSIX installer', async () => {
     setPlatform('win32');
     const { manager, calls } = stubPtyManager({ shell: 'wsl.exe', args: [], isWSL: true });
-    const result = await startProviderInstall(manager, 'grok');
+    const result = await startProviderInstall(manager, 'grok', 'curl -fsSL https://x.ai/cli/install.sh | bash');
 
     expect(result.command).toBe('curl -fsSL https://x.ai/cli/install.sh | bash');
     expect(calls.created[0].options).toEqual({ powershell: false });
+  });
+
+  test('refuses when the shell changed after the command was confirmed', async () => {
+    setPlatform('win32');
+    // Confirmed under WSL, but the shell is now cmd.exe: the PowerShell
+    // installer must not run in place of the confirmed curl | bash.
+    const { manager, calls } = stubPtyManager(nativeShell);
+    await expect(
+      startProviderInstall(manager, 'grok', 'curl -fsSL https://x.ai/cli/install.sh | bash')
+    ).rejects.toThrow(INSTALL_COMMAND_CHANGED);
+    expect(calls.killed).toEqual([]);
+    expect(calls.created).toEqual([]);
+  });
+
+  test('refuses a missing or non-string confirmed command', async () => {
+    const { manager, calls } = stubPtyManager();
+    for (const bad of [undefined, null, 42, '']) {
+      await expect(startProviderInstall(manager, 'codex', bad)).rejects.toThrow(INSTALL_COMMAND_CHANGED);
+    }
+    expect(calls.created).toEqual([]);
   });
 
   test('rejects unknown providers', async () => {

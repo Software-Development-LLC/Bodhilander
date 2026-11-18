@@ -288,6 +288,20 @@ describe('createInstallSession', () => {
     }
   });
 
+  test('a missing Windows PowerShell throws before any install session exists', () => {
+    setPlatform('win32');
+    process.env.SystemRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bodhi-empty-sysroot-'));
+    const manager = new PtyManager();
+    try {
+      expect(() => manager.createInstallSession('__install-kimi', 'irm x | iex', { powershell: true }))
+        .toThrow(/PowerShell not found/);
+      expect(spawned.length).toBe(0);
+      expect(manager.getSession('__install-kimi')).toBeUndefined();
+    } finally {
+      fs.rmSync(process.env.SystemRoot, { recursive: true, force: true });
+    }
+  });
+
   test('a WSL shell never hands a command to PowerShell', () => {
     setPlatform('win32');
     shellInfoStub = { ...defaultShellInfo, args: ['-d', 'Ubuntu'], isWSL: true };

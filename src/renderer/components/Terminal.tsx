@@ -274,10 +274,11 @@ const Terminal: React.FC<TerminalProps> = ({ sessionId, cwd, launchClaude = true
     // exact command before executing anything.
     if (!window.confirm(`This will run on your machine:\n\n${installHint.installCommand}\n\nContinue?`)) return;
     try {
-      const flow = await window.electronAPI.runProviderInstall(installHint.providerId);
+      const flow = await window.electronAPI.runProviderInstall(installHint.providerId, installHint.installCommand);
       setInstallFlow(flow);
     } catch (err) {
       console.error('Failed to start provider install:', err);
+      window.alert(`Install did not start: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [installHint]);
 

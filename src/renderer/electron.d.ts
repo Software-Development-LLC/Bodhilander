@@ -117,7 +117,7 @@ interface ElectronAPI {
   // Shell
   openExternal: (url: string) => Promise<void>;
   detectProviders: () => Promise<ProviderStatus[]>;
-  runProviderInstall: (providerId: string) => Promise<{ ptyId: string; command: string }>;
+  runProviderInstall: (providerId: string, confirmedCommand: string) => Promise<{ ptyId: string; command: string }>;
   cancelProviderInstall: (ptyId: string) => Promise<void>;
   onProviderInstallHint: (callback: (hint: ProviderInstallHint) => void) => () => void;
   vaultList: () => Promise<KeyVaultStatus[]>;

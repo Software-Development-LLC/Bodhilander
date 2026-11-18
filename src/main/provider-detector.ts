@@ -93,7 +93,7 @@ async function probeCommand(command: string): Promise<{ installed: boolean; vers
 
 /** Probe every registered provider concurrently. */
 export function detectProviders(): Promise<ProviderStatus[]> {
-  const shellInfo = detectShell(getPreference('customShellPath') ?? '');
+  const shellInfo = detectShell(getPreference('customShellPath') || '');
   return Promise.all(
     listProviders().map(async (p): Promise<ProviderStatus> => {
       const { installed, version } = await probeCommand(p.command);

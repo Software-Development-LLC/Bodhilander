@@ -20,6 +20,8 @@ import { resolveInstall } from './install-command';
  */
 export const INSTALL_PTY_PREFIX = '__install-';
 
+export const INSTALL_COMMAND_CHANGED = 'The install command changed since it was shown; confirm the current one';
+
 export interface ProviderInstallStart {
   ptyId: string;
   command: string;
@@ -29,10 +31,13 @@ export interface ProviderInstallStart {
  * Spawn the install pty for a provider. Commands come only from the static
  * provider registry — never from the renderer. Throws for unknown providers
  * and for providers without a runnable install command (e.g. GUI installs).
+ * The renderer's confirmed command is only compared, never run: a shell
+ * change since the dialog was built would otherwise run unconfirmed text.
  */
 export async function startProviderInstall(
   ptyManager: PtyManager,
   providerId: unknown,
+  confirmedCommand: unknown,
 ): Promise<ProviderInstallStart> {
   if (typeof providerId !== 'string' || providerId.length === 0) {
     throw new Error('Invalid providerId');
@@ -42,6 +47,9 @@ export async function startProviderInstall(
   const command = install?.installCommand;
   if (!install || !command) {
     throw new Error(`Provider '${providerId}' has no runnable install command`);
+  }
+  if (confirmedCommand !== command) {
+    throw new Error(INSTALL_COMMAND_CHANGED);
   }
   const ptyId = `${INSTALL_PTY_PREFIX}${providerId}`;
   // A previous run's pty may still be around (user reopened the modal).
