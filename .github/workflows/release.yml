@@ -97,7 +97,7 @@ jobs:
           # 2026), which the project's node-gyp doesn't yet detect — the
           # postinstall electron-rebuild fails with "Could not find any Visual
           # Studio installation to use". Same build-reproducibility reasoning as
-          # the pinned macos-14 runner below. Revisit when node-gyp/node-pty gain
+          # the pinned macos-15 runner below. Revisit when node-gyp/node-pty gain
           # VS 2026 support (or if windows-2022 is retired).
           - runs-on: windows-2022
             platform: win
@@ -113,7 +113,7 @@ jobs:
           # Command Line Tools python3, not setup-python. Labels never fall
           # back: if those Macs are offline, edit this entry back to
           # `macos-15-intel`.
-          - runs-on: macos-14
+          - runs-on: macos-15
             platform: mac-arm64
           - runs-on: [self-hosted, macOS, X64, intel]
             platform: mac-x64
