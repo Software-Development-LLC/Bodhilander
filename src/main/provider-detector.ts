@@ -11,6 +11,7 @@
 import { execFile } from 'child_process';
 import { listProviders } from './providers';
 import { detectShell } from './shell-detector';
+import { resolveInstall } from './install-command';
 import { getPreference } from './repositories/preferences';
 import { ProviderStatus } from '../shared/types';
 
@@ -92,17 +93,19 @@ async function probeCommand(command: string): Promise<{ installed: boolean; vers
 
 /** Probe every registered provider concurrently. */
 export function detectProviders(): Promise<ProviderStatus[]> {
+  const shellInfo = detectShell(getPreference('customShellPath') ?? '');
   return Promise.all(
     listProviders().map(async (p): Promise<ProviderStatus> => {
       const { installed, version } = await probeCommand(p.command);
+      const install = resolveInstall(p.setup, shellInfo);
       return {
         id: p.id,
         name: p.name,
         command: p.command,
         installed,
         version,
-        installHint: p.setup.installHint,
-        installCommand: p.setup.installCommand ?? null,
+        installHint: install.installHint,
+        installCommand: install.installCommand,
         docsUrl: p.setup.docsUrl,
         loginHint: p.setup.loginHint,
       };

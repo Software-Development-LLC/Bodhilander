@@ -287,8 +287,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   detectProviders: (): Promise<ProviderStatus[]> => ipcRenderer.invoke('providers:detect'),
-  runProviderInstall: (providerId: string): Promise<{ ptyId: string; command: string }> =>
-    ipcRenderer.invoke('providers:run-install', providerId),
+  runProviderInstall: (providerId: string, confirmedCommand: string): Promise<{ ptyId: string; command: string }> =>
+    ipcRenderer.invoke('providers:run-install', providerId, confirmedCommand),
   cancelProviderInstall: (ptyId: string): Promise<void> =>
     ipcRenderer.invoke('providers:cancel-install', ptyId),
   onProviderInstallHint: (callback: (hint: ProviderInstallHint) => void) => {

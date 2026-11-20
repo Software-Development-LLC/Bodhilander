@@ -5,6 +5,8 @@ let releaseListen: () => void = () => {};
 let failListen: (err: Error) => void = () => {};
 const closedSockets: string[] = [];
 let unpairHook: ((deviceId: string) => void) | undefined;
+let boundPort = 8443;
+let ptyPortSource: () => number | null = () => -1;
 
 mock.module('electron-log', () => ({ default: { info() {}, warn() {}, error() {}, debug() {} } }));
 mock.module('../pairing/pairing-manager', () => ({
@@ -20,12 +22,15 @@ mock.module('../ws-server', () => ({
     closeConnectionsForDevice(id: string) { closedSockets.push(id); },
   }),
 }));
+mock.module('../../pty-manager', () => ({
+  ptyManager: { setApiPortSource(source: () => number | null) { ptyPortSource = source; } },
+}));
 mock.module('../http-server', () => ({
   createHttpServer: async (config: { onDeviceUnpaired?: (id: string) => void }) => {
     listens++;
     unpairHook = config.onDeviceUnpaired;
     await new Promise<void>((resolve, reject) => { releaseListen = resolve; failListen = reject; });
-    return { server: { close: (cb: () => void) => cb() }, port: 8443 };
+    return { server: { close: (cb: () => void) => cb() }, port: boundPort };
   },
 }));
 
@@ -35,6 +40,7 @@ const server = createApiServer();
 beforeEach(async () => {
   await server.stop();
   listens = 0;
+  boundPort = 8443;
 });
 
 describe('ApiServer.start', () => {
@@ -98,5 +104,19 @@ describe('ApiServer.start', () => {
     closedSockets.length = 0;
     expect(server.unpairDevice('nobody')).toBe(false);
     expect(closedSockets).toEqual([]);
+  });
+});
+
+describe('the port agent sessions are handed', () => {
+  test('is the one the server bound, and none once it stops', async () => {
+    boundPort = 8447;
+    const started = server.start();
+    await Promise.resolve();
+    releaseListen();
+    await started;
+    expect(ptyPortSource()).toBe(8447);
+
+    await server.stop();
+    expect(ptyPortSource()).toBeNull();
   });
 });

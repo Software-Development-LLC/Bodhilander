@@ -13,6 +13,7 @@ import log from 'electron-log';
 import { createHttpServer } from './http-server';
 import { createWsServer, WsServer } from './ws-server';
 import { PairingManager } from './pairing/pairing-manager';
+import { ptyManager } from '../pty-manager';
 import type { ChatEvent } from './chat-parser';
 
 export interface ApiServerConfig {
@@ -50,6 +51,8 @@ class ApiServer extends EventEmitter {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.pairingManager = new PairingManager();
+    // The hook script posts here, and the port is not always the configured one.
+    ptyManager.setApiPortSource(() => this._port);
   }
 
   get isRunning(): boolean {

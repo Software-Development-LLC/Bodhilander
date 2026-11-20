@@ -35,6 +35,11 @@ export const grokProvider = passthroughProvider({
   setup: {
     installHint: 'curl -fsSL https://x.ai/cli/install.sh | bash',
     installCommand: 'curl -fsSL https://x.ai/cli/install.sh | bash',
+    windows: {
+      installHint: 'irm https://x.ai/cli/install.ps1 | iex',
+      installCommand: 'irm https://x.ai/cli/install.ps1 | iex',
+      powershell: true,
+    },
     docsUrl: 'https://docs.x.ai/build/overview',
     loginHint: 'Run `grok` — the first launch prompts sign-in with your X/xAI account (requires SuperGrok or X Premium+)',
   },

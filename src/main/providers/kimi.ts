@@ -26,6 +26,11 @@ export const kimiProvider = passthroughProvider({
   setup: {
     installHint: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
     installCommand: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
+    windows: {
+      installHint: 'irm https://code.kimi.com/kimi-code/install.ps1 | iex',
+      installCommand: 'irm https://code.kimi.com/kimi-code/install.ps1 | iex',
+      powershell: true,
+    },
     docsUrl: 'https://moonshotai.github.io/kimi-code/',
     loginHint: 'Works out of the box; run `kimi login` to use your own Moonshot account',
   },

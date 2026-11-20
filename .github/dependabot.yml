@@ -11,4 +11,8 @@ updates:
       actions:
         patterns:
           - '*'
-
+  - package-ecosystem: "docker"
+    directories:
+      - "/relay"
+    schedule:
+      interval: "weekly"
