@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -287,8 +287,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Shell
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   detectProviders: (): Promise<ProviderStatus[]> => ipcRenderer.invoke('providers:detect'),
-  runProviderInstall: (providerId: string): Promise<{ ptyId: string; command: string }> =>
-    ipcRenderer.invoke('providers:run-install', providerId),
+  runProviderInstall: (providerId: string, confirmedCommand: string): Promise<{ ptyId: string; command: string }> =>
+    ipcRenderer.invoke('providers:run-install', providerId, confirmedCommand),
   cancelProviderInstall: (ptyId: string): Promise<void> =>
     ipcRenderer.invoke('providers:cancel-install', ptyId),
   onProviderInstallHint: (callback: (hint: ProviderInstallHint) => void) => {
@@ -400,6 +400,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   apiUpdateDevicePermissions: (deviceId: string, permissions: { canControl?: boolean; canModify?: boolean }) =>
     ipcRenderer.invoke('api:updateDevicePermissions', deviceId, permissions),
   apiHasPairingCode: (): Promise<{ active: boolean }> => ipcRenderer.invoke('api:hasPairingCode'),
+
+  // Claude Desktop
+  claudeDesktopGetStatus: (): Promise<ClaudeDesktopStatus> => ipcRenderer.invoke('claudeDesktop:getStatus'),
+  claudeDesktopEnable: (): Promise<ClaudeDesktopActionResult> => ipcRenderer.invoke('claudeDesktop:enable'),
+  claudeDesktopDisable: (): Promise<ClaudeDesktopActionResult> => ipcRenderer.invoke('claudeDesktop:disable'),
+  claudeDesktopInstall: (): Promise<ClaudeDesktopActionResult> => ipcRenderer.invoke('claudeDesktop:install'),
+  claudeDesktopSaveExtension: (): Promise<ClaudeDesktopActionResult> => ipcRenderer.invoke('claudeDesktop:saveExtension'),
 
 
   // Editor Integration

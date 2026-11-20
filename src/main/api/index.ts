@@ -13,6 +13,7 @@ import log from 'electron-log';
 import { createHttpServer } from './http-server';
 import { createWsServer, WsServer } from './ws-server';
 import { PairingManager } from './pairing/pairing-manager';
+import { ptyManager } from '../pty-manager';
 import type { ChatEvent } from './chat-parser';
 
 export interface ApiServerConfig {
@@ -42,6 +43,7 @@ class ApiServer extends EventEmitter {
   private config: ApiServerConfig;
   private _isRunning = false;
   private _port: number | null = null;
+  private starting: Promise<{ port: number; addresses: string[] }> | null = null;
 
   public readonly pairingManager: PairingManager;
 
@@ -49,6 +51,8 @@ class ApiServer extends EventEmitter {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.pairingManager = new PairingManager();
+    // The hook script posts here, and the port is not always the configured one.
+    ptyManager.setApiPortSource(() => this._port);
   }
 
   get isRunning(): boolean {
@@ -67,11 +71,18 @@ class ApiServer extends EventEmitter {
     return this.wsServer?.getClientCount() ?? 0;
   }
 
-  async start(): Promise<{ port: number; addresses: string[] }> {
+  /** Callers that overlap with a start already under way share its outcome. */
+  start(): Promise<{ port: number; addresses: string[] }> {
     if (this._isRunning) {
-      throw new Error('API server is already running');
+      return Promise.reject(new Error('API server is already running'));
     }
+    this.starting ??= this.listen().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
 
+  private async listen(): Promise<{ port: number; addresses: string[] }> {
     log.info('[ApiServer] Starting API server...');
 
     try {
@@ -86,6 +97,7 @@ class ApiServer extends EventEmitter {
         pairingManager: this.pairingManager,
         onDeviceUnpaired: (deviceId) => {
           this.wsServer?.closeConnectionsForDevice(deviceId);
+          this.emit('deviceUnpaired', deviceId);
         },
       });
 
@@ -138,6 +150,16 @@ class ApiServer extends EventEmitter {
       });
       this.httpServer = null;
     }
+  }
+
+  /** Every unpair goes through here, so the device's WebSockets close with it. */
+  unpairDevice(deviceId: string): boolean {
+    const removed = this.pairingManager.unpairDevice(deviceId);
+    if (removed) {
+      this.wsServer?.closeConnectionsForDevice(deviceId);
+      this.emit('deviceUnpaired', deviceId);
+    }
+    return removed;
   }
 
   getStatus(): ApiServerStatus {

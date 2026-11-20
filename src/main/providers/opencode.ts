@@ -26,6 +26,11 @@ export const opencodeProvider = passthroughProvider({
   setup: {
     installHint: 'curl -fsSL https://opencode.ai/install | bash',
     installCommand: 'curl -fsSL https://opencode.ai/install | bash',
+    // No PowerShell installer is published; npm runs in the user's shell.
+    windows: {
+      installHint: 'npm install -g opencode-ai',
+      installCommand: 'npm install -g opencode-ai',
+    },
     docsUrl: 'https://opencode.ai/docs',
     loginHint: 'Run `opencode auth login` and add a provider (or set that provider’s API key)',
   },

@@ -4,6 +4,8 @@ import { Group } from '../../shared/types';
 export function getAllGroups(): Group[] {
   const db = getDatabase();
   const rows = db.prepare('SELECT * FROM groups ORDER BY "order", created_at IS NULL, created_at, id').all() as any[];
+  // A parent that no longer exists would hide the group from every tree view.
+  const ids = new Set(rows.map(row => row.id));
 
   return rows.map(row => ({
     id: row.id,
@@ -12,7 +14,7 @@ export function getAllGroups(): Group[] {
     workingDir: row.working_dir || '',
     order: row.order,
     createdAt: new Date(row.created_at),
-    parentId: row.parent_id || null,
+    parentId: row.parent_id && ids.has(row.parent_id) ? row.parent_id : null,
     collapsed: Boolean(row.collapsed),
     claudeAccountId: row.claude_account_id ?? null,
     githubProjectNumber: row.github_project_number ?? null,
@@ -94,7 +96,11 @@ export function updateGroup(id: string, updates: Partial<Group>): void {
   }
 }
 
+/** Sub-groups move up to the deleted group's own parent rather than being orphaned. */
 export function deleteGroup(id: string): void {
   const db = getDatabase();
-  db.prepare('DELETE FROM groups WHERE id = ?').run(id);
+  db.transaction(() => {
+    db.prepare('UPDATE groups SET parent_id = (SELECT parent_id FROM groups WHERE id = ?) WHERE parent_id = ?').run(id, id);
+    db.prepare('DELETE FROM groups WHERE id = ?').run(id);
+  })();
 }

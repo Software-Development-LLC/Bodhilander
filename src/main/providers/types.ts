@@ -47,6 +47,8 @@ export interface ProviderLaunchConfig {
   agentSession?: AgentSessionLaunch;
   /** Isolated config dir for multi-account providers (BDHLNDR-31). */
   configDir?: string;
+  /** Port the local API server bound, which the hook script posts to; null while it is down. */
+  apiPort?: number | null;
 }
 
 export interface ProviderCommand {
@@ -118,6 +120,17 @@ export interface ProviderDefinition {
      * Omit when installation needs manual steps (e.g. a GUI download).
      */
     installCommand?: string;
+    /**
+     * Native Windows (non-WSL) replacement for installHint/installCommand,
+     * for vendors whose POSIX one-liner cannot run there. Absent = the POSIX
+     * values apply on every platform.
+     */
+    windows?: {
+      installHint: string;
+      installCommand?: string;
+      /** Runs under PowerShell whatever the user's shell (`irm ... | iex`). */
+      powershell?: boolean;
+    };
     /** Official installation/authentication documentation URL. */
     docsUrl: string;
     /** How to authenticate after installing. */

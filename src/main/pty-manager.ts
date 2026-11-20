@@ -18,7 +18,9 @@ import {
 import { detectShell, ShellInfo } from './shell-detector';
 import { detectSpawnFailure } from './spawn-failure';
 import { LiveAccountBinding, LiveAccountBindings, ProviderInstallHint } from '../shared/types';
-import { getShellLaunch } from './shell-launch';
+import { getPowershellLaunch, getShellLaunch } from './shell-launch';
+import { resolveInstall } from './install-command';
+import { envWithoutSessionVars } from './providers/passthrough';
 import {
   ensureTranscriptInConfigDir,
   isPathSafeConversationId,
@@ -253,6 +255,7 @@ export class PtyManager extends EventEmitter {
   private readonly exitWaiters: Map<pty.IPty, () => void> = new Map();
   /** Queued ptys not yet signalled, so killAll can signal them out of turn. */
   private readonly queuedSignals: Map<pty.IPty, () => void> = new Map();
+  private apiPortSource: () => number | null = () => null;
 
   constructor(opts?: { killGraceMs?: number; serializeTeardown?: boolean }) {
     super();
@@ -272,6 +275,11 @@ export class PtyManager extends EventEmitter {
 
   getSocketPath(): string {
     return this.socketPath;
+  }
+
+  /** Where agent sessions learn the API's bound port, read at each spawn. */
+  setApiPortSource(source: () => number | null): void {
+    this.apiPortSource = source;
   }
 
   getDefaultShellInfo(): ShellInfo {
@@ -673,6 +681,7 @@ export class PtyManager extends EventEmitter {
         ? { id: agentSessionId, mode: agentSessionMode }
         : undefined,
       configDir: account?.configDir,
+      apiPort: this.apiPortSource(),
     });
 
     // Suffix appended to every shell's agent command. UUIDs are alphanumeric
@@ -690,7 +699,7 @@ export class PtyManager extends EventEmitter {
       // Visibility that key auth is active; values scrubbed via redactEnv.
       log.info(`[PTY] API-key auth enabled for '${provider.id}':`, redactEnv(vaultEnv));
     }
-    const processEnv = { ...process.env, ...launch.env, ...vaultEnv } as { [key: string]: string };
+    const processEnv = { ...envWithoutSessionVars(), ...launch.env, ...vaultEnv } as { [key: string]: string };
 
     // The agent command interpolates no env values — everything the CLI needs
     // travels in processEnv — so cmd.exe can host it unchanged (#106).
@@ -744,7 +753,9 @@ export class PtyManager extends EventEmitter {
 
     session.spawnFailureNotified = true;
     session.launchOutput = '';
-    const { setup } = session.provider;
+    // Resolved against the current shell, which is what the banner's install
+    // button will run under, not the one this session launched in.
+    const install = resolveInstall(session.provider.setup, this.getShellInfo());
     log.warn(`[PTY] ${session.provider.name} launch failure (${kind}) detected for session ${id}: ${failure.line}`);
     const hint: ProviderInstallHint = {
       sessionId: id,
@@ -752,9 +763,9 @@ export class PtyManager extends EventEmitter {
       providerName: session.provider.name,
       command: session.provider.command,
       kind,
-      installHint: setup.installHint,
-      installCommand: setup.installCommand ?? null,
-      docsUrl: setup.docsUrl,
+      installHint: install.installHint,
+      installCommand: install.installCommand,
+      docsUrl: session.provider.setup.docsUrl,
     };
     this.emit('providerHint', hint);
   }
@@ -764,9 +775,10 @@ export class PtyManager extends EventEmitter {
    * instead of copy-pasting into their own terminal (follow-up to #97's
    * install hints). Runs through the user's shell like sessions do, defers
    * emission until the renderer primes it (BDHLNDR-33), and exits when the
-   * install command does — the pty's exit code is the install's.
+   * install command does — the pty's exit code is the install's. A
+   * `powershell` command bypasses the user's shell for PowerShell.
    */
-  createInstallSession(id: string, installCommand: string): void {
+  createInstallSession(id: string, installCommand: string, options: { powershell?: boolean } = {}): void {
     const shellInfo = this.getShellInfo();
     if (!shellInfo.shell || !fs.existsSync(shellInfo.shell)) {
       throw new Error(`Shell not found: ${shellInfo.shell || '(empty)'}`);
@@ -774,7 +786,10 @@ export class PtyManager extends EventEmitter {
 
     const cwd = os.homedir();
     // Static registry string (never user input) with no env interpolation.
-    const shellLaunch = getShellLaunch(shellInfo, { needsEnvRef: false });
+    // A WSL shell runs the POSIX variant; PowerShell is never reached from it.
+    const shellLaunch = options.powershell && !shellInfo.isWSL
+      ? getPowershellLaunch(shellInfo)
+      : getShellLaunch(shellInfo, { needsEnvRef: false });
 
     log.info(`[PTY] Starting install pty ${id}: ${installCommand}`);
 

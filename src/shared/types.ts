@@ -511,6 +511,19 @@ export interface PairedDevice {
   canModify: boolean;
 }
 
+export interface ClaudeDesktopStatus {
+  enabled: boolean;
+  deviceId: string | null;
+  apiRunning: boolean;
+  port: number | null;
+  /** Whether this build carries the packaged extension file. */
+  extensionAvailable: boolean;
+}
+
+export type ClaudeDesktopActionResult =
+  | { success: true; status: ClaudeDesktopStatus; message?: string }
+  | { success: false; error: string; status?: ClaudeDesktopStatus };
+
 export interface ApiServerConfig {
   port?: number;
 }

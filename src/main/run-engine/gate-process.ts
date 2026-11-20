@@ -38,6 +38,7 @@
 import { spawn } from 'child_process';
 import type { GateCommand } from './gate-command';
 import { killTree } from '../process-tree';
+import { envWithoutSessionVars } from '../providers/passthrough';
 import { firstText } from './first-text';
 
 export class GateSpawnError extends Error {}
@@ -251,7 +252,7 @@ export function runGate(command: GateCommand, options: GateSpawnOptions): Promis
       cwd: command.cwd,
       // The gate's env is additive. A gate that did not inherit PATH could not
       // find git, gh or python, and the plugin shells out to all three.
-      env: { ...process.env, ...command.env },
+      env: { ...envWithoutSessionVars(), ...command.env },
       windowsHide: true,
       // Own process group on POSIX so a cancel or a timeout reaches the whole
       // tree — the CLI starts its own children, and they hold the worktree.

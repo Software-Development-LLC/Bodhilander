@@ -4,12 +4,17 @@
  * CRUD operations for sessions.
  */
 
+import * as fs from 'fs';
 import { Router, Request, Response } from 'express';
 import log from 'electron-log';
 import * as sessionsRepo from '../../repositories/sessions';
+import * as groupsRepo from '../../repositories/groups';
+import { findKnownRepo } from '../../../shared/known-repos';
+import { isClaudeDesktopDevice, recordClaudeDesktopSession } from '../claude-desktop-scope';
 import * as sessionEventsRepo from '../../repositories/session-events';
 import * as chatEventsRepo from '../../repositories/chat-events';
 import { ptyManager } from '../../pty-manager';
+import { remoteSessionEvents } from '../remote-session-events';
 import { routeNewSessionByUsage, sessionTokenRefreshSettled } from '../../session-routing';
 import { requireControlPermission, requireModifyPermission } from '../middleware/auth';
 import {
@@ -64,6 +69,22 @@ function parseLimitParam(raw: string | undefined): number | null {
     return null;
   }
   return Math.min(Math.floor(parsed), CHAT_EVENTS_MAX_LIMIT);
+}
+
+function isDirectory(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** A Claude Desktop session always runs Claude Code, in a known repo's own group. */
+function claudeDesktopTarget(workingDir: unknown): { groupId: string; workingDir: string; launchClaude: true } | null {
+  if (typeof workingDir !== 'string') return null;
+  const repo = findKnownRepo(workingDir, groupsRepo.getAllGroups(), sessionsRepo.getAllSessions(), process.platform);
+  if (!repo || !isDirectory(repo.dir)) return null;
+  return { groupId: repo.groupId, workingDir: repo.dir, launchClaude: true };
 }
 
 export function createSessionsRouter(): Router {
@@ -176,7 +197,14 @@ export function createSessionsRouter(): Router {
     validateCreateSession,
     async (req: Request, res: Response) => {
       try {
-        const { groupId, name, workingDir, launchClaude } = req.body;
+        const fromDesktop = isClaudeDesktopDevice(req.device);
+        const target = fromDesktop ? claudeDesktopTarget(req.body.workingDir) : req.body;
+        if (!target) {
+          res.status(403).json({ error: 'Claude Desktop can only start sessions in a repo Bodhilander knows' });
+          return;
+        }
+        const { groupId, workingDir, launchClaude } = target;
+        const { name } = req.body;
 
         // Generate UUID for new session
         const id = generateUUID();
@@ -203,6 +231,7 @@ export function createSessionsRouter(): Router {
         };
 
         sessionsRepo.createSession(session);
+        if (fromDesktop) recordClaudeDesktopSession(id);
         routeNewSessionByUsage(id);
 
         // Log session start event (BDHLNDR-17)
@@ -218,8 +247,11 @@ export function createSessionsRouter(): Router {
           ptyManager.createSession(id, session.workingDir, true, session.provider);
         }
 
+        const created = sessionsRepo.getSession(id) ?? session;
+        remoteSessionEvents.emit('created', created);
+
         log.info(`[SessionsAPI] Created session: ${id}`);
-        res.status(201).json({ session: sessionsRepo.getSession(id) ?? session });
+        res.status(201).json({ session: created });
       } catch (error) {
         log.error('[SessionsAPI] Error creating session:', error);
         res.status(500).json({ error: 'Failed to create session' });

@@ -47,6 +47,7 @@ mock.module('node-pty', () => ({
 
 const { createSessionsRouter } = await import('../sessions');
 const { ptyManager } = await import('../../../pty-manager');
+const { remoteSessionEvents } = await import('../../remote-session-events');
 
 /**
  * Per-test shadows over the singleton's prototype methods. getSession only
@@ -179,6 +180,24 @@ describe('POST /sessions', () => {
     expect(spawnedWhenRouted).toEqual([false]);
     expect(spawned).toBe(true);
     expect(body.session.claudeAccountId).toBe('acct-relief');
+  });
+
+  test('announces the new session so the desktop window lists it', async () => {
+    const announced: string[] = [];
+    const listener = (s: { id: string }) => announced.push(s.id);
+    remoteSessionEvents.on('created', listener);
+    try {
+      const res = await fetch(`${baseUrl}/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId, name: 'from desktop', workingDir: PRESENT_DIR }),
+      });
+      const body = await res.json() as { session: { id: string } };
+      expect(res.status).toBe(201);
+      expect(announced).toEqual([body.session.id]);
+    } finally {
+      remoteSessionEvents.off('created', listener);
+    }
   });
 });
 

@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import { ptyManager } from '../../pty-manager';
 import { requireControlPermission } from '../middleware/auth';
 import { getStringParam } from '../middleware/validation';
+import { isClaudeDesktopDevice } from '../claude-desktop-scope';
 
 export function createTerminalRouter(): Router {
   const router = Router();
@@ -28,6 +29,11 @@ export function createTerminalRouter(): Router {
     const session = ptyManager.getSession(sessionId);
     if (!session) {
       res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    if (isClaudeDesktopDevice(req.device) && !session.provider) {
+      res.status(403).json({ error: 'Claude Desktop can only type into a running agent, not a shell' });
       return;
     }
 

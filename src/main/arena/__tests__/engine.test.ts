@@ -98,6 +98,13 @@ const FAKE_PROVIDERS: Record<string, any> = {
       createParser: textParser,
     },
   },
+  tabReader: {
+    id: 'tabReader',
+    arena: {
+      buildCommand: () => `node -e "console.log('tab=' + (process.env.BODHILANDER_SESSION_ID || 'none'))"`,
+      createParser: textParser,
+    },
+  },
   failer: {
     id: 'failer',
     arena: {
@@ -253,6 +260,23 @@ describe('ArenaEngine', () => {
       expect(text).toContain('key=sekret-123');
     } finally {
       delete process.env.FAKE_PROVIDER_KEY;
+    }
+  }, 25_000);
+
+  test("contestants never inherit the tab identity of the app's own launch", async () => {
+    finalized.length = 0;
+    const saved = process.env.BODHILANDER_SESSION_ID;
+    process.env.BODHILANDER_SESSION_ID = 'tab-the-app-was-started-from';
+    try {
+      const engine = new ArenaEngine();
+      const settled = collectUntilSettled(engine, 1);
+      const run = engine.prepare('p', ['tabReader']);
+      engine.launch(run.id);
+      const updates = await settled;
+      expect(updates.map((u) => u.chunk).join('')).toContain('tab=none');
+    } finally {
+      if (saved === undefined) delete process.env.BODHILANDER_SESSION_ID;
+      else process.env.BODHILANDER_SESSION_ID = saved;
     }
   }, 25_000);
 

@@ -14,6 +14,9 @@ import rateLimit from 'express-rate-limit';
 import log from 'electron-log';
 import { PairingManager } from './pairing/pairing-manager';
 import { authenticateDevice } from './middleware/auth';
+import { getClientIp, isLoopbackIp } from './client-ip';
+import { forgetSessionsOnExit } from './claude-desktop-scope';
+import { ptyManager } from '../pty-manager';
 import { createSessionsRouter } from './routes/sessions';
 import { createGroupsRouter } from './routes/groups';
 import { createSystemRouter } from './routes/system';
@@ -21,6 +24,7 @@ import { createPairingRouter } from './routes/pairing';
 import { createTerminalRouter } from './routes/terminal';
 import { createHooksRouter } from './routes/hooks';
 import { createWebPushRouter } from './routes/web-push';
+import { createRunsRouter } from './routes/runs';
 
 export interface HttpServerConfig {
   port: number;
@@ -45,7 +49,7 @@ export interface HttpServerResult {
  */
 function isLocalNetworkIp(ip: string): boolean {
   // Allow loopback
-  if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost') {
+  if (isLoopbackIp(ip)) {
     return true;
   }
 
@@ -64,16 +68,6 @@ function isLocalNetworkIp(ip: string): boolean {
   ];
 
   return privateRanges.some(range => range.test(ip));
-}
-
-/**
- * Extract client IP from request
- */
-function getClientIp(req: Request): string {
-  // Don't trust X-Forwarded-For - we're not behind a proxy
-  const ip = req.socket.remoteAddress || '';
-  // Handle IPv4-mapped IPv6 addresses
-  return ip.replace(/^::ffff:/, '');
 }
 
 /**
@@ -96,6 +90,7 @@ function localNetworkOnly(req: Request, res: Response, next: NextFunction): void
  */
 export async function createHttpServer(config: HttpServerConfig): Promise<HttpServerResult> {
   const app = express();
+  forgetSessionsOnExit(ptyManager);
 
   // Security middleware
   app.use(helmet({
@@ -223,6 +218,7 @@ export async function createHttpServer(config: HttpServerConfig): Promise<HttpSe
   app.use('/api/v1/groups', generalLimiter, authMiddleware, createGroupsRouter());
   app.use('/api/v1/system', generalLimiter, authMiddleware, createSystemRouter());
   app.use('/api/v1/terminal', generalLimiter, authMiddleware, createTerminalRouter());
+  app.use('/api/v1/runs', generalLimiter, authMiddleware, createRunsRouter());
 
   // Error handling middleware
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

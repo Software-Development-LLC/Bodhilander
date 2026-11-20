@@ -114,7 +114,12 @@ export function useGroups() {
   const removeGroup = useCallback(async (id: string) => {
     try {
       await window.electronAPI.deleteGroup(id);
-      setGroups(prev => prev.filter(g => g.id !== id));
+      setGroups(prev => {
+        const parentId = prev.find(g => g.id === id)?.parentId ?? null;
+        return prev
+          .filter(g => g.id !== id)
+          .map(g => (g.parentId === id ? { ...g, parentId } : g));
+      });
     } catch (error) {
       console.error('Failed to remove group:', error);
       // Don't update state - DB failed

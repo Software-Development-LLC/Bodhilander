@@ -35,6 +35,7 @@ import log from 'electron-log';
 import { PairingManager, PairedDevice } from './pairing/pairing-manager';
 import { ptyManager } from '../pty-manager';
 import { messageText } from './ws-message';
+import { isClaudeDesktopDevice } from './claude-desktop-scope';
 
 export interface WsMessage {
   type: string;
@@ -277,6 +278,10 @@ function handleAuthMessage(
   const device = pairingManager.validateToken(token);
   if (!device) {
     rejectUnauthorized('token failed validation');
+    return;
+  }
+  if (isClaudeDesktopDevice(device)) {
+    rejectUnauthorized('the Claude Desktop device has no WebSocket access');
     return;
   }
 

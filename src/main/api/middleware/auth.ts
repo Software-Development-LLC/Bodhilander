@@ -7,6 +7,8 @@
 import { Request, Response, NextFunction } from 'express';
 import log from 'electron-log';
 import { PairingManager, PairedDevice } from '../pairing/pairing-manager';
+import { claudeDesktopRefusal, isClaudeDesktopDevice } from '../claude-desktop-scope';
+import { getClientIp } from '../client-ip';
 
 // Extend Express Request to include device info
 declare global {
@@ -44,6 +46,15 @@ export function authenticateDevice(pairingManager: PairingManager) {
       log.warn('[Auth] Invalid or expired token');
       res.status(401).json({ error: 'Invalid or expired token' });
       return;
+    }
+
+    if (isClaudeDesktopDevice(device)) {
+      const refusal = claudeDesktopRefusal(req.method, getClientIp(req), req.originalUrl);
+      if (refusal) {
+        log.warn(`[Auth] Claude Desktop request refused from ${getClientIp(req)}: ${req.method} ${req.originalUrl.split('?')[0]}`);
+        res.status(403).json({ error: refusal });
+        return;
+      }
     }
 
     // Update last used timestamp

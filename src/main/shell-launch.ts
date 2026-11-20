@@ -49,7 +49,7 @@ function powershellLaunch(shell: string): ShellLaunch {
  * a poisoned PATH can't substitute the binary. Throws a clear error rather
  * than spawning an ENOENT if it is somehow absent (e.g. a pwsh-only image).
  */
-function windowsPowershellPath(): string {
+function windowsPowershellPath(requiredBy: string): string {
   // SystemRoot can be set-but-empty in some sandboxed processes; an empty or
   // whitespace value would make path.join produce a relative (PATH-relative)
   // path, so fall back to the default whenever it isn't a usable string.
@@ -58,11 +58,28 @@ function windowsPowershellPath(): string {
   const candidate = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   if (!fs.existsSync(candidate)) {
     throw new Error(
-      `Windows PowerShell not found at ${candidate}. Agent launches from a cmd.exe ` +
-      `shell require it; set your Bodhilander shell to PowerShell or Git Bash instead.`
+      `Windows PowerShell not found at ${candidate}. ${requiredBy}`
     );
   }
   return candidate;
+}
+
+function isPowershell(shellInfo: ShellInfo): boolean {
+  return shellInfo.shell.toLowerCase().includes('powershell');
+}
+
+/**
+ * Launch for a PowerShell-syntax command (`irm ... | iex`). A configured
+ * PowerShell runs it as-is; any other Windows shell hands it to Windows
+ * PowerShell directly, never nested inside `bash -c` or `cmd /c`.
+ */
+export function getPowershellLaunch(shellInfo: ShellInfo): ShellLaunch {
+  if (isPowershell(shellInfo)) {
+    return powershellLaunch(shellInfo.shell);
+  }
+  return powershellLaunch(windowsPowershellPath(
+    'This installer needs it; set your Bodhilander shell to PowerShell instead.'
+  ));
 }
 
 export function getShellLaunch(shellInfo: ShellInfo, options: ShellLaunchOptions): ShellLaunch {
@@ -75,17 +92,18 @@ export function getShellLaunch(shellInfo: ShellInfo, options: ShellLaunchOptions
     };
   }
   if (process.platform === 'win32') {
-    const shellName = shellInfo.shell.toLowerCase();
-    if (shellName.includes('powershell')) {
+    if (isPowershell(shellInfo)) {
       return powershellLaunch(shellInfo.shell);
     }
-    if (shellName.includes('cmd')) {
+    if (shellInfo.shell.toLowerCase().includes('cmd')) {
       // cmd.exe %VAR% expansion is textual and pre-parse (#106) — see the
       // module doc. When the caller interpolates a value via envRef, reroute
       // through PowerShell whose $env: expansion is parse-safe. Otherwise
       // (login pty), keep cmd.exe and make envRef throw so misuse is caught.
       if (options.needsEnvRef) {
-        return powershellLaunch(windowsPowershellPath());
+        return powershellLaunch(windowsPowershellPath(
+          'Agent launches from a cmd.exe shell require it; set your Bodhilander shell to PowerShell or Git Bash instead.'
+        ));
       }
       return {
         shell: shellInfo.shell,
