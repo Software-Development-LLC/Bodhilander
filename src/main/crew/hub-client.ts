@@ -22,6 +22,7 @@ import {
   type AuthFrame,
   type CardDecisionFrame,
   type CardRaiseFrame,
+  type SendFrame,
   type ChallengeFrame,
   type DeliverFrame,
   type EditResultFrame,
@@ -587,6 +588,14 @@ export class HubClient extends EventEmitter {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: CardRaiseFrame = { type: 'card_raise', ...raise, hireId: stamp.hireId, epoch: stamp.epoch };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  /** Queue a run's send through the outbox, stamped with its job's epoch. False when fenced or gone. */
+  sendMessage(jobId: string, send: Omit<SendFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: SendFrame = { type: 'send', ...send, text: cutText(send.text), hireId: stamp.hireId, epoch: stamp.epoch };
     return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
   }
 

@@ -7,7 +7,7 @@ import * as path from 'path';
 import type Database from 'better-sqlite3';
 import { writeAudit } from '../audit';
 import { textResult, type McpServerHandler, type McpTool } from '../mcp/host';
-import { MAX_SKILL_BYTES, MAX_TEXT, type CardRaiseFrame, type RunScope, type SkillFile } from '../protocol';
+import { MAX_SKILL_BYTES, MAX_TEXT, type CardRaiseFrame, type RunScope, type SendFrame, type SkillFile } from '../protocol';
 import { isTainted } from '../taint';
 
 export const SKILL_PROPOSAL_MAX_BYTES = 1024 * 1024;
@@ -22,14 +22,15 @@ export interface ToolsJob {
 export interface ToolsDeps {
   db: Database.Database;
   raiseCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean;
+  sendMessage(jobId: string, send: Omit<SendFrame, 'type' | 'hireId' | 'epoch'>): boolean;
   newId?(): string;
 }
 
 const TOOLS: McpTool[] = [
   {
     name: 'send',
-    description: 'Send a message to a Bodhi person by their UPN. The owner approves it in Teams first.',
-    inputSchema: { type: 'object', properties: { recipient: { type: 'string' }, text: { type: 'string' } }, required: ['recipient', 'text'] },
+    description: 'Send a message: to a Bodhi person by their UPN, or with no recipient back to the conversation that asked.',
+    inputSchema: { type: 'object', properties: { recipient: { type: 'string' }, text: { type: 'string' } }, required: ['text'] },
   },
   {
     name: 'note_read',
@@ -84,10 +85,15 @@ export function crewTools(deps: ToolsDeps, job: ToolsJob, threadKey: string): Mc
   const send = (args: Record<string, unknown>) => {
     const recipient = typeof args.recipient === 'string' ? args.recipient.trim() : '';
     const text = typeof args.text === 'string' ? args.text : '';
-    if (!recipient || recipient.length > 320 || !recipient.includes('@')) return textResult('recipient must be a UPN.', true);
+    if (args.recipient !== undefined && (!recipient || recipient.length > 320 || !recipient.includes('@'))) return textResult('recipient must be a UPN.', true);
     if (!text || text.length > MAX_TEXT) return textResult(`text must be 1 to ${MAX_TEXT} characters.`, true);
-    const ok = deps.raiseCard(job.id, { id: newId(), kind: 'outbound', tainted: tainted(), payload: { recipient, text }, ...inbound() });
-    return ok ? textResult('Sent to the owner for approval in Teams.') : textResult('The message could not be queued.', true);
+    const { inboundId } = inbound();
+    if (!recipient && !inboundId) return textResult('This run has no conversation to answer; name a recipient.', true);
+    const target = recipient ? { recipient } : { inboundId };
+    const ok = deps.sendMessage(job.id, { id: newId(), text, tainted: tainted(), ...target });
+    return ok
+      ? textResult('Queued. People outside the circle, or any send from a run that read untrusted content, get it after the owner approves.')
+      : textResult('The message could not be queued.', true);
   };
 
   const noteRead = (args: Record<string, unknown>) => {

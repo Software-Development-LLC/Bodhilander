@@ -78,7 +78,12 @@ function ensureServices(): RunServiceManager {
   services ??= new RunServiceManager({
     host,
     broker: () => runtime?.broker ?? null,
-    tools: (job, threadKey) => crewTools({ db, raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false }, job, threadKey),
+    tools: (job, threadKey) =>
+      crewTools(
+        { db, raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false, sendMessage: (jobId, send) => runtimeHub?.sendMessage(jobId, send) ?? false },
+        job,
+        threadKey,
+      ),
     gateway: gw,
     repos: hireRepos,
     uid,

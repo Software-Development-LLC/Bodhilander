@@ -14,20 +14,42 @@ function setup(scope: 'owner' | 'circle' = 'owner') {
   raw.query(`INSERT INTO crew_hire_cache (hire_id, rev, data) VALUES (?, 1, ?)`).run(HIRE, JSON.stringify({ skillBundleHash: BUNDLE }));
   raw.query(`INSERT INTO crew_note (note_id, hire_id, scope, path, body) VALUES ('n1', ?, 'owner', 'plan.md', 'owner text'), ('n2', ?, 'shared', 'team.md', 'shared text')`).run(HIRE, HIRE);
   const cards: [string, Record<string, unknown>][] = [];
+  const sends: [string, Record<string, unknown>][] = [];
   let ids = 0;
-  const tools = crewTools({ db, raiseCard: (jobId, raise) => (cards.push([jobId, raise as unknown as Record<string, unknown>]), true), newId: () => uuid(50 + ++ids) }, { id: uuid(1), hireId: HIRE, scope }, `chat:${scope}`);
+  const tools = crewTools(
+    {
+      db,
+      raiseCard: (jobId, raise) => (cards.push([jobId, raise as unknown as Record<string, unknown>]), true),
+      sendMessage: (jobId, send) => (sends.push([jobId, send as unknown as Record<string, unknown>]), true),
+      newId: () => uuid(50 + ++ids),
+    },
+    { id: uuid(1), hireId: HIRE, scope },
+    `chat:${scope}`,
+  );
   const text = async (name: string, args: Record<string, unknown>) => (await tools.call(name, args)).content[0].text;
-  return { raw, db, tools, cards, text };
+  return { raw, db, tools, cards, sends, text };
 }
 
 describe('Crew tools', () => {
-  test('send raises an outbound card for the recipient, tainted as the thread is', async () => {
+  test('send queues a send frame, never a card: to the recipient, or the asking conversation, tainted as the thread is', async () => {
     const t = setup();
     markTainted(t.db, HIRE, 'chat:owner', 'web_fetch');
-    await t.tools.call('send', { recipient: 'ana@bodhi.example', text: 'hello' });
-    expect(t.cards).toEqual([[uuid(1), { id: uuid(51), kind: 'outbound', tainted: true, payload: { recipient: 'ana@bodhi.example', text: 'hello' }, inboundId: uuid(1) }]]);
+    expect(await t.text('send', { recipient: 'ana@bodhi.example', text: 'hello' })).toContain('after the owner approves');
+    await t.tools.call('send', { text: 'back to you' });
+    expect(t.sends).toEqual([
+      [uuid(1), { id: uuid(51), text: 'hello', tainted: true, recipient: 'ana@bodhi.example' }],
+      [uuid(1), { id: uuid(52), text: 'back to you', tainted: true, inboundId: uuid(1) }],
+    ]);
+    expect(t.cards).toEqual([]);
     expect((await t.tools.call('send', { recipient: 'nobody', text: 'x' })).isError).toBe(true);
     expect((await t.tools.call('send', { recipient: 'a@b.c', text: 'x'.repeat(28_001) })).isError).toBe(true);
+  });
+
+  test('a send with no recipient from a routine names nobody, so it is refused', async () => {
+    const t = setup();
+    t.raw.query(`UPDATE crew_job SET kind = 'routine' WHERE id = ?`).run(uuid(1));
+    expect((await t.tools.call('send', { text: 'hi' })).isError).toBe(true);
+    expect(t.sends).toEqual([]);
   });
 
   test('note_read reads by the job\'s run scope: a circle run never sees owner notes', async () => {

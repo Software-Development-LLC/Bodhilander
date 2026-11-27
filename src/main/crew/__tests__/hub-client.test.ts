@@ -944,4 +944,14 @@ describe('HubClient cards and tokens', () => {
     t.sock().hub({ type: 'refused', id: uuid(20), reason: 'scope' });
     expect(cards).toEqual([uuid(20)]);
   });
+
+  test('a send goes through the outbox under its job\'s epoch, and not for a fenced job', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    expect(t.client.sendMessage(uuid(1), { id: uuid(30), text: 'hello', tainted: false, recipient: 'a@b.c' })).toBe(true);
+    expect(t.sock().sent.filter((f) => f.type === 'send')).toEqual([{ type: 'send', id: uuid(30), text: 'hello', tainted: false, recipient: 'a@b.c', hireId: HIRE, epoch: 1 }]);
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local WHERE frame_type = 'send'`).get()).toEqual({ n: 1 });
+    expect(t.client.sendMessage(uuid(99), { id: uuid(31), text: 'x', tainted: false, recipient: 'a@b.c' })).toBe(false);
+  });
 });

@@ -28,6 +28,7 @@ export const MACHINE_FRAME_TYPES = [
   'typing',
   'lease_revoked',
   'file',
+  'send',
   'card_raise',
   'usage_record',
   'usage_read',
@@ -102,7 +103,7 @@ export const LEASE_MODES = ['drop', 'pause'] as const;
 export type LeaseMode = (typeof LEASE_MODES)[number];
 
 // The card kinds a machine may raise in phase 1 (design §7). `link` is raised by the Hub only.
-export const MACHINE_CARD_KINDS = ['permission', 'outbound', 'skill_change', 'note_patch', 'move'] as const;
+export const MACHINE_CARD_KINDS = ['permission', 'skill_change', 'note_patch', 'move'] as const;
 export type MachineCardKind = (typeof MACHINE_CARD_KINDS)[number];
 
 export const CARD_DECISIONS = ['approved', 'denied'] as const;
@@ -167,9 +168,9 @@ export type ReplyFrame = { type: 'reply'; id: string; hireId: string; epoch: num
 export type TypingFrame = { type: 'typing'; hireId: string; epoch: number; inboundId: string };
 // Live only, never through the outbox, never answered.
 export type LeaseRevokedFrame = { type: 'lease_revoked'; hireId: string; epoch: number };
-// One chunk of one file. name, size and sha256 are on index 0 only, with the target: inboundId (the
-// conversation of that inbound row) or recipient (the UPN of a Bodhi person, which the Hub turns
-// into an `outbound` card when they are outside the circle), exactly one of the two.
+// One chunk of one file. name, size, sha256 and tainted are on index 0 only, with the target: inboundId
+// (the conversation of that inbound row) or recipient (a Bodhi person's UPN), exactly one of the two.
+// The Hub turns a tainted file, or one outside the circle, into an `outbound` card.
 export type FileFrame = {
   type: 'file';
   id: string;
@@ -183,9 +184,11 @@ export type FileFrame = {
   sha256?: string;
   inboundId?: string;
   recipient?: string;
+  tainted?: boolean;
 };
+// A message to inboundId's conversation or to recipient's UPN, exactly one; the Hub decides whether it needs an outbound card.
+export type SendFrame = { type: 'send'; id: string; hireId: string; epoch: number; text: string; tainted: boolean; inboundId?: string; recipient?: string };
 export type PermissionPayload = { tool: string; summary: string };
-export type OutboundPayload = { recipient: string; text: string };
 export type SkillFile = { path: string; content: string };
 export type SkillChangePayload = { baseBundle: string; files: SkillFile[] };
 export type NotePatchPayload = { path: string; rev: number; baseContent: string; newContent: string };
@@ -199,7 +202,7 @@ export type CardRaiseFrame = {
   kind: MachineCardKind;
   inboundId?: string;
   tainted: boolean;
-  payload: PermissionPayload | OutboundPayload | SkillChangePayload | NotePatchPayload | MovePayload;
+  payload: PermissionPayload | SkillChangePayload | NotePatchPayload | MovePayload;
 };
 export type UsageWindow = { name: string; utilization: number; resetsAt: number; status: string };
 export type UsageRecordFrame = {
@@ -297,6 +300,7 @@ export type MachineFrame =
   | TypingFrame
   | LeaseRevokedFrame
   | FileFrame
+  | SendFrame
   | CardRaiseFrame
   | UsageRecordFrame
   | UsageReadFrame
@@ -426,7 +430,6 @@ const hireFrame: Spec = { hireId: [uuid], epoch: [int] };
 
 const PAYLOADS: Record<MachineCardKind, Spec> = {
   permission: { tool: [nonEmpty(200)], summary: [text(4000)] },
-  outbound: { recipient: [nonEmpty(320)], text: [nonEmpty(MAX_TEXT)] },
   skill_change: { baseBundle: [sha256Hex], files: [list(shape({ path: [nonEmpty(300)], content: [text(MAX_SKILL_BYTES)] }), 500)] },
   note_patch: { path: [nonEmpty(300)], rev: [int], baseContent: [text(100_000)], newContent: [text(100_000)] },
   move: { account: [oneOf(['signed-in', 'missing', 'signed-out'])], accountLabel: [text(200)] },
@@ -451,7 +454,9 @@ const SPECS: Record<MachineFrameType, Spec> = {
     sha256: [sha256Hex, OPT],
     inboundId: [uuid, OPT],
     recipient: [nonEmpty(320), OPT],
+    tainted: [bool, OPT],
   },
+  send: { type: [bool], id: [uuid], ...hireFrame, text: [nonEmpty(MAX_TEXT)], tainted: [bool], inboundId: [uuid, OPT], recipient: [nonEmpty(320), OPT] },
   card_raise: {
     type: [bool],
     id: [uuid],
@@ -539,6 +544,7 @@ export function parseMachineFrame(raw: string): Parsed {
   if (!fits(o, SPECS[o.type])) return malformed;
   if (o.type === 'card_raise' && !fits(o.payload as Record<string, unknown>, PAYLOADS[o.kind as MachineCardKind])) return malformed;
   if (o.type === 'file' && !fileChunkFits(o)) return malformed;
+  if (o.type === 'send' && (o.inboundId === undefined) === (o.recipient === undefined)) return malformed;
   if (o.type === 'edit' && o.op !== 'create' && (o.objectId === undefined || o.rev === undefined)) return malformed;
   return { ok: true, frame: o as unknown as MachineFrame };
 }
@@ -553,9 +559,9 @@ function hasNul(v: unknown): boolean {
   return false;
 }
 
-// index 0 carries name, size, sha256 and exactly one target; later chunks carry none of them.
+// index 0 carries name, size, sha256, tainted and exactly one target; later chunks carry none of them.
 function fileChunkFits(o: Record<string, unknown>): boolean {
-  const head = ['name', 'size', 'sha256'].map(k => o[k] !== undefined);
+  const head = ['name', 'size', 'sha256', 'tainted'].map(k => o[k] !== undefined);
   const targets = [o.inboundId, o.recipient].filter(t => t !== undefined).length;
   if (o.index === 0) return head.every(Boolean) && targets === 1 && (o.size as number) <= FILE_MAX_BYTES;
   return !head.some(Boolean) && targets === 0;

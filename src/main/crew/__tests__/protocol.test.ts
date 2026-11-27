@@ -5,6 +5,7 @@ import {
   ERROR_REASONS,
   HUB_FRAME_TYPES,
   LINK_ERRORS,
+  MACHINE_CARD_KINDS,
   MACHINE_FRAME_TYPES,
   MAX_FRAME_BYTES,
   MAX_TEXT,
@@ -30,12 +31,31 @@ describe('the copied protocol', () => {
     );
   });
 
+  test('a file carries tainted on chunk 0 only', () => {
+    const head = { type: 'file', id: uuid(1), hireId: uuid(2), epoch: 1, index: 0, final: false, data: '', name: 'a.txt', size: 1, sha256: 'a'.repeat(64), inboundId: uuid(3) };
+    expect(() => assertSendable({ ...head, tainted: false } as MachineFrame)).not.toThrow();
+    expect(() => assertSendable(head as MachineFrame)).toThrow(/malformed/);
+    const later = { type: 'file', id: uuid(1), hireId: uuid(2), epoch: 1, index: 1, final: true, data: '' };
+    expect(() => assertSendable(later as MachineFrame)).not.toThrow();
+    expect(() => assertSendable({ ...later, tainted: true } as MachineFrame)).toThrow(/malformed/);
+  });
+
+  test('a send names exactly one target; outbound is no longer a machine card kind', () => {
+    const send = { type: 'send', id: uuid(1), hireId: uuid(2), epoch: 1, text: 'hi', tainted: false };
+    expect(() => assertSendable({ ...send, inboundId: uuid(3) } as MachineFrame)).not.toThrow();
+    expect(() => assertSendable({ ...send, recipient: 'a@b.c' } as MachineFrame)).not.toThrow();
+    expect(() => assertSendable(send as MachineFrame)).toThrow(/malformed/);
+    expect(() => assertSendable({ ...send, inboundId: uuid(3), recipient: 'a@b.c' } as MachineFrame)).toThrow(/malformed/);
+    expect(() => assertSendable({ ...send, text: '', inboundId: uuid(3) } as MachineFrame)).toThrow(/malformed/);
+    expect(MACHINE_CARD_KINDS).not.toContain('outbound');
+  });
+
   test('the value sets match the published contract exactly', () => {
     expect(PROTOCOL_VERSION).toBe(2);
     expect(MAX_TEXT).toBe(28_000);
     expect(MAX_FRAME_BYTES).toBe(262_144);
     expect([...MACHINE_FRAME_TYPES]).toEqual([
-      'auth', 'ack', 'heartbeat', 'reply', 'typing', 'lease_revoked', 'file', 'card_raise', 'usage_record',
+      'auth', 'ack', 'heartbeat', 'reply', 'typing', 'lease_revoked', 'file', 'send', 'card_raise', 'usage_record',
       'usage_read', 'sync_pull', 'edit', 'note_write', 'routine_fired', 'token_request', 'audit', 'unlink',
       'artifact_request',
     ]);
