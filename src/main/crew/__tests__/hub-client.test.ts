@@ -105,6 +105,16 @@ describe('resolveHubUrl', () => {
     expect(resolveHubUrl(false, null)).toBe(HUB_URL_DEVELOPMENT);
     expect(resolveHubUrl(true, ' https://h.example// ')).toBe('https://h.example');
     expect(resolveHubUrl(false, '')).toBe(HUB_URL_DEVELOPMENT);
+    expect(resolveHubUrl(false, 'http://localhost:8080/')).toBe('http://localhost:8080');
+    expect(resolveHubUrl(false, 'http://127.0.0.1:8080')).toBe('http://127.0.0.1:8080');
+    expect(resolveHubUrl(false, 'http://[::1]:8080')).toBe('http://[::1]:8080');
+  });
+
+  test('a plain http override off this machine is ignored', () => {
+    expect(resolveHubUrl(true, 'http://h.example')).toBe(HUB_URL_PRODUCTION);
+    expect(resolveHubUrl(false, 'http://10.0.0.5:8080')).toBe(HUB_URL_DEVELOPMENT);
+    expect(resolveHubUrl(true, 'ftp://localhost')).toBe(HUB_URL_PRODUCTION);
+    expect(resolveHubUrl(true, 'not a url')).toBe(HUB_URL_PRODUCTION);
   });
 });
 
@@ -609,6 +619,58 @@ describe('HubClient connection health', () => {
     });
     local.start();
     expect(urls).toEqual(['ws://localhost:8080/ws']);
+  });
+
+  test('a Hub that is not on loopback is dialled over wss whatever the scheme', () => {
+    const urls: string[] = [];
+    const remote = new HubClient({
+      db: crewDb().db, hubUrl: 'http://h.example', getMachineId: () => MACHINE, forgetMachineId: () => {}, sign: () => Buffer.alloc(0),
+      connect: (url) => {
+        urls.push(url);
+        return new FakeSocket() as unknown as HubSocket;
+      },
+      interruptRun: () => {},
+      timers: { setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {} },
+    });
+    remote.start();
+    expect(urls).toEqual(['wss://h.example/ws']);
+    expect(remote.hubUrl).toBe('http://h.example');
+  });
+
+  test('a timer callback that throws is audited, not thrown into the main process', () => {
+    const t = setup();
+    t.online();
+    t.client.outbox.tick = () => {
+      throw new Error('disk full');
+    };
+    t.client.lease.sweep = () => {
+      throw new Error('busy');
+    };
+    for (const i of t.intervals.filter((x) => x.live)) expect(() => i.fn()).not.toThrow();
+    const timers = (t.raw.query(`SELECT detail FROM crew_audit WHERE event = 'hub-timer-error'`).all() as { detail: string }[]).map((r) => JSON.parse(r.detail).timer);
+    expect(timers.sort()).toEqual(['heartbeat', 'sweep']);
+  });
+
+  test('an unlink forgets the bodies still owed', () => {
+    const t = setup();
+    t.online();
+    const pull = t.sock().sent.find((f) => f.type === 'sync_pull') as { id: string };
+    t.sock().hub({ type: 'sync_page', id: pull.id, changes: [{ kind: 'note', objectId: 'n1', rev: 1, seq: 2, hash: 'h', deleted: false }], next: 2, more: false });
+    expect(t.client.sync.onConnect(0).fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
+    t.sock().drop(4410);
+    expect(t.client.sync.onConnect(0)).toEqual(expect.not.objectContaining({ fetch: expect.anything() }));
+  });
+
+  test('a timer error with the database gone still does not throw', () => {
+    const t = setup();
+    t.online();
+    t.client.outbox.tick = () => {
+      throw new Error('disk full');
+    };
+    t.raw.exec('DROP TABLE crew_audit');
+    const heartbeat = t.intervals.find((x) => x.live && x.ms === 30_000);
+    expect(heartbeat).toBeDefined();
+    expect(() => heartbeat!.fn()).not.toThrow();
   });
 
   test('a reply queued after the socket closed waits for the next welcome', () => {

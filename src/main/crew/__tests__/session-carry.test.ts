@@ -7,7 +7,7 @@ function setup() {
   const thread = (key: string, session: string | null, account: string | null) =>
     raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id) VALUES (?, ?, ?, ?)`).run(HIRE, key, session, account);
   const read = () => raw.query(`SELECT thread_key, session_id, account_id FROM crew_thread ORDER BY thread_key`).all();
-  return { db, thread, read };
+  return { raw, db, thread, read };
 }
 
 describe('carryHireSessions', () => {
@@ -49,5 +49,17 @@ describe('carryHireSessions', () => {
     });
     expect(result).toEqual({ carried: 0, fresh: 0 });
     expect(read()).toEqual([{ thread_key: 't1', session_id: 's1', account_id: 'new' }]);
+  });
+
+  test('a thread that cannot be written leaves every thread where it was', () => {
+    const { raw, db, thread, read } = setup();
+    thread('t1', 's1', 'old');
+    thread('t2', 's2', 'old');
+    raw.exec(`CREATE TRIGGER no_t2 BEFORE UPDATE ON crew_thread WHEN NEW.thread_key = 't2' BEGIN SELECT RAISE(ABORT, 'locked'); END`);
+    expect(() => carryHireSessions(db, HIRE, { id: 'new', configDir: '/new' }, () => '/old', () => true)).toThrow();
+    expect(read()).toEqual([
+      { thread_key: 't1', session_id: 's1', account_id: 'old' },
+      { thread_key: 't2', session_id: 's2', account_id: 'old' },
+    ]);
   });
 });

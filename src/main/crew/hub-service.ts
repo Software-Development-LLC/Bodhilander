@@ -16,6 +16,7 @@ import { LinkFlow } from './hub-link';
 const RELAY_NAME_PREF = 'relay.machineName';
 
 let client: HubClient | null = null;
+let resumeWired = false;
 
 export function crewHubUrl(): string {
   return resolveHubUrl(app.isPackaged, getPreference(HUB_URL_PREF));
@@ -25,15 +26,17 @@ export function getCrewHub(): HubClient | null {
   return client;
 }
 
-/** Call after app ready. Safe to call again; a second call returns the running client. */
+/** Call after app ready. Safe to call again: the running client is kept unless crew.hubUrl changed. */
 export function startCrewHub(): HubClient {
-  if (client) {
+  const hubUrl = crewHubUrl();
+  if (client?.hubUrl === hubUrl) {
     client.start();
     return client;
   }
+  client?.stop();
   const hub = new HubClient({
     db: getDatabase(),
-    hubUrl: crewHubUrl(),
+    hubUrl,
     getMachineId: () => getPreference(MACHINE_ID_PREF),
     forgetMachineId: () => deletePreference(MACHINE_ID_PREF),
     sign: signWithIdentity,
@@ -42,10 +45,20 @@ export function startCrewHub(): HubClient {
     interruptRun: () => {},
   });
   client = hub;
-  powerMonitor.on('resume', () => hub.onResume());
+  if (!resumeWired) {
+    resumeWired = true;
+    powerMonitor.on('resume', () => client?.onResume());
+  }
   hub.on('status', (status) => log.info(`[Crew] Hub ${status}`));
   hub.start();
   return hub;
+}
+
+/** A new link stored a new machine id, so the connection starts over. */
+export function restartCrewHub(): HubClient {
+  client?.stop();
+  client = null;
+  return startCrewHub();
 }
 
 /** Part of the quit cleanup; `will-quit` never fires after the hard exit there. */
@@ -72,6 +85,6 @@ export function newLinkFlow(): LinkFlow {
     fetch: (url, init) => fetch(url, init),
     storeMachineId: (machineId) => setPreference(MACHINE_ID_PREF, machineId),
     openExternal: (url) => void shell.openExternal(url),
-    connect: () => startCrewHub(),
+    connect: () => restartCrewHub(),
   });
 }

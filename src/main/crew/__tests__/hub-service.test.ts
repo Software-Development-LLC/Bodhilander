@@ -65,7 +65,29 @@ describe('the app Crew connection', () => {
     expect(sockets[0].closed).toBe(true);
   });
 
-  test('the link request names the machine as the relay does, else by host name', () => {
+  test('a changed crew.hubUrl or a new link starts a fresh connection', () => {
+    const first = startCrewHub();
+    prefs.set('crew.hubUrl', 'https://other.example');
+    const moved = startCrewHub();
+    expect(moved).not.toBe(first);
+    expect(moved.hubUrl).toBe('https://other.example');
+    expect(sockets.at(-2)?.closed).toBe(true);
+    expect(sockets.at(-1)?.url).toBe('wss://other.example/ws');
+    const relinked = (newLinkFlow() as unknown as { deps: { connect: () => unknown } }).deps.connect();
+    expect(relinked).not.toBe(moved);
+    expect(sockets.at(-2)?.closed).toBe(true);
+    let resumed = 0;
+    (relinked as { onResume: () => void }).onResume = () => {
+      resumed += 1;
+    };
+    for (const cb of powerHandlers.resume ?? []) cb();
+    expect(resumed).toBe(1);
+    expect(powerHandlers.resume).toHaveLength(1);
+    prefs.delete('crew.hubUrl');
+    stopCrewHub();
+  });
+
+    test('the link request names the machine as the relay does, else by host name', () => {
     const nameOf = () => (newLinkFlow() as unknown as { deps: { name: string } }).deps.name;
     expect(nameOf()).toBe(os.hostname());
     prefs.set('relay.machineName', '  Studio  ');

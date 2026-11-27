@@ -9,6 +9,7 @@ import { writeAudit } from './audit';
 import type { EditFrame, EditKind, EditOp, EditResultFrame, SyncKind, SyncObject, SyncPageFrame, SyncPullFrame, SyncRef } from './protocol';
 
 export const SYNC_SEQ_KEY = 'sync.seq';
+export const SYNC_WANTED_KEY = 'sync.wanted';
 export const PULL_RESEND_MS = 30_000;
 export const FETCH_MAX = 200;
 
@@ -45,7 +46,32 @@ export class CrewSync {
   constructor(
     private readonly db: Database.Database,
     private readonly newId: () => string = randomUUID,
-  ) {}
+  ) {
+    for (const ref of this.loadWanted()) this.wanted.set(refKey(ref), ref);
+  }
+
+  private loadWanted(): SyncRef[] {
+    const row = this.db.prepare('SELECT value FROM crew_sync_state WHERE key = ?').get(SYNC_WANTED_KEY) as { value: string } | undefined;
+    try {
+      const refs = JSON.parse(row?.value ?? '[]') as Partial<SyncRef>[];
+      return refs.filter((r): r is SyncRef => typeof r?.kind === 'string' && r.kind in TABLES && typeof r.objectId === 'string');
+    } catch {
+      return [];
+    }
+  }
+
+  /** The bodies still owed are kept with the sequence, so a restart never skips past them. */
+  private saveWanted(): void {
+    this.db
+      .prepare('INSERT INTO crew_sync_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(SYNC_WANTED_KEY, JSON.stringify([...this.wanted.values()]));
+  }
+
+  /** After an unlink nothing owed is fetched again. */
+  forget(): void {
+    this.wanted.clear();
+    this.pending = null;
+  }
 
   since(): number {
     const row = this.db.prepare('SELECT value FROM crew_sync_state WHERE key = ?').get(SYNC_SEQ_KEY) as { value: string } | undefined;
@@ -115,16 +141,24 @@ export class CrewSync {
     if (pending?.frame.id !== frame.id) return null;
     this.pending = null;
     this.db.transaction(() => {
-      for (const obj of frame.changes) this.apply(obj);
+      for (const obj of frame.changes) this.applyOne(obj);
+      if (!frame.more) for (const ref of pending.refs) this.wanted.delete(refKey(ref));
       if (frame.next > this.since()) this.setSince(frame.next);
+      this.saveWanted();
     })();
-    if (!frame.more) for (const ref of pending.refs) this.wanted.delete(refKey(ref));
     if (frame.more || this.wanted.size > 0 || this.changedSince) return this.pull(now);
     return null;
   }
 
   /** Write one object to its cache. A header without its body is queued for fetching. */
   apply(obj: SyncObject): void {
+    this.db.transaction(() => {
+      this.applyOne(obj);
+      this.saveWanted();
+    })();
+  }
+
+  private applyOne(obj: SyncObject): void {
     const { table, id } = TABLES[obj.kind];
     const key = refKey(obj);
     const cached = this.cachedRev(obj.kind, obj.objectId);

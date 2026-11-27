@@ -25,16 +25,20 @@ export function carryHireSessions(
   const update = db.prepare(
     `UPDATE crew_thread SET session_id = ?, account_id = ?, updated_at = CURRENT_TIMESTAMP WHERE hire_id = ? AND thread_key = ?`,
   );
+  const moves: { threadKey: string; sessionId: string | null }[] = [];
   for (const thread of threads) {
     if (!thread.session_id || thread.account_id === to.id) {
-      update.run(thread.session_id, to.id, hireId, thread.thread_key);
+      moves.push({ threadKey: thread.thread_key, sessionId: thread.session_id });
       continue;
     }
     const fromDir = thread.account_id ? configDirOf(thread.account_id) : null;
     const ok = fromDir !== null && carry(thread.session_id, fromDir, to.configDir);
-    update.run(ok ? thread.session_id : null, to.id, hireId, thread.thread_key);
+    moves.push({ threadKey: thread.thread_key, sessionId: ok ? thread.session_id : null });
     if (ok) result.carried += 1;
     else result.fresh += 1;
   }
+  db.transaction(() => {
+    for (const move of moves) update.run(move.sessionId, to.id, hireId, move.threadKey);
+  })();
   return result;
 }

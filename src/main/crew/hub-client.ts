@@ -44,10 +44,23 @@ export const HUB_URL_DEVELOPMENT = 'https://crew-dev.bodhi.software';
 export const HUB_URL_PREF = 'crew.hubUrl';
 export const MACHINE_ID_PREF = 'crew.machineId';
 
-/** Packaged builds on either channel use production; `crew.hubUrl` overrides. */
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** Plain http, and so plain ws, only for a Hub on this machine. */
+export function isLoopbackHttp(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' && LOOPBACK.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Packaged builds on either channel use production; `crew.hubUrl` overrides with https, or http on loopback. */
 export function resolveHubUrl(isPackaged: boolean, override: string | null): string {
   const trimmed = override?.trim();
-  if (trimmed) return trimTrailingSlashes(trimmed);
+  if (trimmed && (trimmed.startsWith('https://') || isLoopbackHttp(trimmed))) return trimTrailingSlashes(trimmed);
+  if (trimmed) log.warn('[Crew] ignored crew.hubUrl: it must be https, or http on this machine');
   return isPackaged ? HUB_URL_PRODUCTION : HUB_URL_DEVELOPMENT;
 }
 
@@ -155,14 +168,17 @@ export class HubClient extends EventEmitter {
     this.clocks = deps.clocks ?? systemClocks;
     this.timers = deps.timers ?? realTimers;
     this.random = deps.random ?? Math.random;
-    const hub = new URL(deps.hubUrl);
-    this.hubHost = hub.host;
-    this.wsScheme = hub.protocol === 'http:' ? 'ws' : 'wss';
+    this.hubHost = new URL(deps.hubUrl).host;
+    this.wsScheme = isLoopbackHttp(deps.hubUrl) ? 'ws' : 'wss';
     this.lease = new LeaseClock(this.clocks);
     this.fence = new EpochFence(deps.db);
     this.outbox = new LocalOutbox(deps.db, this.fence, this.random);
     this.newId = deps.newId ?? randomUUID;
     this.sync = new CrewSync(deps.db, this.newId);
+  }
+
+  get hubUrl(): string {
+    return this.deps.hubUrl;
   }
 
   getStatus(): HubStatus {
@@ -188,7 +204,7 @@ export class HubClient extends EventEmitter {
     if (!this.deps.getMachineId()) return;
     this.stopped = false;
     this.outbox.prune();
-    this.sweepTimer = this.timers.setInterval(() => this.sweep(), 1000);
+    this.sweepTimer = this.timers.setInterval(() => this.guarded('sweep', () => this.sweep()), 1000);
     this.open();
   }
 
@@ -270,6 +286,20 @@ export class HubClient extends EventEmitter {
 
   private send(frame: MachineFrame): number {
     return this.sender.send(assertSendable(frame));
+  }
+
+  /** A timer callback that throws is logged and audited, never left to crash the main process. */
+  private guarded(what: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      log.error(`[Crew] the ${what} timer threw`, err);
+      try {
+        writeAudit(this.deps.db, null, 'hub-timer-error', { timer: what });
+      } catch {
+        // The database is what failed; the log line is all there is.
+      }
+    }
   }
 
   private onMessage(raw: string): void {
@@ -371,7 +401,7 @@ export class HubClient extends EventEmitter {
     this.outbox.drain(this.sender, this.clocks.wall());
     this.sendPull(this.sync.onConnect(this.clocks.wall()));
     this.heartbeat();
-    this.heartbeatTimer = this.timers.setInterval(() => this.heartbeat(), HEARTBEAT_MS);
+    this.heartbeatTimer = this.timers.setInterval(() => this.guarded('heartbeat', () => this.heartbeat()), HEARTBEAT_MS);
   }
 
   private heartbeat(): void {
@@ -576,6 +606,7 @@ export class HubClient extends EventEmitter {
       }
       writeAudit(db, null, 'unlinked', {});
     })();
+    this.sync.forget();
     this.deps.forgetMachineId();
     this.stopReconnecting('unlinked');
   }

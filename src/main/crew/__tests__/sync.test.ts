@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { CrewSync, PULL_RESEND_MS, SYNC_SEQ_KEY } from '../sync';
+import { CrewSync, PULL_RESEND_MS, SYNC_SEQ_KEY, SYNC_WANTED_KEY } from '../sync';
 import type { SyncObject, SyncPageFrame } from '../protocol';
 import { HIRE, crewDb, uuid } from './crew-db';
 
@@ -207,5 +207,57 @@ describe('CrewSync edits', () => {
     expect(t.sync.onEditResult({ type: 'edit_result', id: uuid(9), result: 'applied', objectId: 'r1', rev: 2 }, 0)).toBeNull();
     expect(t.sync.onEditResult({ type: 'edit_result', id: uuid(9), result: 'refused', why: 'no' }, 0)).toBeNull();
     expect(t.rows('SELECT * FROM crew_audit')).toEqual([]);
+  });
+});
+
+describe('CrewSync owed bodies', () => {
+  const note = (over: Partial<SyncObject> = {}) => obj({ kind: 'note', objectId: 'n1', seq: 5, body: undefined, ...over });
+
+  test('a restart between a header page and its fetch still fetches the body', () => {
+    const t = setup();
+    const p = t.sync.onConnect(0);
+    const fetch = t.sync.onPage(page(p.id, [note()], 5), 0);
+    expect(fetch?.fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
+    const again = new CrewSync(t.db, () => uuid(60));
+    const p2 = again.onConnect(0);
+    expect(p2).toEqual({ type: 'sync_pull', id: uuid(60), since: 5, fetch: [{ kind: 'note', objectId: 'n1' }] });
+    expect(again.onPage(page(p2.id, [note({ body: { content: 'x' } })], 5), 0)).toBeNull();
+    expect(new CrewSync(t.db).onConnect(0).fetch).toBeUndefined();
+  });
+
+  test('a header applied outside a page is saved as owed too', () => {
+    const t = setup();
+    t.sync.apply(note());
+    expect(new CrewSync(t.db).onConnect(0).fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
+  });
+
+  test('a fetched page with more to come keeps its refs owed across a restart', () => {
+    const t = setup();
+    const p = t.sync.onConnect(0);
+    const f = t.sync.onPage(page(p.id, [note()], 5), 0)!;
+    t.sync.onPage(page(f.id, [], 5, true), 0);
+    expect(new CrewSync(t.db).onConnect(0).fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
+  });
+
+  test('an unreadable saved list is ignored, and unknown kinds are dropped', () => {
+    const t = setup();
+    const save = (v: string) => t.raw.prepare('INSERT OR REPLACE INTO crew_sync_state (key, value) VALUES (?, ?)').run(SYNC_WANTED_KEY, v);
+    save('{oops');
+    expect(new CrewSync(t.db).onConnect(0).fetch).toBeUndefined();
+    save('{"kind":"note"}');
+    expect(new CrewSync(t.db).onConnect(0).fetch).toBeUndefined();
+    save('[{"kind":"widget","objectId":"w"},{"kind":"note","objectId":7},null,{"kind":"note","objectId":"n2"}]');
+    expect(new CrewSync(t.db).onConnect(0).fetch).toEqual([{ kind: 'note', objectId: 'n2' }]);
+  });
+
+  test('forget drops what was owed and the pull in flight', () => {
+    const t = setup();
+    const p = t.sync.onConnect(0);
+    t.sync.onPage(page(p.id, [note()], 5), 0);
+    t.sync.request(0);
+    t.sync.forget();
+    expect(t.sync.pendingId()).toBeNull();
+    expect(t.sync.onConnect(0).fetch).toBeUndefined();
+    expect(t.sync.onPage(page(uuid(4), [], 5), 0)).toBeNull();
   });
 });
