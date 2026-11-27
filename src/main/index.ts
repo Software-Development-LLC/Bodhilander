@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
-import { startCrewHub, stopCrewHub } from './crew/hub-service';
+import { startCrew, stopCrew } from './crew/crew-main';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1746,7 +1746,7 @@ app.whenReady().then(() => {
     log.error('[Main] Failed to start the run loop:', error);
   }
   try {
-    startCrewHub();
+    startCrew();
   } catch (error) {
     log.error('[Main] Failed to start Crew:', error);
   }
@@ -1913,7 +1913,7 @@ app.on('before-quit', (event) => {
           log.error('Error stopping relay client on quit:', e);
         }
         try {
-          stopCrewHub();
+          stopCrew();
         } catch (e) {
           log.error('Error stopping Crew on quit:', e);
         }

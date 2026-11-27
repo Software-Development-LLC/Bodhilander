@@ -1,0 +1,132 @@
+/**
+ * Crew's moving parts joined to one Hub connection: jobs and renewals start
+ * runs, a lease lost interrupts them, finished runs report usage, account
+ * changes settle on every connection, and sign-in reminders are checked hourly.
+ */
+import type { EventEmitter } from 'events';
+import type Database from 'better-sqlite3';
+import log from 'electron-log';
+import type { AccountUsage, ClaudeAccount } from '../../shared/types';
+import type { UsageObservation } from '../usage-meter';
+import { AccountChanger, accountRefFor } from './account-ref';
+import type { CrewSignIn, Reminder } from './crew-token';
+import type { UsageInput } from './hub-client';
+import type { EditResultFrame } from './protocol';
+import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
+import { RunSlots } from './run/slots';
+import type { EditInput } from './sync';
+import { mergeRunObservation, usageRecordFor } from './usage-report';
+
+export const REMINDER_CHECK_MS = 60 * 60_000;
+
+export interface CrewHubPort extends Pick<EventEmitter, 'on' | 'off'> {
+  canStart(hireId: string, epoch: number): boolean;
+  sendReply(jobId: string, text: string): boolean;
+  sendUsage(jobId: string, usage: UsageInput): boolean;
+  sendEdit(input: EditInput): string;
+}
+
+export interface CrewRuntimeDeps {
+  db: Database.Database;
+  hub: CrewHubPort;
+  signIn: CrewSignIn;
+  accounts(): ClaudeAccount[];
+  prepare(job: CrewJob, threadKey: string): Promise<Prepared>;
+  usage: { get(id: string): AccountUsage | null; set(u: AccountUsage): void };
+  remind(reminder: Reminder, account: ClaudeAccount): void;
+  maxRuns?(): number;
+  spawn?(run: PreparedRun): RunChild;
+  now?(): number;
+  setInterval?(fn: () => void, ms: number): unknown;
+  clearInterval?(handle: unknown): void;
+}
+
+export interface CrewRuntime {
+  loop: RunLoop;
+  changer: AccountChanger;
+  interrupt(hireId: string): void;
+  checkReminders(): number;
+  stop(): void;
+}
+
+export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
+  const now = deps.now ?? Date.now;
+  const accountOf = (id: string) => deps.accounts().find((a) => a.id === id) ?? null;
+  const loop = new RunLoop({
+    db: deps.db,
+    slots: new RunSlots(deps.maxRuns),
+    canStart: (hireId, epoch) => deps.hub.canStart(hireId, epoch),
+    prepare: deps.prepare,
+    spawn: deps.spawn ?? spawnRun,
+    reply: (jobId, text) => deps.hub.sendReply(jobId, text),
+    onSignedOut: (_hireId, accountId) => deps.signIn.recordAuthFailure(accountId, now()),
+    onUsageObserved: (accountId: string, observation: UsageObservation) => {
+      mergeRunObservation(accountId, observation, deps.usage);
+    },
+    onFinished: (run) => {
+      const account = accountOf(run.accountId);
+      const uuid = account ? accountRefFor(account).accountUuid : null;
+      if (!uuid) return log.warn('[Crew] a finished run has no account uuid; its usage is not reported');
+      deps.hub.sendUsage(run.job.id, usageRecordFor(run, uuid, deps.usage.get(run.accountId)));
+    },
+    onSettled: () => void tick(),
+    now,
+  });
+  const changer = new AccountChanger({
+    db: deps.db,
+    sendEdit: (input) => deps.hub.sendEdit(input),
+    configDirOf: (id) => accountOf(id)?.configDir ?? null,
+  });
+
+  const guard = (what: string, fn: () => unknown) => {
+    try {
+      fn();
+    } catch (err) {
+      log.error(`[Crew] ${what} failed`, err);
+    }
+  };
+  const tick = () => loop.tick().catch((err) => log.error('[Crew] the run loop failed', err));
+  const settle = () => guard('settling account changes', () => changer.settle());
+  const onEditResult = (frame: EditResultFrame): void => guard('carrying sessions', () => changer.onEditResult(frame));
+
+  const checkReminders = (): number => {
+    let sent = 0;
+    for (const account of deps.accounts()) {
+      guard('a sign-in reminder', () => {
+        for (const reminder of deps.signIn.dueReminders(account.id, now())) {
+          deps.remind(reminder, account);
+          sent += 1;
+        }
+      });
+    }
+    return sent;
+  };
+
+  const listeners: [string, Parameters<EventEmitter['on']>[1]][] = [
+    ['job', tick],
+    ['renewed', tick],
+    ['welcome', () => (settle(), void tick())],
+    ['epoch', settle],
+    ['revoked', settle],
+    ['sync-needed', settle],
+    ['edit-result', onEditResult],
+  ];
+  for (const [event, fn] of listeners) deps.hub.on(event, fn);
+  settle();
+  const setInt = deps.setInterval ?? ((fn: () => void, ms: number) => setInterval(fn, ms));
+  const clearInt = deps.clearInterval ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
+  const reminderTimer = setInt(() => void checkReminders(), REMINDER_CHECK_MS);
+  checkReminders();
+
+  return {
+    loop,
+    changer,
+    interrupt: (hireId) => void loop.interrupt(hireId),
+    checkReminders,
+    stop: () => {
+      clearInt(reminderTimer);
+      for (const [event, fn] of listeners) deps.hub.off(event, fn);
+      loop.interruptAll();
+    },
+  };
+}

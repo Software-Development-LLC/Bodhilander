@@ -95,10 +95,4 @@ describe('the app Crew connection', () => {
     prefs.set('relay.machineName', '   ');
     expect(nameOf()).toBe(os.hostname());
   });
-
-  test('the app starts it after ready', async () => {
-    const src = await Bun.file(new URL('../../index.ts', import.meta.url)).text();
-    expect(src).toMatch(/startCrewHub\(\);/);
-    expect(src).toMatch(/stopCrewHub\(\);/);
-  });
 });

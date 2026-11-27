@@ -17,6 +17,12 @@ const RELAY_NAME_PREF = 'relay.machineName';
 
 let client: HubClient | null = null;
 let resumeWired = false;
+let interruptHook: ((hireId: string) => void) | null = null;
+
+/** The run loop registers here, so a lost lease reaches the run it covers. */
+export function setCrewInterrupt(fn: ((hireId: string) => void) | null): void {
+  interruptHook = fn;
+}
 
 export function crewHubUrl(): string {
   return resolveHubUrl(app.isPackaged, getPreference(HUB_URL_PREF));
@@ -41,8 +47,7 @@ export function startCrewHub(): HubClient {
     forgetMachineId: () => deletePreference(MACHINE_ID_PREF),
     sign: signWithIdentity,
     connect: (url, options) => new WebSocket(url, options) as unknown as HubSocket,
-    // Runs arrive with the run loop; until then there is never one to interrupt.
-    interruptRun: () => {},
+    interruptRun: (hireId) => interruptHook?.(hireId),
   });
   client = hub;
   if (!resumeWired) {
