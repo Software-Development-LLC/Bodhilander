@@ -21,6 +21,7 @@ const detail = (over: Partial<CrewHireDetail> = {}): CrewHireDetail => ({
   dailyTokenCap: null,
   skillBundleId: 'bundle-1',
   skillBundleHash: 'abcdef0123456789',
+  bundles: [{ id: 'bundle-1', files: 3 }, { id: 'bundle-2', files: 5 }],
   accountId: 'acc-1',
   accountEmail: 'w@x.com',
   ...over,
@@ -53,6 +54,7 @@ function api(over: Partial<HireDetailApi> = {}): HireDetailApi & { edits: unknow
     listAccounts: async () => accounts,
     getAccountUsage: async () => ({ 'acc-1': accountUsage }),
     setDailyCap: async (...args) => (edits.push(['cap', ...args]), ok()),
+    pinSkillBundle: async (...args) => (edits.push(['pin', ...args]), ok()),
     setRepos: async (...args) => (edits.push(['repos', ...args]), ok()),
     changeAccount: async (...args) => (edits.push(['account', ...args]), ok()),
     letGo: async (...args) => (edits.push(['letGo', ...args]), ok()),
@@ -126,6 +128,22 @@ describe('the rest of the hire page', () => {
     expect(screen.getByText(/abcdef012345/)).toBeTruthy();
     expect((screen.getByLabelText('Daily token cap') as HTMLInputElement).value).toBe('');
     expect(screen.getByText('Off')).toBeTruthy();
+  });
+
+  test('pins a chosen skill bundle, and shows why a pin was refused', async () => {
+    const a = api({ pinSkillBundle: async () => ({ ok: false, error: 'The pin was not applied (refused).' }) });
+    render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
+    const select = (await screen.findByLabelText('Skill bundle to pin')) as HTMLSelectElement;
+    expect(select.value).toBe('bundle-1');
+    fireEvent.change(select, { target: { value: 'bundle-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    await screen.findByText('The pin was not applied (refused).');
+    const b = api();
+    cleanup();
+    render(<HireDetail hireId="h1" api={b} now={() => NOW} />);
+    fireEvent.change(await screen.findByLabelText('Skill bundle to pin'), { target: { value: 'bundle-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Pin' }));
+    await waitFor(() => expect(b.edits).toEqual([['pin', 'h1', 'bundle-2']]));
   });
 
   test('sets a daily cap, and refuses one that is not a whole number', async () => {

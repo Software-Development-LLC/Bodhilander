@@ -22,6 +22,7 @@ export interface HireDetailApi {
   listAccounts(): Promise<ClaudeAccount[]>;
   getAccountUsage(): Promise<AccountUsageMap>;
   setDailyCap(hireId: string, cap: number | null): Promise<CrewEditResult>;
+  pinSkillBundle(hireId: string, bundleId: string): Promise<CrewEditResult>;
   setRepos(hireId: string, repos: string[]): Promise<CrewEditResult>;
   changeAccount(hireId: string, accountId: string): Promise<CrewEditResult>;
   letGo(hireId: string): Promise<CrewEditResult>;
@@ -39,6 +40,7 @@ const windowApi = (): HireDetailApi => ({
   listAccounts: () => window.electronAPI.listAccounts(),
   getAccountUsage: () => window.electronAPI.getAccountUsage(),
   setDailyCap: (id, cap) => window.electronAPI.crewSetDailyCap(id, cap),
+  pinSkillBundle: (id, bundleId) => window.electronAPI.crewPinSkillBundle(id, bundleId),
   setRepos: (id, repos) => window.electronAPI.crewSetRepos(id, repos),
   changeAccount: (id, accountId) => window.electronAPI.crewChangeAccount(id, accountId),
   letGo: (id) => window.electronAPI.crewLetGo(id),
@@ -110,6 +112,7 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [capText, setCapText] = useState('');
+  const [pinChoice, setPinChoice] = useState<string | null>(null);
   const [confirmingLetGo, setConfirmingLetGo] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [loginPty, setLoginPty] = useState<string | null>(null);
@@ -180,6 +183,10 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
     const parsed = parseDailyCap(capText);
     if (!parsed.ok) return setMessage(CAP_REFUSED);
     void apply(api.setDailyCap(hire.hireId, parsed.cap), 'Cap saved.');
+  };
+  const pin = () => {
+    const bundleId = pinChoice ?? hire.skillBundleId;
+    void apply(api.pinSkillBundle(hire.hireId, bundleId), `Pinned ${bundleId}.`);
   };
   const removeRepo = (repo: string) => {
     void apply(api.setRepos(hire.hireId, hire.repos.filter((r) => r !== repo)), `Removed ${repo}.`);
@@ -339,6 +346,20 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
         <div className="crew-detail__hint">
           {hire.skillBundleId} pinned at {hire.skillBundleHash.slice(0, 12)}
         </div>
+        {hire.bundles.length > 0 && (
+          <div className="crew-detail__row">
+            <select aria-label="Skill bundle to pin" value={pinChoice ?? hire.skillBundleId} onChange={(e) => setPinChoice(e.target.value)}>
+              {hire.bundles.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.id} ({b.files} files)
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={pin}>
+              Pin
+            </button>
+          </div>
+        )}
       </section>
 
       {office.length > 0 && (

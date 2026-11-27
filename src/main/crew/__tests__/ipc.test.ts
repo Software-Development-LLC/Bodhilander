@@ -116,6 +116,15 @@ describe('reading hires from the local store', () => {
     expect(detail?.accountId).toBeNull();
   });
 
+  test("the detail lists the cached skill bundles for the hire's role that carry a hash, to pin from", () => {
+    putHire(db, HIRE, hireBody());
+    const bundle = (id: string, body: Record<string, unknown>) => db.prepare(`INSERT INTO crew_skill_cache (skill_id, rev, data) VALUES (?, 1, ?)`).run(id, JSON.stringify(body));
+    bundle('b-po', { role: 'fresh-po', files: [{ path: 'a.md', content: 'a' }, { path: 'b.md', content: 'b' }], hash: 'h-po' });
+    bundle('b-other', { role: 'care-po', files: [], hash: 'h-other' });
+    bundle('b-nohash', { role: 'fresh-po', files: [] });
+    expect(readHire(db, HIRE, MACHINE, resolve)?.bundles).toEqual([{ id: 'b-po', files: 2 }]);
+  });
+
   test('a corrupt row is skipped, not thrown', () => {
     db.prepare(`INSERT INTO crew_hire_cache (hire_id, rev, data) VALUES ('bad', 1, '{not json')`).run();
     putHire(db, HIRE, hireBody());
@@ -244,6 +253,7 @@ describe('the channels', () => {
       officeEmployees: () => ['fresh-po'],
       makeHome: (hireId) => (imported.push([hireId, 'home']), { ok: true }),
       unlink: () => ({ ok: true }),
+      pinSkillBundle: async (hireId, bundleId) => (imported.push([hireId, `pin:${bundleId}`]), { ok: true }),
       importFromOffice: async (hireId, handle) => (imported.push([hireId, handle]), { ok: true, skills: 2, notes: 0, work: 3, skipped: [], failed: [] }),
       now: () => NOW,
     });
@@ -269,6 +279,7 @@ describe('the channels', () => {
       'crew:makeHome',
       'crew:officeEmployees',
       'crew:openCard',
+      'crew:pinSkillBundle',
       'crew:setDailyCap',
       'crew:setRepos',
       'crew:unlink',
@@ -295,6 +306,13 @@ describe('the channels', () => {
     expect((call('crew:setRepos', HIRE, ['acme/bodhi-care', '']) as { ok: boolean }).ok).toBe(false);
     expect((call('crew:setRepos', HIRE, 'acme/bodhi-care') as { ok: boolean }).ok).toBe(false);
     expect(edits).toHaveLength(2);
+  });
+
+  test('a bundle pin names a synced hire and a bundle id', async () => {
+    expect(await call('crew:pinSkillBundle', HIRE, 'b-po')).toEqual({ ok: true });
+    expect(((await call('crew:pinSkillBundle', 'unknown', 'b-po')) as { ok: boolean }).ok).toBe(false);
+    expect(((await call('crew:pinSkillBundle', HIRE, 42)) as { ok: boolean }).ok).toBe(false);
+    expect(imported).toEqual([[HIRE, 'pin:b-po']]);
   });
 
   test('an Office import names a synced hire and an Office employee found here', async () => {

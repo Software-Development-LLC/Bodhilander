@@ -216,6 +216,7 @@ interface ElectronAPI {
   crewMakeHome: (hireId: string) => Promise<CrewEditResult>;
   crewUnlink: () => Promise<CrewEditResult>;
   crewImportFromOffice: (hireId: string, handle: string) => Promise<CrewOfficeImportResult>;
+  crewPinSkillBundle: (hireId: string, bundleId: string) => Promise<CrewEditResult>;
   crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
   crewLetGo: (hireId: string) => Promise<CrewEditResult>;
   crewListRoles: () => Promise<CrewRole[]>;

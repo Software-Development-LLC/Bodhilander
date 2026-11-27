@@ -434,6 +434,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   crewMakeHome: (hireId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:makeHome', hireId),
   crewUnlink: (): Promise<CrewEditResult> => ipcRenderer.invoke('crew:unlink'),
   crewImportFromOffice: (hireId: string, handle: string): Promise<CrewOfficeImportResult> => ipcRenderer.invoke('crew:importFromOffice', hireId, handle),
+  crewPinSkillBundle: (hireId: string, bundleId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:pinSkillBundle', hireId, bundleId),
   crewListRoles: (): Promise<CrewRole[]> => ipcRenderer.invoke('crew:listRoles'),
   crewCreateHire: (input: CrewHireInput): Promise<CrewHireResult> => ipcRenderer.invoke('crew:createHire', input),
   crewHireAccounts: (): Promise<CrewHireAccount[]> => ipcRenderer.invoke('crew:hireAccounts'),

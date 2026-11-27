@@ -300,11 +300,8 @@ export function wireCrewIpc(handle: (channel: string, handler: (...args: unknown
       if (!client) return { ok: false, error: "Crew isn't running on this machine." };
       return unlinkHere(crewHomeDeps(client, new CrewSignIn(getDatabase(), safeStorage)));
     },
-    importFromOffice: (hireId, handle) => {
-      const result = importOfficeHere(hireId, handle);
-      notify();
-      return result;
-    },
+    importFromOffice: (hireId, handle) => importOfficeHere(hireId, handle).finally(notify),
+    pinSkillBundle: (hireId, bundleId) => pinSkillBundle(hireId, bundleId).finally(notify),
     confirmLinkOwner: (isMe) => {
       const confirmed = link?.confirmOwner(isMe) ?? false;
       link = null;

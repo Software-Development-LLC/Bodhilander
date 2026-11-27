@@ -170,6 +170,15 @@ function routinesOf(db: Database.Database, hireId: string): CrewRoutine[] {
   });
 }
 
+function pinnableBundles(db: Database.Database, roleId: string): { id: string; files: number }[] {
+  const rows = db.prepare(`SELECT skill_id, data FROM crew_skill_cache ORDER BY skill_id`).all() as { skill_id: string; data: string }[];
+  return rows.flatMap((row) => {
+    const body = parse(row.data);
+    if (!body || body.role !== roleId || typeof body.hash !== 'string' || !body.hash) return [];
+    return [{ id: row.skill_id, files: Array.isArray(body.files) ? body.files.length : 0 }];
+  });
+}
+
 export function readHire(db: Database.Database, hireId: string, machineId: string | null, resolveAccount: ResolveAccount): CrewHireDetail | null {
   const row = hireRows(db, hireId)[0];
   const body = row ? parse(row.data) : null;
@@ -183,6 +192,7 @@ export function readHire(db: Database.Database, hireId: string, machineId: strin
     dailyTokenCap: typeof body.dailyTokenCap === 'number' ? body.dailyTokenCap : null,
     skillBundleId: str(body.skillBundleId),
     skillBundleHash: str(body.skillBundleHash),
+    bundles: pinnableBundles(db, str(body.roleId)),
     accountId: account?.id ?? null,
     accountEmail: ref?.email ?? null,
   };
@@ -253,6 +263,7 @@ export interface CrewIpcDeps extends UsageReadPort {
   makeHome(hireId: string): CrewEditResult;
   unlink(): CrewEditResult;
   importFromOffice(hireId: string, handle: string): Promise<CrewOfficeImportResult>;
+  pinSkillBundle(hireId: string, bundleId: string): Promise<CrewEditResult>;
   now(): number;
 }
 
@@ -308,6 +319,11 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
   deps.handle('crew:officeEmployees', () => deps.officeEmployees());
   deps.handle('crew:makeHome', (hireId) => (known(hireId) ? deps.makeHome(hireId) : refuse('This hire has not synced to this machine yet.')));
   deps.handle('crew:unlink', () => deps.unlink());
+  deps.handle('crew:pinSkillBundle', async (hireId, bundleId): Promise<CrewEditResult> => {
+    if (!known(hireId)) return refuse('This hire has not synced to this machine yet.');
+    if (typeof bundleId !== 'string' || !bundleId) return refuse('Choose a skill bundle to pin.');
+    return deps.pinSkillBundle(hireId, bundleId);
+  });
   deps.handle('crew:importFromOffice', async (hireId, handle): Promise<CrewOfficeImportResult> => {
     if (!known(hireId)) return refuse('This hire has not synced to this machine yet.');
     if (typeof handle !== 'string' || !(deps.officeEmployees() ?? []).includes(handle)) return refuse('That Office employee is not on this machine.');

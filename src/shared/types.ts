@@ -1072,6 +1072,8 @@ export interface CrewHireDetail extends CrewHireSummary {
   dailyTokenCap: number | null;
   skillBundleId: string;
   skillBundleHash: string;
+  /** Cached skill bundles for the hire's role that the owner can pin. */
+  bundles: { id: string; files: number }[];
   /** The local claude_accounts row the hire's account reference resolves to, or null when it resolves to none. */
   accountId: string | null;
   accountEmail: string | null;
