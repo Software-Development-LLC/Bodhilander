@@ -250,3 +250,8 @@
 .crew-inbox__note {
   display: block;
 }
+
+.crew-sign-in {
+  position: static;
+  margin: 0;
+}

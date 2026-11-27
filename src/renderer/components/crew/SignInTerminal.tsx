@@ -19,7 +19,7 @@ export interface SignInTerminalProps {
 /** The account's login pty, shown while Crew's Sign in again waits for it; it closes when the sign in ends. */
 export const SignInTerminal: React.FC<SignInTerminalProps> = ({ accountLabel, ptyId, isMac, LoginTerminal, onCancel, onConfirmMac }) => (
   <div className="modal-overlay">
-    <div className="claude-account-login-modal" role="dialog" aria-modal="true" aria-labelledby="crew-sign-in-title">
+    <dialog open className="claude-account-login-modal crew-sign-in" aria-modal="true" aria-labelledby="crew-sign-in-title">
       <h3 id="crew-sign-in-title">Sign in to {accountLabel}</h3>
       <p className="hint">
         <LoginHint completed={false} verified={false} exited={false} isMac={isMac} />
@@ -37,6 +37,6 @@ export const SignInTerminal: React.FC<SignInTerminalProps> = ({ accountLabel, pt
           </button>
         )}
       </div>
-    </div>
+    </dialog>
   </div>
 );

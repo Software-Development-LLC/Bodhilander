@@ -79,10 +79,10 @@ export const CardsInbox: React.FC<CardsInboxProps> = ({ load, openCard, pollMs =
   } else {
     const shown = cards.map((c) => ({ c, state: shownState(c) }));
     const done = (s: ShownState) => Number(!STILL_WAITING.has(s));
-    const ordered = shown.sort((a, b) => done(a.state) - done(b.state) || b.c.raisedAt - a.c.raisedAt);
+    shown.sort((a, b) => done(a.state) - done(b.state) || b.c.raisedAt - a.c.raisedAt);
     body = (
       <ul className="crew-cards__list">
-        {ordered.map(({ c, state }) => (
+        {shown.map(({ c, state }) => (
           <li key={c.raiseId} className={`crew-card crew-card--${state}${STILL_WAITING.has(state) ? ' crew-card--open' : ''}`}>
             <div className="crew-card__head">
               <strong>{KIND_TEXT[c.kind] ?? c.kind}</strong>
