@@ -1070,8 +1070,8 @@ export interface CrewCard {
   raisedAt: number;
   decision: 'approved' | 'denied' | null;
   decidedBy: string | null;
-  /** sending: not yet acked by the Hub. parked: the run stopped waiting and resumes on the decision. */
-  state?: 'sending' | 'waiting' | 'parked' | 'decided';
+  /** sending: not yet acked by the Hub. parked: the run stopped waiting and resumes on the decision. closed: the run ended without one. */
+  state?: 'sending' | 'waiting' | 'parked' | 'decided' | 'closed';
 }
 
 /** null when this machine cannot read its cards, so the inbox never claims to be empty when it does not know. */
@@ -1083,3 +1083,9 @@ export type CrewLinkView =
   | { step: 'stopped'; message: string };
 
 export type CrewEditResult = { ok: true } | { ok: false; error: string };
+
+/** The login pty Crew's Sign in again started, for the renderer to show. */
+export interface CrewSignInStarted {
+  accountId: string;
+  ptyId: string;
+}

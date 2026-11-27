@@ -224,6 +224,11 @@
   border-left-color: var(--color-waiting);
 }
 
+.crew-card--closed,
+.crew-card--decided {
+  opacity: 0.75;
+}
+
 .crew-card__head {
   display: flex;
   justify-content: space-between;
@@ -244,4 +249,9 @@
 .crew-detail__hint,
 .crew-inbox__note {
   display: block;
+}
+
+.crew-sign-in {
+  position: static;
+  margin: 0;
 }

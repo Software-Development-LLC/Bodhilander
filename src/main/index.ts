@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
 import { crewRecordSignIn, startCrew, stopCrew } from './crew/crew-main';
 import { registerCrewSignIn } from './crew/crew-sign-in';
+import { announceSignInStart } from './crew/sign-in-started';
 import { wireCrewIpc } from './crew/ipc-wiring';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1081,7 +1082,10 @@ safeHandle('accounts:resumeLogin', (accountId: string) => {
 
 registerCrewSignIn({
   handle: safeHandle,
-  resumeLogin: (accountId) => accountAuth.resumeLoginFlow(ptyManager, mainWindow, accountId),
+  resumeLogin: announceSignInStart(
+    (accountId) => accountAuth.resumeLoginFlow(ptyManager, mainWindow, accountId),
+    (channel, data) => mainWindow?.webContents.send(channel, data),
+  ),
   loginSettled: accountAuth.loginSettled,
   cancelLogin: (ptyId) => accountAuth.cancelLoginFlow(ptyManager, ptyId, false),
   recordSignIn: (accountId) => crewRecordSignIn(accountId),
