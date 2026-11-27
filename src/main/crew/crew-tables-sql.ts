@@ -143,6 +143,9 @@ export function initializeCrewTables(database: Database.Database): void {
   addColumn('claude_accounts', 'crew_token_enc', 'crew_token_enc TEXT DEFAULT NULL');
   addColumn('claude_accounts', 'crew_token_created_at', 'crew_token_created_at TEXT DEFAULT NULL');
   addColumn('claude_accounts', 'crew_token_expires_at', 'crew_token_expires_at TEXT DEFAULT NULL');
+  addColumn('claude_accounts', 'crew_signed_in_at', 'crew_signed_in_at TEXT DEFAULT NULL');
+  addColumn('claude_accounts', 'crew_auth_failed_at', 'crew_auth_failed_at TEXT DEFAULT NULL');
+  addColumn('claude_accounts', 'crew_reminded', 'crew_reminded TEXT DEFAULT NULL');
 
   // A job left running by a quit or crash was interrupted; it runs again once a lease is renewed.
   database
