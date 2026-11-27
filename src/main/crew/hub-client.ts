@@ -227,6 +227,7 @@ export class HubClient extends EventEmitter {
     this.sweepTimer = null;
     this.socket?.close(1000);
     this.socket = null;
+    this.releaseLeases();
     this.connectionClosed();
   }
 

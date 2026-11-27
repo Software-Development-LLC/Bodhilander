@@ -751,6 +751,17 @@ describe('HubClient connection health', () => {
   }
 });
 
+describe('HubClient stop', () => {
+  test('stopping gives up every lease and interrupts the run', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(renewFor(1));
+    t.client.stop();
+    expect(t.client.canStart(HIRE, 1)).toBe(false);
+    expect(t.interrupted).toEqual([HIRE]);
+  });
+});
+
 describe('HubClient sync edges', () => {
   test('resumes while offline send nothing, so the next connection is not taken for dead', () => {
     const t = setup();

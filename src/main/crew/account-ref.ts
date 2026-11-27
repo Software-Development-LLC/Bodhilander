@@ -51,7 +51,7 @@ export function wireAccountRef(ref: ClaudeAccountRef): AccountRef | null {
 }
 
 export function accountChangeEdit(hireId: string, ref: AccountRef): EditInput {
-  return { op: 'update', kind: 'hire', objectId: hireId, fields: { accountRef: ref } };
+  return { op: 'update', kind: 'hire', objectId: hireId, hireId, fields: { accountRef: ref } };
 }
 
 export interface AccountChangeDeps {
@@ -61,27 +61,52 @@ export interface AccountChangeDeps {
   carry?: typeof carryTranscript;
 }
 
-/** Changes a hire's account. Sessions move only once the Hub applies the edit; the change takes effect on the next run. */
-export class AccountChanger {
-  private readonly pending = new Map<string, { hireId: string; to: ClaudeAccount }>();
+export type AccountChangeOutcome = { editId: string } | { refused: 'unknown-account' | 'hire-not-synced' };
 
+const PENDING_PREFIX = 'account-change:';
+
+/**
+ * Changes a hire's account. The pending change is stored beside the outbox edit, so
+ * sessions still move when the Hub applies it after a restart; they take effect on the next run.
+ */
+export class AccountChanger {
   constructor(private readonly deps: AccountChangeDeps) {}
 
-  change(hireId: string, to: ClaudeAccount): string | 'unknown-account' {
+  change(hireId: string, to: ClaudeAccount): AccountChangeOutcome {
     const ref = wireAccountRef(accountRefFor(to));
-    if (ref === null) return 'unknown-account';
-    const editId = this.deps.sendEdit(accountChangeEdit(hireId, ref));
-    this.pending.set(editId, { hireId, to });
-    return editId;
+    if (ref === null) return { refused: 'unknown-account' };
+    let editId: string;
+    try {
+      editId = this.deps.sendEdit(accountChangeEdit(hireId, ref));
+    } catch {
+      return { refused: 'hire-not-synced' };
+    }
+    this.deps.db
+      .prepare(`INSERT OR REPLACE INTO crew_sync_state (key, value) VALUES (?, ?)`)
+      .run(PENDING_PREFIX + editId, JSON.stringify({ hireId, accountId: to.id, configDir: to.configDir }));
+    return { editId };
   }
 
   /** Feed every edit_result here. Returns what was carried, or null when the frame is not an applied account change. */
   onEditResult(frame: Pick<EditResultFrame, 'id' | 'result'>): CarryResult | null {
-    const change = this.pending.get(frame.id);
-    if (!change) return null;
-    this.pending.delete(frame.id);
+    const key = PENDING_PREFIX + frame.id;
+    const row = this.deps.db.prepare(`SELECT value FROM crew_sync_state WHERE key = ?`).get(key) as { value: string } | undefined;
+    if (!row) return null;
+    this.deps.db.prepare(`DELETE FROM crew_sync_state WHERE key = ?`).run(key);
     if (frame.result !== 'applied') return null;
-    const { hireId, to } = change;
-    return carryHireSessions(this.deps.db, hireId, { id: to.id, configDir: to.configDir }, this.deps.configDirOf, this.deps.carry);
+    const change = pendingChange(row.value);
+    if (change === null) return null;
+    return carryHireSessions(this.deps.db, change.hireId, { id: change.accountId, configDir: change.configDir }, this.deps.configDirOf, this.deps.carry);
+  }
+}
+
+function pendingChange(stored: string): { hireId: string; accountId: string; configDir: string } | null {
+  try {
+    const v: unknown = JSON.parse(stored);
+    if (typeof v !== 'object' || v === null) return null;
+    const { hireId, accountId, configDir } = v as Record<string, unknown>;
+    return typeof hireId === 'string' && typeof accountId === 'string' && typeof configDir === 'string' ? { hireId, accountId, configDir } : null;
+  } catch {
+    return null;
   }
 }

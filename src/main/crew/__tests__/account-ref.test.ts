@@ -54,15 +54,16 @@ describe('changing a hire\'s account', () => {
     identities['/d/b'] = { accountUuid: 'u-b', email: 'b@x.com' };
     const sent: unknown[] = [];
     let n = 0;
-    const changer = new AccountChanger({ db, sendEdit: (e) => (sent.push(e), `e${++n}`), configDirOf: (id) => `/d/${id}`, carry: () => true });
+    const deps = { db, sendEdit: (e: unknown) => (sent.push(e), `e${++n}`), configDirOf: (id: string) => `/d/${id}`, carry: () => true };
+    const changer = new AccountChanger(deps);
     const thread = () => raw.query(`SELECT account_id FROM crew_thread`).get() as { account_id: string };
-    return { changer, sent, thread };
+    return { changer, sent, thread, restart: () => new AccountChanger(deps), AccountChanger, deps };
   };
 
   test('sends one hire update carrying accountRef, and carries sessions only once it is applied', async () => {
     const { changer, sent, thread } = await seed();
-    expect(changer.change('h1', account('b'))).toBe('e1');
-    expect(sent).toEqual([{ op: 'update', kind: 'hire', objectId: 'h1', fields: { accountRef: { accountUuid: 'u-b', email: 'b@x.com', label: 'L-b' } } }]);
+    expect(changer.change('h1', account('b'))).toEqual({ editId: 'e1' });
+    expect(sent).toEqual([{ op: 'update', kind: 'hire', objectId: 'h1', hireId: 'h1', fields: { accountRef: { accountUuid: 'u-b', email: 'b@x.com', label: 'L-b' } } }]);
     expect(JSON.stringify(sent)).not.toMatch(/claudeAccountRef|claude_account_ref|configDir/);
     expect(thread().account_id).toBe('a');
     expect(changer.onEditResult({ id: 'other', result: 'applied' })).toBeNull();
@@ -80,10 +81,23 @@ describe('changing a hire\'s account', () => {
     expect(thread().account_id).toBe('a');
   });
 
+  test('an edit applied after a restart still carries the sessions', async () => {
+    const { changer, thread, restart } = await seed();
+    changer.change('h1', account('b'));
+    expect(restart().onEditResult({ id: 'e1', result: 'applied' })).toEqual({ carried: 1, fresh: 0 });
+    expect(thread().account_id).toBe('b');
+  });
+
+  test('a hire the machine has not synced is refused, not thrown', async () => {
+    const { AccountChanger, deps } = await seed();
+    const changer = new AccountChanger({ ...deps, sendEdit: () => { throw new Error('needs an objectId and a rev'); } });
+    expect(changer.change('h1', account('b'))).toEqual({ refused: 'hire-not-synced' });
+  });
+
   test('an account with no uuid is never sent', async () => {
     const { changer, sent } = await seed();
     identities['/d/c'] = { accountUuid: null, email: 'c@x.com' };
-    expect(changer.change('h1', account('c'))).toBe('unknown-account');
+    expect(changer.change('h1', account('c'))).toEqual({ refused: 'unknown-account' });
     expect(sent).toEqual([]);
   });
 });
