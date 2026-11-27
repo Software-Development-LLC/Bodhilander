@@ -544,8 +544,12 @@ describe('HubClient queued frames', () => {
     t.client.sync.onEditResult = () => {
       throw new Error('disk');
     };
+    const queuedAtEmit: number[] = [];
+    t.client.on('edit-result', () => queuedAtEmit.push((t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local`).get() as { n: number }).n));
     t.sock().hub({ type: 'edit_result', id, result: 'applied', objectId: HIRE, rev: 4 });
     expect(results).toHaveLength(1);
+    expect(queuedAtEmit).toEqual([1]);
+    expect((t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local`).get() as { n: number }).n).toBe(0);
   });
 
   test('a conflicting edit shows the Hub copy', () => {
@@ -625,6 +629,7 @@ describe('HubClient queued frames', () => {
     t.sock().hub(deliver(1, 4));
     const id = t.client.sendMoveCard(HIRE, { account: 'missing', accountLabel: 'Work' });
     expect(sentOf(t, 'card_raise')).toEqual([{ type: 'card_raise', id, hireId: HIRE, epoch: 4, kind: 'move', tainted: false, payload: { account: 'missing', accountLabel: 'Work' } }]);
+    expect(t.raw.query(`SELECT raise_id, kind FROM crew_card_log`).all()).toEqual([{ raise_id: id, kind: 'move' }]);
     expect(t.client.sendUnlink(MACHINE)).toBe(true);
     expect(sentOf(t, 'unlink')).toEqual([{ type: 'unlink', id: expect.any(String), machineId: MACHINE }]);
   });

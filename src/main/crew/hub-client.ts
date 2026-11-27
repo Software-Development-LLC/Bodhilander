@@ -485,14 +485,17 @@ export class HubClient extends EventEmitter {
 
   private onEditResult(frame: EditResultFrame): void {
     const sent = this.outbox.frameOf(frame.id);
-    if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
     try {
       if (sent?.type === 'note_write') applyNoteResult(this.deps.db, sent, frame);
       this.sendPull(this.sync.onEditResult(frame, this.clocks.wall(), sent?.type === 'edit' ? sent : null));
     } catch (err) {
       log.warn(`[Crew] could not apply edit_result ${frame.id}; the next sync catches up`, err);
     }
-    this.emit('edit-result', frame);
+    try {
+      this.emit('edit-result', frame);
+    } finally {
+      if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
+    }
   }
 
   private onDeliver(frame: DeliverFrame): void {
@@ -639,7 +642,9 @@ export class HubClient extends EventEmitter {
     const epoch = this.fence.known(hireId);
     if (epoch === null) return null;
     const frame: CardRaiseFrame = { type: 'card_raise', id: this.newId(), hireId, epoch, kind: 'move', tainted: false, payload };
-    return this.queue(frame, { hireId, epoch }) ? frame.id : null;
+    if (!this.queue(frame, { hireId, epoch })) return null;
+    recordCardRaise(this.deps.db, frame, this.clocks.wall());
+    return frame.id;
   }
 
   sendUnlink(machineId: string): boolean {

@@ -34,14 +34,14 @@ export function officeEmployees(dataDir: string): string[] {
   return fs
     .readdirSync(root)
     .filter((h) => /^[a-z0-9-]+$/.test(h) && ['skills', 'work', 'notes'].some((d) => isDir(path.join(root, h, d))))
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /** Regular files under dir, posix-relative, sorted; symlinks and dotfiles are never followed or read. */
 function walk(dir: string, prefix = ''): string[] {
   if (!isDir(dir)) return [];
   const out: string[] = [];
-  for (const name of fs.readdirSync(dir).sort()) {
+  for (const name of fs.readdirSync(dir).sort((a, b) => a.localeCompare(b))) {
     if (name.startsWith('.')) continue;
     const full = path.join(dir, name);
     const rel = prefix ? `${prefix}/${name}` : name;

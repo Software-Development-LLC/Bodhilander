@@ -1,8 +1,6 @@
 /**
- * Unlinking this machine, and Make this machine home for a hire left with
- * none. The move is a card the owner approves; the Hub moves the lease only
- * after the old machine has stopped, and refuses a move from anyone but the
- * hire's owner, so this machine just raises and waits.
+ * Unlink this machine, and Make this machine home for a hire with none. The
+ * Hub moves the lease on approval and refuses a move from anyone but the owner.
  */
 import type Database from 'better-sqlite3';
 import type { ClaudeAccount, CrewEditResult } from '../../shared/types';

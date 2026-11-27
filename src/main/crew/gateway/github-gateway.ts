@@ -116,6 +116,7 @@ const NO_SLASHED_ARGS = new Set(['issue', 'run', 'label']);
 
 /** A repo named in an argument rather than with -R, which gh would read instead. */
 function argumentRepo(group: string, rest: string[]): string | null {
+  if (group === 'search') return null;
   for (const a of rest) {
     const m = a.startsWith('-') ? null : REPO_ISSUE.exec(a);
     if (m) return m[1];
@@ -124,9 +125,15 @@ function argumentRepo(group: string, rest: string[]): string | null {
   return positionals(rest).find((a) => REPO_NAME.test(a)) ?? null;
 }
 
-export function planGh(argv: string[], repos: readonly string[]): GhPlan {
+function argvRefusal(argv: string[]): GhPlan | null {
   if (argv.some((a) => GROUPED_SHORT.test(a))) return { kind: 'refused', why: 'Give each short flag on its own, with its value as the next argument.' };
   if (flagValues(argv, FILTER_FLAGS).some((f) => READS_ENV.test(f))) return { kind: 'refused', why: 'A --jq or --template filter cannot read the environment.' };
+  return null;
+}
+
+export function planGh(argv: string[], repos: readonly string[]): GhPlan {
+  const refusal = argvRefusal(argv);
+  if (refusal) return refusal;
   const [group, sub, ...rest] = argv;
   if (group === 'api') return planApi(argv.slice(1), repos);
   if (!group || !(group in READS)) return { kind: 'write' };
@@ -138,7 +145,7 @@ export function planGh(argv: string[], repos: readonly string[]): GhPlan {
   if (repo.value !== null && !repos.includes(repo.value.toLowerCase())) return { kind: 'refused', why: `${repo.value} is not one of this hire's repos.` };
   if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
   if (group === 'repo') return repoViewPlan(argv, rest, repos, repo.value);
-  const inArgs = group === 'search' ? null : argumentRepo(group, rest);
+  const inArgs = argumentRepo(group, rest);
   if (inArgs !== null && !repos.includes(inArgs.toLowerCase())) return { kind: 'refused', why: `${inArgs} is not one of this hire's repos.` };
   if (rest.some((a) => SEARCH_SCOPE.test(a))) return { kind: 'refused', why: 'Search names repos with --repo, never a qualifier.' };
   if (group === 'search') {
