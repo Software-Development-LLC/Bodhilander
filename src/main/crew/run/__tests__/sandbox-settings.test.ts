@@ -22,6 +22,16 @@ describe('run settings', () => {
     expect(s.sandbox.network).toEqual({ allowedDomains: ['api.anthropic.com'], allowUnixSockets: ['/tmp/cr-501/h1.sock'] });
   });
 
+  test('no run can read the owner\'s credential stores under home', () => {
+    for (const scope of ['owner', 'circle'] as const) {
+      const s = buildRunSettings(input(scope));
+      for (const p of ['.ssh', '.aws', '.config/gh', '.gnupg', '.netrc', '.docker', '.kube', '.npmrc', '.git-credentials', 'Library/Application Support/Google/Chrome']) {
+        expect(s.sandbox.filesystem.denyRead).toContain(`/Users/b/${p}`);
+        expect(s.permissions.deny).toContain(`Read(//Users/b/${p}/**)`);
+      }
+    }
+  });
+
   test('a circle run cannot read or write the owner folder or its transcripts', () => {
     const s = buildRunSettings(input('circle'));
     expect(s.sandbox.filesystem.allowWrite).toEqual([paths.circle]);

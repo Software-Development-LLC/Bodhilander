@@ -39,6 +39,12 @@ export interface RunSettings {
   };
 }
 
+// Credential stores under home that no run may read, whoever asked for it.
+const HOME_SECRETS = [
+  '.ssh', '.aws', '.azure', '.config/gcloud', '.config/gh', '.gnupg', '.netrc', '.docker', '.kube', '.npmrc', '.git-credentials',
+  'Library/Application Support/Google/Chrome', 'Library/Application Support/Firefox', 'Library/Safari', 'Library/Cookies',
+];
+
 const FILE_WRITERS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const FILE_READERS = ['Read', 'Glob', 'Grep'];
 
@@ -71,7 +77,8 @@ export function buildRunSettings(input: SandboxInput): RunSettings {
   const otherUserData = input.userDataEntries.filter((n) => n !== 'crew').map((n) => path.join(input.userData, n));
   const accounts = [...new Set([input.configDir, ...input.accountDirs])];
   const scoped = scope === 'circle' ? [paths.owner, projectsEntry(input.configDir, paths.owner)] : [];
-  const denyRead = [...new Set([...accounts, keychains, ...otherHires, ...otherUserData, ...scoped])];
+  const secrets = HOME_SECRETS.map((p) => path.join(input.home, p));
+  const denyRead = [...new Set([...accounts, keychains, ...secrets, ...otherHires, ...otherUserData, ...scoped])];
   const steering = steeringPaths(paths);
   const denyWrite = [...new Set([...accounts, ...otherHires, input.socketRoot, ...steering, ...scoped])];
   return {

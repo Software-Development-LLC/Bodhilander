@@ -1,3 +1,4 @@
+import net from 'node:net';
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -151,5 +152,23 @@ describe('GithubGateway', () => {
     });
     t.gw.close(uuid(1));
     expect(answer).toEqual({ status: 1, stdout: '', stderr: `${WRITE_MESSAGE}\n` });
+  });
+
+  test('a connection gets one answer, however many lines it sends', async () => {
+    const t = setup();
+    const dir = fs.mkdtempSync('/tmp/crg-');
+    dirs.push(dir);
+    const sock = path.join(dir, 'gh.sock');
+    await t.gw.listen(sock, t.run());
+    const line = `${JSON.stringify({ token: 'a'.repeat(64), args: ['pr', 'create'] })}\n`;
+    const got = await new Promise<string>((resolve) => {
+      const c = net.createConnection(sock, () => c.write(line + line));
+      let out = '';
+      c.setEncoding('utf8');
+      c.on('data', (d: string) => (out += d));
+      c.on('close', () => resolve(out));
+    });
+    t.gw.close(uuid(1));
+    expect(got.trim().split('\n')).toHaveLength(1);
   });
 });

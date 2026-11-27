@@ -22,6 +22,7 @@ function deps(result: EditResultFrame['result'] | null, over: Partial<LetGoDeps>
     online: () => true,
     sendDelete: (hireId) => (calls.push(`delete:${hireId}`), 'e1'),
     editResult: async (id) => (calls.push(`wait:${id}`), result === null ? null : { type: 'edit_result', id, result, why: 'not the owner' }),
+    forget: (hireId) => void calls.push(`forget:${hireId}`),
     interrupt: (hireId) => void calls.push(`interrupt:${hireId}`),
     moveAside: (hireId) => void calls.push(`move:${hireId}`),
     ...over,
@@ -30,17 +31,17 @@ function deps(result: EditResultFrame['result'] | null, over: Partial<LetGoDeps>
 }
 
 describe('letting a hire go', () => {
-  test('the Hub applies the delete first; only then is the run stopped and the folder moved aside', async () => {
+  test('the Hub applies the delete first; then the lease and jobs go before the run stops, so nothing reruns it, and the folder moves aside', async () => {
     const { d, calls } = deps('applied');
     expect(await letGoHire(d, HIRE)).toEqual({ ok: true });
-    expect(calls).toEqual([`delete:${HIRE}`, 'wait:e1', `interrupt:${HIRE}`, `move:${HIRE}`]);
+    expect(calls).toEqual([`delete:${HIRE}`, 'wait:e1', `forget:${HIRE}`, `interrupt:${HIRE}`, `move:${HIRE}`]);
   });
 
   test('a refusal, no answer or no connection leaves the hire and its folder alone', async () => {
     for (const result of ['refused', 'conflict', null] as const) {
       const { d, calls } = deps(result);
       expect((await letGoHire(d, HIRE)).ok).toBe(false);
-      expect(calls.filter((c) => c.startsWith('move') || c.startsWith('interrupt'))).toEqual([]);
+      expect(calls.filter((c) => c.startsWith('move') || c.startsWith('interrupt') || c.startsWith('forget'))).toEqual([]);
     }
     const offline = deps('applied', { online: () => false });
     expect(await letGoHire(offline.d, HIRE)).toEqual({ ok: false, error: "Crew Hub isn't connected, so the hire can't be let go now." });

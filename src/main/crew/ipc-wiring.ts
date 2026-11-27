@@ -59,6 +59,7 @@ export async function letGoHire(hireId: string): Promise<CrewEditResult> {
       online: () => hub.getStatus() === 'online',
       sendDelete: (id) => hub.sendEdit({ op: 'delete', kind: 'hire', objectId: id, hireId: id, fields: {} }),
       editResult: (id) => editResultFrom(hub, id, LET_GO_ANSWER_MS),
+      forget: (id) => hub.forgetHire(id),
       interrupt: (id) => crewRuntime()?.interrupt(id),
       moveAside: (id) => moveHireAside(app.getPath('userData'), id, Date.now()),
     },

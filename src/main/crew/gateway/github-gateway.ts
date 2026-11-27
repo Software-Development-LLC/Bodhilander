@@ -226,9 +226,11 @@ export class GithubGateway {
       conns.add(conn);
       conn.on('close', () => conns.delete(conn));
       let buffered = '';
+      let answered = false;
       conn.setEncoding('utf8');
       conn.on('error', () => conn.destroy());
       conn.on('data', (chunk: string) => {
+        if (answered) return;
         buffered += chunk;
         if (buffered.length > 1024 * 1024) return conn.destroy();
         const cut = buffered.indexOf('\n');
@@ -240,6 +242,8 @@ export class GithubGateway {
           request = {};
         }
         buffered = '';
+        answered = true;
+        conn.pause();
         void this.handle(run, request).then((r) => conn.end(`${JSON.stringify(r)}\n`));
       });
     });

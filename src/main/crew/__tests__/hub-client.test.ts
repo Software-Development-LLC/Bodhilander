@@ -924,6 +924,18 @@ describe('HubClient cards and tokens', () => {
     expect(await closed).toBe(null);
   });
 
+  test('forgetting a let-go hire drops its jobs and its lease', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    t.sock().hub(renewFor(1));
+    const before = t.client.canStart(HIRE, 1);
+    t.client.forgetHire(HIRE);
+    expect(before).toBe(true);
+    expect(t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(uuid(1))).toEqual({ state: 'dropped' });
+    expect(t.client.canStart(HIRE, 1)).toBe(false);
+  });
+
   test('a card_decision is acked only after it was handled; a handler that throws leaves it unacked', () => {
     const t = setup();
     t.online();

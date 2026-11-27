@@ -569,6 +569,13 @@ export class HubClient extends EventEmitter {
     this.emit('revoked', { hireId, mode: frame.mode });
   }
 
+  /** The Hub let the hire go: this machine stops leasing it and drops its jobs, so nothing runs it again. */
+  forgetHire(hireId: string): void {
+    this.lease.revoke(hireId);
+    this.fence.dropHire(hireId);
+    this.audit('hire-let-go', { hireId });
+  }
+
   /** Queue a run's reply, cut to MAX_TEXT and stamped with its job's epoch. False when fenced or already queued. */
   sendReply(jobId: string, text: string): boolean {
     const stamp = this.fence.stampFor(jobId);

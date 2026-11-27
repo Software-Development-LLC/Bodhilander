@@ -13,6 +13,7 @@ export interface LetGoDeps {
   online(): boolean;
   sendDelete(hireId: string): string;
   editResult(id: string): Promise<EditResultFrame | null>;
+  forget(hireId: string): void;
   interrupt(hireId: string): void;
   moveAside(hireId: string): void;
 }
@@ -29,6 +30,7 @@ export async function letGoHire(deps: LetGoDeps, hireId: string): Promise<CrewEd
   const answer = await deps.editResult(id);
   if (!answer) return { ok: false, error: "Crew Hub didn't answer. Try again." };
   if (answer.result !== 'applied') return { ok: false, error: answer.why ?? 'Crew Hub refused the let go.' };
+  deps.forget(hireId);
   deps.interrupt(hireId);
   try {
     deps.moveAside(hireId);
