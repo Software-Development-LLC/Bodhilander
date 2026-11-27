@@ -64,15 +64,16 @@ export class LocalOutbox {
     private readonly random: () => number = Math.random,
   ) {}
 
-  /** Throws on a frame over MAX_FRAME_BYTES, so the caller fails its tool call or job. */
-  enqueue(frame: MachineFrame & { id: string }, meta: { hireId?: string; epoch?: number; jobId?: string } = {}): void {
+  /** Throws on a frame over MAX_FRAME_BYTES, so the caller fails its tool call or job. False when the id is already queued. */
+  enqueue(frame: MachineFrame & { id: string }, meta: { hireId?: string; epoch?: number; jobId?: string } = {}): boolean {
     const body = assertSendable(frame);
-    this.db
+    const result = this.db
       .prepare(
         `INSERT INTO crew_outbox_local (id, hire_id, epoch, job_id, frame_type, protocol_version, body)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
       )
       .run(frame.id, meta.hireId ?? null, meta.epoch ?? null, meta.jobId ?? null, frame.type, PROTOCOL_VERSION, body);
+    return result.changes > 0;
   }
 
   /** At start: rows this build no longer speaks are dropped and audited. */

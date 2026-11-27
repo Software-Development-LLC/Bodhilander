@@ -62,10 +62,10 @@ describe('crew tables', () => {
     raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state) VALUES ('j1', 'h', 1, 'owner', 'p', 'running')`);
     raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state) VALUES ('j2', 'h', 1, 'owner', 'p', 'done')`);
     initializeCrewTables(db);
-    const states = raw.query(`SELECT id, state FROM crew_job ORDER BY id`).all();
+    const states = raw.query(`SELECT id, state, attempts FROM crew_job ORDER BY id`).all();
     expect(states).toEqual([
-      { id: 'j1', state: 'queued' },
-      { id: 'j2', state: 'done' },
+      { id: 'j1', state: 'queued', attempts: 1 },
+      { id: 'j2', state: 'done', attempts: 0 },
     ]);
   });
 

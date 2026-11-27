@@ -73,6 +73,14 @@ export class LeaseClock {
     this.leases.delete(hireId);
   }
 
+  /** Drop every lease at once; returns the hires that had one. */
+  revokeAll(): string[] {
+    const hires = [...this.leases.keys()];
+    this.leases.clear();
+    this.wasHeld.clear();
+    return hires;
+  }
+
   held(hireId: string, epoch?: number): boolean {
     const lease = this.leases.get(hireId);
     if (!lease) return false;

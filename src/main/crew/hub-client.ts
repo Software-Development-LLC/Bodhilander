@@ -15,6 +15,7 @@ import { CrewSync, type EditInput } from './sync';
 import {
   HEARTBEAT_MS,
   MAX_FRAME_BYTES,
+  OFFLINE_AFTER_MS,
   PROTOCOL_VERSION,
   authMessage,
   type AuditFrame,
@@ -62,6 +63,8 @@ export const CLOSE_CODES: Record<number, ErrorReason> = {
 export const BACKOFF_FIRST_MS = 1000;
 export const BACKOFF_CAP_MS = 30_000;
 export const SKEW_LIMIT_MS = 2 * 60_000;
+/** Heartbeats left unrenewed before the socket is treated as dead: the Hub's own offline window. */
+export const MISSED_RENEWS_LIMIT = OFFLINE_AFTER_MS / HEARTBEAT_MS;
 
 export type HubStatus =
   | 'idle'
@@ -79,6 +82,7 @@ export type HubStatus =
 export interface HubSocket {
   send(data: string): void;
   close(code?: number): void;
+  terminate(): void;
   on(event: 'open', cb: () => void): unknown;
   on(event: 'message', cb: (data: unknown) => void): unknown;
   on(event: 'close', cb: (code: number) => void): unknown;
@@ -125,6 +129,7 @@ export class HubClient extends EventEmitter {
   private readonly timers: Timers;
   private readonly random: () => number;
   private readonly hubHost: string;
+  private readonly wsScheme: 'ws' | 'wss';
   private readonly newId: () => string;
 
   private socket: HubSocket | null = null;
@@ -150,7 +155,9 @@ export class HubClient extends EventEmitter {
     this.clocks = deps.clocks ?? systemClocks;
     this.timers = deps.timers ?? realTimers;
     this.random = deps.random ?? Math.random;
-    this.hubHost = new URL(deps.hubUrl).host;
+    const hub = new URL(deps.hubUrl);
+    this.hubHost = hub.host;
+    this.wsScheme = hub.protocol === 'http:' ? 'ws' : 'wss';
     this.lease = new LeaseClock(this.clocks);
     this.fence = new EpochFence(deps.db);
     this.outbox = new LocalOutbox(deps.db, this.fence, this.random);
@@ -196,6 +203,7 @@ export class HubClient extends EventEmitter {
   }
 
   private connectionClosed(): void {
+    this.phase = 'challenge';
     this.lease.onConnectionClosed();
     this.outbox.onConnectionClosed();
     this.sync.onClosed();
@@ -208,6 +216,7 @@ export class HubClient extends EventEmitter {
     this.lease.onResume();
     this.heartbeatSentAt.clear();
     this.sweep();
+    if (this.phase === 'open' && this.socket) this.heartbeat();
   }
 
   canStart(hireId: string, epoch: number): boolean {
@@ -235,7 +244,7 @@ export class HubClient extends EventEmitter {
     this.setStatus(this.status === 'pending' ? 'pending' : 'connecting');
     let socket: HubSocket;
     try {
-      socket = this.deps.connect(`wss://${this.hubHost}/ws`, { maxPayload: MAX_FRAME_BYTES });
+      socket = this.deps.connect(`${this.wsScheme}://${this.hubHost}/ws`, { maxPayload: MAX_FRAME_BYTES });
     } catch (err) {
       log.warn('[Crew] could not open the Hub socket', err);
       this.scheduleReconnect('unavailable');
@@ -366,6 +375,10 @@ export class HubClient extends EventEmitter {
   }
 
   private heartbeat(): void {
+    if (this.heartbeatSentAt.size >= MISSED_RENEWS_LIMIT) {
+      this.dropDeadSocket();
+      return;
+    }
     const seq = this.lease.sendHeartbeat();
     const sentAt = this.send({ type: 'heartbeat', seq });
     this.heartbeatSentAt.set(seq, sentAt);
@@ -457,18 +470,18 @@ export class HubClient extends EventEmitter {
     this.emit('revoked', { hireId, mode: frame.mode });
   }
 
-  /** Queue a run's reply, cut to MAX_TEXT and stamped with its job's epoch. False when fenced. */
+  /** Queue a run's reply, cut to MAX_TEXT and stamped with its job's epoch. False when fenced or already queued. */
   sendReply(jobId: string, text: string): boolean {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: ReplyFrame = { type: 'reply', id: jobId, hireId: stamp.hireId, epoch: stamp.epoch, text: cutText(text) };
-    this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
-    return true;
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
   }
 
-  private queue(frame: MachineFrame & { id: string }, meta: { hireId?: string; epoch?: number; jobId?: string }): void {
-    this.outbox.enqueue(frame, meta);
+  private queue(frame: MachineFrame & { id: string }, meta: { hireId?: string; epoch?: number; jobId?: string }): boolean {
+    if (!this.outbox.enqueue(frame, meta)) return false;
     if (this.phase === 'open') this.outbox.sendNow(frame.id, this.sender, this.clocks.wall());
+    return true;
   }
 
   /** Queue an edit against the cached rev; a hire's edit carries its newest known epoch. Returns the edit id. */
@@ -506,6 +519,15 @@ export class HubClient extends EventEmitter {
     }
   }
 
+  /** No renew for the Hub's offline window: the connection is gone even if TCP has not said so. */
+  private dropDeadSocket(): void {
+    const socket = this.socket;
+    log.warn('[Crew] no renew from the Hub; dropping the connection');
+    this.socket = null;
+    socket?.terminate();
+    this.onClose(1006);
+  }
+
   private onClose(code: number): void {
     this.socket = null;
     this.clearTimers();
@@ -521,6 +543,7 @@ export class HubClient extends EventEmitter {
         return this.stopReconnecting('link-again');
       case 'replaced':
         log.warn('[Crew] another connection replaced this one');
+        this.releaseLeases();
         return this.stopReconnecting('replaced');
       case 'unlinked':
         this.unlinked();
@@ -532,7 +555,16 @@ export class HubClient extends EventEmitter {
     }
   }
 
+  /** Another connection holds the hires now, or none does: nothing here may keep running. */
+  private releaseLeases(): void {
+    for (const hireId of this.lease.revokeAll()) {
+      this.deps.interruptRun(hireId);
+      this.fence.requeueRunning(hireId);
+    }
+  }
+
   private unlinked(): void {
+    this.releaseLeases();
     const db = this.deps.db;
     const hires = db.prepare(`SELECT DISTINCT hire_id FROM crew_job WHERE state IN ('queued', 'running', 'parked')`).all() as {
       hire_id: string;

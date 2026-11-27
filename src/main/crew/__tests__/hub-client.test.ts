@@ -20,6 +20,10 @@ class FakeSocket {
   close(code = 1000) {
     this.closed = code;
   }
+  terminated = false;
+  terminate() {
+    this.terminated = true;
+  }
   hub(frame: Record<string, unknown>) {
     for (const cb of this.handlers.message ?? []) cb(JSON.stringify(frame));
   }
@@ -546,4 +550,97 @@ describe('HubClient queued frames', () => {
     const rows = t.raw.query(`SELECT hire_id, epoch FROM crew_outbox_local ORDER BY seq`).all();
     expect(rows).toEqual([{ hire_id: HIRE, epoch: 6 }, { hire_id: null, epoch: null }]);
   });
+});
+
+describe('HubClient connection health', () => {
+  const heartbeats = (t: ReturnType<typeof setup>) => t.sock().sent.filter((f) => f.type === 'heartbeat').length;
+  const beat = (t: ReturnType<typeof setup>) => t.intervals.filter((i) => i.ms === HEARTBEAT_MS && i.live).at(-1)!.fn();
+
+  test('three heartbeats with no renew drop the socket and back off', () => {
+    const t = setup();
+    t.online();
+    beat(t);
+    beat(t);
+    expect(t.sock().terminated).toBe(false);
+    beat(t);
+    expect(heartbeats(t)).toBe(3);
+    expect(t.sock().terminated).toBe(true);
+    expect(t.client.getStatus()).toBe('unavailable');
+    expect(t.timeouts.map((x) => x.ms)).toEqual([1000]);
+    t.sock().drop(1006);
+    expect(t.timeouts).toHaveLength(1);
+  });
+
+  test('a renew keeps the connection', () => {
+    const t = setup();
+    t.online();
+    for (let seq = 2; seq <= 6; seq += 1) {
+      t.sock().hub(renewFor(seq - 1));
+      beat(t);
+    }
+    expect(t.sock().terminated).toBe(false);
+    expect(heartbeats(t)).toBe(6);
+  });
+
+  test('a resume sends a heartbeat at once, so a renewal can come; offline it sends nothing', () => {
+    const t = setup();
+    t.online();
+    t.client.onResume();
+    expect(heartbeats(t)).toBe(2);
+    t.sock().hub(renewFor(2));
+    expect(t.client.canStart(HIRE, 1)).toBe(true);
+    t.sock().drop(1006);
+    const sent = t.sock().sent.length;
+    t.client.onResume();
+    expect(t.sock().sent.length).toBe(sent);
+  });
+
+  test('an http Hub override dials ws', () => {
+    const t = setup();
+    const urls: string[] = [];
+    const local = new HubClient({
+      db: t.db, hubUrl: 'http://localhost:8080', getMachineId: () => MACHINE, forgetMachineId: () => {}, sign: () => Buffer.alloc(0),
+      connect: (url) => {
+        urls.push(url);
+        return new FakeSocket() as unknown as HubSocket;
+      },
+      interruptRun: () => {},
+      timers: { setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {} },
+    });
+    local.start();
+    expect(urls).toEqual(['ws://localhost:8080/ws']);
+  });
+
+  test('a reply queued after the socket closed waits for the next welcome', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1));
+    t.sock().drop(1006);
+    expect(t.client.sendReply(uuid(1), 'r')).toBe(true);
+    expect(t.client.outbox.sentIndex(uuid(1))).toBeNull();
+  });
+
+  test('a second reply for one job is refused, not thrown', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1));
+    expect(t.client.sendReply(uuid(1), 'a')).toBe(true);
+    expect(t.client.sendReply(uuid(1), 'b')).toBe(false);
+    expect(t.sock().sent.filter((f) => f.type === 'reply')).toHaveLength(1);
+  });
+
+  for (const [code, status] of [[4409, 'replaced'], [4410, 'unlinked']] as const) {
+    test(`a ${status} close gives up every lease and interrupts its run`, () => {
+      const t = setup();
+      t.online();
+      t.sock().hub(renewFor(1));
+      t.sock().hub(deliver(1));
+      t.raw.exec(`UPDATE crew_job SET state = 'running'`);
+      t.sock().drop(code);
+      expect(t.client.canStart(HIRE, 1)).toBe(false);
+      expect(t.interrupted[0]).toBe(HIRE);
+      const state = (t.raw.query(`SELECT state FROM crew_job`).get() as { state: string }).state;
+      expect(state).toBe(status === 'replaced' ? 'queued' : 'dropped');
+    });
+  }
 });

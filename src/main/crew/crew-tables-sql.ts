@@ -145,5 +145,7 @@ export function initializeCrewTables(database: Database.Database): void {
   addColumn('claude_accounts', 'crew_token_expires_at', 'crew_token_expires_at TEXT DEFAULT NULL');
 
   // A job left running by a quit or crash was interrupted; it runs again once a lease is renewed.
-  database.prepare(`UPDATE crew_job SET state = 'queued', updated_at = CURRENT_TIMESTAMP WHERE state = 'running'`).run();
+  database
+    .prepare(`UPDATE crew_job SET state = 'queued', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE state = 'running'`)
+    .run();
 }
