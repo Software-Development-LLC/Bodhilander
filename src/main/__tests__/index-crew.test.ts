@@ -26,7 +26,11 @@ const app = new Proxy(
   { get: (t, key) => (key in t ? t[key] : stub) },
 );
 const ELECTRON = ['BrowserWindow', 'ipcMain', 'dialog', 'shell', 'crashReporter', 'Notification', 'screen', 'safeStorage', 'powerMonitor', 'nativeTheme', 'Menu', 'MenuItem', 'Tray', 'clipboard', 'nativeImage', 'net', 'session', 'webContents', 'protocol', 'globalShortcut', 'systemPreferences', 'autoUpdater', 'utilityProcess', 'MessageChannelMain', 'desktopCapturer', 'powerSaveBlocker', 'inAppPurchase', 'contentTracing', 'netLog', 'pushNotifications', 'TouchBar', 'ShareMenu', 'webFrameMain', 'contextBridge', 'ipcRenderer'];
-const electron: Record<string, unknown> = { app, ...Object.fromEntries(ELECTRON.map((k) => [k, stub])) };
+const ipc: Record<string, (...args: unknown[]) => unknown> = {};
+const ipcMain = new Proxy({ handle: (channel: string, fn: (...args: unknown[]) => unknown) => void (ipc[channel] = fn) } as Record<string | symbol, unknown>, {
+  get: (t, key) => (key in t ? t[key] : stub),
+});
+const electron: Record<string, unknown> = { app, ...Object.fromEntries(ELECTRON.map((k) => [k, stub])), ipcMain };
 mock.module('electron', () => ({ ...electron, default: electron }));
 mock.module('electron-log', () => ({ default: stub }));
 mock.module('node-pty', () => ({ spawn: stub }));
@@ -58,5 +62,12 @@ describe('the main process', () => {
     const quit = handlers['before-quit'] ?? [];
     expect(quit.some((fn) => /stopCrew\(\)/.test(String(fn)))).toBe(true);
     expect(calls).toEqual([]);
+  });
+
+  test('prefs:set refuses every crew.* key', async () => {
+    await import('../index');
+    for (const key of ['crew.hubUrl', 'crew.machineId']) {
+      await expect(Promise.resolve(ipc['prefs:set']({}, key, 'https://h.example'))).rejects.toThrow(`${key} is set by Bodhilander only`);
+    }
   });
 });

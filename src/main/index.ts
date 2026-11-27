@@ -6,6 +6,7 @@ import { registerWindowsSignIn } from './crew/wsl-sign-in';
 import { registerWindowsSetup } from './crew/wsl-ipc';
 import { announceSignInStart } from './crew/sign-in-started';
 import { wireCrewIpc } from './crew/ipc-wiring';
+import { rendererMayWritePreference } from './crew/prefs';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1240,6 +1241,7 @@ safeHandle('prefs:get', (key: string) => {
 });
 
 safeHandle('prefs:set', (key: string, value: string) => {
+  if (!rendererMayWritePreference(key)) throw new Error(`${key} is set by Bodhilander only`);
   prefsRepo.setPreference(key, value);
   usageService?.preferenceChanged(key);
 });
