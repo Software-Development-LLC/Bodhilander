@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
 import { crewRecordSignIn, startCrew, stopCrew } from './crew/crew-main';
-import { registerCrewIpc } from './crew/crew-ipc';
+import { registerCrewSignIn } from './crew/crew-sign-in';
+import { wireCrewIpc } from './crew/ipc-wiring';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1078,9 +1079,11 @@ safeHandle('accounts:resumeLogin', (accountId: string) => {
   return accountAuth.resumeLoginFlow(ptyManager, mainWindow, id);
 });
 
-registerCrewIpc({
+registerCrewSignIn({
   handle: safeHandle,
   resumeLogin: (accountId) => accountAuth.resumeLoginFlow(ptyManager, mainWindow, accountId),
+  loginSettled: accountAuth.loginSettled,
+  cancelLogin: (ptyId) => accountAuth.cancelLoginFlow(ptyManager, ptyId, false),
   recordSignIn: (accountId) => crewRecordSignIn(accountId),
   setLoginCompletedHook: accountAuth.setLoginCompletedHook,
 });
@@ -1540,6 +1543,11 @@ registerClaudeDesktopIpc({
     return choice.canceled || !choice.filePath ? null : choice.filePath;
   },
 });
+
+wireCrewIpc(
+  (channel, handler) => safeHandle(channel, handler),
+  () => mainWindow?.webContents.send('crew:changed'),
+);
 
 // ============================================================================
 // Remote Hosting (Relay) IPC Handlers

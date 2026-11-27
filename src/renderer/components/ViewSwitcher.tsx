@@ -6,7 +6,7 @@ import React, { useCallback } from 'react';
  * Arena are both open" unrepresentable — that used to happen with two
  * independent booleans.
  */
-export type ContentView = 'terminal' | 'analytics' | 'arena' | 'runs' | 'board';
+export type ContentView = 'terminal' | 'analytics' | 'arena' | 'runs' | 'board' | 'crew';
 
 /**
  * Tab strip at the top of the content area. Digits (not letters) because the
@@ -18,6 +18,7 @@ export const VIEW_TABS: Array<{ id: ContentView; label: string; digit: string }>
   { id: 'arena', label: 'Arena', digit: '3' },
   { id: 'runs', label: 'Runs', digit: '4' },
   { id: 'board', label: 'Board', digit: '5' },
+  { id: 'crew', label: 'Crew', digit: '6' },
 ];
 
 interface ViewSwitcherProps {

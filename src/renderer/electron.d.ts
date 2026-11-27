@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -194,6 +194,22 @@ interface ElectronAPI {
   claudeDesktopDisable: () => Promise<ClaudeDesktopActionResult>;
   claudeDesktopInstall: () => Promise<ClaudeDesktopActionResult>;
   claudeDesktopSaveExtension: () => Promise<ClaudeDesktopActionResult>;
+
+  // Crew. The renderer never talks to the Hub; every read and edit goes through the main process.
+  crewGetStatus: () => Promise<CrewStatus>;
+  crewListHires: () => Promise<CrewHireSummary[]>;
+  crewGetHire: (hireId: string) => Promise<CrewHireDetail | null>;
+  crewGetHireUsage: (hireId: string) => Promise<CrewHireUsage>;
+  crewSetDailyCap: (hireId: string, cap: number | null) => Promise<CrewEditResult>;
+  crewSetRepos: (hireId: string, repos: string[]) => Promise<CrewEditResult>;
+  crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
+  crewLetGo: (hireId: string) => Promise<CrewEditResult>;
+  crewSignInAgain: (accountId: string) => Promise<CrewEditResult>;
+  crewListCards: () => Promise<CrewCardList>;
+  crewOpenCard: (raiseId: string) => Promise<boolean>;
+  crewBeginLink: () => Promise<CrewLinkView>;
+  crewConfirmLinkOwner: (isMe: boolean) => Promise<boolean>;
+  onCrewChanged: (callback: () => void) => () => void;
 
   // Vector Search
 
