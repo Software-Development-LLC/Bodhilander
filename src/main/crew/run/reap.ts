@@ -4,6 +4,7 @@
 import { execFileSync } from 'child_process';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
+import { writeAudit } from '../audit';
 
 export interface ReapDeps {
   commandOf(pid: number): string | null;
@@ -19,7 +20,7 @@ function tree(deps: ReapDeps, pid: number, seen = new Set<number>()): number[] {
 
 /** The number of leftover runs killed. Every unended run is closed as interrupted either way. */
 export function reapLeftoverRuns(db: Database.Database, deps: ReapDeps): number {
-  const rows = db.prepare(`SELECT id, hire_id, pid FROM crew_run WHERE ended_at IS NULL AND pid IS NOT NULL`).all() as { id: string; hire_id: string; pid: number }[];
+  const rows = db.prepare(`SELECT id, job_id, hire_id, pid FROM crew_run WHERE ended_at IS NULL AND pid IS NOT NULL`).all() as { id: string; job_id: string; hire_id: string; pid: number }[];
   let killed = 0;
   for (const row of rows) {
     const command = deps.commandOf(row.pid);
@@ -32,6 +33,7 @@ export function reapLeftoverRuns(db: Database.Database, deps: ReapDeps): number 
         }
       }
       killed += 1;
+      writeAudit(db, row.hire_id, 'run-leftover-stopped', { runId: row.id, jobId: row.job_id, where: 'native' });
     }
   }
   db.prepare(`UPDATE crew_run SET ended_at = CURRENT_TIMESTAMP, outcome = 'interrupted', pid = NULL WHERE ended_at IS NULL`).run();

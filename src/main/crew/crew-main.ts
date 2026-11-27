@@ -36,6 +36,7 @@ import { crewTools } from './tools/server';
 import { writeAudit } from './audit';
 import { createWindowsCrew, type WindowsCrew } from './wsl-runtime';
 import { windowsSetupDeps } from './wsl-main';
+import { takeLeftoverRuns, type LeftoverRun } from './wsl-reap';
 
 let runtime: CrewRuntime | null = null;
 let runtimeHub: HubClient | null = null;
@@ -44,6 +45,7 @@ let gateway: GithubGateway | null = null;
 let services: RunServiceManager | null = null;
 let detachHub: (() => void) | null = null;
 let windowsCrew: WindowsCrew | null = null;
+let leftoverWslRuns: LeftoverRun[] = [];
 const holds = new Holds();
 const slots = new RunSlots();
 
@@ -164,6 +166,7 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     },
     resources: { dir, relayScript: res.relayScript, shimDir: res.shimDir },
     recordsFile: path.join(app.getPath('userData'), 'crew', 'wsl-tmp.json'),
+    leftoverRuns: () => leftoverWslRuns.splice(0),
     ...windowsSetupDeps(async () => {
       await runtime?.loop.tick();
     }),
@@ -278,13 +281,15 @@ function attach(hub: HubClient): CrewRuntime {
 
 export function startCrew(): CrewRuntime {
   sweepLetGo(app.getPath('userData'), Date.now());
-  if (process.platform !== 'win32') {
-    try {
+  try {
+    if (process.platform === 'win32') {
+      leftoverWslRuns = takeLeftoverRuns(getDatabase());
+    } else {
       reapLeftoverRuns(getDatabase(), systemReap);
       sweepRunDirs(socketRoot(process.getuid?.() ?? 0), process.getuid?.() ?? 0);
-    } catch (err) {
-      log.error('[Crew] could not end leftover runs', err);
     }
+  } catch (err) {
+    log.error('[Crew] could not end leftover runs', err);
   }
   setCrewHubReplaced((hub) => attach(hub));
   setCrewInterrupt((hireId) => runtime?.interrupt(hireId));

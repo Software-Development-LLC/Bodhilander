@@ -28,6 +28,8 @@ describe('leftover runs after a crash', () => {
     expect(reapLeftoverRuns(db, deps)).toBe(1);
     expect(killed).toEqual([[102, 'SIGKILL'], [101, 'SIGKILL'], [100, 'SIGKILL']]);
     expect(raw.query(`SELECT outcome, pid, ended_at IS NOT NULL AS ended FROM crew_run`).get()).toEqual({ outcome: 'interrupted', pid: null, ended: 1 });
+    const audits = raw.query(`SELECT hire_id, detail FROM crew_audit WHERE event = 'run-leftover-stopped'`).all() as { hire_id: string; detail: string }[];
+    expect(audits.map((a) => [a.hire_id, JSON.parse(a.detail)])).toEqual([[HIRE, { runId: 'r1', jobId: 'j1', where: 'native' }]]);
   });
 
   test('a pid now used by something else, a run that ended, or a gone process is left alone', () => {
@@ -42,6 +44,7 @@ describe('leftover runs after a crash', () => {
     });
     expect(reapLeftoverRuns(db, deps)).toBe(0);
     expect(killed).toEqual([]);
+    expect(raw.query(`SELECT COUNT(*) AS n FROM crew_audit`).get()).toEqual({ n: 0 });
     expect(raw.query(`SELECT id, outcome FROM crew_run ORDER BY id`).all()).toEqual([
       { id: 'r1', outcome: 'interrupted' }, { id: 'r2', outcome: 'interrupted' }, { id: 'r3', outcome: 'done' },
     ]);

@@ -13,6 +13,7 @@ import { removeTmpOrphans, sweepTmpParentScript, type DistroSh, type TmpRecords 
 import { asCrew, asRoot, checkWsl, decodeWslOutput, repairLock, repairWsl1, type WslExec } from './wsl';
 import { agentServeArgs, WSL_EXE, windowsEnv, type AgentChild } from './wsl-agent';
 import { WslRuns, WSL_GH_SHIM_DIR, WSL_MCP_RELAY, type WslRunDeps } from './wsl-run';
+import { stopLeftoverWslRuns, type LeftoverRun } from './wsl-reap';
 import { BUILD_NOT_READY, buildCanSetUp, installShipped, LINK_WAITING, repairUser, runSetup, WindowsGate, type ShippedFiles } from './wsl-setup';
 import { WindowsSetupService } from './wsl-setup-service';
 import { WslSignIn, type SignInChild, type WslSignInDeps } from './wsl-sign-in';
@@ -173,6 +174,8 @@ export type WindowsCrewDeps = Omit<WslRunDeps, 'exec' | 'sh' | 'records' | 'agen
   audit(event: string, detail: Record<string, unknown>): void;
   openExternal: WslSignInDeps['openExternal'];
   belongsTo: WslSignInDeps['belongsTo'];
+  /** The last session's unended runs, handed over once; their groups are stopped when the start check passes. */
+  leftoverRuns?(): LeftoverRun[];
   exec?: WslExec;
   spawnAgent?: () => AgentChild;
 };
@@ -216,6 +219,13 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
       const live = new Set([...runs.liveTmpNames(), ...signIn.liveTmpNames()]);
       await removeTmpOrphans(sh, CREW_UID, records, live);
       if (live.size === 0) await sh(sweepTmpParentScript(CREW_UID), true);
+    },
+    ready: async () => {
+      try {
+        await stopLeftoverWslRuns(deps.db, sh, deps.leftoverRuns?.() ?? []);
+      } catch (err) {
+        deps.audit('leftover-runs-failed', { error: err instanceof Error ? err.message : String(err) });
+      }
     },
   });
   const installDir = path.join(deps.crewDir, 'wsl');

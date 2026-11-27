@@ -323,6 +323,8 @@ export interface WindowsGateDeps {
   audit(event: string, detail: Record<string, unknown>): void;
   /** The root-side sweep of /tmp/crt-<uid>/ at start, before any run. */
   sweep?(): Promise<void>;
+  /** Once the start check passes, before any run is let through. */
+  ready?(): Promise<void>;
 }
 
 /**
@@ -340,10 +342,12 @@ export class WindowsGate {
   async atStart(): Promise<StepResult> {
     await this.deps.sweep?.();
     const machine = await machineCheck(this.deps.exec, this.deps.versions);
-    this.interop = machine.ok ? await checkInterop(this.deps.exec) : machine;
-    this.last = this.interop;
-    if (!this.interop.ok) this.record(this.interop);
-    return this.interop;
+    const interop = machine.ok ? await checkInterop(this.deps.exec) : machine;
+    if (interop.ok) await this.deps.ready?.();
+    this.interop = interop;
+    this.last = interop;
+    if (!interop.ok) this.record(interop);
+    return interop;
   }
 
   /** The last check, at start or before a run; null before the first. */

@@ -386,6 +386,21 @@ describe('the gate a Windows run waits on', () => {
     expect(launches()).toBe(1);
   });
 
+  test('once the start check passes, leftover runs are stopped before any run is let through; a failed check stops nothing', async () => {
+    const d = finished();
+    let open: string | null | undefined;
+    const g = new WindowsGate({ exec: d.exec, versions, audit: () => {}, ready: async () => void (open = await g.gate()) });
+    await g.atStart();
+    expect(open).toBe('held:setup');
+    expect(await g.gate()).toBeNull();
+
+    const e = finished();
+    e.interop = { code: 0, stdout: 'pc\\me', stderr: '' };
+    let readied = 0;
+    await new WindowsGate({ exec: e.exec, versions, audit: () => {}, ready: async () => void readied++ }).atStart();
+    expect(readied).toBe(0);
+  });
+
   test('interop coming back at start holds with one audit row; a wsl.conf edited later holds at the next run', async () => {
     const d = finished();
     d.interop = { code: 0, stdout: 'pc\\me', stderr: '' };
