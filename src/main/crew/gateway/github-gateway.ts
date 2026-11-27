@@ -48,6 +48,22 @@ function flagValues(args: string[], names: Set<string>): string[] {
   return values;
 }
 
+const METHOD_FLAGS = new Set(['-X', '--method']);
+
+function apiFlagPlan(name: string): GhPlan | null {
+  if (API_WRITE_FLAGS.has(name)) return { kind: 'write' };
+  if (API_REFUSED_FLAGS.has(name)) return { kind: 'refused', why: 'gh api reaches github.com only.' };
+  return null;
+}
+
+function apiEndpointPlan(positional: string[], repos: readonly string[], rest: string[]): GhPlan {
+  const endpoint = positional.length === 1 ? positional[0] : null;
+  const m = endpoint && !/\.\.|%|\\/.test(endpoint) ? /^\/?repos\/([^/]+\/[^/?#]+)(?:[/?#]|$)/.exec(endpoint) : null;
+  if (!m) return { kind: 'refused', why: 'gh api takes one endpoint, under repos/<owner>/<repo>/ of this hire.' };
+  if (!repos.includes(m[1].toLowerCase())) return { kind: 'refused', why: `${m[1]} is not one of this hire's repos.` };
+  return { kind: 'read', args: ['api', ...rest] };
+}
+
 function planApi(rest: string[], repos: readonly string[]): GhPlan {
   const positional: string[] = [];
   let method: string | null = null;
@@ -55,25 +71,18 @@ function planApi(rest: string[], repos: readonly string[]): GhPlan {
   while (i < rest.length) {
     const a = rest[i];
     const name = flagName(a);
-    i += 1;
-    if (API_WRITE_FLAGS.has(name)) return { kind: 'write' };
-    if (API_REFUSED_FLAGS.has(name)) return { kind: 'refused', why: 'gh api reaches github.com only.' };
+    const stop = apiFlagPlan(name);
+    if (stop) return stop;
+    const inline = name !== a;
     if (!a.startsWith('-')) positional.push(a);
     else if (API_VALUE_FLAGS.has(name)) {
-      let value = a.slice(a.indexOf('=') + 1);
-      if (name === a) {
-        value = rest[i] ?? '';
-        i += 1;
-      }
-      if (name === '-X' || name === '--method') method = value;
+      if (METHOD_FLAGS.has(name)) method = inline ? a.slice(a.indexOf('=') + 1) : (rest[i + 1] ?? '');
+      if (!inline) i += 1;
     }
+    i += 1;
   }
   if (method !== null && method.toUpperCase() !== 'GET') return { kind: 'write' };
-  const endpoint = positional.length === 1 ? positional[0] : null;
-  const m = endpoint && !/\.\.|%|\\/.test(endpoint) ? /^\/?repos\/([^/]+\/[^/?#]+)(?:[/?#]|$)/.exec(endpoint) : null;
-  if (!m) return { kind: 'refused', why: 'gh api takes one endpoint, under repos/<owner>/<repo>/ of this hire.' };
-  if (!repos.includes(m[1].toLowerCase())) return { kind: 'refused', why: `${m[1]} is not one of this hire's repos.` };
-  return { kind: 'read', args: ['api', ...rest] };
+  return apiEndpointPlan(positional, repos, rest);
 }
 
 /** What a run's `gh` argv may do. Repos are lowercase owner/name. */
