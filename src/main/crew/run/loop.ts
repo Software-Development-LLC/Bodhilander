@@ -10,6 +10,7 @@ import type Database from 'better-sqlite3';
 import log from 'electron-log';
 import type { UsageObservation } from '../../usage-meter';
 import { writeAudit } from '../audit';
+import { CREW_JOB_MAX_ATTEMPTS } from '../crew-tables-sql';
 import { isAuthFailure } from '../crew-token';
 import type { RunScope } from '../protocol';
 import { sessionLost } from './sessions';
@@ -17,7 +18,7 @@ import type { RunSlots, SlotKind } from './slots';
 import { parseRateLimitEvent, parseRejection, runUsage, type RunUsage } from './usage-stream';
 
 export const ERROR_REPLY = 'I hit an error on this one.';
-export const MAX_ATTEMPTS = 2;
+export const MAX_ATTEMPTS = CREW_JOB_MAX_ATTEMPTS;
 
 export interface CrewJob {
   id: string;

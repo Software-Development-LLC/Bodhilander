@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { CREW_TABLES_SQL, initializeCrewTables } from '../crew-tables-sql';
+import { CREW_JOB_MAX_ATTEMPTS as MAX_ATTEMPTS, CREW_TABLES_SQL, initializeCrewTables } from '../crew-tables-sql';
 import { crewDb, type Db } from './crew-db';
 
 const TABLES = [
@@ -65,16 +65,37 @@ describe('crew tables', () => {
     expect(columns(raw, 'crew_run')).toContain('pid');
   });
 
-  test('a job left running by a quit is queued again at start, with its attempt given back', () => {
+  test('a job left running by a quit or crash is queued again at start, and that attempt counts', () => {
     const { raw, db } = crewDb();
-    raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', 2)`);
+    raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', 1)`);
     raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state) VALUES ('j2', 'h', 1, 'owner', 'p', 'done')`);
     initializeCrewTables(db);
-    const states = raw.query(`SELECT id, state, attempts FROM crew_job ORDER BY id`).all();
-    expect(states).toEqual([
+    expect(raw.query(`SELECT id, state, attempts FROM crew_job ORDER BY id`).all()).toEqual([
       { id: 'j1', state: 'queued', attempts: 1 },
       { id: 'j2', state: 'done', attempts: 0 },
     ]);
+  });
+
+  test('a job that keeps crashing the app stops at the retry limit, and says so in the audit', () => {
+    const { raw, db } = crewDb();
+    raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', 1)`);
+    for (let restart = 0; restart < 4; restart += 1) {
+      initializeCrewTables(db);
+      raw.exec(`UPDATE crew_job SET state = 'running', attempts = attempts + 1 WHERE id = 'j1' AND state = 'queued'`);
+    }
+    expect(raw.query(`SELECT state, attempts FROM crew_job WHERE id = 'j1'`).get()).toEqual({ state: 'dead', attempts: MAX_ATTEMPTS });
+    const audits = raw.query(`SELECT hire_id, event, detail FROM crew_audit WHERE event = 'job-crash-limit'`).all() as { hire_id: string; detail: string }[];
+    expect(audits).toHaveLength(1);
+    expect(audits[0].hire_id).toBe('h');
+    expect(JSON.parse(audits[0].detail)).toEqual({ jobId: 'j1', attempts: MAX_ATTEMPTS });
+  });
+
+  test('a job left running while it waits on a card still parks, whatever its attempts', () => {
+    const { raw, db } = crewDb();
+    raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', ${MAX_ATTEMPTS})`);
+    raw.exec(`INSERT INTO crew_card (raise_id, job_id, hire_id, thread_key, scope, requested_by, kind, state) VALUES ('c1', 'j1', 'h', 'chat:owner', 'owner', 'p', 'permission', 'waiting')`);
+    initializeCrewTables(db);
+    expect(raw.query(`SELECT state FROM crew_job WHERE id = 'j1'`).get()).toEqual({ state: 'parked' });
   });
 
   test('database.ts calls the crew initializer', async () => {
