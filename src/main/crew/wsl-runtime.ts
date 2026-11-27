@@ -246,7 +246,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
     check: () => checkWsl(exec),
     start,
     gateState: () => gate.state(),
-    activeRuns: () => runs.activeCount(),
+    activeRuns: () => runs.activeCount() + (signIn.active ? 1 : 0),
     unbuilt: () => unbuilt,
     setup: (onStep) =>
       runSetup({ exec, versions, linked: deps.linked, link: (onStatus) => waitForLink(deps.linked, onStatus), download: fetchRootfs, removeFile: (f) => fs.rmSync(f, { force: true }), installDir, shipped, source, onStep }),

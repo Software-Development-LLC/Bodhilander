@@ -105,10 +105,20 @@ interface Build {
 
 export class WslRuns {
   private readonly open = new Map<string, Open>();
+  private readonly preparing = new Set<string>();
 
   constructor(private readonly deps: WslRunDeps) {}
 
   async prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
+    this.preparing.add(job.id);
+    try {
+      return await this.prepareRun(job, threadKey, runId);
+    } finally {
+      this.preparing.delete(job.id);
+    }
+  }
+
+  private async prepareRun(job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
     const d = this.deps;
     const now = d.now?.() ?? Date.now();
     const ref = hireAccountRef(d.db, job.hireId);
@@ -260,7 +270,7 @@ export class WslRuns {
   }
 
   activeCount(): number {
-    return this.open.size;
+    return new Set([...this.open.keys(), ...this.preparing]).size;
   }
 
   /** The names of TMPDIRs a live run still owns, for the start sweep. */

@@ -117,10 +117,16 @@ describe('Repair', () => {
   test('Repair waits while Crew runs on this PC, saying how many, and changes nothing', async () => {
     let checked = false;
     const t = service({ activeRuns: () => 2, check: async () => ((checked = true), { state: 'wsl1', message: WSL1_MESSAGE }) });
-    for (const confirmed of [false, true]) expect(await t.svc.repair(confirmed)).toEqual({ ok: false, message: repairWaits(2), repair: true });
+    for (const confirmed of [false, true]) expect(await t.svc.repair(confirmed)).toEqual({ ok: false, message: repairWaits(2), repair: false });
     expect(repairWaits(2)).toContain("Repair waits until Crew's runs on this PC finish");
     expect(repairWaits(2)).toContain('2');
     expect(checked).toBe(false);
+    expect(t.calls).toEqual([]);
+  });
+
+  test('setup waits for active runs too', async () => {
+    const t = service({ activeRuns: () => 1 });
+    expect(await t.svc.setup(() => {})).toEqual({ ok: false, message: repairWaits(1), repair: false });
     expect(t.calls).toEqual([]);
   });
 

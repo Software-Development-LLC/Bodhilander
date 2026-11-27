@@ -187,6 +187,14 @@ describe('a run prepared inside BodhiCrew', () => {
     expect(t.runs.activeCount()).toBe(0);
   });
 
+  test('a run counts as active from the moment prepare starts, until it holds or ends', async () => {
+    const t = setup({ mode: 'login', signedIn: false });
+    const p = t.runs.prepare(job(), 'chat:owner', 'run-1');
+    expect(t.runs.activeCount()).toBe(1);
+    expect(await p).toEqual({ hold: HOLD_SIGNED_OUT });
+    expect(t.runs.activeCount()).toBe(0);
+  });
+
   test('a signed-out account or a missing broker holds before anything is made in the distro', async () => {
     const t = setup({ signedIn: false });
     expect(await t.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SIGNED_OUT });

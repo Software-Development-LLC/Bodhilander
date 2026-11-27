@@ -18,7 +18,7 @@ export interface SetupServiceDeps {
   start(): Promise<void>;
   /** The last start or per-run check, or null before the first. */
   gateState(): StepResult | null;
-  /** Crew runs open in BodhiCrew now; Repair never starts under one. */
+  /** Runs and sign-ins in BodhiCrew now; neither setup nor Repair starts under one. */
   activeRuns(): number;
   /** True when this build's hashes or bundles are placeholders. */
   unbuilt(): boolean;
@@ -60,6 +60,8 @@ export class WindowsSetupService {
   private async exclusive<T>(fn: () => Promise<T | CrewWindowsSetupResult>): Promise<T | CrewWindowsSetupResult> {
     if (this.deps.unbuilt()) return fail(BUILD_NOT_READY, false);
     if (this.running) return fail(REPAIR_BUSY, false);
+    const active = this.deps.activeRuns();
+    if (active > 0) return fail(repairWaits(active), false);
     this.running = true;
     try {
       return await fn();
@@ -76,8 +78,6 @@ export class WindowsSetupService {
   }
 
   private async runRepair(confirmed: boolean): Promise<CrewWindowsRepairResult> {
-    const active = this.deps.activeRuns();
-    if (active > 0) return fail(repairWaits(active), true);
     const wsl = await this.deps.check();
     if (wsl.state === 'no-wsl') return fail(wsl.message, false);
     if (wsl.state === 'missing') return fail(SETUP_NEEDED_MESSAGE, false);
