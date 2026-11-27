@@ -1,8 +1,9 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
-import { crewRecordSignIn, crewWindowsSignIn, startCrew, stopCrew } from './crew/crew-main';
+import { crewRecordSignIn, crewWindowsSetup, crewWindowsSignIn, startCrew, stopCrew } from './crew/crew-main';
 import { registerCrewSignIn } from './crew/crew-sign-in';
 import { registerSavedCopies } from './crew/wsl-backup';
 import { registerWindowsSignIn } from './crew/wsl-sign-in';
+import { registerWindowsSetup } from './crew/wsl-ipc';
 import { announceSignInStart } from './crew/sign-in-started';
 import { wireCrewIpc } from './crew/ipc-wiring';
 import * as fs from 'fs';
@@ -1099,6 +1100,7 @@ registerSavedCopies({
   backupDir: process.platform === 'win32' && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Bodhilander', 'crew', 'backup') : null,
 });
 registerWindowsSignIn(safeHandle, crewWindowsSignIn);
+registerWindowsSetup(safeHandle, (channel, payload) => mainWindow?.webContents.send(channel, payload), crewWindowsSetup);
 
 safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {
   accountAuth.cancelLoginFlow(ptyManager, ptyId, deleteAccount);

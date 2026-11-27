@@ -44,6 +44,7 @@ mock.module('../crew/crew-main', () => ({
   startCrew: () => calls.push('start'),
   crewRecordSignIn: () => calls.push('signed-in'),
   crewWindowsSignIn: () => null,
+  crewWindowsSetup: () => null,
   stopCrew: () => calls.push('stop'),
   crewRuntime: () => null,
 }));

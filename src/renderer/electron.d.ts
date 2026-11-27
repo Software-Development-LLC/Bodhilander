@@ -1,5 +1,5 @@
 import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount } from '../shared/types';
-import type { CrewSavedCopy, CrewWindowsSignInResult } from '../shared/types';
+import type { CrewSavedCopy, CrewWindowsProgress, CrewWindowsRepairResult, CrewWindowsSetupResult, CrewWindowsSignInResult, CrewWindowsState } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -203,6 +203,10 @@ interface ElectronAPI {
   crewWindowsSignIn: (accountId: string) => Promise<CrewWindowsSignInResult>;
   crewWindowsSignInCode: (code: string) => Promise<boolean>;
   crewWindowsSignInCancel: () => Promise<void>;
+  crewWindowsCheckState: () => Promise<CrewWindowsState | null>;
+  crewWindowsSetup: () => Promise<CrewWindowsSetupResult>;
+  crewWindowsRepair: (confirmed: boolean) => Promise<CrewWindowsRepairResult>;
+  onCrewWindowsSetupProgress: (callback: (data: CrewWindowsProgress) => void) => () => void;
   crewListHires: () => Promise<CrewHireSummary[]>;
   crewGetHire: (hireId: string) => Promise<CrewHireDetail | null>;
   crewGetHireUsage: (hireId: string) => Promise<CrewHireUsage>;
