@@ -239,7 +239,15 @@ describe('CrewSync owed bodies', () => {
     expect(new CrewSync(t.db).onConnect(0).fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
   });
 
-  test('an unreadable saved list is ignored, and unknown kinds are dropped', () => {
+  test('a fetch the Hub answers with nothing is not owed after a restart', () => {
+    const t = setup();
+    const p = t.sync.onConnect(0);
+    const f = t.sync.onPage(page(p.id, [note()], 5), 0)!;
+    expect(t.sync.onPage(page(f.id, [], 5), 0)).toBeNull();
+    expect(new CrewSync(t.db).onConnect(0).fetch).toBeUndefined();
+  });
+
+    test('an unreadable saved list is ignored, and unknown kinds are dropped', () => {
     const t = setup();
     const save = (v: string) => t.raw.prepare('INSERT OR REPLACE INTO crew_sync_state (key, value) VALUES (?, ?)').run(SYNC_WANTED_KEY, v);
     save('{oops');
