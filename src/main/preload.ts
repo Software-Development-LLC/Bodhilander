@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult } from '../shared/types';
+import type { CrewSavedCopy } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -410,6 +411,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Crew
   crewGetStatus: (): Promise<CrewStatus> => ipcRenderer.invoke('crew:getStatus'),
+  crewListSavedCopies: (): Promise<CrewSavedCopy[]> => ipcRenderer.invoke('crew:listSavedCopies'),
+  crewDeleteSavedCopy: (name: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:deleteSavedCopy', name),
   crewListHires: (): Promise<CrewHireSummary[]> => ipcRenderer.invoke('crew:listHires'),
   crewGetHire: (hireId: string): Promise<CrewHireDetail | null> => ipcRenderer.invoke('crew:getHire', hireId),
   crewGetHireUsage: (hireId: string): Promise<CrewHireUsage> => ipcRenderer.invoke('crew:getHireUsage', hireId),

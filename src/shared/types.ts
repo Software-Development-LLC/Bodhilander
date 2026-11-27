@@ -1019,6 +1019,13 @@ export interface CrewStatus {
   owner: { name: string; upn: string } | null;
 }
 
+/** A Repair export of Crew's Windows setup, under Crew → Windows setup → Saved copies. */
+export interface CrewSavedCopy {
+  name: string;
+  sizeBytes: number;
+  savedAt: number;
+}
+
 /** What the sidebar says a hire is doing, from this machine's point of view. */
 export type CrewHireActivity = 'running' | 'idle' | 'held' | 'elsewhere' | 'provisioning' | 'paused' | 'let-go';
 
