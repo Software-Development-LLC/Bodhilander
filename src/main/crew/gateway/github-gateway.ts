@@ -131,6 +131,12 @@ function argvRefusal(argv: string[]): GhPlan | null {
   return null;
 }
 
+function readShapeRefusal(group: string, rest: string[]): GhPlan | null {
+  if (rest.some((a) => a === '-w' || a === '--web')) return { kind: 'refused', why: 'A run cannot open a browser.' };
+  if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
+  return null;
+}
+
 export function planGh(argv: string[], repos: readonly string[]): GhPlan {
   const refusal = argvRefusal(argv);
   if (refusal) return refusal;
@@ -138,12 +144,12 @@ export function planGh(argv: string[], repos: readonly string[]): GhPlan {
   if (group === 'api') return planApi(argv.slice(1), repos);
   if (!group || !(group in READS)) return { kind: 'write' };
   if (!sub || !READS[group].includes(sub)) return { kind: 'write' };
-  if (rest.some((a) => a === '-w' || a === '--web')) return { kind: 'refused', why: 'A run cannot open a browser.' };
+  const shape = readShapeRefusal(group, rest);
+  if (shape) return shape;
   const named = flagValues(rest, REPO_FLAGS);
   if (named.length > 1) return { kind: 'refused', why: 'Name one repo with -R.' };
   const repo = { value: named[0] ?? null };
   if (repo.value !== null && !repos.includes(repo.value.toLowerCase())) return { kind: 'refused', why: `${repo.value} is not one of this hire's repos.` };
-  if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
   if (group === 'repo') return repoViewPlan(argv, rest, repos, repo.value);
   const inArgs = argumentRepo(group, rest);
   if (inArgs !== null && !repos.includes(inArgs.toLowerCase())) return { kind: 'refused', why: `${inArgs} is not one of this hire's repos.` };
