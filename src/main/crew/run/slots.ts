@@ -38,7 +38,13 @@ export class RunSlots {
 
   tryAcquire(hireId: string, kind: SlotKind): Slot | null {
     if (this.held.size >= this.max() || this.busy(hireId)) return null;
-    const slot: Slot = { hireId, kind, release: () => void this.held.delete(slot) };
+    const slot: Slot = {
+      hireId,
+      kind,
+      release: () => {
+        this.held.delete(slot);
+      },
+    };
     this.held.add(slot);
     return slot;
   }

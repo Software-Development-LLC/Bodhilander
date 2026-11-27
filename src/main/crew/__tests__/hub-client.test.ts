@@ -735,7 +735,7 @@ describe('HubClient connection health', () => {
     expect(t.sock().sent.filter((f) => f.type === 'reply')).toHaveLength(1);
   });
 
-  for (const [code, status] of [[4409, 'replaced'], [4410, 'unlinked']] as const) {
+  for (const [code, status] of [[4409, 'replaced'], [4410, 'unlinked'], [4401, 'link-again'], [4426, 'update-required']] as const) {
     test(`a ${status} close gives up every lease and interrupts its run`, () => {
       const t = setup();
       t.online();
@@ -746,7 +746,7 @@ describe('HubClient connection health', () => {
       expect(t.client.canStart(HIRE, 1)).toBe(false);
       expect(t.interrupted[0]).toBe(HIRE);
       const state = (t.raw.query(`SELECT state FROM crew_job`).get() as { state: string }).state;
-      expect(state).toBe(status === 'replaced' ? 'queued' : 'dropped');
+      expect(state).toBe(status === 'unlinked' ? 'dropped' : 'queued');
     });
   }
 });

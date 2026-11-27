@@ -510,7 +510,7 @@ export class HubClient extends EventEmitter {
     } else {
       if (frame.mode !== 'pause') {
         log.warn(`[Crew] lease_revoke with unknown mode for ${hireId}; treating it as pause`);
-        writeAudit(this.deps.db, hireId, 'lease-revoke-unknown-mode', { mode: frame.mode });
+        this.audit('lease-revoke-unknown-mode', { hireId, mode: frame.mode });
       }
       this.fence.requeueRunning(hireId);
     }
@@ -590,7 +590,6 @@ export class HubClient extends EventEmitter {
         return this.stopReconnecting('link-again');
       case 'replaced':
         log.warn('[Crew] another connection replaced this one');
-        this.releaseLeases();
         return this.stopReconnecting('replaced');
       case 'unlinked':
         this.unlinked();
@@ -631,6 +630,7 @@ export class HubClient extends EventEmitter {
   }
 
   private stopReconnecting(status: HubStatus): void {
+    this.releaseLeases();
     this.stopped = true;
     this.clearTimers();
     this.timers.clearInterval(this.sweepTimer);

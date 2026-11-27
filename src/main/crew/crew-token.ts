@@ -73,6 +73,16 @@ const ms = (iso: string | null): number | null => {
   return Number.isNaN(n) ? null : n;
 };
 
+function remindedKeys(stored: string | null): string[] {
+  if (stored === null) return [];
+  try {
+    const keys: unknown = JSON.parse(stored);
+    return Array.isArray(keys) ? keys.filter((k): k is string => typeof k === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 export class CrewSignIn {
   constructor(
     private readonly db: Database.Database,
@@ -189,7 +199,7 @@ export class CrewSignIn {
     const endsAt = this.endsAt(accountId);
     if (!row || endsAt === null || now >= endsAt) return [];
     const mode = this.mode();
-    const sent = new Set<string>(row.crew_reminded ? (JSON.parse(row.crew_reminded) as string[]) : []);
+    const sent = new Set<string>(remindedKeys(row.crew_reminded));
     const marks =
       mode === 'token'
         ? TOKEN_REMIND_DAYS.map((d) => ({ key: `token-${d}`, at: endsAt - d * DAY_MS }))

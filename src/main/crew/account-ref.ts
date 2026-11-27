@@ -7,7 +7,7 @@ import { resolveAccountIdentity } from '../account-identity';
 import type Database from 'better-sqlite3';
 import type { ClaudeAccount } from '../../shared/types';
 import type { carryTranscript } from '../conversation-transcript';
-import type { AccountRef } from './protocol';
+import type { AccountRef, EditResultFrame } from './protocol';
 import { carryHireSessions, type CarryResult } from './session-carry';
 import type { EditInput } from './sync';
 
@@ -61,15 +61,27 @@ export interface AccountChangeDeps {
   carry?: typeof carryTranscript;
 }
 
-/** Change account: tell the Hub, then carry each thread's session to the new config dir. Takes effect on the next run. */
-export function changeHireAccount(
-  deps: AccountChangeDeps,
-  hireId: string,
-  to: ClaudeAccount,
-): { editId: string; carried: CarryResult } | 'unknown-account' {
-  const ref = wireAccountRef(accountRefFor(to));
-  if (ref === null) return 'unknown-account';
-  const editId = deps.sendEdit(accountChangeEdit(hireId, ref));
-  const carried = carryHireSessions(deps.db, hireId, { id: to.id, configDir: to.configDir }, deps.configDirOf, deps.carry);
-  return { editId, carried };
+/** Changes a hire's account. Sessions move only once the Hub applies the edit; the change takes effect on the next run. */
+export class AccountChanger {
+  private readonly pending = new Map<string, { hireId: string; to: ClaudeAccount }>();
+
+  constructor(private readonly deps: AccountChangeDeps) {}
+
+  change(hireId: string, to: ClaudeAccount): string | 'unknown-account' {
+    const ref = wireAccountRef(accountRefFor(to));
+    if (ref === null) return 'unknown-account';
+    const editId = this.deps.sendEdit(accountChangeEdit(hireId, ref));
+    this.pending.set(editId, { hireId, to });
+    return editId;
+  }
+
+  /** Feed every edit_result here. Returns what was carried, or null when the frame is not an applied account change. */
+  onEditResult(frame: Pick<EditResultFrame, 'id' | 'result'>): CarryResult | null {
+    const change = this.pending.get(frame.id);
+    if (!change) return null;
+    this.pending.delete(frame.id);
+    if (frame.result !== 'applied') return null;
+    const { hireId, to } = change;
+    return carryHireSessions(this.deps.db, hireId, { id: to.id, configDir: to.configDir }, this.deps.configDirOf, this.deps.carry);
+  }
 }

@@ -41,14 +41,19 @@ function window(v: unknown, observedAt: number): UsageWindow | null {
  * time. `unifiedWindows` is read keyed by window name or as a list naming each.
  * A window it does not report stays null: not reported, never 0%.
  */
+function windowEntries(raw: unknown): [string, unknown][] {
+  if (isRecord(raw)) return Object.entries(raw);
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((w): [string, unknown][] => {
+    const name = isRecord(w) ? (w.window ?? w.type ?? w.name) : undefined;
+    return typeof name === 'string' ? [[name, w]] : [];
+  });
+}
+
 export function parseRateLimitEvent(event: unknown, observedAt: number): UsageObservation | null {
   if (!isRecord(event) || event.type !== 'rate_limit_event') return null;
   const raw = event.unifiedWindows ?? (isRecord(event.rate_limit_info) ? event.rate_limit_info.unifiedWindows : undefined);
-  const entries: [string, unknown][] = Array.isArray(raw)
-    ? raw.flatMap((w) => (isRecord(w) && typeof (w.window ?? w.type ?? w.name) === 'string' ? [[String(w.window ?? w.type ?? w.name), w]] : []))
-    : isRecord(raw)
-      ? Object.entries(raw)
-      : [];
+  const entries = windowEntries(raw);
   const obs: UsageObservation = { fiveHour: null, sevenDay: null, source: 'run', observedAt };
   for (const [name, value] of entries) {
     const key = WINDOW_KEYS[name];
@@ -60,7 +65,10 @@ export function parseRateLimitEvent(event: unknown, observedAt: number): UsageOb
 /** The run's own tokens from `result.usage`; a missing count is 0. */
 export function runUsage(result: unknown): RunUsage {
   const u = isRecord(result) && isRecord(result.usage) ? result.usage : {};
-  const n = (k: string) => (typeof u[k] === 'number' && Number.isFinite(u[k]) && (u[k] as number) >= 0 ? (u[k] as number) : 0);
+  const n = (k: string): number => {
+    const v = u[k];
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
+  };
   return {
     input_tokens: n('input_tokens'),
     cache_creation_input_tokens: n('cache_creation_input_tokens'),

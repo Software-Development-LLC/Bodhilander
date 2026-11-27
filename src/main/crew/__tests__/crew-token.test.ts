@@ -71,6 +71,13 @@ describe('the login fallback', () => {
     expect(t.signIn.endsAt('a1')).toBe(T0 + 2 * DAY + LOGIN_LIFETIME_MS);
   });
 
+  test('a corrupt record of sent reminders reads as none sent', () => {
+    const t = setup({ ships: false });
+    t.signIn.recordSignIn('a1', T0);
+    t.raw.exec(`UPDATE claude_accounts SET crew_reminded = '{not json' WHERE id = 'a1'`);
+    expect(t.signIn.dueReminders('a1', T0 + LOGIN_LIFETIME_MS - LOGIN_REMIND_BEFORE_MS)).toHaveLength(1);
+  });
+
   test('one reminder, 24 hours before the login is due to end, and again after a new sign-in', () => {
     const t = setup({ ships: false });
     t.signIn.recordSignIn('a1', T0);
