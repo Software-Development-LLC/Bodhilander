@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 
-const { ApproveBroker, CARD_HOLD_MS, DENIED_MESSAGE, PARKED_MESSAGE, UNRAISED_MESSAGE, inputHash } = await import('../broker');
+const { ApproveBroker, CARD_HOLD_MS, DENIED_MESSAGE, PARKED_MESSAGE, UNRAISED_MESSAGE, inputHash, permissionSummary } = await import('../broker');
 import type { CardRaise } from '../broker';
 import type { CardDecisionFrame } from '../../protocol';
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
@@ -190,5 +190,10 @@ describe('approve broker', () => {
     expect(await broker.ask(RUN, ASK)).toEqual({ behavior: 'deny', message: UNRAISED_MESSAGE });
     expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_card`).get()).toEqual({ n: 0 });
     expect(broker.waitingFor(RUN.jobId)).toBe(false);
+  });
+
+  test('a long summary never ends on half an emoji', () => {
+    const summary = permissionSummary('T', { a: `${'x'.repeat(3990)}${'😀'.repeat(20)}` });
+    expect(summary.isWellFormed()).toBe(true);
   });
 });

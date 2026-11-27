@@ -8,6 +8,7 @@ import type { GatewayRun } from '../github-gateway';
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 const { GithubGateway, TOKEN_REUSE_MS, WRITE_MESSAGE, planGh } = await import('../github-gateway');
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
+import { isTainted, wrapUntrusted } from '../../taint';
 
 const REPOS = ['acme/app'];
 const SHIM_DIR = path.join(import.meta.dir, '..', '..', '..', '..', '..', 'resources', 'crew', 'gh-shim');
@@ -80,14 +81,15 @@ function setup(answer: 'token' | 'none' = 'token') {
     newId: () => uuid(300 + ++ids),
     tokenWaitMs: 20,
   });
-  const run = (requestedBy = PERSON): GatewayRun => ({ jobId: uuid(1), hireId: HIRE, requestedBy, repos: REPOS, token: 'a'.repeat(64) });
-  return { raw, gw, requests, ran, run, advance: (ms: number) => (clock += ms) };
+  const run = (requestedBy = PERSON): GatewayRun => ({ jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', requestedBy, repos: REPOS, token: 'a'.repeat(64) });
+  return { raw, db, gw, requests, ran, run, advance: (ms: number) => (clock += ms) };
 }
 
 describe('GithubGateway', () => {
   test('a read runs gh with the minted read token and nothing of the run\'s', async () => {
     const t = setup();
-    expect(await t.gw.handle(t.run(), { token: 'a'.repeat(64), args: ['issue', 'list'] })).toEqual({ code: 0, stdout: 'out\n', stderr: '' });
+    expect(await t.gw.handle(t.run(), { token: 'a'.repeat(64), args: ['issue', 'list'] })).toEqual({ code: 0, stdout: wrapUntrusted('github', 'out\n'), stderr: '' });
+    expect(isTainted(t.db, HIRE, 'chat:owner')).toBe(true);
     const [args, env] = t.ran[0];
     expect(args).toEqual(['issue', 'list', '-R', 'acme/app']);
     expect(env.GH_TOKEN).toBe('tok-1');

@@ -57,7 +57,9 @@ export function inputHash(tool: string, input: unknown): string {
 
 export function permissionSummary(tool: string, input: unknown): string {
   const text = `${tool} ${JSON.stringify(input ?? {})}`;
-  return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 1)}…` : text;
+  if (text.length <= SUMMARY_MAX) return text;
+  const cut = text.slice(0, SUMMARY_MAX - 1);
+  return `${/[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut}…`;
 }
 
 export function decisionText(tool: string | null, decision: CardDecisionFrame['decision']): string {

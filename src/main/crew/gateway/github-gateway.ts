@@ -13,6 +13,7 @@ import log from 'electron-log';
 import { writeAudit } from '../audit';
 import type { TokenFrame } from '../protocol';
 import { tokenMatches } from '../run/sockets';
+import { markTainted, wrapUntrusted } from '../taint';
 
 export const TOKEN_REUSE_MS = 5 * 60_000;
 export const TOKEN_WAIT_MS = 20_000;
@@ -114,6 +115,7 @@ export function planGh(argv: string[], repos: readonly string[]): GhPlan {
 export interface GatewayRun {
   jobId: string;
   hireId: string;
+  threadKey: string;
   requestedBy: string;
   repos: string[];
   token: string;
@@ -213,7 +215,10 @@ export class GithubGateway {
     if (ghToken === null) return { code: 1, stdout: '', stderr: 'No GitHub read access for this request right now.\n' };
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-gh-'));
     try {
-      return await this.deps.run(plan.args, { GH_TOKEN: ghToken, GH_CONFIG_DIR: configDir, GH_PROMPT_DISABLED: '1', NO_COLOR: '1', PATH: process.env.PATH ?? '' });
+      const result = await this.deps.run(plan.args, { GH_TOKEN: ghToken, GH_CONFIG_DIR: configDir, GH_PROMPT_DISABLED: '1', NO_COLOR: '1', PATH: process.env.PATH ?? '' });
+      // What GitHub returns is written by other people, so the thread is tainted before the run sees it.
+      markTainted(this.deps.db, run.hireId, run.threadKey, 'github');
+      return { ...result, stdout: wrapUntrusted('github', result.stdout) };
     } finally {
       fs.rmSync(configDir, { recursive: true, force: true });
     }

@@ -54,7 +54,7 @@ export class RunServiceManager {
     try {
       const ghSocket = socketPath(dir, 'gh');
       const gatewayToken = newRunToken();
-      await this.deps.gateway.listen(ghSocket, { jobId: job.id, hireId: job.hireId, requestedBy: job.requestedBy, repos: this.deps.repos(job.hireId), token: gatewayToken });
+      await this.deps.gateway.listen(ghSocket, { jobId: job.id, hireId: job.hireId, threadKey, requestedBy: job.requestedBy, repos: this.deps.repos(job.hireId), token: gatewayToken });
       const mcpToken = this.deps.host.register({
         jobId: job.id,
         hireId: job.hireId,
