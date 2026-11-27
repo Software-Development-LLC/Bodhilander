@@ -154,6 +154,8 @@ export interface ShippedFiles {
   nodeTarball: string | null;
   claudePackage: string | null;
   crewAgent: string;
+  /** The MCP relay and the gh shim, copied into crew/bin as they are. */
+  helpers?: ReadonlyArray<{ from: string; to: string; mode: string }>;
 }
 
 export interface FileSource {
@@ -199,6 +201,7 @@ export async function installShipped(exec: WslExec, files: ShippedFiles, source:
     () => exec(asCrew('sh', '-c', `${NODE_DIR}/bin/npm install -g --prefix ${CREW_DIR}/claude ${CREW_DIR}/download/claude.tgz && mkdir -p ${BIN_DIR} && ln -sf ${CREW_DIR}/claude/bin/claude ${CLAUDE_BIN} && rm -f ${CREW_DIR}/download/claude.tgz`)),
     () => writeIntoDistro(exec, `${CREW_AGENT}.mjs`, source.read(files.crewAgent), '0555'),
     () => writeIntoDistro(exec, CREW_AGENT, `#!/bin/sh\nexec ${NODE_DIR}/bin/node ${CREW_AGENT}.mjs "$@"\n`, '0555'),
+    ...(files.helpers ?? []).map((h) => () => writeIntoDistro(exec, h.to, source.read(h.from), h.mode)),
   ];
   for (const step of steps) {
     const r = await step();

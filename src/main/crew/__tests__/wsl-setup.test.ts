@@ -377,3 +377,18 @@ describe('the gate a Windows run waits on', () => {
     expect(await g2.gate()).toBe('held:setup');
   });
 });
+
+describe('the shipped helpers', () => {
+  const { installShipped } = require('../wsl-setup') as typeof import('../wsl-setup');
+  test('are written into crew/bin after crew-agent, each with its own mode', async () => {
+    const dests: string[] = [];
+    const exec: import('../wsl').WslExec = async (args) => {
+      const m = /mv -f \S+ (\S+)$/.exec(String(args[args.length - 1]));
+      if (m) dests.push(m[1]);
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const files = { nodeTarball: 'n', claudePackage: 'c', crewAgent: 'a', helpers: [{ from: 'r', to: '/home/crew/.bodhilander/crew/bin/crew-mcp.js', mode: '0444' }] };
+    expect(await installShipped(exec, files, { read: () => 'x' })).toEqual({ ok: true });
+    expect(dests.at(-1)).toBe('/home/crew/.bodhilander/crew/bin/crew-mcp.js');
+  });
+});

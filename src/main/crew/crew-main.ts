@@ -24,6 +24,8 @@ import { McpHost, hostSocketPath } from './mcp/host';
 import { prepareRun, type PrepareDeps } from './run/prepare';
 import { RunServiceManager, ServicesNotReady } from './run/services';
 import { crewTools } from './tools/server';
+import { writeAudit } from './audit';
+import { createWindowsCrew, type WindowsCrew } from './wsl-runtime';
 
 let runtime: CrewRuntime | null = null;
 let runtimeHub: HubClient | null = null;
@@ -31,6 +33,7 @@ let host: McpHost | null = null;
 let gateway: GithubGateway | null = null;
 let services: RunServiceManager | null = null;
 let detachHub: (() => void) | null = null;
+let windowsCrew: WindowsCrew | null = null;
 
 const listDir = (dir: string): string[] => {
   try {
@@ -94,10 +97,39 @@ function ensureServices(): RunServiceManager {
   return services;
 }
 
+/** On Windows every run is prepared inside BodhiCrew; nothing is built off Windows. */
+function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
+  if (process.platform !== 'win32') return null;
+  if (windowsCrew) return windowsCrew;
+  ensureServices();
+  const db = getDatabase();
+  const res = crewResourcePaths();
+  const dir = app.isPackaged ? path.join(process.resourcesPath, 'crew-agent') : path.join(app.getAppPath(), 'resources', 'crew-agent');
+  windowsCrew = createWindowsCrew({
+    db,
+    signIn,
+    accounts: getAllAccounts,
+    host: host as McpHost,
+    gateway: gateway as GithubGateway,
+    broker: () => runtime?.broker ?? null,
+    tools: (job, threadKey) =>
+      crewTools({ db, raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false, sendMessage: (jobId, send) => runtimeHub?.sendMessage(jobId, send) ?? false }, job, threadKey),
+    repos: hireRepos,
+    onLost: (hireId) => runtime?.interrupt(hireId),
+    handbook: () => '',
+    timeZone: () => null,
+    audit: (event, detail) => writeAudit(db, null, event, detail),
+    resources: { dir, relayScript: res.relayScript, shimDir: res.shimDir },
+    recordsFile: path.join(app.getPath('userData'), 'crew', 'wsl-tmp.json'),
+  });
+  return windowsCrew;
+}
+
 export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
   const userData = app.getPath('userData');
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   return {
+    windows: ensureWindowsCrew(signIn)?.windows,
     db: getDatabase(),
     signIn,
     accounts: getAllAccounts,
@@ -138,7 +170,10 @@ function attach(hub: HubClient): CrewRuntime {
     accounts: getAllAccounts,
     prepare: (job: CrewJob, threadKey: string, runId: string): Promise<Prepared> =>
       prepareRun(prepareDeps, job, threadKey, runId),
-    runEnded: (jobId) => services?.end(jobId),
+    runEnded: (jobId) => {
+      services?.end(jobId);
+      windowsCrew?.end(jobId);
+    },
     usage: { get: getUsage, set: setUsage },
     loggedIn: (account) => resolveAccountIdentity(account.configDir).loggedIn,
     remind: (reminder, account) => {
@@ -165,7 +200,18 @@ export function startCrew(): CrewRuntime {
   setCrewHubReplaced((hub) => attach(hub));
   setCrewInterrupt((hireId) => runtime?.interrupt(hireId));
   const hub = startCrewHub();
-  return runtime && runtimeHub === hub ? runtime : attach(hub);
+  const rt = runtime && runtimeHub === hub ? runtime : attach(hub);
+  windowsCrew
+    ?.start()
+    .then(() => void rt.loop.tick())
+    .catch((err) => log.warn('[Crew] the Windows setup check failed', err));
+  return rt;
+}
+
+/** After Repair: the full check again, interop included, then held runs try again. */
+export async function crewWindowsRepaired(): Promise<void> {
+  await windowsCrew?.afterRepair();
+  if (runtime) void runtime.loop.tick();
 }
 
 export function stopCrew(): void {
@@ -174,6 +220,8 @@ export function stopCrew(): void {
   detachHub?.();
   detachHub = null;
   services?.endAll();
+  windowsCrew?.endAll();
+  windowsCrew = null;
   gateway?.stop();
   host?.close();
   services = null;
