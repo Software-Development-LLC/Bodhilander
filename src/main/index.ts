@@ -3,6 +3,7 @@ import { crewRecordSignIn, crewWindowsSignIn, startCrew, stopCrew } from './crew
 import { registerCrewSignIn } from './crew/crew-sign-in';
 import { registerSavedCopies } from './crew/wsl-backup';
 import { registerWindowsSignIn } from './crew/wsl-sign-in';
+import { announceSignInStart } from './crew/sign-in-started';
 import { wireCrewIpc } from './crew/ipc-wiring';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -1083,7 +1084,10 @@ safeHandle('accounts:resumeLogin', (accountId: string) => {
 
 registerCrewSignIn({
   handle: safeHandle,
-  resumeLogin: (accountId) => accountAuth.resumeLoginFlow(ptyManager, mainWindow, accountId),
+  resumeLogin: announceSignInStart(
+    (accountId) => accountAuth.resumeLoginFlow(ptyManager, mainWindow, accountId),
+    (channel, data) => mainWindow?.webContents.send(channel, data),
+  ),
   loginSettled: accountAuth.loginSettled,
   cancelLogin: (ptyId) => accountAuth.cancelLoginFlow(ptyManager, ptyId, false),
   recordSignIn: (accountId) => crewRecordSignIn(accountId),

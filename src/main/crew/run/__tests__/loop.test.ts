@@ -8,6 +8,7 @@ import { RunSlots } from '../slots';
 import { HIRE, HIRE_B, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 
 class FakeChild implements RunChild {
+  readonly pid = 4242;
   input: string | null = null;
   signals: string[] = [];
   private readonly lines: Record<string, ((l: string) => void)[]> = {};
@@ -50,6 +51,7 @@ function setup(opts: {
   const signedOut: [string, string][] = [];
   const finished: unknown[] = [];
   const observed: unknown[] = [];
+  const limited: [string, number][] = [];
   let clock = 1_000;
   let ids = 0;
   const prepared = (job: CrewJob): PreparedRun => ({
@@ -71,6 +73,7 @@ function setup(opts: {
       return true;
     },
     onSignedOut: (hireId, accountId) => signedOut.push([hireId, accountId]),
+    onRateLimited: (accountId, until) => limited.push([accountId, until]),
     onFinished: (run) => {
       if (opts.finishedThrows) throw new Error('report failed');
       finished.push(run);
@@ -87,7 +90,7 @@ function setup(opts: {
       .run(uuid(n), hireId, kind, PERSON, `text ${n}`, `2026-01-01 00:00:${String(n).padStart(2, '0')}`);
   const state = (n: number) => raw.query(`SELECT state, attempts FROM crew_job WHERE id = ?`).get(uuid(n)) as { state: string; attempts: number };
   const lastRun = () => raw.query(`SELECT outcome, account_id, session_id, reply_text FROM crew_run ORDER BY rowid DESC LIMIT 1`).get() as Record<string, unknown>;
-  return { raw, loop, children, replies, signedOut, finished, observed, job, state, lastRun, advance: (ms: number) => (clock += ms) };
+  return { raw, loop, children, replies, signedOut, finished, observed, limited, job, state, lastRun, advance: (ms: number) => (clock += ms) };
 }
 
 describe('run loop', () => {
@@ -177,6 +180,39 @@ describe('run loop', () => {
     expect(t.replies).toEqual([]);
   });
 
+  test('a usage-limit rejection requeues without spending the attempt, posts nothing, and records the reset for the account', async () => {
+    const t = setup();
+    t.job(1);
+    await t.loop.tick();
+    t.children[0].out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1_787_767_200, rateLimitType: 'five_hour' } });
+    t.children[0].out({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'limit' });
+    t.children[0].exit();
+    expect(t.state(1)).toEqual({ state: 'queued', attempts: 0 });
+    expect(t.lastRun().outcome).toBe('rate-limited');
+    expect(t.replies).toEqual([]);
+    expect(t.limited).toEqual([['acct-a', 1_787_767_200_000]]);
+  });
+
+  test("the CLI's quotaLimits entry counts as a rejection; one without a reset holds for the retry interval", async () => {
+    const t = setup();
+    t.job(1);
+    await t.loop.tick();
+    t.children[0].out({ type: 'assistant', isApiErrorMessage: true, quotaLimits: { status: 'rejected' } });
+    t.children[0].exit();
+    expect(t.lastRun().outcome).toBe('rate-limited');
+    expect(t.limited).toEqual([['acct-a', 1_000 + 15 * 60_000]]);
+  });
+
+  test('an allowed rate_limit_event is not a rejection', async () => {
+    const t = setup();
+    t.job(1);
+    await t.loop.tick();
+    t.children[0].out({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', resetsAt: 1_787_767_200 } });
+    t.children[0].finish('hi');
+    expect(t.lastRun().outcome).toBe('done');
+    expect(t.limited).toEqual([]);
+  });
+
   test('a lost session clears the thread and requeues without spending the retry', async () => {
     const t = setup({ prepare: async (job) => ({ command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'acct-a', sessionId: 'old', token: null }) });
     t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id) VALUES (?, 'chat:owner', 'old')`).run(HIRE);
@@ -186,6 +222,15 @@ describe('run loop', () => {
     t.children[0].exit();
     expect(t.state(1)).toEqual({ state: 'queued', attempts: 0 });
     expect((t.raw.query(`SELECT session_id FROM crew_thread`).get() as { session_id: unknown }).session_id).toBeNull();
+  });
+
+  test("the run's pid is recorded while it runs and cleared when it ends, so a crash leaves only live runs to reap", async () => {
+    const t = setup();
+    t.job(1);
+    await t.loop.tick();
+    expect(t.raw.query(`SELECT pid FROM crew_run`).get()).toEqual({ pid: 4242 });
+    t.children[0].finish();
+    expect(t.raw.query(`SELECT pid FROM crew_run`).get()).toEqual({ pid: null });
   });
 
   test('a hold leaves the job queued and starts nothing', async () => {

@@ -14,7 +14,7 @@ import { isAuthFailure } from '../crew-token';
 import type { RunScope } from '../protocol';
 import { sessionLost } from './sessions';
 import type { RunSlots, SlotKind } from './slots';
-import { parseRateLimitEvent, runUsage, type RunUsage } from './usage-stream';
+import { parseRateLimitEvent, parseRejection, runUsage, type RunUsage } from './usage-stream';
 
 export const ERROR_REPLY = 'I hit an error on this one.';
 export const MAX_ATTEMPTS = 2;
@@ -46,6 +46,7 @@ export interface PreparedRun {
 export type Prepared = PreparedRun | { hold: string };
 
 export interface RunChild {
+  readonly pid?: number;
   write(input: string): void;
   onLine(stream: 'stdout' | 'stderr', cb: (line: string) => void): void;
   onClose(cb: () => void): void;
@@ -63,7 +64,7 @@ export interface FinishedRun {
   observation: UsageObservation | null;
 }
 
-export type RunOutcome = 'done' | 'interrupted' | 'signed-out' | 'lost-session' | 'held' | 'parked' | 'died' | 'dead';
+export type RunOutcome = 'done' | 'interrupted' | 'signed-out' | 'rate-limited' | 'lost-session' | 'held' | 'parked' | 'died' | 'dead';
 
 export interface RunLoopDeps {
   db: Database.Database;
@@ -75,6 +76,8 @@ export interface RunLoopDeps {
   spawn(run: PreparedRun): RunChild;
   reply(jobId: string, text: string): boolean;
   onSignedOut(hireId: string, accountId: string): void;
+  /** The account's usage limit was hit; runs on it are held until `until`. */
+  onRateLimited?(accountId: string, until: number): void;
   onFinished?(run: FinishedRun): void;
   onUsageObserved?(accountId: string, observation: UsageObservation): void;
   onSettled?(jobId: string, outcome: RunOutcome): void;
@@ -102,6 +105,7 @@ interface Active {
   authFailed: boolean;
   stderr: string[];
   observation: UsageObservation | null;
+  limitedUntil: number | null;
 }
 
 const slotKind = (job: Pick<CrewJob, 'kind'>): SlotKind => (job.kind === 'routine' ? 'routine' : 'chat');
@@ -115,9 +119,11 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 export class RunLoop {
   private readonly active = new Map<string, Active>();
+  private readonly idle = new Map<string, (() => void)[]>();
   private readonly holds = new Map<string, string>();
   private ticking: Promise<number> | null = null;
   private again = false;
+  private stopped = false;
   private readonly now: () => number;
   private readonly newId: () => string;
 
@@ -132,6 +138,7 @@ export class RunLoop {
 
   /** Start what can start now. A call made while a tick runs makes it run once more when it ends. */
   tick(): Promise<number> {
+    if (this.stopped) return Promise.resolve(0);
     if (this.ticking) {
       this.again = true;
       return this.ticking;
@@ -194,7 +201,7 @@ export class RunLoop {
     }
     const run: Active = {
       runId: this.newId(), job: { ...job, attempts: job.attempts + 1 }, threadKey: this.deps.threadKeyOf?.(job) ?? threadKeyFor(job), release: () => slot.release(), startedAt: this.now(),
-      interrupted: false, parked: false, settled: false, child: null, prepared: null, result: null, model: '', authFailed: false, stderr: [], observation: null,
+      interrupted: false, parked: false, settled: false, child: null, prepared: null, result: null, model: '', authFailed: false, stderr: [], observation: null, limitedUntil: null,
     };
     this.active.set(job.hireId, run);
     const record = () => db.prepare(`INSERT INTO crew_run (id, job_id, hire_id, thread_key) VALUES (?, ?, ?, ?)`).run(run.runId, job.id, job.hireId, run.threadKey);
@@ -227,6 +234,7 @@ export class RunLoop {
     try {
       const child = this.deps.spawn(prepared);
       run.child = child;
+      if (child.pid !== undefined) db.prepare(`UPDATE crew_run SET pid = ? WHERE id = ?`).run(child.pid, run.runId);
       child.onLine('stdout', (line) => this.onStdout(run, line));
       child.onLine('stderr', (line) => this.onStderr(run, line));
       child.onClose(() => this.settle(run));
@@ -252,12 +260,31 @@ export class RunLoop {
     return true;
   }
 
+  /** Resolves once the hire has no run going. */
+  whenIdle(hireId: string): Promise<void> {
+    if (!this.active.has(hireId)) return Promise.resolve();
+    return new Promise((resolve) => this.idle.set(hireId, [...(this.idle.get(hireId) ?? []), resolve]));
+  }
+
+  kill(hireId: string): void {
+    try {
+      this.active.get(hireId)?.child?.kill('SIGKILL');
+    } catch (err) {
+      log.warn('[Crew] could not kill a run', err);
+    }
+  }
+
   /** The run gave up waiting on a card: it ends parked, with no reply, and resumes from the decision. */
   park(jobId: string): boolean {
     const run = [...this.active.values()].find((r) => r.job.id === jobId);
     if (!run || run.settled) return false;
     run.parked = true;
     return true;
+  }
+
+  /** Starts nothing more; runs already going still settle. */
+  stop(): void {
+    this.stopped = true;
   }
 
   interruptAll(): void {
@@ -279,6 +306,8 @@ export class RunLoop {
       this.deps.db.prepare(`UPDATE crew_run SET rate_limit = ? WHERE id = ?`).run(JSON.stringify(observation), run.runId);
       if (run.prepared) this.deps.onUsageObserved?.(run.prepared.accountId, observation);
     }
+    const until = parseRejection(event, this.now());
+    if (until !== null) run.limitedUntil = Math.max(until, run.limitedUntil ?? 0);
     if (event.type === 'result') run.result = event;
   }
 
@@ -291,24 +320,33 @@ export class RunLoop {
     if (run.settled) return;
     const result = run.result;
     const resultText = typeof result?.result === 'string' ? result.result : '';
-    if (run.parked) {
-      if (result && run.prepared) this.keepSession(run, result);
-      return this.finishAs(run, 'parked', { park: true });
-    }
-    if (run.interrupted) return this.finishAs(run, 'interrupted', { requeue: true });
-    if (run.authFailed || (result?.is_error === true && isAuthFailure(resultText))) {
-      this.finishAs(run, 'signed-out', { requeue: true });
-      if (run.prepared) this.deps.onSignedOut(run.job.hireId, run.prepared.accountId);
-      return;
-    }
+    if (this.settleStopped(run, result, resultText)) return;
+    const ok = !!result && result.is_error !== true && !!run.prepared;
+    if (run.limitedUntil !== null && run.prepared) this.deps.onRateLimited?.(run.prepared.accountId, run.limitedUntil);
+    if (run.limitedUntil !== null && !ok) return this.finishAs(run, 'rate-limited', { requeue: true });
     if (run.prepared?.sessionId && sessionLost(run.stderr.join('\n'))) {
       this.deps.db.prepare(`UPDATE crew_thread SET session_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE hire_id = ? AND thread_key = ?`).run(run.job.hireId, run.threadKey);
       return this.finishAs(run, 'lost-session', { requeue: true });
     }
-    if (result && result.is_error !== true && run.prepared) return this.finishDone(run, result, resultText);
+    if (ok && result) return this.finishDone(run, result, resultText);
     if (run.job.attempts < MAX_ATTEMPTS) return this.finishAs(run, 'died', { retry: true });
     this.finishAs(run, 'dead', {});
     this.sendReply(run.job.id, ERROR_REPLY);
+  }
+
+  private settleStopped(run: Active, result: Record<string, unknown> | null, resultText: string): boolean {
+    if (run.parked) {
+      if (result && run.prepared) this.keepSession(run, result);
+      this.finishAs(run, 'parked', { park: true });
+    } else if (run.interrupted) {
+      this.finishAs(run, 'interrupted', { requeue: true });
+    } else if (run.authFailed || (result?.is_error === true && isAuthFailure(resultText))) {
+      this.finishAs(run, 'signed-out', { requeue: true });
+      if (run.prepared) this.deps.onSignedOut(run.job.hireId, run.prepared.accountId);
+    } else {
+      return false;
+    }
+    return true;
   }
 
   private keepSession(run: Active, result: Record<string, unknown>): string | null {
@@ -368,8 +406,10 @@ export class RunLoop {
       if (how.retry) state = 'queued';
       db.prepare(`UPDATE crew_job SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(state, run.job.id);
     }
-    db.prepare(`UPDATE crew_run SET ended_at = CURRENT_TIMESTAMP, outcome = ? WHERE id = ?`).run(outcome, run.runId);
+    db.prepare(`UPDATE crew_run SET ended_at = CURRENT_TIMESTAMP, outcome = ?, pid = NULL WHERE id = ?`).run(outcome, run.runId);
     this.active.delete(run.job.hireId);
+    for (const resolve of this.idle.get(run.job.hireId) ?? []) resolve();
+    this.idle.delete(run.job.hireId);
     run.release();
     this.deps.onSettled?.(run.job.id, outcome);
   }
@@ -390,6 +430,7 @@ export function spawnRun(run: PreparedRun): RunChild {
     if (stream) createInterface({ input: stream }).on('line', cb);
   };
   return {
+    pid: child.pid,
     write: (input) => child.stdin?.end(input),
     onLine: (stream, cb) => lines(stream === 'stdout' ? child.stdout : child.stderr, cb),
     onClose: (cb) => {

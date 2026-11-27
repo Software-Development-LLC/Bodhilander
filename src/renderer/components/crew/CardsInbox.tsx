@@ -10,11 +10,26 @@ const KIND_TEXT: Record<CrewCardKind, string> = {
   move: 'Move home machine',
 };
 
-function decisionText(card: CrewCard): string {
-  if (card.decision === null) return 'Waiting for a decision';
-  const by = card.decidedBy ? ` by ${card.decidedBy}` : '';
-  return card.decision === 'approved' ? `Approved${by}` : `Denied${by}`;
+type ShownState = NonNullable<CrewCard['state']>;
+
+function shownState(card: CrewCard): ShownState {
+  if (card.decision !== null) return 'decided';
+  return card.state && card.state !== 'decided' ? card.state : 'waiting';
 }
+
+function stateText(card: CrewCard, state: ShownState): string {
+  if (state === 'decided') {
+    const by = card.decidedBy ? ` by ${card.decidedBy}` : '';
+    return card.decision === 'denied' ? `Denied${by}` : `Approved${by}`;
+  }
+  if (state === 'sending') return 'Waiting for Crew Hub…';
+  if (state === 'parked') return 'Parked: waiting for a decision, and the run resumes when it comes';
+  if (state === 'closed') return 'Closed: the run ended before a decision';
+  return 'Waiting for a decision';
+}
+
+const STILL_WAITING: ReadonlySet<ShownState> = new Set(['sending', 'waiting', 'parked']);
+const OPENABLE: ReadonlySet<ShownState> = new Set(['waiting', 'parked']);
 
 export interface CardsInboxProps {
   load?: () => Promise<CrewCardList>;
@@ -62,11 +77,13 @@ export const CardsInbox: React.FC<CardsInboxProps> = ({ load, openCard, pollMs =
   } else if (cards.length === 0) {
     body = <p>No cards waiting</p>;
   } else {
-    const ordered = [...cards].sort((a, b) => Number(a.decision !== null) - Number(b.decision !== null) || b.raisedAt - a.raisedAt);
+    const shown = cards.map((c) => ({ c, state: shownState(c) }));
+    const done = (s: ShownState) => Number(!STILL_WAITING.has(s));
+    shown.sort((a, b) => done(a.state) - done(b.state) || b.c.raisedAt - a.c.raisedAt);
     body = (
       <ul className="crew-cards__list">
-        {ordered.map((c) => (
-          <li key={c.raiseId} className={`crew-card${c.decision === null ? ' crew-card--open' : ''}`}>
+        {shown.map(({ c, state }) => (
+          <li key={c.raiseId} className={`crew-card crew-card--${state}${STILL_WAITING.has(state) ? ' crew-card--open' : ''}`}>
             <div className="crew-card__head">
               <strong>{KIND_TEXT[c.kind] ?? c.kind}</strong>
               <span className="crew-card__meta">
@@ -74,8 +91,8 @@ export const CardsInbox: React.FC<CardsInboxProps> = ({ load, openCard, pollMs =
               </span>
             </div>
             <div className="crew-card__summary">{c.summary}</div>
-            <div className="crew-card__meta">{decisionText(c)}</div>
-            {c.decision === null && (
+            <div className="crew-card__meta">{stateText(c, state)}</div>
+            {OPENABLE.has(state) && (
               <button type="button" onClick={() => void open(c.raiseId)}>
                 Open in Teams
               </button>

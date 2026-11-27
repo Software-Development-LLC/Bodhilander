@@ -127,4 +127,14 @@ describe('linking this machine', () => {
     panel();
     expect(screen.queryByRole('button', { name: 'Link this machine' })).toBeNull();
   });
+
+  test('Hire is offered only while Crew is online', () => {
+    let opened = 0;
+    panel({ onHire: () => opened++ });
+    fireEvent.click(screen.getByRole('button', { name: 'Hire' }));
+    expect(opened).toBe(1);
+    cleanup();
+    panel({ status: { availability: 'unavailable', owner: null }, onHire: () => opened++ });
+    expect(screen.queryByRole('button', { name: 'Hire' })).toBeNull();
+  });
 });

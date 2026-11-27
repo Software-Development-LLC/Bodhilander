@@ -1080,8 +1080,8 @@ export interface CrewCard {
   raisedAt: number;
   decision: 'approved' | 'denied' | null;
   decidedBy: string | null;
-  /** sending: not yet acked by the Hub. parked: the run stopped waiting and resumes on the decision. */
-  state?: 'sending' | 'waiting' | 'parked' | 'decided';
+  /** sending: not yet acked by the Hub. parked: the run stopped waiting and resumes on the decision. closed: the run ended without one. */
+  state?: 'sending' | 'waiting' | 'parked' | 'decided' | 'closed';
 }
 
 /** null when this machine cannot read its cards, so the inbox never claims to be empty when it does not know. */
@@ -1093,3 +1093,32 @@ export type CrewLinkView =
   | { step: 'stopped'; message: string };
 
 export type CrewEditResult = { ok: true } | { ok: false; error: string };
+
+export interface CrewRole {
+  roleId: string;
+  name: string;
+}
+
+/** What the Hire form sends. The main process checks every field again before the Hub sees it. */
+export interface CrewHireInput {
+  name: string;
+  roleId: string;
+  repos: string[];
+  accountId: string;
+}
+
+/** An account the Hire form offers, and what it needs before a hire can run on it. */
+export interface CrewHireAccount {
+  id: string;
+  label: string;
+  needs: 'sign-in' | 'crew-token' | null;
+}
+
+/** hireId is set once the create was sent, even when the Hub has not answered yet. */
+export type CrewHireResult = CrewEditResult & { hireId?: string };
+
+/** The login pty Crew's Sign in again started, for the renderer to show. */
+export interface CrewSignInStarted {
+  accountId: string;
+  ptyId: string;
+}

@@ -3,6 +3,7 @@
  * No token or config dir ever leaves the machine. Resolution is direct, by
  * uuid then email; Crew never goes through the session resolver or failover.
  */
+import { randomUUID } from 'crypto';
 import { resolveAccountIdentity } from '../account-identity';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
@@ -84,15 +85,18 @@ export class AccountChanger {
     const ref = wireAccountRef(accountRefFor(to));
     if (ref === null) return { refused: 'unknown-account' };
     if (!this.synced(hireId)) return { refused: 'hire-not-synced' };
+    const id = randomUUID();
+    const change: PendingChange = { hireId, accountId: to.id, configDir: to.configDir };
+    this.deps.db.prepare(`INSERT OR REPLACE INTO crew_sync_state (key, value) VALUES (?, ?)`).run(PENDING_PREFIX + id, JSON.stringify(change));
     let editId: string;
     try {
-      editId = this.deps.sendEdit(accountChangeEdit(hireId, ref));
+      editId = this.deps.sendEdit({ ...accountChangeEdit(hireId, ref), id });
     } catch (err) {
       log.warn('[Crew] could not queue an account change', err);
+      this.forget(PENDING_PREFIX + id);
       return { refused: 'send-failed' };
     }
-    const change: PendingChange = { hireId, accountId: to.id, configDir: to.configDir };
-    this.deps.db.prepare(`INSERT OR REPLACE INTO crew_sync_state (key, value) VALUES (?, ?)`).run(PENDING_PREFIX + editId, JSON.stringify(change));
+    if (editId !== id) this.deps.db.prepare(`UPDATE crew_sync_state SET key = ? WHERE key = ?`).run(PENDING_PREFIX + editId, PENDING_PREFIX + id);
     return { editId };
   }
 

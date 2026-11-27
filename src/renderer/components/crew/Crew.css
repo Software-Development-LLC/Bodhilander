@@ -22,6 +22,7 @@
 }
 
 .crew-panel__cards,
+.crew-hire-modal button,
 .crew-link button,
 .crew-detail button,
 .crew-cards button {
@@ -224,6 +225,11 @@
   border-left-color: var(--color-waiting);
 }
 
+.crew-card--closed,
+.crew-card--decided {
+  opacity: 0.75;
+}
+
 .crew-card__head {
   display: flex;
   justify-content: space-between;
@@ -244,4 +250,40 @@
 .crew-detail__hint,
 .crew-inbox__note {
   display: block;
+}
+
+.crew-sign-in {
+  position: static;
+  margin: 0;
+}
+
+.crew-hire-modal {
+  position: static;
+  margin: 0;
+  min-width: 360px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-sm);
+}
+
+.crew-hire-modal form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crew-hire-modal label {
+  font-size: var(--font-size-xs);
+  margin-bottom: -6px;
+}
+
+.crew-hire-modal textarea {
+  min-height: 64px;
+}
+
+.crew-hire-modal .footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

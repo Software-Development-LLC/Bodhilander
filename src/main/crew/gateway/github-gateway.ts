@@ -34,6 +34,12 @@ const API_WRITE_FLAGS = new Set(['-f', '-F', '--field', '--raw-field', '--input'
 const API_VALUE_FLAGS = new Set(['-H', '--header', '-q', '--jq', '-t', '--template', '-p', '--preview', '--cache', '-X', '--method']);
 const API_REFUSED_FLAGS = new Set(['--hostname']);
 const REPO_FLAGS = new Set(['-R', '--repo']);
+const VALUE_FLAGS = new Set(['-R', '--repo', '-b', '--branch', '-q', '--jq', '-t', '--template', '--json', '-L', '--limit', '-s', '--state', '-S', '--search', '-A', '--author', '-a', '--assignee', '-l', '--label', '-B', '--base', '-H', '--head', '-w', '--workflow', '-u', '--user', '-c', '--commit', '-e', '--event', '-j', '--job', '--attempt', '-O', '--order', '--sort', '--created', '-m', '--milestone', '--app', '--mention']);
+
+/** The arguments that are not flags or flag values. */
+function positionals(args: string[]): string[] {
+  return args.filter((a, i) => !a.startsWith('-') && !(i > 0 && VALUE_FLAGS.has(args[i - 1])));
+}
 
 export type GhPlan = { kind: 'read'; args: string[] } | { kind: 'write' } | { kind: 'refused'; why: string };
 
@@ -91,6 +97,18 @@ function planApi(rest: string[], repos: readonly string[]): GhPlan {
 const GROUPED_SHORT = /^-[^-].+/;
 const SEARCH_SCOPE = /(^|\s)-?(repo|org|user|owner):/i;
 
+function repoViewPlan(argv: string[], rest: string[], repos: readonly string[], named: string | null): GhPlan {
+  if (named !== null) return { kind: 'refused', why: 'gh repo view names its repo as an argument, not with -R.' };
+  const [target, ...extra] = positionals(rest);
+  if (extra.length > 0) return { kind: 'refused', why: 'gh repo view takes one repo.' };
+  if (target === undefined) {
+    if (repos.length !== 1) return { kind: 'refused', why: `Name the repo: one of ${repos.join(', ')}.` };
+    return { kind: 'read', args: [...argv, repos[0]] };
+  }
+  if (!repos.includes(target.toLowerCase())) return { kind: 'refused', why: `${target} is not one of this hire's repos.` };
+  return { kind: 'read', args: argv };
+}
+
 export function planGh(argv: string[], repos: readonly string[]): GhPlan {
   if (argv.some((a) => GROUPED_SHORT.test(a))) return { kind: 'refused', why: 'Give each short flag on its own, with its value as the next argument.' };
   const [group, sub, ...rest] = argv;
@@ -103,7 +121,8 @@ export function planGh(argv: string[], repos: readonly string[]): GhPlan {
   const repo = { value: named[0] ?? null };
   if (repo.value !== null && !repos.includes(repo.value.toLowerCase())) return { kind: 'refused', why: `${repo.value} is not one of this hire's repos.` };
   if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
-  if (group === 'search' && rest.some((a) => SEARCH_SCOPE.test(a))) return { kind: 'refused', why: 'Search names repos with --repo, never a qualifier.' };
+  if (group === 'repo') return repoViewPlan(argv, rest, repos, repo.value);
+  if (rest.some((a) => SEARCH_SCOPE.test(a))) return { kind: 'refused', why: 'Search names repos with --repo, never a qualifier.' };
   if (group === 'search') {
     if (rest.some((a) => a === '--owner' || a.startsWith('--owner='))) return { kind: 'refused', why: 'Search names repos with --repo, never --owner.' };
     return { kind: 'read', args: repo.value === null ? [...argv, ...repos.flatMap((r) => ['--repo', r])] : argv };

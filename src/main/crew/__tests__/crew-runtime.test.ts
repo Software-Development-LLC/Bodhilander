@@ -8,8 +8,10 @@ mock.module('../../account-identity', () => ({
 
 const { startCrewRuntime, REMINDER_CHECK_MS } = await import('../crew-runtime');
 const { CrewSignIn, LOGIN_LIFETIME_MS } = await import('../crew-token');
+const { Holds } = await import('../holds');
 import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
 import type { CrewJob, Prepared, RunChild } from '../run/loop';
+import { RunSlots } from '../run/slots';
 import { HIRE, PERSON, crewDb, uuid } from './crew-db';
 
 class Child implements RunChild {
@@ -26,6 +28,10 @@ class Child implements RunChild {
   kill(s: string) {
     this.signals.push(s);
   }
+  limited() {
+    for (const cb of this.out) cb(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1_900_000_000 } }));
+    for (const cb of this.close) cb();
+  }
   finish() {
     for (const cb of this.out) cb(JSON.stringify({ type: 'rate_limit_event', unifiedWindows: { five_hour: { utilization: 0.5, resetsAt: 9e12 } } }));
     for (const cb of this.out) cb(JSON.stringify({ type: 'result', is_error: false, result: 'ok', session_id: 's', usage: { input_tokens: 2 } }));
@@ -41,6 +47,7 @@ function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
   const accounts = [{ id: 'a1', label: 'Work', configDir: '/acct/a1', email: null } as ClaudeAccount];
   const cipher = { isEncryptionAvailable: () => true, encryptString: (p: string) => Buffer.from(p), decryptString: (b: Buffer) => b.toString() };
   const signIn = new CrewSignIn(db, cipher, false);
+  const holds = new Holds();
   const hub = Object.assign(new EventEmitter(), {
     leased: true,
     replies: [] as [string, string][],
@@ -62,8 +69,8 @@ function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
   const loggedIn: { a1: boolean | undefined } = { a1: undefined };
   const timers: { fn: () => void; ms: number; live: boolean }[] = [];
   let clock = Date.parse('2026-11-27T12:00:00Z');
-  const rt = startCrewRuntime({
-    db, hub, signIn, accounts: () => accounts,
+  const deps: Parameters<typeof startCrewRuntime>[0] = {
+    db, hub, signIn, holds, accounts: () => accounts,
     prepare: over.prepare ?? (async (job) => ({ command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a1', sessionId: null, token: null })),
     usage: { get: (id) => records.get(id) ?? null, set: (u) => void records.set(u.accountId, u) },
     remind: (r, a) => reminders.push(`${a.label}:${r.key}`),
@@ -81,12 +88,50 @@ function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
       return t;
     },
     clearInterval: (h) => void ((h as { live: boolean }).live = false),
-  });
+  };
+  const rt = startCrewRuntime(deps);
   const job = (n: number) => raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(n), HIRE, PERSON);
-  return { raw, db, hub, rt, children, records, reminders, timers, signIn, job, ended, loggedIn, advance: (ms: number) => (clock += ms) };
+  return { deps, raw, db, hub, rt, children, records, reminders, timers, signIn, holds, job, ended, loggedIn, advance: (ms: number) => (clock += ms) };
 }
 
 describe('crew runtime', () => {
+  test("a replaced runtime's run still holds its hire and slot, and its end lets the new runtime start the next job", async () => {
+    const t = setup();
+    const slots = new RunSlots(() => 2);
+    let current: ReturnType<typeof startCrewRuntime> | null = null;
+    t.rt.stop();
+    const first = startCrewRuntime({ ...t.deps, slots, settled: () => void current?.loop.tick() });
+    current = first;
+    t.job(1);
+    t.hub.emit('job');
+    await flush();
+    expect(t.children).toHaveLength(1);
+    first.stop();
+    const second = startCrewRuntime({ ...t.deps, slots, settled: () => void current?.loop.tick() });
+    current = second;
+    t.job(2);
+    await second.loop.tick();
+    expect(t.children).toHaveLength(1);
+    t.children[0].finish();
+    await flush();
+    await flush();
+    expect(t.children).toHaveLength(2);
+    expect(second.loop.running()).toEqual([HIRE]);
+    expect(first.loop.running()).toEqual([]);
+    second.stop();
+  });
+
+  test("a run the account's usage limit rejects holds that account until the reported reset", async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job');
+    await flush();
+    t.children[0].limited();
+    await flush();
+    expect(t.holds.rateLimitedUntil('a1', Date.parse('2026-11-27T12:00:00Z'))).toBe(1_900_000_000_000);
+    expect(t.hub.replies).toEqual([]);
+  });
+
   test('a delivered job runs; its reply and one usage record go to the Hub, and the window reading reaches the account', async () => {
     const t = setup();
     t.job(1);
@@ -129,6 +174,24 @@ describe('crew runtime', () => {
     await flush();
     t.rt.interrupt(HIRE);
     expect(t.children[0].signals).toEqual(['SIGINT']);
+  });
+
+  test('stopHire resolves once the run exits, and kills a run that ignores the interrupt', async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    let stopped = false;
+    const stopping = t.rt.stopHire(HIRE, 5).then(() => (stopped = true));
+    await flush();
+    expect(t.children[0].signals).toEqual(['SIGINT']);
+    expect(stopped).toBe(false);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(t.children[0].signals).toEqual(['SIGINT', 'SIGKILL']);
+    t.children[0].finish();
+    await stopping;
+    expect(stopped).toBe(true);
+    await t.rt.stopHire(HIRE, 5);
   });
 
   test('an applied edit_result carries the account change; welcome settles orphans', () => {

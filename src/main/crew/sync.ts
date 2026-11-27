@@ -30,6 +30,7 @@ const str = (v: unknown, fallback: string): string => (typeof v === 'string' ? v
 const refKey = (r: SyncRef): string => `${r.kind}:${r.objectId}`;
 
 export interface EditInput {
+  id?: string;
   op: EditOp;
   kind: EditKind;
   objectId?: string;
@@ -224,7 +225,7 @@ export class CrewSync {
 
   /** An edit names the rev it was made against; an update or delete defaults to the cached one. */
   buildEdit(input: EditInput): EditFrame {
-    const frame: EditFrame = { type: 'edit', id: this.newId(), op: input.op, kind: input.kind, fields: input.fields };
+    const frame: EditFrame = { type: 'edit', id: input.id ?? this.newId(), op: input.op, kind: input.kind, fields: input.fields };
     if (input.objectId !== undefined) frame.objectId = input.objectId;
     const rev = input.rev ?? (input.objectId === undefined ? null : this.cachedRev(input.kind, input.objectId));
     if (input.op !== 'create') {

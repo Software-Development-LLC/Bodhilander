@@ -57,6 +57,14 @@ describe('crew tables', () => {
     expect(row.crew_token_enc).toBeNull();
   });
 
+  test('an existing crew_run table gains the pid column', () => {
+    const raw = new Database(':memory:');
+    raw.exec(`CREATE TABLE claude_accounts (id TEXT PRIMARY KEY, label TEXT NOT NULL, config_dir TEXT NOT NULL UNIQUE, email TEXT)`);
+    raw.exec(`CREATE TABLE crew_run (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, hire_id TEXT NOT NULL, ended_at TEXT DEFAULT NULL)`);
+    initializeCrewTables(raw as unknown as Db);
+    expect(columns(raw, 'crew_run')).toContain('pid');
+  });
+
   test('a job left running by a quit is queued again at start, with its attempt given back', () => {
     const { raw, db } = crewDb();
     raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', 2)`);

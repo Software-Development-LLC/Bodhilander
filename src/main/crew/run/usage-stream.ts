@@ -62,6 +62,23 @@ export function parseRateLimitEvent(event: unknown, observedAt: number): UsageOb
   return obs.fiveHour || obs.sevenDay ? obs : null;
 }
 
+/** How long a hire is held when a rejection carries no reset time. */
+export const REJECTED_RETRY_MS = 15 * 60_000;
+
+function rejectedAt(info: unknown, now: number): number | null {
+  if (!isRecord(info) || info.status !== 'rejected') return null;
+  return instant(info.resetsAt ?? info.resets_at) ?? now + REJECTED_RETRY_MS;
+}
+
+/** When a usage-limit rejection the stream reports lifts: a rejected `rate_limit_event` or window, or the CLI's `quotaLimits` entry. */
+export function parseRejection(event: unknown, now: number): number | null {
+  if (!isRecord(event)) return null;
+  if (event.type !== 'rate_limit_event') return rejectedAt(event.quotaLimits, now);
+  const info = isRecord(event.rate_limit_info) ? event.rate_limit_info : event;
+  const resets = [rejectedAt(info, now), ...windowEntries(info.unifiedWindows ?? event.unifiedWindows).map(([, w]) => rejectedAt(w, now))].filter((r): r is number => r !== null);
+  return resets.length > 0 ? Math.max(...resets) : null;
+}
+
 /** The run's own tokens from `result.usage`; a missing count is 0. */
 export function runUsage(result: unknown): RunUsage {
   const u = isRecord(result) && isRecord(result.usage) ? result.usage : {};

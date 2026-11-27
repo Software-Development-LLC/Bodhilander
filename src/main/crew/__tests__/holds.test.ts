@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { Holds, capDay, capTokens, overCrewCap, readWindow, type HoldInputs } from '../holds';
+import { Holds, capDay, capTokens, machineTimeZone, overCrewCap, readWindow, type HoldInputs } from '../holds';
 
 const NOW = 1_700_000_000_000;
 const win = (pct: number, resetsAt: number | null = NOW + 1000) => ({ pct, resetsAt, observedAt: NOW });
@@ -65,5 +65,16 @@ describe('holds', () => {
     expect(capDay(t, 'UTC')).toBe('2026-01-02');
     expect(capDay(t, 'America/Chicago')).toBe('2026-01-01');
     expect(capDay(t, 'Not/AZone')).toBe('2026-01-02');
+  });
+});
+
+describe("the owner's day", () => {
+  test("is this machine's own IANA zone, or null when it has none to give", () => {
+    expect(machineTimeZone(() => 'America/Chicago')).toBe('America/Chicago');
+    expect(machineTimeZone(() => undefined)).toBeNull();
+    expect(machineTimeZone(() => 'Not/AZone')).toBeNull();
+    expect(machineTimeZone(() => {
+      throw new Error('no Intl');
+    })).toBeNull();
   });
 });

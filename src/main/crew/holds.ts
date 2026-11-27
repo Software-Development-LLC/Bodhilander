@@ -44,6 +44,20 @@ export function capTokens(usage: { input_tokens?: number; cache_creation_input_t
   return (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.output_tokens ?? 0);
 }
 
+const resolvedZone = (): string | undefined => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** The owner's timezone as this machine knows it: the Hub sends no person.timezone, and the owner is the one at this machine. */
+export function machineTimeZone(read: () => string | undefined = resolvedZone): string | null {
+  try {
+    const zone = read();
+    if (!zone) return null;
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return zone;
+  } catch {
+    return null;
+  }
+}
+
 /** The calendar day in the owner's timezone, so the hire cap resets at their midnight. */
 export function capDay(now: number, timeZone: string | null): string {
   try {
@@ -52,6 +66,29 @@ export function capDay(now: number, timeZone: string | null): string {
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   }
 }
+
+/** The instant the owner's day began, so the Hub is asked for that day's totals. */
+export function dayStart(now: number, timeZone: string | null): number {
+  const day = capDay(now, timeZone);
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  let t = midnight;
+  for (let i = 0; i < 2; i += 1) t = midnight - offsetAt(t, timeZone);
+  return t;
+}
+
+function offsetAt(t: number, timeZone: string | null): number {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', { timeZone: timeZone ?? 'UTC', hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(t);
+  } catch {
+    return 0;
+  }
+  const n = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'), n('second')) - Math.floor(t / 1000) * 1000;
+}
+
+/** The hire state a cause is reported as. */
+export const holdState = (cause: HoldCause): string => `held:${cause}`;
 
 export class Holds {
   private readonly limitedUntil = new Map<string, number>();

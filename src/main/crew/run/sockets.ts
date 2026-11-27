@@ -109,6 +109,19 @@ export function tokenMatches(presented: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** At start no run is live, so every run dir left in the root is stale. A root that fails the ownership check is left alone. */
+export function sweepRunDirs(root: string, uid: number, fsx: SocketFs & { readdirSync(p: string): string[] } = fs): number {
+  try {
+    const st = fsx.lstatSync(root);
+    if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== uid) return 0;
+  } catch {
+    return 0;
+  }
+  const entries = fsx.readdirSync(root);
+  for (const entry of entries) fsx.rmSync(path.join(root, entry), { recursive: true, force: true });
+  return entries.length;
+}
+
 export function removeRunDir(dir: string, fsx: SocketFs = fs): void {
   fsx.rmSync(dir, { recursive: true, force: true });
 }

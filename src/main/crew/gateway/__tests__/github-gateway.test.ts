@@ -33,6 +33,21 @@ describe('planGh', () => {
     expect(planGh(['api', '-q', '.[].title', '--paginate', 'repos/acme/app/issues'], REPOS).kind).toBe('read');
   });
 
+  test('a search qualifier naming another repo is refused in every group', () => {
+    expect(planGh(['issue', 'list', '--search', 'repo:other/x is:open'], REPOS).kind).toBe('refused');
+    expect(planGh(['pr', 'list', '-S', 'org:other'], REPOS).kind).toBe('refused');
+    expect(planGh(['issue', 'list', '--search', 'is:open label:bug'], REPOS).kind).toBe('read');
+  });
+
+  test('gh repo view takes its repo as an argument, and only one of the hire\'s', () => {
+    expect(planGh(['repo', 'view'], REPOS)).toEqual({ kind: 'read', args: ['repo', 'view', 'acme/app'] });
+    expect(planGh(['repo', 'view', 'Acme/App', '--json', 'name'], REPOS)).toEqual({ kind: 'read', args: ['repo', 'view', 'Acme/App', '--json', 'name'] });
+    expect(planGh(['repo', 'view', 'other/repo'], REPOS)).toEqual({ kind: 'refused', why: "other/repo is not one of this hire's repos." });
+    expect(planGh(['repo', 'view', '--json', 'name', 'other/repo'], REPOS).kind).toBe('refused');
+    expect(planGh(['repo', 'view', '-R', 'acme/app'], REPOS).kind).toBe('refused');
+    expect(planGh(['repo', 'view'], ['acme/app', 'acme/api']).kind).toBe('refused');
+  });
+
   test('reads pass, scoped to the hire\'s repo', () => {
     expect(planGh(['issue', 'list'], REPOS)).toEqual({ kind: 'read', args: ['issue', 'list', '-R', 'acme/app'] });
     expect(planGh(['pr', 'view', '3', '-R', 'Acme/App'], REPOS)).toEqual({ kind: 'read', args: ['pr', 'view', '3', '-R', 'Acme/App'] });

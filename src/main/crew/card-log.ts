@@ -65,7 +65,8 @@ function hireName(data: string | null): string {
 function stateOf(row: LogRow): NonNullable<CrewCard['state']> {
   if (row.decision !== null) return 'decided';
   if (!row.acked) return 'sending';
-  return row.card_state === 'parked' ? 'parked' : 'waiting';
+  if (row.card_state === 'parked' || row.card_state === 'closed') return row.card_state;
+  return 'waiting';
 }
 
 export function listCards(db: Database.Database): CrewCard[] {

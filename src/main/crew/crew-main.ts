@@ -10,19 +10,26 @@ import log from 'electron-log';
 import { resolveAccountIdentity } from '../account-identity';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
+import { getCrewAccountCap } from '../repositories/preferences';
 import { claudePath, ghPath } from '../run-engine/machine-config';
 import { getUsage, setUsage } from '../usage-store';
 import { CrewSignIn, type Reminder } from './crew-token';
 import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
 import { GithubGateway, runGh } from './gateway/github-gateway';
+import { handbookFor, pinnedSkills, restoreSkills } from './handbook';
+import { Holds, machineTimeZone } from './holds';
 import type { HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
 import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
 import { sweepLetGo } from './let-go';
 import { McpHost, hostSocketPath } from './mcp/host';
+import { HireDayUsage } from './run/hire-usage';
 import { prepareRun, type PrepareDeps } from './run/prepare';
 import { RunServiceManager, ServicesNotReady } from './run/services';
+import { reapLeftoverRuns, systemReap } from './run/reap';
+import { socketRoot, sweepRunDirs } from './run/sockets';
+import { RunSlots } from './run/slots';
 import { crewTools } from './tools/server';
 import { writeAudit } from './audit';
 import { createWindowsCrew, type WindowsCrew } from './wsl-runtime';
@@ -34,6 +41,8 @@ let gateway: GithubGateway | null = null;
 let services: RunServiceManager | null = null;
 let detachHub: (() => void) | null = null;
 let windowsCrew: WindowsCrew | null = null;
+const holds = new Holds();
+const slots = new RunSlots();
 
 const listDir = (dir: string): string[] => {
   try {
@@ -116,8 +125,8 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
       crewTools({ db, raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false, sendMessage: (jobId, send) => runtimeHub?.sendMessage(jobId, send) ?? false }, job, threadKey),
     repos: hireRepos,
     onLost: (hireId) => runtime?.interrupt(hireId),
-    handbook: () => '',
-    timeZone: () => null,
+    handbook: (hireId) => handbookFor(db, hireId),
+    timeZone: () => machineTimeZone(),
     audit: (event, detail) => writeAudit(db, null, event, detail),
     openExternal: (url) => void shell.openExternal(url),
     belongsTo: (accountId, _token, accountUuid) => {
@@ -129,6 +138,20 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     recordsFile: path.join(app.getPath('userData'), 'crew', 'wsl-tmp.json'),
   });
   return windowsCrew;
+}
+
+const realDir = (file: string): string => {
+  try {
+    return path.dirname(fs.realpathSync(file));
+  } catch {
+    return path.dirname(file);
+  }
+};
+
+function reopenedForRuns(): string[] {
+  const exec = process.execPath;
+  const bundle = exec.includes('.app/') ? exec.slice(0, exec.indexOf('.app/') + 4) : path.dirname(exec);
+  return [bundle, app.getAppPath(), crewResourcePaths().shimDir, realDir(claudePath())];
 }
 
 export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
@@ -144,8 +167,16 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
     home: os.homedir(),
     claudePath: claudePath(),
     env: process.env,
-    timeZone: () => null,
-    handbook: () => '',
+    timeZone: () => machineTimeZone(),
+    handbook: (hireId) => handbookFor(getDatabase(), hireId),
+    restoreSkills: (paths, hireId) => restoreSkills(paths, pinnedSkills(getDatabase(), hireId)),
+    holds,
+    usage: getUsage,
+    accountCap: getCrewAccountCap,
+    hireUsage: new HireDayUsage(getDatabase(), async (hireId, epoch, since) => {
+      const frame = await runtimeHub?.usageRead(hireId, epoch, since);
+      return frame ? frame.inputTokens + frame.cacheCreationTokens + frame.outputTokens : null;
+    }),
     services: async (job, threadKey, runId) => {
       const manager = ensureServices();
       if (!(await host?.ready())) throw new ServicesNotReady('the Crew MCP host is not listening');
@@ -158,6 +189,8 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
       sockets: [],
       socketRoot: `/tmp/cr-${uid}`,
       allowedDomains: [],
+      reopen: reopenedForRuns(),
+      listDir,
     }),
   };
 }
@@ -173,6 +206,11 @@ function attach(hub: HubClient): CrewRuntime {
     db,
     hub,
     signIn,
+    holds,
+    slots,
+    settled: () => {
+      runtime?.loop.tick().catch((err) => log.warn('[Crew] could not pick up the next job', err));
+    },
     accounts: getAllAccounts,
     prepare: (job: CrewJob, threadKey: string, runId: string): Promise<Prepared> =>
       prepareRun(prepareDeps, job, threadKey, runId),
@@ -203,6 +241,14 @@ function attach(hub: HubClient): CrewRuntime {
 
 export function startCrew(): CrewRuntime {
   sweepLetGo(app.getPath('userData'), Date.now());
+  if (process.platform !== 'win32') {
+    try {
+      reapLeftoverRuns(getDatabase(), systemReap);
+      sweepRunDirs(socketRoot(process.getuid?.() ?? 0), process.getuid?.() ?? 0);
+    } catch (err) {
+      log.error('[Crew] could not end leftover runs', err);
+    }
+  }
   setCrewHubReplaced((hub) => attach(hub));
   setCrewInterrupt((hireId) => runtime?.interrupt(hireId));
   const hub = startCrewHub();

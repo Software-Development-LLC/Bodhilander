@@ -10,10 +10,14 @@ import type {
   CrewCardList,
   CrewEditResult,
   CrewHireActivity,
+  CrewHireAccount,
   CrewHireDetail,
+  CrewHireInput,
+  CrewHireResult,
   CrewHireSummary,
   CrewHireUsage,
   CrewLinkView,
+  CrewRole,
   CrewRoutine,
   CrewStatus,
 } from '../../shared/types';
@@ -182,6 +186,17 @@ export function readHire(db: Database.Database, hireId: string, machineId: strin
   };
 }
 
+export function readRoles(db: Database.Database): CrewRole[] {
+  const rows = db.prepare(`SELECT role_id, data FROM crew_role_cache`).all() as { role_id: string; data: string }[];
+  return rows
+    .flatMap((row) => {
+      const body = parse(row.data);
+      if (!body || body.deleted) return [];
+      return [{ roleId: row.role_id, name: str(body.role, row.role_id) }];
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export interface UsageReadPort {
   online(): boolean;
   epochOf(hireId: string): number | null;
@@ -228,6 +243,8 @@ export interface CrewIpcDeps extends UsageReadPort {
   cards(): CrewCardList;
   openCard(raiseId: string): boolean;
   letGo(hireId: string): Promise<CrewEditResult>;
+  createHire(input: CrewHireInput): Promise<CrewHireResult>;
+  hireAccounts(): CrewHireAccount[];
   beginLink(): Promise<CrewLinkView>;
   confirmLinkOwner(isMe: boolean): boolean;
   now(): number;
@@ -258,7 +275,8 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
     if (!Array.isArray(repos) || !repos.every((r) => typeof r === 'string' && r.trim() !== '')) return refuse('Each repo needs a name.');
     const synced = parse(hireRows(deps.db(), hireId)[0].data)?.repos;
     const current = new Set((Array.isArray(synced) ? synced : []).filter((r): r is string => typeof r === 'string').map((r) => r.toLowerCase()));
-    const wanted = [...new Set(repos.map((r: string) => r.trim()))];
+    const seen = new Set<string>();
+    const wanted = repos.map((r: string) => r.trim()).filter((r) => !seen.has(r.toLowerCase()) && seen.add(r.toLowerCase()));
     if (wanted.some((r) => !current.has(r.toLowerCase()))) return refuse('Adding a repo needs a grant card, which comes in a later phase. You can remove repos now.');
     return edit(hireId, { repos: wanted });
   });
@@ -270,6 +288,13 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
   });
 
   deps.handle('crew:letGo', (hireId) => (known(hireId) ? deps.letGo(hireId) : Promise.resolve(refuse('This hire has not synced to this machine yet.'))));
+  deps.handle('crew:listRoles', () => readRoles(deps.db()));
+  deps.handle('crew:hireAccounts', () => deps.hireAccounts());
+  deps.handle('crew:createHire', (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return Promise.resolve(refuse('The hire form sent nothing.'));
+    const { name, roleId, repos, accountId } = input as CrewHireInput;
+    return deps.createHire({ name, roleId, repos, accountId });
+  });
   deps.handle('crew:listCards', () => deps.cards());
   deps.handle('crew:openCard', (raiseId) => typeof raiseId === 'string' && deps.openCard(raiseId));
   deps.handle('crew:beginLink', () => deps.beginLink());

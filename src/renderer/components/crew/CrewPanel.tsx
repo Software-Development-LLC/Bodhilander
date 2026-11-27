@@ -75,12 +75,13 @@ export interface CrewPanelProps extends CrewLinkProps {
   selectedHireId: string | null;
   onSelectHire: (hireId: string) => void;
   onOpenCards: () => void;
+  onHire?: () => void;
 }
 
 const LINKABLE = new Set(['unlinked', 'link-again']);
 
 /** The sidebar's Crew section: whether Crew can be reached, and each hire with its state. */
-export const CrewPanel: React.FC<CrewPanelProps> = ({ status, hires, error, selectedHireId, onSelectHire, onOpenCards, beginLink, confirmLinkOwner }) => {
+export const CrewPanel: React.FC<CrewPanelProps> = ({ status, hires, error, selectedHireId, onSelectHire, onOpenCards, onHire, beginLink, confirmLinkOwner }) => {
   const notice = status ? availabilityText(status.availability) : null;
   const online = status?.availability === 'online';
 
@@ -88,6 +89,11 @@ export const CrewPanel: React.FC<CrewPanelProps> = ({ status, hires, error, sele
     <section className="crew-panel" aria-labelledby="crew-panel-title">
       <div className="crew-panel__header">
         <h3 id="crew-panel-title">Crew</h3>
+        {online && onHire && (
+          <button type="button" className="crew-panel__cards" onClick={onHire}>
+            Hire
+          </button>
+        )}
         <button type="button" className="crew-panel__cards" onClick={onOpenCards}>
           Cards
         </button>

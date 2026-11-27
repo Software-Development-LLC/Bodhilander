@@ -19,6 +19,22 @@ describe('runEnv', () => {
     });
   });
 
+  test('PATH drops entries under home unless re-opened, and keeps the order of the rest', () => {
+    const env = runEnv({ PATH: '/Users/b/.bun/bin:/opt/homebrew/bin:/Users/b/.local/bin::/usr/bin' }, {
+      ...base, tokenOnFd: false, home: '/Users/b', reopened: ['/Users/b/.local'], pathFirst: '/shim',
+    });
+    expect(env.PATH).toBe('/shim:/opt/homebrew/bin:/Users/b/.local/bin:/usr/bin');
+  });
+
+  test('a PATH wholly under home leaves only the shim', () => {
+    const env = runEnv({ PATH: '/Users/b/bin' }, { ...base, tokenOnFd: false, home: '/Users/b', pathFirst: '/shim' });
+    expect(env.PATH).toBe('/shim');
+  });
+
+  test('git reads the given global config', () => {
+    expect(runEnv(parent, { ...base, tokenOnFd: false, gitConfig: '/hire/git/gitconfig' }).GIT_CONFIG_GLOBAL).toBe('/hire/git/gitconfig');
+  });
+
   test('on a Crew token the descriptor is announced, never the token', () => {
     const env = runEnv(parent, { ...base, tokenOnFd: true });
     expect(env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR).toBe('3');

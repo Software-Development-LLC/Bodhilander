@@ -14,6 +14,7 @@ export interface HirePaths {
   run: string;
   ghConfig: string;
   shell: string;
+  git: string;
 }
 
 export function hirePaths(userData: string, hireId: string): HirePaths {
@@ -26,6 +27,7 @@ export function hirePaths(userData: string, hireId: string): HirePaths {
     run: path.join(root, 'run'),
     ghConfig: path.join(root, 'gh-config'),
     shell: path.join(root, 'empty-shell'),
+    git: path.join(root, 'git'),
   };
 }
 

@@ -11,6 +11,7 @@ import type { UsageObservation } from '../usage-meter';
 import { AccountChanger, accountRefFor } from './account-ref';
 import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
+import type { Holds } from './holds';
 import type { UsageInput } from './hub-client';
 import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame } from './protocol';
 import { HOLD_STATES } from './protocol';
@@ -34,6 +35,7 @@ export interface CrewRuntimeDeps {
   db: Database.Database;
   hub: CrewHubPort;
   signIn: CrewSignIn;
+  holds: Holds;
   accounts(): ClaudeAccount[];
   prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
   usage: { get(id: string): AccountUsage | null; set(u: AccountUsage): void };
@@ -44,6 +46,10 @@ export interface CrewRuntimeDeps {
   runEnded?(jobId: string): void;
   cardHoldMs?: number;
   maxRuns?(): number;
+  /** Shared across runtimes, so a replaced runtime's runs still count against the machine and their hires. */
+  slots?: RunSlots;
+  /** A run ended and freed its slot; the current runtime may start the next job. */
+  settled?(): void;
   spawn?(run: PreparedRun): RunChild;
   now?(): number;
   setInterval?(fn: () => void, ms: number): unknown;
@@ -55,8 +61,22 @@ export interface CrewRuntime {
   changer: AccountChanger;
   broker: ApproveBroker;
   interrupt(hireId: string): void;
+  /** Interrupts the hire's run and resolves once it has exited, killing it after the grace period. */
+  stopHire(hireId: string, graceMs?: number): Promise<void>;
   checkReminders(): number;
   stop(): void;
+}
+
+export const STOP_GRACE_MS = 10_000;
+
+function within(done: Promise<void>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    void done.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
@@ -77,13 +97,14 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   });
   loop = new RunLoop({
     db: deps.db,
-    slots: new RunSlots(deps.maxRuns),
+    slots: deps.slots ?? new RunSlots(deps.maxRuns),
     canStart: (hireId, epoch) => deps.hub.canStart(hireId, epoch),
     prepare: deps.prepare,
     threadKeyOf: (job) => (job.kind === 'card' ? broker.threadOf(job.id) : null),
     spawn: deps.spawn ?? spawnRun,
     reply: (jobId, text) => deps.hub.sendReply(jobId, text),
     onSignedOut: (_hireId, accountId) => deps.signIn.recordAuthFailure(accountId, now()),
+    onRateLimited: (accountId, until) => deps.holds.recordRateLimit(accountId, until),
     onUsageObserved: (accountId: string, observation: UsageObservation) => {
       mergeRunObservation(accountId, observation, deps.usage);
     },
@@ -99,7 +120,9 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     onSettled: (jobId, outcome) => {
       broker.release(jobId, outcome);
       guard('ending a run', () => deps.runEnded?.(jobId));
-      if (outcome !== 'held') void tick();
+      if (outcome === 'held') return;
+      void tick();
+      guard('starting the next run', () => deps.settled?.());
     },
     waitingOnCard: (jobId) => broker.waitingFor(jobId),
     now,
@@ -174,10 +197,17 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     interrupt: (hireId) => {
       runLoop.interrupt(hireId);
     },
+    stopHire: async (hireId, graceMs = STOP_GRACE_MS) => {
+      runLoop.interrupt(hireId);
+      if (await within(runLoop.whenIdle(hireId), graceMs)) return;
+      runLoop.kill(hireId);
+      await within(runLoop.whenIdle(hireId), graceMs);
+    },
     checkReminders,
     stop: () => {
       clearInt(reminderTimer);
       for (const [event, fn] of listeners) deps.hub.off(event, fn);
+      runLoop.stop();
       broker.stop();
       runLoop.interruptAll();
     },

@@ -80,7 +80,8 @@ export const CREW_TABLES_SQL = `
       outcome TEXT DEFAULT NULL,
       reply_text TEXT DEFAULT NULL,
       rate_limit TEXT DEFAULT NULL,
-      usage TEXT DEFAULT NULL
+      usage TEXT DEFAULT NULL,
+      pid INTEGER DEFAULT NULL
     );
 
     CREATE TABLE IF NOT EXISTS crew_thread (
@@ -176,6 +177,7 @@ export function initializeCrewTables(database: Database.Database): void {
   addColumn('claude_accounts', 'crew_signed_in_at', 'crew_signed_in_at TEXT DEFAULT NULL');
   addColumn('claude_accounts', 'crew_auth_failed_at', 'crew_auth_failed_at TEXT DEFAULT NULL');
   addColumn('claude_accounts', 'crew_reminded', 'crew_reminded TEXT DEFAULT NULL');
+  addColumn('crew_run', 'pid', 'pid INTEGER DEFAULT NULL');
 
   // A job left running by a quit or crash was interrupted: one waiting on a card parks, so the decision resumes it; the rest run again.
   database.transaction(() => {

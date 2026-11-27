@@ -1,16 +1,19 @@
 /** The Crew IPC channels joined to the running Hub client and runtime. */
-import { app, shell } from 'electron';
+import { app, safeStorage, shell } from 'electron';
 import log from 'electron-log';
-import type { CrewCardList, CrewEditResult, CrewLinkView } from '../../shared/types';
+import type { CrewCardList, CrewEditResult, CrewHireAccount, CrewHireInput, CrewHireResult, CrewLinkView } from '../../shared/types';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
 import { getPreference } from '../repositories/preferences';
-import { resolveAccountRef } from './account-ref';
+import { accountRefFor, resolveAccountRef } from './account-ref';
 import { listCards } from './card-log';
 import { crewRuntime } from './crew-main';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import type { LinkFlow } from './hub-link';
 import { getCrewHub, newLinkFlow } from './hub-service';
+import { resolveAccountIdentity } from '../account-identity';
+import { CrewSignIn } from './crew-token';
+import { createHire, HIRE_ANSWER_MS, hireAccounts, type HireDeps } from './hire';
 import { crewStatusFrom, KEYCHAIN_NEEDED, linkViewFrom, registerCrewIpc } from './ipc';
 import { LET_GO_ANSWER_MS, letGoHire as letGo, moveHireAside } from './let-go';
 import type { EditResultFrame, UsageFrame } from './protocol';
@@ -51,6 +54,49 @@ function editResultFrom(hub: HubClient, id: string, timeoutMs: number): Promise<
   });
 }
 
+/** Waits with no timeout for one edit's answer, for as long as this Hub client lives. */
+function onLateEditResult(hub: HubClient, id: string, handle: (frame: EditResultFrame) => void): void {
+  const onResult = (frame: EditResultFrame) => {
+    if (frame.id !== id) return;
+    hub.off('edit-result', onResult);
+    try {
+      handle(frame);
+    } catch (err) {
+      log.warn('[Crew] could not finish a late let go', err);
+    }
+  };
+  hub.on('edit-result', onResult);
+}
+
+function accountChecks(): Pick<HireDeps, 'accounts' | 'refFor' | 'signedIn' | 'mode'> {
+  const signIn = new CrewSignIn(getDatabase(), safeStorage);
+  return {
+    accounts: getAllAccounts,
+    refFor: accountRefFor,
+    signedIn: (account) => signIn.signedIn(account.id, resolveAccountIdentity(account.configDir).loggedIn, Date.now()),
+    mode: () => signIn.mode(),
+  };
+}
+
+export function hireAccountsHere(): CrewHireAccount[] {
+  return hireAccounts(accountChecks());
+}
+
+export async function hireFromHere(input: CrewHireInput): Promise<CrewHireResult> {
+  const hub = getCrewHub();
+  if (!hub) return { ok: false, error: "Crew isn't running on this machine." };
+  return createHire(
+    {
+      ...accountChecks(),
+      db: getDatabase(),
+      online: () => hub.getStatus() === 'online',
+      sendEdit: (edit) => hub.sendEdit(edit),
+      editResult: (id) => editResultFrom(hub, id, HIRE_ANSWER_MS),
+    },
+    input,
+  );
+}
+
 export async function letGoHire(hireId: string): Promise<CrewEditResult> {
   const hub = getCrewHub();
   if (!hub) return { ok: false, error: "Crew isn't running on this machine." };
@@ -59,8 +105,9 @@ export async function letGoHire(hireId: string): Promise<CrewEditResult> {
       online: () => hub.getStatus() === 'online',
       sendDelete: (id) => hub.sendEdit({ op: 'delete', kind: 'hire', objectId: id, hireId: id, fields: {} }),
       editResult: (id) => editResultFrom(hub, id, LET_GO_ANSWER_MS),
+      onLateResult: (id, handle) => onLateEditResult(hub, id, handle),
       forget: (id) => hub.forgetHire(id),
-      interrupt: (id) => crewRuntime()?.interrupt(id),
+      stop: (id) => crewRuntime()?.stopHire(id) ?? Promise.resolve(),
       moveAside: (id) => moveHireAside(app.getPath('userData'), id, Date.now()),
     },
     hireId,
@@ -129,6 +176,12 @@ export function wireCrewIpc(handle: (channel: string, handler: (...args: unknown
     cards: hubCards,
     openCard: openHubCard,
     letGo: letGoHire,
+    hireAccounts: hireAccountsHere,
+    createHire: async (input) => {
+      const result = await hireFromHere(input);
+      notify();
+      return result;
+    },
     beginLink: async (): Promise<CrewLinkView> => {
       try {
         link = newLinkFlow();
