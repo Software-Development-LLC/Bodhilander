@@ -205,6 +205,7 @@ describe('the channels', () => {
   let db: Db;
   let edits: { hireId: string; fields: Record<string, unknown> }[];
   let changed: [string, string][];
+  let hired: unknown[];
 
   beforeEach(() => {
     db = crewDb().db;
@@ -212,6 +213,7 @@ describe('the channels', () => {
     handlers = new Map();
     edits = [];
     changed = [];
+    hired = [];
     registerCrewIpc({
       handle: (channel, handler) => handlers.set(channel, handler),
       db: () => db,
@@ -233,6 +235,7 @@ describe('the channels', () => {
       cards: () => null,
       openCard: () => false,
       letGo: async () => ({ ok: false, error: 'not yet' }),
+      createHire: async (input) => (hired.push(input), { ok: true, hireId: 'h-new' }),
       beginLink: async () => ({ step: 'stopped', message: 'x' }),
       confirmLinkOwner: () => false,
       now: () => NOW,
@@ -246,12 +249,14 @@ describe('the channels', () => {
       'crew:beginLink',
       'crew:changeAccount',
       'crew:confirmLinkOwner',
+      'crew:createHire',
       'crew:getHire',
       'crew:getHireUsage',
       'crew:getStatus',
       'crew:letGo',
       'crew:listCards',
       'crew:listHires',
+      'crew:listRoles',
       'crew:openCard',
       'crew:setDailyCap',
       'crew:setRepos',
@@ -293,6 +298,28 @@ describe('the channels', () => {
 
   test('unreadable cards stay null, so the inbox never claims to be empty', () => {
     expect(call('crew:listCards')).toBeNull();
+  });
+
+  test('a hire is made from the four fields the form sends, and nothing else', async () => {
+    const input = { name: 'Fresh PO', roleId: 'fresh-po', repos: ['acme/app'], accountId: 'acc-1', homeMachineId: 'other' };
+    expect(await call('crew:createHire', input)).toEqual({ ok: true, hireId: 'h-new' });
+    expect(hired).toEqual([{ name: 'Fresh PO', roleId: 'fresh-po', repos: ['acme/app'], accountId: 'acc-1' }]);
+  });
+
+  test('a hire request that is not an object is refused before it reaches the Hub', async () => {
+    for (const bad of [null, 'x', ['a']]) expect(((await call('crew:createHire', bad)) as { ok: boolean }).ok).toBe(false);
+    expect(hired).toHaveLength(0);
+  });
+
+  test('roles come from the synced cache by name, without deleted ones', () => {
+    db.prepare(`INSERT INTO crew_role_cache (role_id, rev, data) VALUES ('fresh-po', 1, '{"role":"fresh-po","roleMd":"# Fresh"}')`).run();
+    db.prepare(`INSERT INTO crew_role_cache (role_id, rev, data) VALUES ('care-po', 1, '{"role":"care-po"}')`).run();
+    db.prepare(`INSERT INTO crew_role_cache (role_id, rev, data) VALUES ('gone', 1, '{"deleted":true}')`).run();
+    db.prepare(`INSERT INTO crew_role_cache (role_id, rev, data) VALUES ('bad', 1, '{not json')`).run();
+    expect(call('crew:listRoles')).toEqual([
+      { roleId: 'care-po', name: 'care-po' },
+      { roleId: 'fresh-po', name: 'fresh-po' },
+    ]);
   });
 
   test("the usage channel answers not available when the Hub doesn't", async () => {

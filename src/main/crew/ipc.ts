@@ -11,9 +11,12 @@ import type {
   CrewEditResult,
   CrewHireActivity,
   CrewHireDetail,
+  CrewHireInput,
+  CrewHireResult,
   CrewHireSummary,
   CrewHireUsage,
   CrewLinkView,
+  CrewRole,
   CrewRoutine,
   CrewStatus,
 } from '../../shared/types';
@@ -182,6 +185,17 @@ export function readHire(db: Database.Database, hireId: string, machineId: strin
   };
 }
 
+export function readRoles(db: Database.Database): CrewRole[] {
+  const rows = db.prepare(`SELECT role_id, data FROM crew_role_cache`).all() as { role_id: string; data: string }[];
+  return rows
+    .flatMap((row) => {
+      const body = parse(row.data);
+      if (!body || body.deleted) return [];
+      return [{ roleId: row.role_id, name: str(body.role, row.role_id) }];
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export interface UsageReadPort {
   online(): boolean;
   epochOf(hireId: string): number | null;
@@ -228,6 +242,7 @@ export interface CrewIpcDeps extends UsageReadPort {
   cards(): CrewCardList;
   openCard(raiseId: string): boolean;
   letGo(hireId: string): Promise<CrewEditResult>;
+  createHire(input: CrewHireInput): Promise<CrewHireResult>;
   beginLink(): Promise<CrewLinkView>;
   confirmLinkOwner(isMe: boolean): boolean;
   now(): number;
@@ -271,6 +286,12 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
   });
 
   deps.handle('crew:letGo', (hireId) => (known(hireId) ? deps.letGo(hireId) : Promise.resolve(refuse('This hire has not synced to this machine yet.'))));
+  deps.handle('crew:listRoles', () => readRoles(deps.db()));
+  deps.handle('crew:createHire', (input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return Promise.resolve(refuse('The hire form sent nothing.'));
+    const { name, roleId, repos, accountId } = input as CrewHireInput;
+    return deps.createHire({ name, roleId, repos, accountId });
+  });
   deps.handle('crew:listCards', () => deps.cards());
   deps.handle('crew:openCard', (raiseId) => typeof raiseId === 'string' && deps.openCard(raiseId));
   deps.handle('crew:beginLink', () => deps.beginLink());

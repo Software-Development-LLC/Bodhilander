@@ -22,6 +22,7 @@
 }
 
 .crew-panel__cards,
+.crew-hire-modal button,
 .crew-link button,
 .crew-detail button,
 .crew-cards button {
@@ -254,4 +255,37 @@
 .crew-sign-in {
   position: static;
   margin: 0;
+}
+
+.crew-hire-modal {
+  position: static;
+  margin: 0;
+  min-width: 360px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-sm);
+}
+
+.crew-hire-modal form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crew-hire-modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--font-size-xs);
+}
+
+.crew-hire-modal textarea {
+  min-height: 64px;
+}
+
+.crew-hire-modal .footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

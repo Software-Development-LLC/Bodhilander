@@ -1,16 +1,17 @@
 /** The Crew IPC channels joined to the running Hub client and runtime. */
 import { app, shell } from 'electron';
 import log from 'electron-log';
-import type { CrewCardList, CrewEditResult, CrewLinkView } from '../../shared/types';
+import type { CrewCardList, CrewEditResult, CrewHireInput, CrewHireResult, CrewLinkView } from '../../shared/types';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
 import { getPreference } from '../repositories/preferences';
-import { resolveAccountRef } from './account-ref';
+import { accountRefFor, resolveAccountRef } from './account-ref';
 import { listCards } from './card-log';
 import { crewRuntime } from './crew-main';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import type { LinkFlow } from './hub-link';
 import { getCrewHub, newLinkFlow } from './hub-service';
+import { createHire, HIRE_ANSWER_MS } from './hire';
 import { crewStatusFrom, KEYCHAIN_NEEDED, linkViewFrom, registerCrewIpc } from './ipc';
 import { LET_GO_ANSWER_MS, letGoHire as letGo, moveHireAside } from './let-go';
 import type { EditResultFrame, UsageFrame } from './protocol';
@@ -63,6 +64,22 @@ function onLateEditResult(hub: HubClient, id: string, handle: (frame: EditResult
     }
   };
   hub.on('edit-result', onResult);
+}
+
+export async function hireFromHere(input: CrewHireInput): Promise<CrewHireResult> {
+  const hub = getCrewHub();
+  if (!hub) return { ok: false, error: "Crew isn't running on this machine." };
+  return createHire(
+    {
+      db: getDatabase(),
+      online: () => hub.getStatus() === 'online',
+      accounts: getAllAccounts,
+      refFor: accountRefFor,
+      sendEdit: (edit) => hub.sendEdit(edit),
+      editResult: (id) => editResultFrom(hub, id, HIRE_ANSWER_MS),
+    },
+    input,
+  );
 }
 
 export async function letGoHire(hireId: string): Promise<CrewEditResult> {
@@ -144,6 +161,11 @@ export function wireCrewIpc(handle: (channel: string, handler: (...args: unknown
     cards: hubCards,
     openCard: openHubCard,
     letGo: letGoHire,
+    createHire: async (input) => {
+      const result = await hireFromHere(input);
+      notify();
+      return result;
+    },
     beginLink: async (): Promise<CrewLinkView> => {
       try {
         link = newLinkFlow();

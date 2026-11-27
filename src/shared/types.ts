@@ -1084,6 +1084,22 @@ export type CrewLinkView =
 
 export type CrewEditResult = { ok: true } | { ok: false; error: string };
 
+export interface CrewRole {
+  roleId: string;
+  name: string;
+}
+
+/** What the Hire form sends. The main process checks every field again before the Hub sees it. */
+export interface CrewHireInput {
+  name: string;
+  roleId: string;
+  repos: string[];
+  accountId: string;
+}
+
+/** hireId is set once the create was sent, even when the Hub has not answered yet. */
+export type CrewHireResult = CrewEditResult & { hireId?: string };
+
 /** The login pty Crew's Sign in again started, for the renderer to show. */
 export interface CrewSignInStarted {
   accountId: string;

@@ -6,7 +6,7 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
-import type { ClaudeAccount, CrewEditResult } from '../../shared/types';
+import type { ClaudeAccount, CrewHireResult } from '../../shared/types';
 import type { ClaudeAccountRef } from './account-ref';
 import type { EditResultFrame } from './protocol';
 import type { EditInput } from './sync';
@@ -33,7 +33,9 @@ export interface HireDeps {
   newId?(): string;
 }
 
-export type HireResult = CrewEditResult & { hireId?: string };
+export type HireResult = CrewHireResult;
+
+export const HIRE_ANSWER_MS = 30_000;
 
 const refuse = (error: string): HireResult => ({ ok: false, error });
 

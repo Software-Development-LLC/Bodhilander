@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -204,6 +204,8 @@ interface ElectronAPI {
   crewSetRepos: (hireId: string, repos: string[]) => Promise<CrewEditResult>;
   crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
   crewLetGo: (hireId: string) => Promise<CrewEditResult>;
+  crewListRoles: () => Promise<CrewRole[]>;
+  crewCreateHire: (input: CrewHireInput) => Promise<CrewHireResult>;
   crewSignInAgain: (accountId: string) => Promise<CrewEditResult>;
   onCrewSignInStarted: (callback: (data: CrewSignInStarted) => void) => () => void;
   crewListCards: () => Promise<CrewCardList>;
