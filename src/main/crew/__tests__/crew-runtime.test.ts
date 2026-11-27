@@ -57,6 +57,7 @@ function setup() {
   const children: Child[] = [];
   const records = new Map<string, AccountUsage>();
   const reminders: string[] = [];
+  const loggedIn: { a1: boolean | undefined } = { a1: undefined };
   const timers: { fn: () => void; ms: number; live: boolean }[] = [];
   let clock = Date.parse('2026-11-27T12:00:00Z');
   const rt = startCrewRuntime({
@@ -64,6 +65,7 @@ function setup() {
     prepare: async (job) => ({ command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a1', sessionId: null, token: null }),
     usage: { get: (id) => records.get(id) ?? null, set: (u) => void records.set(u.accountId, u) },
     remind: (r, a) => reminders.push(`${a.label}:${r.key}`),
+    loggedIn: (a) => (a.id === 'a1' ? loggedIn.a1 : undefined),
     spawn: () => {
       const c = new Child();
       children.push(c);
@@ -79,7 +81,7 @@ function setup() {
     clearInterval: (h) => void ((h as { live: boolean }).live = false),
   });
   const job = (n: number) => raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(n), HIRE, PERSON);
-  return { raw, db, hub, rt, children, records, reminders, timers, signIn, job, ended, advance: (ms: number) => (clock += ms) };
+  return { raw, db, hub, rt, children, records, reminders, timers, signIn, job, ended, loggedIn, advance: (ms: number) => (clock += ms) };
 }
 
 describe('crew runtime', () => {
@@ -137,6 +139,16 @@ describe('crew runtime', () => {
     const hourly = t.timers.find((x) => x.ms === REMINDER_CHECK_MS);
     hourly?.fn();
     hourly?.fn();
+    expect(t.reminders).toEqual(['Work:login']);
+  });
+
+  test('a login seen on the hourly check starts its reminder clock, with no sign-in recorded through the app', () => {
+    const t = setup();
+    t.loggedIn.a1 = true;
+    t.rt.checkReminders();
+    t.advance(LOGIN_LIFETIME_MS - 60_000);
+    t.loggedIn.a1 = undefined;
+    expect(t.rt.checkReminders()).toBe(1);
     expect(t.reminders).toEqual(['Work:login']);
   });
 

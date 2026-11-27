@@ -139,6 +139,7 @@ function attach(hub: HubClient): CrewRuntime {
       prepareRun(prepareDeps, job, threadKey, runId),
     runEnded: (jobId) => services?.end(jobId),
     usage: { get: getUsage, set: setUsage },
+    loggedIn: (account) => resolveAccountIdentity(account.configDir).loggedIn,
     remind: (reminder, account) => {
       try {
         new Notification({ title: 'Bodhi Crew', body: reminderText(reminder, account.label) }).show();

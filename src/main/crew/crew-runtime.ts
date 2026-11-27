@@ -36,6 +36,8 @@ export interface CrewRuntimeDeps {
   prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
   usage: { get(id: string): AccountUsage | null; set(u: AccountUsage): void };
   remind(reminder: Reminder, account: ClaudeAccount): void;
+  /** account-identity's login evidence for the account, so a login made outside the app still starts its reminder clock. */
+  loggedIn?(account: ClaudeAccount): boolean | undefined;
   /** A run ended, whatever its outcome: its MCP registration and sockets go with it. */
   runEnded?(jobId: string): void;
   cardHoldMs?: number;
@@ -124,6 +126,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     let sent = 0;
     for (const account of deps.accounts()) {
       guard('a sign-in reminder', () => {
+        if (deps.loggedIn) deps.signIn.observeLogin(account.id, deps.loggedIn(account), now());
         for (const reminder of deps.signIn.dueReminders(account.id, now())) {
           deps.remind(reminder, account);
           sent += 1;
