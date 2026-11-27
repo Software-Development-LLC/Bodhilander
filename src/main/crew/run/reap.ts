@@ -1,9 +1,6 @@
-/**
- * A crash or force-quit leaves its `claude` runs going with nobody reading
- * them. Before any job runs again, each recorded run that never ended is
- * killed with its tool processes, but only when its command line still names
- * that hire's folder, so a reused pid is left alone.
- */
+// A crash leaves its `claude` runs going. Each recorded run that never ended is
+// killed with its tool processes, but only while its command line still names
+// that hire's folder, so a reused pid is left alone.
 import { execFileSync } from 'child_process';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
@@ -43,14 +40,17 @@ export function reapLeftoverRuns(db: Database.Database, deps: ReapDeps): number 
 
 const psOut = (args: string[]): string | null => {
   try {
-    return execFileSync('ps', args, { encoding: 'utf8', timeout: 5000 });
+    return execFileSync('/bin/ps', args, { encoding: 'utf8', timeout: 5000 });
   } catch {
     return null;
   }
 };
 
 export const systemReap: ReapDeps = {
-  commandOf: (pid) => psOut(['-o', 'command=', '-p', String(pid)])?.trim() || null,
+  commandOf: (pid) => {
+    const command = psOut(['-o', 'command=', '-p', String(pid)])?.trim();
+    return command ? command : null;
+  },
   childrenOf: (pid) =>
     (psOut(['-A', '-o', 'pid=,ppid=']) ?? '')
       .split('\n')

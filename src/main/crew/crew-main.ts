@@ -151,7 +151,9 @@ function attach(hub: HubClient): CrewRuntime {
     signIn,
     holds,
     slots,
-    settled: () => void runtime?.loop.tick(),
+    settled: () => {
+      runtime?.loop.tick().catch((err) => log.warn('[Crew] could not pick up the next job', err));
+    },
     accounts: getAllAccounts,
     prepare: (job: CrewJob, threadKey: string, runId: string): Promise<Prepared> =>
       prepareRun(prepareDeps, job, threadKey, runId),

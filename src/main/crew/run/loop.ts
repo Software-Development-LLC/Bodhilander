@@ -300,16 +300,7 @@ export class RunLoop {
     if (run.settled) return;
     const result = run.result;
     const resultText = typeof result?.result === 'string' ? result.result : '';
-    if (run.parked) {
-      if (result && run.prepared) this.keepSession(run, result);
-      return this.finishAs(run, 'parked', { park: true });
-    }
-    if (run.interrupted) return this.finishAs(run, 'interrupted', { requeue: true });
-    if (run.authFailed || (result?.is_error === true && isAuthFailure(resultText))) {
-      this.finishAs(run, 'signed-out', { requeue: true });
-      if (run.prepared) this.deps.onSignedOut(run.job.hireId, run.prepared.accountId);
-      return;
-    }
+    if (this.settleStopped(run, result, resultText)) return;
     const ok = !!result && result.is_error !== true && !!run.prepared;
     if (run.limitedUntil !== null && run.prepared) this.deps.onRateLimited?.(run.prepared.accountId, run.limitedUntil);
     if (run.limitedUntil !== null && !ok) return this.finishAs(run, 'rate-limited', { requeue: true });
@@ -321,6 +312,21 @@ export class RunLoop {
     if (run.job.attempts < MAX_ATTEMPTS) return this.finishAs(run, 'died', { retry: true });
     this.finishAs(run, 'dead', {});
     this.sendReply(run.job.id, ERROR_REPLY);
+  }
+
+  private settleStopped(run: Active, result: Record<string, unknown> | null, resultText: string): boolean {
+    if (run.parked) {
+      if (result && run.prepared) this.keepSession(run, result);
+      this.finishAs(run, 'parked', { park: true });
+    } else if (run.interrupted) {
+      this.finishAs(run, 'interrupted', { requeue: true });
+    } else if (run.authFailed || (result?.is_error === true && isAuthFailure(resultText))) {
+      this.finishAs(run, 'signed-out', { requeue: true });
+      if (run.prepared) this.deps.onSignedOut(run.job.hireId, run.prepared.accountId);
+    } else {
+      return false;
+    }
+    return true;
   }
 
   private keepSession(run: Active, result: Record<string, unknown>): string | null {
