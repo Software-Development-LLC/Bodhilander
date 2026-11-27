@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { CrewSync, PULL_RESEND_MS, SYNC_SEQ_KEY, SYNC_WANTED_KEY } from '../sync';
+import { CrewSync, FETCH_TRIES, PULL_RESEND_MS, SYNC_SEQ_KEY, SYNC_WANTED_KEY } from '../sync';
 import type { SyncObject, SyncPageFrame } from '../protocol';
 import { HIRE, crewDb, uuid } from './crew-db';
 
@@ -159,6 +159,20 @@ describe('CrewSync applying objects', () => {
     const p = t.sync.onConnect(0);
     const fetch = t.sync.onPage(page(p.id, [obj({ kind: 'note', objectId: 'n1', body: undefined })], 1), 0);
     expect(t.sync.onPage(page(fetch!.id, [], 1, true), 0)?.fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
+  });
+
+  test('a fetch answered three times with only the header is dropped and audited, so pulls stop', () => {
+    const t = setup();
+    const header = obj({ kind: 'note', objectId: 'n1', seq: 1, body: undefined });
+    let pull = t.sync.onPage(page(t.sync.onConnect(0).id, [header], 1), 0);
+    for (let i = 0; i < FETCH_TRIES - 1; i++) {
+      expect(pull?.fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
+      pull = t.sync.onPage(page(pull!.id, [header], 1, true), 0);
+    }
+    expect(pull?.fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
+    expect(t.sync.onPage(page(pull!.id, [header], 1, true), 0)?.fetch).toBeUndefined();
+    expect(t.rows("SELECT event FROM crew_audit WHERE event = 'sync-body-missing'")).toEqual([{ event: 'sync-body-missing' }]);
+    expect(new CrewSync(t.db, () => uuid(90)).onConnect(0).fetch).toBeUndefined();
   });
 });
 

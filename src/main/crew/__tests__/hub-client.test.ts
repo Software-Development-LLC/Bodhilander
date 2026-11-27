@@ -116,6 +116,12 @@ describe('resolveHubUrl', () => {
     expect(resolveHubUrl(true, 'ftp://localhost')).toBe(HUB_URL_PRODUCTION);
     expect(resolveHubUrl(true, 'not a url')).toBe(HUB_URL_PRODUCTION);
   });
+
+  test('an https override that does not parse, or names no host, is ignored', () => {
+    expect(resolveHubUrl(true, 'https://')).toBe(HUB_URL_PRODUCTION);
+    expect(resolveHubUrl(true, 'https://bad host')).toBe(HUB_URL_PRODUCTION);
+    expect(resolveHubUrl(true, 'https://h.example/crew/')).toBe('https://h.example/crew');
+  });
 });
 
 describe('HubClient handshake', () => {
@@ -659,6 +665,44 @@ describe('HubClient connection health', () => {
     expect(t.client.sync.onConnect(0).fetch).toEqual([{ kind: 'note', objectId: 'n1' }]);
     t.sock().drop(4410);
     expect(t.client.sync.onConnect(0)).toEqual(expect.not.objectContaining({ fetch: expect.anything() }));
+  });
+
+  test('a Hub under a path prefix is dialled at that prefix', () => {
+    const urls: string[] = [];
+    const prefixed = new HubClient({
+      db: crewDb().db, hubUrl: 'https://h.example/crew', getMachineId: () => MACHINE, forgetMachineId: () => {}, sign: () => Buffer.alloc(0),
+      connect: (url) => {
+        urls.push(url);
+        return new FakeSocket() as unknown as HubSocket;
+      },
+      interruptRun: () => {},
+      timers: { setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {} },
+    });
+    prefixed.start();
+    expect(urls).toEqual(['wss://h.example/crew/ws']);
+  });
+
+  test('a frame dropped, or a handler that throws, with the database gone does not throw', () => {
+    const t = setup();
+    t.online();
+    t.raw.exec('DROP TABLE crew_audit');
+    expect(() => t.sock().hub({ type: 'nonsense' })).not.toThrow();
+    t.client.sync.onPage = () => {
+      throw new Error('disk full');
+    };
+    const pull = t.sock().sent.find((f) => f.type === 'sync_pull') as { id: string };
+    expect(() => t.sock().hub({ type: 'sync_page', id: pull.id, changes: [], next: 0, more: false })).not.toThrow();
+  });
+
+  test('a resume that throws is audited, not thrown into the main process', () => {
+    const t = setup();
+    t.online();
+    t.client.lease.onResume = () => {
+      throw new Error('busy');
+    };
+    expect(() => t.client.onResume()).not.toThrow();
+    const rows = t.raw.query(`SELECT detail FROM crew_audit WHERE event = 'hub-timer-error'`).all() as { detail: string }[];
+    expect(rows.map((r) => JSON.parse(r.detail).timer)).toEqual(['resume']);
   });
 
   test('a timer error with the database gone still does not throw', () => {

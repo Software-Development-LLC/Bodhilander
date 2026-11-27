@@ -76,21 +76,24 @@ export class LocalOutbox {
     return result.changes > 0;
   }
 
-  /** At start: rows this build no longer speaks are dropped and audited. */
+  /** At start: rows this build no longer speaks, and rows fenced or unlinked for good, are deleted and audited. */
   prune(): number {
-    const rows = this.db.prepare(`SELECT seq, id, hire_id, frame_type, protocol_version FROM crew_outbox_local`).all() as {
+    const rows = this.db.prepare(`SELECT seq, id, hire_id, frame_type, protocol_version, state FROM crew_outbox_local`).all() as {
       seq: number;
       id: string;
       hire_id: string | null;
       frame_type: string;
       protocol_version: number;
+      state: string;
     }[];
     let dropped = 0;
     for (const row of rows) {
       const known = (MACHINE_FRAME_TYPES as readonly string[]).includes(row.frame_type);
-      if (known && row.protocol_version === PROTOCOL_VERSION) continue;
+      const spoken = known && row.protocol_version === PROTOCOL_VERSION;
+      if (spoken && row.state !== 'unsendable') continue;
       this.db.prepare('DELETE FROM crew_outbox_local WHERE seq = ?').run(row.seq);
-      writeAudit(this.db, row.hire_id, 'outbox-dropped', { id: row.id, frameType: row.frame_type, version: row.protocol_version });
+      const event = spoken ? 'outbox-purged' : 'outbox-dropped';
+      writeAudit(this.db, row.hire_id, event, { id: row.id, frameType: row.frame_type, version: row.protocol_version });
       dropped += 1;
     }
     return dropped;

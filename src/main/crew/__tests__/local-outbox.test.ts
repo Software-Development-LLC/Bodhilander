@@ -170,6 +170,18 @@ describe('LocalOutbox', () => {
     expect(audits('outbox-dropped')).toBe(2);
   });
 
+  test('prune purges what can never be sent again, and keeps parked items', () => {
+    const { raw, outbox, audits } = setup();
+    outbox.enqueue(reply(1), { hireId: HIRE, epoch: 1 });
+    outbox.enqueue(reply(2), { hireId: HIRE, epoch: 1 });
+    outbox.enqueue(reply(3), { hireId: HIRE, epoch: 1 });
+    raw.exec(`UPDATE crew_outbox_local SET state = 'unsendable' WHERE id = '${uuid(1)}'`);
+    raw.exec(`UPDATE crew_outbox_local SET state = 'parked' WHERE id = '${uuid(2)}'`);
+    expect(outbox.prune()).toBe(1);
+    expect((raw.query(`SELECT id FROM crew_outbox_local ORDER BY seq`).all() as { id: string }[]).map((r) => r.id)).toEqual([uuid(2), uuid(3)]);
+    expect(audits('outbox-purged')).toBe(1);
+  });
+
   test('dropAll leaves nothing sendable', () => {
     const { outbox, sender } = setup();
     outbox.enqueue(reply(1), { hireId: HIRE, epoch: 1 });

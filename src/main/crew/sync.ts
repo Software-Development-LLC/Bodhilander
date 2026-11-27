@@ -12,6 +12,7 @@ export const SYNC_SEQ_KEY = 'sync.seq';
 export const SYNC_WANTED_KEY = 'sync.wanted';
 export const PULL_RESEND_MS = 30_000;
 export const FETCH_MAX = 200;
+export const FETCH_TRIES = 3;
 
 const FETCHED: ReadonlySet<SyncKind> = new Set<SyncKind>(['note', 'skill_bundle']);
 
@@ -41,6 +42,7 @@ export interface EditInput {
 export class CrewSync {
   private pending: { frame: SyncPullFrame; sentMs: number; refs: SyncRef[] } | null = null;
   private readonly wanted = new Map<string, SyncRef>();
+  private readonly tries = new Map<string, number>();
   private changedSince = false;
 
   constructor(
@@ -70,6 +72,7 @@ export class CrewSync {
   /** After an unlink nothing owed is fetched again. */
   forget(): void {
     this.wanted.clear();
+    this.tries.clear();
     this.pending = null;
   }
 
@@ -92,7 +95,16 @@ export class CrewSync {
   }
 
   private pull(now: number): SyncPullFrame {
+    for (const key of this.tries.keys()) if (!this.wanted.has(key)) this.tries.delete(key);
+    const spent = [...this.wanted].filter(([key]) => (this.tries.get(key) ?? 0) >= FETCH_TRIES);
+    for (const [key, ref] of spent) {
+      this.wanted.delete(key);
+      this.tries.delete(key);
+      writeAudit(this.db, null, 'sync-body-missing', ref);
+    }
+    if (spent.length > 0) this.saveWanted();
     const refs = [...this.wanted.values()].slice(0, FETCH_MAX);
+    for (const ref of refs) this.tries.set(refKey(ref), (this.tries.get(refKey(ref)) ?? 0) + 1);
     const frame: SyncPullFrame = { type: 'sync_pull', id: this.newId(), since: this.since() };
     if (refs.length > 0) frame.fetch = refs;
     this.pending = { frame, sentMs: now, refs };

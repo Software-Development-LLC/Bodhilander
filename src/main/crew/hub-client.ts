@@ -56,10 +56,19 @@ export function isLoopbackHttp(url: string): boolean {
   }
 }
 
+function isHttps(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
 /** Packaged builds on either channel use production; `crew.hubUrl` overrides with https, or http on loopback. */
 export function resolveHubUrl(isPackaged: boolean, override: string | null): string {
   const trimmed = override?.trim();
-  if (trimmed && (trimmed.startsWith('https://') || isLoopbackHttp(trimmed))) return trimTrailingSlashes(trimmed);
+  if (trimmed && (isHttps(trimmed) || isLoopbackHttp(trimmed))) return trimTrailingSlashes(trimmed);
   if (trimmed) log.warn('[Crew] ignored crew.hubUrl: it must be https, or http on this machine');
   return isPackaged ? HUB_URL_PRODUCTION : HUB_URL_DEVELOPMENT;
 }
@@ -142,6 +151,7 @@ export class HubClient extends EventEmitter {
   private readonly timers: Timers;
   private readonly random: () => number;
   private readonly hubHost: string;
+  private readonly wsPath: string;
   private readonly wsScheme: 'ws' | 'wss';
   private readonly newId: () => string;
 
@@ -168,7 +178,9 @@ export class HubClient extends EventEmitter {
     this.clocks = deps.clocks ?? systemClocks;
     this.timers = deps.timers ?? realTimers;
     this.random = deps.random ?? Math.random;
-    this.hubHost = new URL(deps.hubUrl).host;
+    const url = new URL(deps.hubUrl);
+    this.hubHost = url.host;
+    this.wsPath = `${url.pathname.replace(/\/+$/, '')}/ws`;
     this.wsScheme = isLoopbackHttp(deps.hubUrl) ? 'ws' : 'wss';
     this.lease = new LeaseClock(this.clocks);
     this.fence = new EpochFence(deps.db);
@@ -229,10 +241,12 @@ export class HubClient extends EventEmitter {
 
   /** powerMonitor `resume`: every lease lapses until a heartbeat sent after the wake is renewed. */
   onResume(): void {
-    this.lease.onResume();
-    this.heartbeatSentAt.clear();
-    this.sweep();
-    if (this.phase === 'open') this.heartbeat();
+    this.guarded('resume', () => {
+      this.lease.onResume();
+      this.heartbeatSentAt.clear();
+      this.sweep();
+      if (this.phase === 'open') this.heartbeat();
+    });
   }
 
   canStart(hireId: string, epoch: number): boolean {
@@ -260,7 +274,7 @@ export class HubClient extends EventEmitter {
     this.setStatus(this.status === 'pending' ? 'pending' : 'connecting');
     let socket: HubSocket;
     try {
-      socket = this.deps.connect(`${this.wsScheme}://${this.hubHost}/ws`, { maxPayload: MAX_FRAME_BYTES });
+      socket = this.deps.connect(`${this.wsScheme}://${this.hubHost}${this.wsPath}`, { maxPayload: MAX_FRAME_BYTES });
     } catch (err) {
       log.warn('[Crew] could not open the Hub socket', err);
       this.scheduleReconnect('unavailable');
@@ -294,11 +308,16 @@ export class HubClient extends EventEmitter {
       fn();
     } catch (err) {
       log.error(`[Crew] the ${what} timer threw`, err);
-      try {
-        writeAudit(this.deps.db, null, 'hub-timer-error', { timer: what });
-      } catch {
-        // The database is what failed; the log line is all there is.
-      }
+      this.audit('hub-timer-error', { timer: what });
+    }
+  }
+
+  /** An audit row that cannot be written leaves the log line as the only record. */
+  private audit(event: string, detail: Record<string, unknown>): void {
+    try {
+      writeAudit(this.deps.db, null, event, detail);
+    } catch (err) {
+      log.error(`[Crew] could not audit ${event}`, err);
     }
   }
 
@@ -309,7 +328,7 @@ export class HubClient extends EventEmitter {
       log.warn(`[Crew] dropped a Hub frame: ${parsed.problem}`, parsed.type ?? '');
       if (!this.auditedTypes.has(key)) {
         this.auditedTypes.add(key);
-        writeAudit(this.deps.db, null, 'hub-frame-dropped', { problem: parsed.problem, type: parsed.type ?? null });
+        this.audit('hub-frame-dropped', { problem: parsed.problem, type: parsed.type ?? null });
       }
       if (this.phase !== 'open' && (parsed.type === 'challenge' || parsed.type === 'welcome')) this.socket?.close(1000);
       return;
@@ -318,7 +337,7 @@ export class HubClient extends EventEmitter {
       this.handle(parsed.frame);
     } catch (err) {
       log.error('[Crew] a Hub frame handler threw', err);
-      writeAudit(this.deps.db, null, 'hub-frame-handler-error', { type: parsed.frame.type });
+      this.audit('hub-frame-handler-error', { type: parsed.frame.type });
     }
   }
 
