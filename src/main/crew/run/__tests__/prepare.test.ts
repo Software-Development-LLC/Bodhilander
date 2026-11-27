@@ -47,7 +47,7 @@ function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; servi
     services: async () => {
       if (opts.services === 'root') throw new SocketRootError({ type: 'symlink', uid: 0, mode: '777' });
       if (opts.services === 'not-ready') throw new ServicesNotReady('the Crew MCP host is not listening');
-      return { mcpServers: { crew_approve: { command: 'x' } }, sockets: ['/tmp/cr-501/abcdefgh/gh.sock'], pathFirst: '/shim', env: { CREW_GH_SOCKET: '/tmp/cr-501/abcdefgh/gh.sock' } };
+      return { mcpToken: 'm'.repeat(64), mcpServers: (tokenFile: string) => ({ crew_approve: { command: 'x', args: [tokenFile] } }), sockets: ['/tmp/cr-501/abcdefgh/gh.sock'], pathFirst: '/shim', env: { CREW_GH_SOCKET: '/tmp/cr-501/abcdefgh/gh.sock' } };
     },
     sandbox: () => ({ accountDirs: ['/acct/a1'], userDataEntries: [], crewEntries: [], sockets: [], socketRoot: '/tmp/cr-501', allowedDomains: [] }),
     now: () => Date.parse('2026-11-27T12:00:00Z'), underTemp: () => false,
@@ -93,7 +93,12 @@ describe('preparing a run', () => {
     const settings = p.args[p.args.indexOf('--settings') + 1];
     expect(settings).toBe(path.join(t.root, 'run', 'settings-owner.json'));
     expect(JSON.parse(fs.readFileSync(settings, 'utf8')).autoMemoryEnabled).toBe(false);
-    expect(JSON.parse(fs.readFileSync(p.args[p.args.indexOf('--mcp-config') + 1], 'utf8'))).toEqual({ mcpServers: { crew_approve: { command: 'x' } } });
+    const tokenFile = path.join(t.root, 'run', 'mcp-owner.token');
+    const mcpConfig = fs.readFileSync(p.args[p.args.indexOf('--mcp-config') + 1], 'utf8');
+    expect(JSON.parse(mcpConfig)).toEqual({ mcpServers: { crew_approve: { command: 'x', args: [tokenFile] } } });
+    expect(mcpConfig).not.toContain('m'.repeat(64));
+    expect(fs.readFileSync(tokenFile, 'utf8')).toBe('m'.repeat(64));
+    expect(fs.statSync(tokenFile).mode & 0o777).toBe(0o600);
     expect(p.env.CLAUDE_CONFIG_DIR).toBe('/acct/a1');
     expect(Object.keys(p.env)).not.toContain('GH_TOKEN');
     expect(Object.keys(p.env)).not.toContain('ANTHROPIC_API_KEY');

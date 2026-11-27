@@ -210,7 +210,9 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   const settings = buildRunSettings(sandbox);
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
   const mcpConfigPath = path.join(paths.run, `mcp-${job.scope}.json`);
-  fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: services.mcpServers }), { mode: 0o600 });
+  const mcpTokenPath = path.join(paths.run, `mcp-${job.scope}.token`);
+  fs.writeFileSync(mcpTokenPath, services.mcpToken, { mode: 0o600 });
+  fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: services.mcpServers(mcpTokenPath) }), { mode: 0o600 });
 
   const { sessionId, input } = chooseSession(deps.db, job, threadKey, now, deps.timeZone(job.hireId), account.id);
   return {

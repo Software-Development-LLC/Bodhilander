@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -35,7 +35,8 @@ async function setup() {
 
 function relay(socket: string, token: string, server: string, messages: unknown[]): Promise<Record<string, unknown>[]> {
   return new Promise((resolve) => {
-    const child = spawn('node', [RELAY, server], { env: { ...process.env, CREW_MCP_SOCKET: socket, CREW_MCP_TOKEN: token } });
+    const child = spawn('node', [RELAY, server], { env: { ...process.env, CREW_MCP_SOCKET: socket }, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+    (child.stdio[3] as NodeJS.WritableStream).end(`${token}\n`);
     const out: Record<string, unknown>[] = [];
     let buf = '';
     child.stdout.on('data', (c) => {
@@ -71,6 +72,12 @@ describe('MCP host', () => {
     ]);
     expect((out[1].result as { tools: { description: string }[] }).tools[0].description).toBe('tools');
     expect(out[2].result).toEqual({ content: [{ type: 'text', text: 'tools:{"a":1}' }] });
+  });
+
+  test('the relay takes its token from descriptor 3 only, never the env', () => {
+    const r = spawnSync('node', [RELAY, 'tools'], { env: { ...process.env, CREW_MCP_SOCKET: '/tmp/m.sock', CREW_MCP_TOKEN: 'f'.repeat(64) }, input: '', encoding: 'utf8' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('descriptor 3');
   });
 
   test('a wrong or retired token is refused and audited', async () => {

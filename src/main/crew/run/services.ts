@@ -15,7 +15,9 @@ import { ensureSocketRoot, makeRunDir, newRunToken, removeRunDir, socketPath, so
 export class ServicesNotReady extends Error {}
 
 export interface RunServices {
-  mcpServers: Record<string, unknown>;
+  /** The token the relay reads on descriptor 3, written by the caller to the file it names here. */
+  mcpToken: string;
+  mcpServers(tokenFile: string): Record<string, unknown>;
   sockets: string[];
   pathFirst: string;
   env: Record<string, string>;
@@ -64,7 +66,8 @@ export class RunServiceManager {
         },
       });
       return {
-        mcpServers: crewMcpServers({ execPath: this.deps.execPath, script: this.deps.relayScript, socket: this.deps.host.socketPath, token: mcpToken }),
+        mcpToken,
+        mcpServers: (tokenFile) => crewMcpServers({ execPath: this.deps.execPath, script: this.deps.relayScript, socket: this.deps.host.socketPath, tokenFile }),
         sockets: [ghSocket],
         pathFirst: this.deps.shimDir,
         env: {

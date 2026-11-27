@@ -1,16 +1,30 @@
 /**
  * A Crew run's MCP relay: `node crew-mcp.js <approve|tools>`. It decides
- * nothing; each request goes to the main process over CREW_MCP_SOCKET.
+ * nothing; each request goes to the main process over CREW_MCP_SOCKET,
+ * with the run's token read once from descriptor 3.
  */
 'use strict';
 
+const fs = require('fs');
 const net = require('net');
+
+const TOKEN_FD = 3;
+
+function readToken() {
+  try {
+    const value = fs.readFileSync(TOKEN_FD, 'utf8').trim();
+    fs.closeSync(TOKEN_FD);
+    return value;
+  } catch {
+    return '';
+  }
+}
 
 const server = process.argv[2];
 const socketPath = process.env.CREW_MCP_SOCKET;
-const token = process.env.CREW_MCP_TOKEN;
+const token = readToken();
 if (!server || !socketPath || !token) {
-  process.stderr.write('crew-mcp: a server name, CREW_MCP_SOCKET and CREW_MCP_TOKEN are required\n');
+  process.stderr.write('crew-mcp: a server name, CREW_MCP_SOCKET and the token on descriptor 3 are required\n');
   process.exit(2);
 }
 

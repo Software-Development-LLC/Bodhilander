@@ -58,12 +58,14 @@ describe('run services', () => {
     const dir = path.join(t.base, path.basename(path.dirname(s.sockets[0])));
     expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
     expect(fs.statSync(t.base).mode & 0o777).toBe(0o700);
-    const approve = s.mcpServers.crew_approve as { command: string; args: string[]; env: Record<string, string> };
-    expect(approve).toMatchObject({ command: '/app/electron', args: ['/app/crew-mcp.js', 'approve'] });
+    const approve = s.mcpServers('/run/mcp-owner.token').crew_approve as { command: string; args: string[]; env: Record<string, string> };
+    expect(approve.args.slice(2)).toEqual(['/app/electron', '/app/crew-mcp.js', 'approve', '/run/mcp-owner.token']);
     expect(approve.env.CREW_MCP_SOCKET).toBe(t.host.socketPath);
+    expect(s.mcpToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(approve)).not.toContain(s.mcpToken);
     expect(s.env).toMatchObject({ CREW_GH_SOCKET: s.sockets[0], CREW_NODE: '/app/electron', CREW_GH_SHIM_JS: '/app/gh-shim/gh-shim.js' });
     expect(s.env.CREW_GH_TOKEN).toMatch(/^[0-9a-f]{64}$/);
-    expect(s.env.CREW_GH_TOKEN).not.toBe(approve.env.CREW_MCP_TOKEN);
+    expect(s.env.CREW_GH_TOKEN).not.toBe(s.mcpToken);
     expect(t.host.registered(job.id)).toBe(true);
     t.manager.end(job.id);
     expect(t.host.registered(job.id)).toBe(false);

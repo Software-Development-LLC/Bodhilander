@@ -217,7 +217,9 @@ export class WslRuns {
     const settingsPath = posix.join(paths.run, `settings-${job.scope}.json`);
     const mcpConfigPath = posix.join(paths.run, `mcp-${job.scope}.json`);
     await this.write(settingsPath, JSON.stringify(settings, null, 2), '0600');
-    const mcpServers = crewMcpServers({ execPath: WSL_NODE, script: WSL_MCP_RELAY, socket: started.served.sockets.mcp, token: mcpToken });
+    const mcpTokenPath = posix.join(paths.run, `mcp-${job.scope}.token`);
+    await this.write(mcpTokenPath, mcpToken, '0600');
+    const mcpServers = crewMcpServers({ execPath: WSL_NODE, script: WSL_MCP_RELAY, socket: started.served.sockets.mcp, tokenFile: mcpTokenPath });
     await this.write(mcpConfigPath, JSON.stringify({ mcpServers }), '0600');
 
     const { sessionId, input } = chooseSession(d.db, job, threadKey, now, d.timeZone(job.hireId), accountId);

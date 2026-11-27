@@ -132,7 +132,10 @@ describe('a run prepared inside BodhiCrew', () => {
     expect(settings.sandbox.filesystem.allowRead.some((x: string) => x.includes('/p-'))).toBe(false);
     expect(JSON.stringify(settings.permissions.deny)).toContain('/home/other');
     const mcp = JSON.parse(t.writes.get(header.argv[header.argv.indexOf('--mcp-config') + 1]) as string);
-    expect(mcp.mcpServers.crew_approve.args[0]).toBe(WSL_MCP_RELAY);
+    const tokenFile = `/home/crew/.bodhilander/crew/hires/${HIRE}/run/mcp-owner.token`;
+    expect(mcp.mcpServers.crew_approve.args.slice(2)).toEqual(['/home/crew/.bodhilander/crew/node/bin/node', WSL_MCP_RELAY, 'approve', tokenFile]);
+    expect(t.writes.get(tokenFile)).toBe('mcp-token-1');
+    expect(JSON.stringify(mcp)).not.toContain(t.writes.get(tokenFile) as string);
     expect(mcp.mcpServers.crew_approve.env.CREW_MCP_SOCKET).toMatch(/^\/tmp\/cr-1000\/p-[a-z2-7]+\/mcp\.sock$/);
     expect(t.writes.get(`/home/crew/.bodhilander/crew/hires/${HIRE}/owner/CLAUDE.md`)).toBe('# Role\n');
   });
