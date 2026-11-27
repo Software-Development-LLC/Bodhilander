@@ -34,7 +34,8 @@ function bad(expr: string, why: string): Error {
 
 function value(token: string, spec: FieldSpec, expr: string): number {
   const named = spec.names?.indexOf(token.toLowerCase()) ?? -1;
-  const n = named >= 0 ? named + (spec.nameBase ?? 0) : /^\d+$/.test(token) ? Number(token) : NaN;
+  let n = /^\d+$/.test(token) ? Number(token) : NaN;
+  if (named >= 0) n = named + (spec.nameBase ?? 0);
   if (!Number.isInteger(n) || n < spec.min || n > spec.max) throw bad(expr, `${token} is out of range`);
   return n;
 }
@@ -46,7 +47,8 @@ function field(text: string, spec: FieldSpec, expr: string): Set<number> {
     const step = stepText === undefined ? 1 : Number(stepText);
     if (!Number.isInteger(step) || step < 1) throw bad(expr, `step ${stepText} must be a whole number above 0`);
     const [lo, hi] = range === '*' ? [spec.min, spec.max] : range.split('-').map((t) => value(t, spec, expr));
-    const end = range === '*' || range.includes('-') ? hi : stepText === undefined ? lo : spec.max;
+    let end = stepText === undefined ? lo : spec.max;
+    if (range === '*' || range.includes('-')) end = hi;
     if (lo === undefined || end === undefined || lo > end) throw bad(expr, `${part} is not a range`);
     for (let v = lo; v <= end; v += step) out.add(v);
   }
@@ -56,7 +58,7 @@ function field(text: string, spec: FieldSpec, expr: string): Set<number> {
 export function parseCron(expr: string): Cron {
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) throw bad(expr, 'it needs five fields');
-  const [minutes, hours, days, months, weekdays] = parts.map((p, i) => field(p, SPECS[i] as FieldSpec, expr)) as [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
+  const [minutes, hours, days, months, weekdays] = parts.map((p, i) => field(p, SPECS[i], expr)) as [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
   if (weekdays.delete(7)) weekdays.add(0);
   return {
     minutes: new Set([...minutes].sort((a, b) => a - b)),

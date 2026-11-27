@@ -8,7 +8,7 @@ import type Database from 'better-sqlite3';
 import { writeAudit } from '../audit';
 import { textResult, type McpServerHandler, type McpTool } from '../mcp/host';
 import { NOTE_MAX_CHARS, cachedNote, parseNotePath, snapshotShared } from '../notes';
-import { MAX_SKILL_BYTES, MAX_TEXT, type CardRaiseFrame, type NoteWriteFrame, type RunScope, type SendFrame, type SkillFile } from '../protocol';
+import { MAX_SKILL_BYTES, MAX_TEXT, type CardRaiseFrame, type NoteWriteFrame, type RunScope, type SendFrame, type SkillFile, type Unstamped } from '../protocol';
 import { isTainted } from '../taint';
 
 export const SKILL_PROPOSAL_MAX_BYTES = 1024 * 1024;
@@ -22,9 +22,9 @@ export interface ToolsJob {
 
 export interface ToolsDeps {
   db: Database.Database;
-  raiseCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean;
-  sendMessage(jobId: string, send: Omit<SendFrame, 'type' | 'hireId' | 'epoch'>): boolean;
-  writeNote(jobId: string, write: Omit<NoteWriteFrame, 'type' | 'hireId' | 'epoch'>): boolean;
+  raiseCard(jobId: string, raise: Unstamped<CardRaiseFrame>): boolean;
+  sendMessage(jobId: string, send: Unstamped<SendFrame>): boolean;
+  writeNote(jobId: string, write: Unstamped<NoteWriteFrame>): boolean;
   newId?(): string;
 }
 
@@ -124,7 +124,8 @@ export function crewTools(deps: ToolsDeps, job: ToolsJob, threadKey: string): Mc
     const where = parseNotePath(args.path);
     if (!where) return textResult('path must be owner/<name> or shared/<name>, with no empty, . or .. part.', true);
     const deleted = args.deleted === true;
-    const content = deleted ? '' : typeof args.content === 'string' ? args.content : null;
+    let content: string | null = typeof args.content === 'string' ? args.content : null;
+    if (deleted) content = '';
     if (content === null) return textResult('content is required unless deleted is true.', true);
     if (content.length > NOTE_MAX_CHARS) return textResult(`A note holds at most ${NOTE_MAX_CHARS} characters.`, true);
     if (where.scope === 'owner' && job.scope !== 'owner') {

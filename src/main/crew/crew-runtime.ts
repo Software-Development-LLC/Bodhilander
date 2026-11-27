@@ -13,7 +13,7 @@ import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
 import type { Holds } from './holds';
 import type { UsageInput } from './hub-client';
-import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame } from './protocol';
+import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame, Unstamped } from './protocol';
 import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
 import { RunSlots } from './run/slots';
 import { RoutineScheduler, SCHEDULE_TICK_MS, type SchedulerHub } from './schedule/scheduler';
@@ -27,7 +27,7 @@ export interface CrewHubPort extends Pick<EventEmitter, 'on' | 'off'> {
   sendReply(jobId: string, text: string): boolean;
   sendUsage(jobId: string, usage: UsageInput): boolean;
   sendEdit(input: EditInput): string;
-  sendCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean;
+  sendCard(jobId: string, raise: Unstamped<CardRaiseFrame>): boolean;
 }
 
 export interface CrewRuntimeDeps {

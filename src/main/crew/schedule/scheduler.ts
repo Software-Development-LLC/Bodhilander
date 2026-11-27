@@ -82,7 +82,7 @@ export function ownerPersonId(db: Database.Database, hireId: string): string | n
   const row = db
     .prepare(`SELECT requested_by FROM crew_job WHERE hire_id = ? AND kind = 'message' AND scope = 'owner' ORDER BY created_at DESC, rowid DESC LIMIT 1`)
     .get(hireId) as { requested_by: string } | undefined;
-  return row?.requested_by || null;
+  return row && row.requested_by !== '' ? row.requested_by : null;
 }
 
 function parse(data: string | undefined): Record<string, unknown> {
@@ -100,6 +100,25 @@ function skewText(ms: number): string {
   const minutes = Math.round(Math.abs(ms) / 60_000);
   const span = minutes >= 120 ? `${Math.round(minutes / 60)} h` : `${minutes} min`;
   return `This machine's clock is ${span} off the Crew Hub's, so routines are held until it is within 2 minutes. Messages still run.`;
+}
+
+/** The later of the Hub's lastFired and this machine's own record of it. */
+function lastFiredOf(body: Record<string, unknown>, row: Row): number | null {
+  const fromBody = typeof body.lastFired === 'number' ? body.lastFired : null;
+  const fromColumn = row.last_fired === null ? null : Number(row.last_fired);
+  const known = [fromBody, fromColumn].filter((v): v is number => v !== null && Number.isFinite(v));
+  return known.length > 0 ? Math.max(...known) : null;
+}
+
+/** The firing to run now, or null: a late one needs a prior firing and no next one close by. */
+function dueFiring(cron: Cron, tz: string, lastFired: number | null, now: number): { at: Date; late: boolean } | null {
+  const at = latestOccurrence(cron, tz, lastFired === null ? null : new Date(lastFired), new Date(now));
+  if (!at) return null;
+  const late = now - at.getTime() >= LATE_AFTER_MS;
+  if (!late) return { at, late };
+  if (lastFired === null) return null;
+  const next = nextOccurrence(cron, tz, new Date(now));
+  return next && next.getTime() - now <= SKIP_WITHIN_MS ? null : { at, late };
 }
 
 type Row = { routine_id: string; hire_id: string; last_fired: string | null; data: string; hire_home: string | null; hire_data: string };
@@ -149,37 +168,31 @@ export class RoutineScheduler {
     return fired;
   }
 
+  private readable(row: Row, body: Record<string, unknown>): { cron: Cron; tz: string } | null {
+    const cronText = typeof body.cron === 'string' ? body.cron : '';
+    const tz = typeof body.timezone === 'string' ? body.timezone : '';
+    try {
+      const cron = parseCron(cronText);
+      if (!isZone(tz)) throw new Error(`${tz} is not a time zone`);
+      return { cron, tz };
+    } catch (err) {
+      this.complainOnce(`${row.routine_id}:${cronText}:${tz}`, row.hire_id, 'routine-unreadable', { routineId: row.routine_id, why: String(err) });
+      return null;
+    }
+  }
+
   private consider(row: Row, mine: string, now: number): Fired | null {
     const hire = parse(row.hire_data);
     const home = typeof hire.homeMachineId === 'string' ? hire.homeMachineId : row.hire_home;
     if (home !== mine) return null;
     if (typeof hire.state === 'string' && NOT_RUNNING.test(hire.state)) return null;
     const body = parse(row.data);
-    const cronText = typeof body.cron === 'string' ? body.cron : '';
-    const tz = typeof body.timezone === 'string' ? body.timezone : '';
-    let cron: Cron;
-    try {
-      cron = parseCron(cronText);
-      if (!isZone(tz)) throw new Error(`${tz} is not a time zone`);
-    } catch (err) {
-      this.complainOnce(`${row.routine_id}:${cronText}:${tz}`, row.hire_id, 'routine-unreadable', { routineId: row.routine_id, why: String(err) });
-      return null;
-    }
+    const when = this.readable(row, body);
+    if (!when) return null;
     const epoch = this.deps.hub.knownEpoch(row.hire_id) ?? (typeof hire.epoch === 'number' ? hire.epoch : 0);
     if (!this.deps.hub.canStart(row.hire_id, epoch)) return null;
-
-    const fromBody = typeof body.lastFired === 'number' ? body.lastFired : null;
-    const fromColumn = row.last_fired === null ? null : Number(row.last_fired);
-    const known = [fromBody, fromColumn].filter((v): v is number => v !== null && Number.isFinite(v));
-    const lastFired = known.length > 0 ? Math.max(...known) : null;
-    const due = latestOccurrence(cron, tz, lastFired === null ? null : new Date(lastFired), new Date(now));
+    const due = dueFiring(when.cron, when.tz, lastFiredOf(body, row), now);
     if (!due) return null;
-    const late = now - due.getTime() >= LATE_AFTER_MS;
-    if (late && lastFired === null) return null;
-    if (late) {
-      const next = nextOccurrence(cron, tz, new Date(now));
-      if (next && next.getTime() - now <= SKIP_WITHIN_MS) return null;
-    }
 
     const requestedBy = ownerPersonId(this.deps.db, row.hire_id);
     if (!requestedBy) {
@@ -187,24 +200,27 @@ export class RoutineScheduler {
       return null;
     }
     const prompt = typeof body.prompt === 'string' ? body.prompt : '';
-    const text = late ? `${prompt}\n\nThis was due at ${zonedTime(due, tz)} and is running at ${zonedTime(new Date(now), tz)}.` : prompt;
-    const dueAt = due.getTime();
+    const text = due.late ? `${prompt}\n\nThis was due at ${zonedTime(due.at, when.tz)} and is running at ${zonedTime(new Date(now), when.tz)}.` : prompt;
+    const dueAt = due.at.getTime();
     const jobId = derivedUuid(`routine:${row.routine_id}:${dueAt}`);
+    if (!this.insertJob({ jobId, row, epoch, requestedBy, text, dueAt, now })) return null;
+    this.deps.hub.sendRoutineFired(jobId, row.routine_id, dueAt, now);
+    return { routineId: row.routine_id, jobId, dueAt, late: due.late };
+  }
+
+  private insertJob(j: { jobId: string; row: Row; epoch: number; requestedBy: string; text: string; dueAt: number; now: number }): boolean {
     const db = this.deps.db;
-    const inserted = db.transaction(() => {
+    return db.transaction(() => {
       const result = db
         .prepare(
           `INSERT OR IGNORE INTO crew_job (id, hire_id, kind, epoch, scope, requested_by, text, state)
            VALUES (?, ?, 'routine', ?, 'owner', ?, ?, 'queued')`,
         )
-        .run(jobId, row.hire_id, epoch, requestedBy, text);
+        .run(j.jobId, j.row.hire_id, j.epoch, j.requestedBy, j.text);
       db.prepare(
         `UPDATE crew_routine_cache SET last_fired = ?, data = json_set(data, '$.lastFired', ?, '$.lastRun', ?) WHERE routine_id = ?`,
-      ).run(String(dueAt), dueAt, now, row.routine_id);
+      ).run(String(j.dueAt), j.dueAt, j.now, j.row.routine_id);
       return result.changes > 0;
     })();
-    if (!inserted) return null;
-    this.deps.hub.sendRoutineFired(jobId, row.routine_id, dueAt, now);
-    return { routineId: row.routine_id, jobId, dueAt, late };
   }
 }
