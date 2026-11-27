@@ -28,7 +28,7 @@ function hireBody(over: Record<string, unknown> = {}): Record<string, unknown> {
     roleId: 'fresh-po',
     skillBundleId: 'bundle-1',
     skillBundleHash: 'abc123',
-    repos: ['bodhi-fresh'],
+    repos: ['acme/bodhi-fresh', 'acme/bodhi-care'],
     sharedWith: [],
     accountRef: { accountUuid: 'u-1', email: 'a@x.com', label: 'Work' },
     homeMachineId: MACHINE,
@@ -131,7 +131,7 @@ describe('reading hires from the local store', () => {
     db.prepare(`INSERT INTO crew_routine_cache (routine_id, hire_id, rev, data) VALUES ('r2', ?, 1, '{}')`).run(HIRE_B);
     const detail = readHire(db, HIRE, MACHINE, resolve);
     expect(detail).toMatchObject({
-      repos: ['bodhi-fresh'],
+      repos: ['acme/bodhi-fresh', 'acme/bodhi-care'],
       dailyTokenCap: 500_000,
       skillBundleId: 'bundle-1',
       skillBundleHash: 'abc123',
@@ -268,11 +268,16 @@ describe('the channels', () => {
     expect(edits).toHaveLength(2);
   });
 
-  test('repos are trimmed, deduplicated and must be non-empty names', () => {
-    expect(call('crew:setRepos', HIRE, [' bodhi-fresh ', 'bodhi-care', 'bodhi-fresh'])).toEqual({ ok: true });
-    expect(edits[0].fields).toEqual({ repos: ['bodhi-fresh', 'bodhi-care'] });
-    expect((call('crew:setRepos', HIRE, ['ok', '']) as { ok: boolean }).ok).toBe(false);
-    expect((call('crew:setRepos', HIRE, 'bodhi-fresh') as { ok: boolean }).ok).toBe(false);
+  test('repos can only be removed: trimmed, deduplicated, and any addition is refused here', () => {
+    expect(call('crew:setRepos', HIRE, [' ACME/bodhi-fresh ', 'acme/bodhi-fresh'])).toEqual({ ok: true });
+    expect(edits[0].fields).toEqual({ repos: ['ACME/bodhi-fresh', 'acme/bodhi-fresh'] });
+    expect(call('crew:setRepos', HIRE, ['acme/bodhi-care'])).toEqual({ ok: true });
+    const added = call('crew:setRepos', HIRE, ['acme/bodhi-care', 'acme/bodhi-pulse']) as { ok: boolean; error?: string };
+    expect(added.ok).toBe(false);
+    expect(added.error).toContain('grant card');
+    expect((call('crew:setRepos', HIRE, ['acme/bodhi-care', '']) as { ok: boolean }).ok).toBe(false);
+    expect((call('crew:setRepos', HIRE, 'acme/bodhi-care') as { ok: boolean }).ok).toBe(false);
+    expect(edits).toHaveLength(2);
   });
 
   test('an edit to a hire this machine has not synced is refused', () => {

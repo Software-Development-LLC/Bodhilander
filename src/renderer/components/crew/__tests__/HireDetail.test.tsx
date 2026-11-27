@@ -16,7 +16,7 @@ const detail = (over: Partial<CrewHireDetail> = {}): CrewHireDetail => ({
   activity: 'idle',
   cause: null,
   accountLabel: 'Work',
-  repos: ['bodhi-fresh'],
+  repos: ['acme/bodhi-fresh', 'acme/bodhi-care'],
   routines: [{ routineId: 'r1', cron: '0 9 * * 1-5', timezone: 'America/Chicago', prompt: 'Morning standup', lastFired: null }],
   dailyTokenCap: null,
   skillBundleId: 'bundle-1',
@@ -116,7 +116,8 @@ describe('the rest of the hire page', () => {
   test('shows repos, routines, the skill bundle pin and the cap off by default', async () => {
     render(<HireDetail hireId="h1" api={api()} now={() => NOW} />);
     await screen.findByText('Morning standup');
-    expect((screen.getByLabelText('Repos') as HTMLTextAreaElement).value).toBe('bodhi-fresh');
+    expect(screen.getByRole('list', { name: 'Repos' }).textContent).toContain('acme/bodhi-fresh');
+    expect(screen.queryByRole('textbox', { name: 'Repos' })).toBe(null);
     expect(screen.getByText(/abcdef012345/)).toBeTruthy();
     expect((screen.getByLabelText('Daily token cap') as HTMLInputElement).value).toBe('');
     expect(screen.getByText('Off')).toBeTruthy();
@@ -134,13 +135,11 @@ describe('the rest of the hire page', () => {
     await waitFor(() => expect(a.edits).toEqual([['cap', 'h1', 250_000]]));
   });
 
-  test('saves repos one per line', async () => {
+  test('removes a repo; there is no way to add one', async () => {
     const a = api();
     render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
-    const box = (await screen.findByLabelText('Repos')) as HTMLTextAreaElement;
-    fireEvent.change(box, { target: { value: 'bodhi-fresh\n\nbodhi-care\n' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save repos' }));
-    await waitFor(() => expect(a.edits).toEqual([['repos', 'h1', ['bodhi-fresh', 'bodhi-care']]]));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove acme/bodhi-fresh' }));
+    await waitFor(() => expect(a.edits).toEqual([['repos', 'h1', ['acme/bodhi-care']]]));
   });
 
   test('changes the account', async () => {

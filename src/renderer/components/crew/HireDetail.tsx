@@ -80,7 +80,6 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
   const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [capText, setCapText] = useState('');
-  const [reposText, setReposText] = useState('');
   const [confirmingLetGo, setConfirmingLetGo] = useState(false);
 
   const loadHire = useCallback(async () => {
@@ -90,7 +89,6 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
       setLoadError(null);
       if (h) {
         setCapText(h.dailyTokenCap === null ? '' : String(h.dailyTokenCap));
-        setReposText(h.repos.join('\n'));
       }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
@@ -136,9 +134,8 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
     if (!parsed.ok) return setMessage(CAP_REFUSED);
     void apply(api.setDailyCap(hire.hireId, parsed.cap), 'Cap saved.');
   };
-  const saveRepos = () => {
-    const repos = reposText.split('\n').map((r) => r.trim()).filter((r) => r !== '');
-    void apply(api.setRepos(hire.hireId, repos), 'Repos saved.');
+  const removeRepo = (repo: string) => {
+    void apply(api.setRepos(hire.hireId, hire.repos.filter((r) => r !== repo)), `Removed ${repo}.`);
   };
   const letGo = async () => {
     setConfirmingLetGo(false);
@@ -199,13 +196,21 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
 
       <section>
         <h3>Repos</h3>
-        <textarea id="crew-repos" aria-label="Repos" rows={Math.max(2, hire.repos.length + 1)} value={reposText} onChange={(e) => setReposText(e.target.value)} />
-        <div className="crew-detail__row">
-          <button type="button" onClick={saveRepos}>
-            Save repos
-          </button>
-          <span className="crew-detail__hint">One per line.</span>
-        </div>
+        {hire.repos.length === 0 ? (
+          <p>No repos.</p>
+        ) : (
+          <ul aria-label="Repos" className="crew-detail__repos">
+            {hire.repos.map((repo) => (
+              <li key={repo} className="crew-detail__row">
+                <span>{repo}</span>
+                <button type="button" aria-label={`Remove ${repo}`} onClick={() => removeRepo(repo)}>
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <span className="crew-detail__hint">Adding a repo needs a grant card, which comes in a later phase.</span>
       </section>
 
       <section>

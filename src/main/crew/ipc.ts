@@ -256,7 +256,11 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
   deps.handle('crew:setRepos', (hireId, repos) => {
     if (!known(hireId)) return refuse('This hire has not synced to this machine yet.');
     if (!Array.isArray(repos) || !repos.every((r) => typeof r === 'string' && r.trim() !== '')) return refuse('Each repo needs a name.');
-    return edit(hireId, { repos: [...new Set(repos.map((r: string) => r.trim()))] });
+    const synced = parse(hireRows(deps.db(), hireId)[0].data)?.repos;
+    const current = new Set((Array.isArray(synced) ? synced : []).filter((r): r is string => typeof r === 'string').map((r) => r.toLowerCase()));
+    const wanted = [...new Set(repos.map((r: string) => r.trim()))];
+    if (wanted.some((r) => !current.has(r.toLowerCase()))) return refuse('Adding a repo needs a grant card, which comes in a later phase. You can remove repos now.');
+    return edit(hireId, { repos: wanted });
   });
 
   deps.handle('crew:changeAccount', (hireId, accountId) => {
