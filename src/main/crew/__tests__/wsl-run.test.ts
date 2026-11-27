@@ -205,9 +205,12 @@ describe('a run prepared inside BodhiCrew', () => {
     expect(t.writes.get(`${H}/git/gitconfig`)).toContain('excludesFile = /dev/null');
   });
 
-  test('a skill path that leaves the skills dir is refused', async () => {
-    const t = setup({ skills: () => [{ path: '../owner/CLAUDE.md', content: 'x' }] });
-    expect(await t.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+  test('a skill path that leaves the skills dir or needs shell quoting is refused', async () => {
+    for (const bad of ['../owner/CLAUDE.md', 'a b.md', 'x;rm -rf ~.md', "q'.md"]) {
+      const t = setup({ skills: () => [{ path: bad, content: 'x' }] });
+      expect(await t.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+      expect(t.agents).toHaveLength(0);
+    }
   });
 
   test('steering the Hub has not synced holds setup before any agent starts', async () => {

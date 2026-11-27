@@ -72,7 +72,7 @@ interface Open {
 
 export const shQuote = (s: string): string => "'" + s.replaceAll("'", String.raw`'\''`) + "'";
 const q = shQuote;
-const SAFE_SKILL_PATH = /^[\w.\/-]+$/;
+const SAFE_SKILL_PATH = /^[\w./-]+$/;
 
 function skillTarget(paths: HirePaths, file: SkillFile): string {
   const p = bundlePath(file.path);
