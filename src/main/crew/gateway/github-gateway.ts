@@ -51,22 +51,22 @@ function flagValues(args: string[], names: Set<string>): string[] {
 function planApi(rest: string[], repos: readonly string[]): GhPlan {
   const positional: string[] = [];
   let method: string | null = null;
-  for (let i = 0; i < rest.length; i += 1) {
+  let i = 0;
+  while (i < rest.length) {
     const a = rest[i];
     const name = flagName(a);
+    i += 1;
     if (API_WRITE_FLAGS.has(name)) return { kind: 'write' };
     if (API_REFUSED_FLAGS.has(name)) return { kind: 'refused', why: 'gh api reaches github.com only.' };
-    if (!a.startsWith('-')) {
-      positional.push(a);
-      continue;
+    if (!a.startsWith('-')) positional.push(a);
+    else if (API_VALUE_FLAGS.has(name)) {
+      let value = a.slice(a.indexOf('=') + 1);
+      if (name === a) {
+        value = rest[i] ?? '';
+        i += 1;
+      }
+      if (name === '-X' || name === '--method') method = value;
     }
-    if (!API_VALUE_FLAGS.has(name)) continue;
-    let value = a.slice(a.indexOf('=') + 1);
-    if (name === a) {
-      i += 1;
-      value = rest[i] ?? '';
-    }
-    if (name === '-X' || name === '--method') method = value;
   }
   if (method !== null && method.toUpperCase() !== 'GET') return { kind: 'write' };
   const endpoint = positional.length === 1 ? positional[0] : null;
