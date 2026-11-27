@@ -108,6 +108,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 export class RunLoop {
   private readonly active = new Map<string, Active>();
+  private readonly holds = new Map<string, string>();
   private ticking: Promise<number> | null = null;
   private readonly now: () => number;
   private readonly newId: () => string;
@@ -167,20 +168,24 @@ export class RunLoop {
       interrupted: false, settled: false, child: null, prepared: null, result: null, model: '', authFailed: false, stderr: [], observation: null,
     };
     this.active.set(job.hireId, run);
-    db.prepare(`INSERT INTO crew_run (id, job_id, hire_id, thread_key) VALUES (?, ?, ?, ?)`).run(run.runId, job.id, job.hireId, run.threadKey);
+    const record = () => db.prepare(`INSERT INTO crew_run (id, job_id, hire_id, thread_key) VALUES (?, ?, ?, ?)`).run(run.runId, job.id, job.hireId, run.threadKey);
     let prepared: Prepared;
     try {
       prepared = await this.deps.prepare(run.job, run.threadKey);
     } catch (err) {
       log.warn('[Crew] could not prepare a run', err);
+      record();
       this.settle(run);
       return true;
     }
     if ('hold' in prepared) {
       this.finishAs(run, 'held', { requeue: true });
-      writeAudit(db, job.hireId, 'run-held', { jobId: job.id, hold: prepared.hold });
+      if (this.holds.get(job.hireId) !== prepared.hold) writeAudit(db, job.hireId, 'run-held', { jobId: job.id, hold: prepared.hold });
+      this.holds.set(job.hireId, prepared.hold);
       return false;
     }
+    this.holds.delete(job.hireId);
+    record();
     run.prepared = prepared;
     db.prepare(`UPDATE crew_run SET account_id = ?, session_id = ? WHERE id = ?`).run(prepared.accountId, prepared.sessionId, run.runId);
     if (run.interrupted) {

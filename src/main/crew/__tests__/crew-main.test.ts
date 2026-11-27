@@ -14,9 +14,11 @@ const { db, raw } = crewDb();
 mock.module('../../database', () => ({ getDatabase: () => db }));
 mock.module('../../repositories/accounts', () => ({ getAllAccounts: () => [] }));
 mock.module('../../run-engine/machine-config', () => ({ claudePath: () => 'claude' }));
-const hub = Object.assign(new EventEmitter(), {
+const fakeHub = () => Object.assign(new EventEmitter(), {
   canStart: () => true, sendReply: () => true, sendUsage: () => true, sendEdit: () => 'e',
 });
+let hub = fakeHub();
+let replaced: ((h: unknown) => void) | null = null;
 const events: string[] = [];
 let interrupt: ((hireId: string) => void) | null = null;
 mock.module('../hub-service', () => ({
@@ -24,6 +26,7 @@ mock.module('../hub-service', () => ({
   stopCrewHub: () => events.push('hub-stop'),
   getCrewHub: () => hub,
   setCrewInterrupt: (fn: typeof interrupt) => (interrupt = fn),
+  setCrewHubReplaced: (fn: typeof replaced) => (replaced = fn),
 }));
 
 const { startCrew, stopCrew, APPROVE_BROKER_READY } = await import('../crew-main');
@@ -44,5 +47,16 @@ describe('Crew in the main process', () => {
     expect(events).toEqual(['hub-start', 'hub-start', 'hub-stop']);
     expect(interrupt).toBeNull();
     expect(hub.listenerCount('job')).toBe(0);
+    expect(replaced).toBeNull();
+  });
+
+  test('a replaced Hub client moves the runtime onto it', () => {
+    startCrew();
+    const first = hub;
+    hub = fakeHub();
+    replaced?.(hub);
+    expect(first.listenerCount('job')).toBe(0);
+    expect(hub.listenerCount('job')).toBe(1);
+    stopCrew();
   });
 });

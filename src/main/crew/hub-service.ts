@@ -18,6 +18,12 @@ const RELAY_NAME_PREF = 'relay.machineName';
 let client: HubClient | null = null;
 let resumeWired = false;
 let interruptHook: ((hireId: string) => void) | null = null;
+let replacedHook: ((hub: HubClient) => void) | null = null;
+
+/** Told whenever a new client replaces the old one, so listeners move with it. */
+export function setCrewHubReplaced(fn: ((hub: HubClient) => void) | null): void {
+  replacedHook = fn;
+}
 
 /** The run loop registers here, so a lost lease reaches the run it covers. */
 export function setCrewInterrupt(fn: ((hireId: string) => void) | null): void {
@@ -56,6 +62,7 @@ export function startCrewHub(): HubClient {
   }
   hub.on('status', (status) => log.info(`[Crew] Hub ${status}`));
   hub.start();
+  replacedHook?.(hub);
   return hub;
 }
 

@@ -173,6 +173,14 @@ describe('run loop', () => {
     expect(t.raw.query(`SELECT event FROM crew_audit`).all()).toEqual([{ event: 'run-held' }]);
   });
 
+  test('a job held on every tick records no run and audits the hold once', async () => {
+    const t = setup({ prepare: async () => ({ hold: 'held:setup' }) });
+    t.job(1);
+    for (let i = 0; i < 3; i += 1) await t.loop.tick();
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_run`).get()).toEqual({ n: 0 });
+    expect(t.raw.query(`SELECT event FROM crew_audit`).all()).toEqual([{ event: 'run-held' }]);
+  });
+
   test('a prepare that throws counts as a run that died', async () => {
     const t = setup({ prepare: async () => { throw new Error('settings write failed'); } });
     t.job(1);

@@ -57,9 +57,9 @@ describe('crew tables', () => {
     expect(row.crew_token_enc).toBeNull();
   });
 
-  test('a job left running by a quit is queued again at start', () => {
+  test('a job left running by a quit is queued again at start, with its attempt given back', () => {
     const { raw, db } = crewDb();
-    raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state) VALUES ('j1', 'h', 1, 'owner', 'p', 'running')`);
+    raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', 2)`);
     raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state) VALUES ('j2', 'h', 1, 'owner', 'p', 'done')`);
     initializeCrewTables(db);
     const states = raw.query(`SELECT id, state, attempts FROM crew_job ORDER BY id`).all();

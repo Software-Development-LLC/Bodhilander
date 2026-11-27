@@ -14,7 +14,8 @@ import { claudePath } from '../run-engine/machine-config';
 import { getUsage, setUsage } from '../usage-store';
 import { CrewSignIn, type Reminder } from './crew-token';
 import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
-import { getCrewHub, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
+import type { HubClient } from './hub-client';
+import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
 import type { CrewJob, Prepared } from './run/loop';
 import { HOLD_SETUP, prepareRun, type PrepareDeps } from './run/prepare';
 
@@ -22,6 +23,7 @@ import { HOLD_SETUP, prepareRun, type PrepareDeps } from './run/prepare';
 export const APPROVE_BROKER_READY = false;
 
 let runtime: CrewRuntime | null = null;
+let runtimeHub: HubClient | null = null;
 
 const listDir = (dir: string): string[] => {
   try {
@@ -62,12 +64,12 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
   };
 }
 
-export function startCrew(): CrewRuntime | null {
-  const hub = startCrewHub();
-  if (runtime) return runtime;
+function attach(hub: HubClient): CrewRuntime {
+  runtime?.stop();
   const db = getDatabase();
   const signIn = new CrewSignIn(db, safeStorage);
   const prepareDeps = crewPrepareDeps(signIn);
+  runtimeHub = hub;
   runtime = startCrewRuntime({
     db,
     hub,
@@ -84,13 +86,21 @@ export function startCrew(): CrewRuntime | null {
       }
     },
   });
-  setCrewInterrupt((hireId) => runtime?.interrupt(hireId));
   return runtime;
 }
 
+export function startCrew(): CrewRuntime {
+  setCrewHubReplaced((hub) => attach(hub));
+  setCrewInterrupt((hireId) => runtime?.interrupt(hireId));
+  const hub = startCrewHub();
+  return runtime && runtimeHub === hub ? runtime : attach(hub);
+}
+
 export function stopCrew(): void {
+  setCrewHubReplaced(null);
   runtime?.stop();
   runtime = null;
+  runtimeHub = null;
   setCrewInterrupt(null);
   stopCrewHub();
 }

@@ -103,6 +103,15 @@ describe('preparing a run', () => {
     expect(p.input).toContain('earlier answer');
     expect(p.input.endsWith('do the thing')).toBe(true);
     expect(isTainted(t.db, HIRE, 'chat:owner')).toBe(false);
+    expect(t.raw.query(`SELECT session_id FROM crew_thread`).get()).toEqual({ session_id: null });
+  });
+
+  test('a token-mode hold leaves a tainted thread marked', async () => {
+    const t = setup({ ships: true });
+    t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id, updated_at) VALUES (?, 'chat:owner', 'old', 'a1', '2026-11-27 11:00:00')`).run(HIRE);
+    markTainted(t.db, HIRE, 'chat:owner', 'issue-body');
+    expect(await prepareRun(t.deps, job(), 'chat:owner')).toEqual({ hold: HOLD_SIGNED_OUT });
+    expect(isTainted(t.db, HIRE, 'chat:owner')).toBe(true);
   });
 
   test('an untainted thread on the same day resumes its session', async () => {

@@ -69,12 +69,23 @@ function regenerate(paths: HirePaths, cwd: string, handbook: string, restoreSkil
   restoreSkills?.(paths);
 }
 
+/** The tainted session is dropped with its mark, so no later run can resume it. */
+function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: string): void {
+  db.transaction(() => {
+    db.prepare(`UPDATE crew_thread SET session_id = NULL WHERE hire_id = ? AND thread_key = ?`).run(hireId, threadKey);
+    consumeTaint(db, hireId, threadKey);
+  })();
+}
+
 export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: string): Promise<Prepared> {
   const now = deps.now?.() ?? Date.now();
   const ref = hireAccountRef(deps.db, job.hireId);
   const account = ref ? resolveAccountRef(ref, deps.accounts()) : null;
   if (!account) return { hold: HOLD_MISSING };
   if (!deps.signIn.signedIn(account.id, deps.loggedIn(account.configDir), now)) return { hold: HOLD_SIGNED_OUT };
+
+  const token = deps.signIn.mode() === 'token' ? deps.signIn.tokenFor(account.id, now) : null;
+  if (deps.signIn.mode() === 'token' && token === null) return { hold: HOLD_SIGNED_OUT };
 
   const paths = hirePaths(deps.userData, job.hireId);
   const underTemp = deps.underTemp ?? ((dir: string) => underTempDir(dir, deps.env.TMPDIR));
@@ -106,13 +117,11 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   let sessionId = thread?.session_id ?? null;
   let input = job.text;
   if (reason) {
-    if (reason === 'tainted') consumeTaint(deps.db, job.hireId, threadKey);
+    if (reason === 'tainted') forgetTaintedSession(deps.db, job.hireId, threadKey);
     input = freshSessionInput(reason, lastTurns(deps.db, job.hireId, threadKey), job.text);
     sessionId = null;
   }
 
-  const token = deps.signIn.mode() === 'token' ? deps.signIn.tokenFor(account.id, now) : null;
-  if (deps.signIn.mode() === 'token' && token === null) return { hold: HOLD_SIGNED_OUT };
   return {
     command: deps.claudePath,
     args: runArgs({ sessionId, settingsPath, mcpConfigPath, model: deps.model?.(job.hireId) }),
