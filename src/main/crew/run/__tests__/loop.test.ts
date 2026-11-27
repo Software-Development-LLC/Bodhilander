@@ -42,6 +42,7 @@ class FakeChild implements RunChild {
 function setup(opts: {
   maxRuns?: number; leased?: boolean; prepare?: (job: CrewJob) => Promise<Prepared>; replyThrows?: string; finishedThrows?: boolean;
   waitingOnCard?: (jobId: string) => boolean; onSettled?: (jobId: string, outcome: string) => void;
+  onHeld?: (hireId: string, hold: string) => void;
 } = {}) {
   const { raw, db } = crewDb();
   const children: FakeChild[] = [];
@@ -77,6 +78,7 @@ function setup(opts: {
     onUsageObserved: (accountId, obs) => observed.push([accountId, obs]),
     waitingOnCard: opts.waitingOnCard,
     onSettled: (jobId, outcome) => opts.onSettled?.(jobId, outcome),
+    onHeld: opts.onHeld,
     now: () => clock,
     newId: () => uuid(500 + ++ids),
   });
@@ -201,6 +203,28 @@ describe('run loop', () => {
     for (let i = 0; i < 3; i += 1) await t.loop.tick();
     expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_run`).get()).toEqual({ n: 0 });
     expect(t.raw.query(`SELECT event FROM crew_audit`).all()).toEqual([{ event: 'run-held' }]);
+  });
+
+  test('a hold is reported once per distinct hold, again when it changes, and again after a run clears it', async () => {
+    const holds = ['held:setup', 'held:setup', 'held:signed-out', null, 'held:signed-out'];
+    let i = 0;
+    const reported: [string, string][] = [];
+    const t = setup({
+      prepare: async (job) => {
+        const h = holds[Math.min(i++, holds.length - 1)];
+        return h ? { hold: h } : { command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a', sessionId: null, token: null };
+      },
+      onHeld: (hireId, hold) => reported.push([hireId, hold]),
+    });
+    t.job(1);
+    for (let n = 0; n < 3; n += 1) await t.loop.tick();
+    expect(reported).toEqual([[HIRE, 'held:setup'], [HIRE, 'held:signed-out']]);
+    await t.loop.tick();
+    t.children[0]?.finish();
+    await new Promise((r) => setTimeout(r, 0));
+    t.job(2);
+    await t.loop.tick();
+    expect(reported).toEqual([[HIRE, 'held:setup'], [HIRE, 'held:signed-out'], [HIRE, 'held:signed-out']]);
   });
 
   test('a prepare that throws counts as a run that died', async () => {

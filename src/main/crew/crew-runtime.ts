@@ -13,6 +13,7 @@ import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
 import type { UsageInput } from './hub-client';
 import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame } from './protocol';
+import { HOLD_STATES } from './protocol';
 import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
 import { RunSlots } from './run/slots';
 import type { EditInput } from './sync';
@@ -24,6 +25,7 @@ export interface CrewHubPort extends Pick<EventEmitter, 'on' | 'off'> {
   canStart(hireId: string, epoch: number): boolean;
   sendReply(jobId: string, text: string): boolean;
   sendUsage(jobId: string, usage: UsageInput): boolean;
+  sendAudit(event: string, detail: Record<string, unknown>, hireId?: string): string;
   sendEdit(input: EditInput): string;
   sendCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean;
 }
@@ -90,6 +92,9 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       const uuid = account ? accountRefFor(account).accountUuid : null;
       if (!uuid) return log.warn('[Crew] a finished run has no account uuid; its usage is not reported');
       deps.hub.sendUsage(run.job.id, usageRecordFor(run, uuid, deps.usage.get(run.accountId)));
+    },
+    onHeld: (hireId, hold) => {
+      if ((HOLD_STATES as readonly string[]).includes(hold)) deps.hub.sendAudit('hold', { state: hold }, hireId);
     },
     onSettled: (jobId, outcome) => {
       broker.release(jobId, outcome);
