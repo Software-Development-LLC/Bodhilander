@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
 import { startCrew, stopCrew } from './crew/crew-main';
+import { wireCrewIpc } from './crew/ipc-wiring';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1532,6 +1533,11 @@ registerClaudeDesktopIpc({
     return choice.canceled || !choice.filePath ? null : choice.filePath;
   },
 });
+
+wireCrewIpc(
+  (channel, handler) => safeHandle(channel, handler),
+  () => mainWindow?.webContents.send('crew:changed'),
+);
 
 // ============================================================================
 // Remote Hosting (Relay) IPC Handlers
