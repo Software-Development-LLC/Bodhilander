@@ -132,7 +132,7 @@ function argvRefusal(argv: string[]): GhPlan | null {
 }
 
 function readShapeRefusal(group: string, rest: string[]): GhPlan | null {
-  if (rest.some((a) => a === '-w' || a === '--web')) return { kind: 'refused', why: 'A run cannot open a browser.' };
+  if (rest.some((a) => a === '--web' || (a === '-w' && group !== 'run'))) return { kind: 'refused', why: 'A run cannot open a browser.' };
   if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
   return null;
 }

@@ -88,6 +88,17 @@ describe('import from Office', () => {
     expect(fs.readFileSync(path.join(o.owner, 'work', 'triage.md'), 'utf8')).toBe('edited by the hire');
   });
 
+  test('a link the hire planted under work/ is never followed', () => {
+    const o = office();
+    const outside = path.join(o.appData, 'outside');
+    fs.mkdirSync(outside);
+    fs.mkdirSync(path.join(o.owner, 'work'), { recursive: true });
+    fs.symlinkSync(outside, path.join(o.owner, 'work', 'deep'));
+    fs.symlinkSync(path.join(outside, 'planted.md'), path.join(o.owner, 'work', 'triage.md'));
+    expect(copyOfficeWork(o.data, 'fresh-po', o.owner)).toBe(0);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
   test('what could not be queued is reported', () => {
     const o = office();
     const summary = importFromOffice(

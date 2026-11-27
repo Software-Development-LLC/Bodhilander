@@ -47,6 +47,8 @@ describe('planGh', () => {
     expect(planGh(['issue', 'view', 'Acme/App#12'], REPOS)).toEqual({ kind: 'read', args: ['issue', 'view', 'Acme/App#12', '-R', 'acme/app'] });
     expect(planGh(['pr', 'view', 'feat/login', '-R', 'acme/app'], REPOS).kind).toBe('read');
     expect(planGh(['issue', 'list', '-l', 'needs/triage'], REPOS).kind).toBe('read');
+    expect(planGh(['run', 'list', '-w', 'ci.yml'], REPOS).kind).toBe('read');
+    expect(planGh(['issue', 'view', '1', '-w'], REPOS).kind).toBe('refused');
   });
 
   test('a jq or template filter cannot read the environment', () => {

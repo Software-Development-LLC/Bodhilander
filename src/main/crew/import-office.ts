@@ -80,16 +80,38 @@ export function readOfficeEmployee(dataDir: string, handle: string): OfficeRead 
 /** Copy work/ under ownerDir/work, leaving anything already there in place. Returns the files copied. */
 export function copyOfficeWork(dataDir: string, handle: string, ownerDir: string): number {
   const from = path.join(dataDir, 'employees', handle, 'work');
-  const to = path.join(ownerDir, IMPORTED_WORK_DIR);
   let copied = 0;
+  fs.mkdirSync(ownerDir, { recursive: true });
   for (const rel of walk(from)) {
-    const target = path.join(to, ...rel.split('/'));
-    if (fs.existsSync(target)) continue;
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(path.join(from, ...rel.split('/')), target, fs.constants.COPYFILE_EXCL);
-    copied += 1;
+    const parts = rel.split('/');
+    const dir = realDirs(ownerDir, [IMPORTED_WORK_DIR, ...parts.slice(0, -1)]);
+    if (!dir) continue;
+    const target = path.join(dir, parts[parts.length - 1]);
+    try {
+      fs.copyFileSync(path.join(from, ...parts), target, fs.constants.COPYFILE_EXCL);
+      copied += 1;
+    } catch {
+      // Already there, or a link the hire left in its place: keep what the hire has.
+    }
   }
   return copied;
+}
+
+/** base/<parts...>, making each missing directory, or null if any part is a link or not a directory. */
+function realDirs(base: string, parts: string[]): string | null {
+  let at = base;
+  for (const part of parts) {
+    at = path.join(at, part);
+    let stat: fs.Stats | null = null;
+    try {
+      stat = fs.lstatSync(at);
+    } catch {
+      fs.mkdirSync(at);
+      continue;
+    }
+    if (!stat.isDirectory()) return null;
+  }
+  return at;
 }
 
 export interface ImportPort {
