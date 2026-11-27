@@ -12,6 +12,7 @@ const { Holds } = await import('../holds');
 const { ERROR_REPLY } = await import('../run/loop');
 import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
 import type { CrewJob, Prepared, RunChild } from '../run/loop';
+import { initializeCrewTables } from '../crew-tables-sql';
 import { RunSlots } from '../run/slots';
 import { SCHEDULE_TICK_MS } from '../schedule/scheduler';
 import { HIRE, MACHINE, PERSON, crewDb, uuid } from './crew-db';
@@ -336,6 +337,51 @@ describe('crew runtime', () => {
     t.loggedIn.a1 = undefined;
     expect(t.rt.checkReminders()).toBe(1);
     expect(t.reminders).toEqual(['Work:login']);
+  });
+
+  test('two clean quits leave a running job retryable with no error reply; a crash still counts', async () => {
+    const t = setup();
+    const job = () => t.raw.query(`SELECT state, attempts, reply_owed FROM crew_job WHERE id = ?`).get(uuid(1));
+    const restart = () => {
+      initializeCrewTables(t.db);
+      return startCrewRuntime(t.deps);
+    };
+    const runOnce = async () => {
+      t.hub.emit('job', {});
+      await flush();
+    };
+    t.job(1);
+    await runOnce();
+    t.rt.quit();
+    let rt = restart();
+    expect(job()).toEqual({ state: 'queued', attempts: 0, reply_owed: 0 });
+    await runOnce();
+    rt.quit();
+    rt = restart();
+    expect(job()).toEqual({ state: 'queued', attempts: 0, reply_owed: 0 });
+    expect(t.children).toHaveLength(2);
+    await runOnce();
+    rt.stop();
+    rt = restart();
+    expect(job()).toEqual({ state: 'queued', attempts: 1, reply_owed: 0 });
+    await runOnce();
+    rt.stop();
+    expect(t.hub.replies).toEqual([]);
+    rt = restart();
+    expect(job()).toEqual({ state: 'dead', attempts: 2, reply_owed: 0 });
+    expect(t.hub.replies).toEqual([[uuid(1), ERROR_REPLY]]);
+    rt.stop();
+  });
+
+  test('a clean quit gives the attempt back once, however the interrupted run then settles', async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    t.rt.quit();
+    t.children[0].finish();
+    await flush();
+    expect(t.raw.query(`SELECT state, attempts FROM crew_job WHERE id = ?`).get(uuid(1))).toEqual({ state: 'queued', attempts: 0 });
   });
 
   test('stop clears the timer, unhooks the Hub and interrupts runs', async () => {

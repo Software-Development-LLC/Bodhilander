@@ -72,6 +72,8 @@ export interface CrewRuntime {
   checkReminders(): number;
   scheduler: RoutineScheduler | null;
   stop(): void;
+  /** The app is quitting: running jobs get their attempt back, then the runtime stops. */
+  quit(): void;
 }
 
 export const STOP_GRACE_MS = 10_000;
@@ -224,6 +226,14 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     checkReminders();
   }, REMINDER_CHECK_MS);
   checkReminders();
+  const stop = () => {
+    clearInt(reminderTimer);
+    if (scheduleTimer !== null) clearInt(scheduleTimer);
+    for (const [event, fn] of listeners) deps.hub.off(event, fn);
+    runLoop.stop();
+    broker.stop();
+    runLoop.interruptAll();
+  };
 
   return {
     loop: runLoop,
@@ -240,13 +250,11 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     },
     checkReminders,
     scheduler,
-    stop: () => {
-      clearInt(reminderTimer);
-      if (scheduleTimer !== null) clearInt(scheduleTimer);
-      for (const [event, fn] of listeners) deps.hub.off(event, fn);
+    stop,
+    quit: () => {
       runLoop.stop();
-      broker.stop();
-      runLoop.interruptAll();
+      runLoop.returnAttempts();
+      stop();
     },
   };
 }

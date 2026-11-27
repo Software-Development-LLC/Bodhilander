@@ -100,6 +100,22 @@ describe('crew tables', () => {
     expect(raw.query(`SELECT state, reply_owed FROM crew_job WHERE id = 'j1'`).get()).toEqual({ state: 'queued', reply_owed: 0 });
   });
 
+  test('a job a clean quit left running is queued again at start, never capped', () => {
+    const { raw, db } = crewDb();
+    raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts, quit_clean) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', ${MAX_ATTEMPTS}, 1)`);
+    initializeCrewTables(db);
+    expect(raw.query(`SELECT state, attempts, reply_owed, quit_clean FROM crew_job WHERE id = 'j1'`).get()).toEqual({ state: 'queued', attempts: MAX_ATTEMPTS, reply_owed: 0, quit_clean: 0 });
+    expect(raw.query(`SELECT 1 FROM crew_audit WHERE event = 'job-crash-limit'`).all()).toEqual([]);
+  });
+
+  test('an existing crew_job gains quit_clean', () => {
+    const raw = new Database(':memory:');
+    raw.exec(`CREATE TABLE claude_accounts (id TEXT PRIMARY KEY, label TEXT NOT NULL, config_dir TEXT NOT NULL UNIQUE, email TEXT)`);
+    raw.exec(`CREATE TABLE crew_job (id TEXT PRIMARY KEY, hire_id TEXT NOT NULL, epoch INTEGER NOT NULL, scope TEXT NOT NULL, requested_by TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT)`);
+    initializeCrewTables(raw as unknown as Db);
+    expect(columns(raw, 'crew_job')).toContain('quit_clean');
+  });
+
   test('a job left running while it waits on a card still parks, whatever its attempts', () => {
     const { raw, db } = crewDb();
     raw.exec(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES ('j1', 'h', 1, 'owner', 'p', 'running', ${MAX_ATTEMPTS})`);

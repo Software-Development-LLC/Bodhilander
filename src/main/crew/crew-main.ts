@@ -315,7 +315,7 @@ export async function crewWindowsRepaired(): Promise<void> {
 
 export function stopCrew(): void {
   setCrewHubReplaced(null);
-  runtime?.stop();
+  runtime?.quit();
   detachHub?.();
   detachHub = null;
   services?.endAll();

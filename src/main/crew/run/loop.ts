@@ -109,6 +109,7 @@ interface Active {
   stderr: string[];
   observation: UsageObservation | null;
   limitedUntil: number | null;
+  attemptReturned: boolean;
 }
 
 const slotKind = (job: Pick<CrewJob, 'kind'>): SlotKind => (job.kind === 'routine' ? 'routine' : 'chat');
@@ -197,14 +198,14 @@ export class RunLoop {
     const slot = this.deps.slots.tryAcquire(job.hireId, slotKind(job));
     if (!slot) return 'skipped';
     const db = this.deps.db;
-    const marked = db.prepare(`UPDATE crew_job SET state = 'running', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state = 'queued'`).run(job.id);
+    const marked = db.prepare(`UPDATE crew_job SET state = 'running', attempts = attempts + 1, quit_clean = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state = 'queued'`).run(job.id);
     if (marked.changes === 0) {
       slot.release();
       return 'skipped';
     }
     const run: Active = {
       runId: this.newId(), job: { ...job, attempts: job.attempts + 1 }, threadKey: this.deps.threadKeyOf?.(job) ?? threadKeyFor(job), release: () => slot.release(), startedAt: this.now(),
-      interrupted: false, parked: false, settled: false, child: null, prepared: null, result: null, model: '', authFailed: false, stderr: [], observation: null, limitedUntil: null,
+      interrupted: false, parked: false, settled: false, child: null, prepared: null, result: null, model: '', authFailed: false, stderr: [], observation: null, limitedUntil: null, attemptReturned: false,
     };
     this.active.set(job.hireId, run);
     const record = () => db.prepare(`INSERT INTO crew_run (id, job_id, hire_id, thread_key) VALUES (?, ?, ?, ?)`).run(run.runId, job.id, job.hireId, run.threadKey);
@@ -289,6 +290,15 @@ export class RunLoop {
   /** Starts nothing more; runs already going still settle. */
   stop(): void {
     this.stopped = true;
+  }
+
+  /** At a clean quit, before the app exits mid-run: each running job gets its attempt back and the crash cap skips it. */
+  returnAttempts(): void {
+    const give = this.deps.db.prepare(`UPDATE crew_job SET attempts = MAX(attempts - 1, 0), quit_clean = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state = 'running'`);
+    for (const run of this.active.values()) {
+      if (run.settled || run.attemptReturned) continue;
+      run.attemptReturned = give.run(run.job.id).changes > 0;
+    }
   }
 
   interruptAll(): void {
@@ -402,7 +412,8 @@ export class RunLoop {
     const db = this.deps.db;
     const live = `id = ? AND state IN ('running', 'queued')`;
     if (how.requeue) {
-      db.prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(run.job.id);
+      const back = run.attemptReturned ? 0 : 1;
+      db.prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - ?, 0), updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(back, run.job.id);
     } else if (how.park) {
       db.prepare(`UPDATE crew_job SET state = 'parked', updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(run.job.id);
     } else {
