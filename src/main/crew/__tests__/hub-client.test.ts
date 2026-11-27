@@ -581,6 +581,28 @@ describe('HubClient queued frames', () => {
     expect(t.client.sendRoutineFired(uuid(99), uuid(60), 1000, 2000)).toBe(false);
   });
 
+  test('a note write is stamped with its job epoch; the cache moves on applied, and a newer synced copy is kept', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 2));
+    const write = { id: uuid(61), scope: 'owner' as const, path: 'shared/team.md', rev: 0, content: 'hello', deleted: false, inboundId: uuid(1) };
+    expect(t.client.sendNoteWrite(uuid(1), write)).toBe(true);
+    expect(sentOf(t, 'note_write')).toEqual([{ type: 'note_write', ...write, hireId: HIRE, epoch: 2 }]);
+    t.sock().hub({ type: 'edit_result', id: uuid(61), result: 'applied', objectId: uuid(62), rev: 1 });
+    const note = () => t.raw.query(`SELECT scope, path, rev, body FROM crew_note WHERE note_id = ?`).get(uuid(62));
+    expect(note()).toEqual({ scope: 'shared', path: 'team.md', rev: 1, body: 'hello' });
+
+    t.raw.query(`UPDATE crew_note SET rev = 5, body = 'newer' WHERE note_id = ?`).run(uuid(62));
+    expect(t.client.sendNoteWrite(uuid(1), { ...write, id: uuid(63), rev: 1, content: 'stale' })).toBe(true);
+    t.sock().hub({ type: 'edit_result', id: uuid(63), result: 'applied', objectId: uuid(62), rev: 2 });
+    expect(note()).toEqual({ scope: 'shared', path: 'team.md', rev: 5, body: 'newer' });
+
+    expect(t.client.sendNoteWrite(uuid(1), { ...write, id: uuid(64), rev: 5, deleted: true, content: '' })).toBe(true);
+    t.sock().hub({ type: 'edit_result', id: uuid(64), result: 'applied', objectId: uuid(62), rev: 6 });
+    expect(note()).toBeNull();
+    expect(t.client.sendNoteWrite(uuid(99), write)).toBe(false);
+  });
+
   test('an audit about a hire carries its newest epoch; one about the machine carries neither', () => {
     const t = setup();
     t.online();

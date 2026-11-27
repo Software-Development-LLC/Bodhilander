@@ -11,6 +11,7 @@ import { dropRefusedCard, markCardAcked, recordCardDecision, recordCardRaise } f
 import { EpochFence } from './epoch';
 import { LeaseClock, systemClocks, type Clocks } from './lease';
 import { LocalOutbox } from './local-outbox';
+import { applyNoteResult } from './notes';
 import { assertSendable, cutText, isErrorReason, parseHubFrame, trimTrailingSlashes } from './protocol-parse';
 import { CrewSync, type EditInput } from './sync';
 import {
@@ -35,6 +36,7 @@ import {
   type LeaseRevokedFrame,
   type MachineFrame,
   type RefusedFrame,
+  type NoteWriteFrame,
   type RenewFrame,
   type RoutineFiredFrame,
   type ReplyFrame,
@@ -482,6 +484,7 @@ export class HubClient extends EventEmitter {
   private onEditResult(frame: EditResultFrame): void {
     const sent = this.outbox.frameOf(frame.id);
     if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
+    if (sent?.type === 'note_write') applyNoteResult(this.deps.db, sent, frame);
     this.sendPull(this.sync.onEditResult(frame, this.clocks.wall(), sent?.type === 'edit' ? sent : null));
     this.emit('edit-result', frame);
   }
@@ -615,6 +618,14 @@ export class HubClient extends EventEmitter {
     const queued = this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
     if (queued) recordCardRaise(this.deps.db, frame, this.clocks.wall());
     return queued;
+  }
+
+  /** Queue a run's note write, stamped with its job's epoch. False when fenced or gone. */
+  sendNoteWrite(jobId: string, write: Omit<NoteWriteFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: NoteWriteFrame = { type: 'note_write', ...write, hireId: stamp.hireId, epoch: stamp.epoch };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
   }
 
   /** A routine's job was queued: the Hub moves the routine's lastFired to dueAt and lastRun to startedAt. */
