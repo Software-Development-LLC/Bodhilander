@@ -8,6 +8,7 @@ export interface WindowsSignInProps {
   start?: (accountId: string) => Promise<CrewWindowsSignInResult>;
   sendCode?: (code: string) => Promise<boolean>;
   cancel?: () => Promise<void>;
+  onSignedIn?: () => void;
 }
 
 const REFUSED: Record<string, string> = {
@@ -21,7 +22,7 @@ const REFUSED: Record<string, string> = {
 };
 
 /** Sign in a Claude account for Crew on Windows: the browser opens, and the code it shows is pasted here. */
-export const WindowsSignIn: React.FC<WindowsSignInProps> = ({ accountId, label, start, sendCode, cancel }) => {
+export const WindowsSignIn: React.FC<WindowsSignInProps> = ({ accountId, label, start, sendCode, cancel, onSignedIn }) => {
   const doStart = start ?? ((id: string) => window.electronAPI.crewWindowsSignIn(id));
   const doSend = sendCode ?? ((c: string) => window.electronAPI.crewWindowsSignInCode(c));
   const doCancel = cancel ?? (() => window.electronAPI.crewWindowsSignInCancel());
@@ -35,6 +36,7 @@ export const WindowsSignIn: React.FC<WindowsSignInProps> = ({ accountId, label, 
     try {
       const r = await doStart(accountId);
       setNote(r.ok ? `${label} is signed in for Crew.` : REFUSED[r.reason] ?? 'Sign-in did not finish.');
+      if (r.ok) onSignedIn?.();
     } finally {
       setWaiting(false);
       setCode('');

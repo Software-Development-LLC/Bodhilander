@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { CrewHireAccount, CrewHireInput, CrewHireResult, CrewRole } from '../../../shared/types';
+import { WindowsAccountsSignIn } from './settings/WindowsAccountSignIn';
 import './Crew.css';
 
 export interface HireModalApi {
@@ -94,6 +95,7 @@ export const HireModal: React.FC<HireModalProps> = ({ api: injected, onHired, on
               </option>
             ))}
           </select>
+          <WindowsAccountsSignIn accounts={accounts} onSignedIn={() => void api.hireAccounts().then(setAccounts, () => {})} />
           {error && (
             <p className="crew-hire-modal__error" role="alert">
               {error}

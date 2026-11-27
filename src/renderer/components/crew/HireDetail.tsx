@@ -4,6 +4,7 @@ import { DEFAULT_USAGE_WARN_THRESHOLD } from '../../../shared/usage';
 import { activityText, formatTokens, hireTokenTotal, parseDailyCap } from '../../store/crew';
 import { UsageMeters } from '../UsageMeters';
 import { AppLoginTerminal, SignInTerminal } from './SignInTerminal';
+import { WindowsHireSignIn } from './settings/WindowsAccountSignIn';
 import './Crew.css';
 
 export interface HireDetailApi {
@@ -239,6 +240,7 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
             ))}
           </select>
         </div>
+        <WindowsHireSignIn accountId={hire.accountId} label={hire.accountLabel ?? 'this account'} />
       </section>
 
       <section>
