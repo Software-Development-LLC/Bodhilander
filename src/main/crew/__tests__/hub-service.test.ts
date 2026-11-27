@@ -36,7 +36,8 @@ mock.module('../../api/relay/relay-identity', () => ({
   signWithIdentity: () => Buffer.from('s'),
 }));
 
-const { crewHubUrl, startCrewHub } = await import('../hub-service');
+const { crewHubUrl, newLinkFlow, startCrewHub } = await import('../hub-service');
+import * as os from 'os';
 
 describe('the app Crew connection', () => {
   test('a packaged build talks to production unless crew.hubUrl says otherwise', () => {
@@ -62,6 +63,15 @@ describe('the app Crew connection', () => {
     expect(resumed).toBe(1);
     for (const cb of appHandlers['will-quit'] ?? []) cb();
     expect(sockets[0].closed).toBe(true);
+  });
+
+  test('the link request names the machine as the relay does, else by host name', () => {
+    const nameOf = () => (newLinkFlow() as unknown as { deps: { name: string } }).deps.name;
+    expect(nameOf()).toBe(os.hostname());
+    prefs.set('relay.machineName', '  Studio  ');
+    expect(nameOf()).toBe('Studio');
+    prefs.set('relay.machineName', '   ');
+    expect(nameOf()).toBe(os.hostname());
   });
 
   test('the app starts it after ready', async () => {
