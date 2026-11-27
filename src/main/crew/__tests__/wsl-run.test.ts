@@ -243,6 +243,14 @@ describe('a run prepared inside BodhiCrew', () => {
     expect(await resumed('America/Los_Angeles')).toBeNull();
   });
 
+  test('a session made under another account is not resumed inside BodhiCrew either', async () => {
+    const t = setup();
+    t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id, updated_at) VALUES (?, 'chat:owner', 's-1', 'a2', '2026-11-27 11:59:00')`).run(HIRE);
+    const p = (await t.runs.prepare(job(), 'chat:owner', 'run-1')) as PreparedRun;
+    expect(p.sessionId).toBeNull();
+    expect(t.raw.query(`SELECT event FROM crew_audit WHERE event = 'session-other-account'`).all()).toHaveLength(1);
+  });
+
   test('the run reads its own git config, never the global one', async () => {
     const t = setup();
     const p = (await t.runs.prepare(job(), 'chat:owner', 'run-1')) as PreparedRun;

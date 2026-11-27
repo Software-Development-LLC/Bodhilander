@@ -12,6 +12,7 @@ import { resolveAccountRef, type ClaudeAccountRef } from '../account-ref';
 import type { CrewSignIn } from '../crew-token';
 import { holdState, type Holds } from '../holds';
 import { SteeringUnavailable } from '../handbook';
+import { writeAudit } from '../audit';
 import { consumeTaint, isTainted } from '../taint';
 import { runArgs, runEnv } from './env';
 import type { CrewJob, Prepared } from './loop';
@@ -141,7 +142,7 @@ function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: 
 }
 
 /** The thread's session resumed, or a fresh one carrying the last turns when it can't be. */
-export function chooseSession(db: Database.Database, job: CrewJob, threadKey: string, now: number, timeZone: string | null): { sessionId: string | null; input: string } {
+export function chooseSession(db: Database.Database, job: CrewJob, threadKey: string, now: number, timeZone: string | null, accountId: string): { sessionId: string | null; input: string } {
   const thread = db.prepare(`SELECT session_id, account_id, updated_at FROM crew_thread WHERE hire_id = ? AND thread_key = ?`).get(job.hireId, threadKey) as
     | { session_id: string | null; account_id: string | null; updated_at: string | null }
     | undefined;
@@ -153,12 +154,14 @@ export function chooseSession(db: Database.Database, job: CrewJob, threadKey: st
       lastRunAt: Number.isNaN(lastRunAt) ? null : lastRunAt,
       tainted: isTainted(db, job.hireId, threadKey),
       moved: false,
+      otherAccount: !!thread?.account_id && thread.account_id !== accountId,
     },
     now,
     timeZone,
   );
   if (!reason) return { sessionId: thread?.session_id ?? null, input: job.text };
   if (reason === 'tainted') forgetTaintedSession(db, job.hireId, threadKey);
+  if (reason === 'other-account') writeAudit(db, job.hireId, 'session-other-account', { threadKey, sessionAccountId: thread?.account_id, runAccountId: accountId });
   return { sessionId: null, input: freshSessionInput(reason, lastTurns(db, job.hireId, threadKey), job.text) };
 }
 
@@ -208,7 +211,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   const mcpConfigPath = path.join(paths.run, `mcp-${job.scope}.json`);
   fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: services.mcpServers }), { mode: 0o600 });
 
-  const { sessionId, input } = chooseSession(deps.db, job, threadKey, now, deps.timeZone(job.hireId));
+  const { sessionId, input } = chooseSession(deps.db, job, threadKey, now, deps.timeZone(job.hireId), account.id);
   return {
     command: deps.claudePath,
     args: runArgs({ sessionId, settingsPath, mcpConfigPath, model: deps.model?.(job.hireId) }),

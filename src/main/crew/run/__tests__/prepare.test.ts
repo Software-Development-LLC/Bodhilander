@@ -155,6 +155,19 @@ describe('preparing a run', () => {
     expect(isTainted(t.db, HIRE, 'chat:owner')).toBe(true);
   });
 
+  test("a session made under another account starts fresh, and the refusal is audited", async () => {
+    const t = setup();
+    t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id, updated_at) VALUES (?, 'chat:owner', 'old', 'a2', '2026-11-27 11:00:00')`).run(HIRE);
+    const p = (await prepareRun(t.deps, job(), 'chat:owner', 'run-1')) as PreparedRun;
+    expect(p.sessionId).toBeNull();
+    expect(p.args).not.toContain('--resume');
+    expect(p.input).toContain("account changed");
+    const rows = t.raw.query(`SELECT hire_id, event, detail FROM crew_audit WHERE event = 'session-other-account'`).all() as { hire_id: string; detail: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].hire_id).toBe(HIRE);
+    expect(JSON.parse(rows[0].detail)).toEqual({ threadKey: 'chat:owner', sessionAccountId: 'a2', runAccountId: 'a1' });
+  });
+
   test('an untainted thread on the same day resumes its session', async () => {
     const t = setup();
     t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id, updated_at) VALUES (?, 'chat:owner', 'old', 'a1', '2026-11-27 11:00:00')`).run(HIRE);

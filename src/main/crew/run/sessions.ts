@@ -23,9 +23,11 @@ export interface ThreadState {
   tainted: boolean;
   /** The session was made on another machine. */
   moved: boolean;
+  /** The session was made under another Claude account than this run's. */
+  otherAccount: boolean;
 }
 
-export type FreshReason = 'size' | 'new-day' | 'moved' | 'tainted';
+export type FreshReason = 'size' | 'new-day' | 'moved' | 'tainted' | 'other-account';
 
 /** `--resume` failed because the session is not in this account. */
 export function sessionLost(stderr: string): boolean {
@@ -36,6 +38,7 @@ export function freshReason(thread: ThreadState, now: number, timeZone: string |
   if (!thread.sessionId) return null;
   if (thread.tainted) return 'tainted';
   if (thread.moved) return 'moved';
+  if (thread.otherAccount) return 'other-account';
   if ((thread.contextTokens ?? 0) > CONTEXT_LIMIT_TOKENS) return 'size';
   if (thread.lastRunAt !== null && capDay(thread.lastRunAt, timeZone) !== capDay(now, timeZone)) return 'new-day';
   return null;
@@ -49,6 +52,7 @@ const WHY: Record<FreshReason, string> = {
   'new-day': 'A new day, so this is a fresh session on this thread.',
   moved: 'This assistant moved to another machine, so this is a fresh session on this thread.',
   tainted: 'The last run read untrusted content, so this is a fresh session on this thread.',
+  'other-account': "This assistant's account changed, so this is a fresh session on this thread.",
 };
 
 export function freshSessionInput(reason: FreshReason, turns: Turn[], input: string): string {

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { CONTEXT_LIMIT_TOKENS, freshReason, freshSessionInput, lostSessionInput, sessionLost } from '../sessions';
 
 const NOW = Date.parse('2026-11-27T15:00:00Z');
-const thread = (over = {}) => ({ sessionId: 's1', contextTokens: 1000, lastRunAt: NOW - 60_000, tainted: false, moved: false, ...over });
+const thread = (over = {}) => ({ sessionId: 's1', contextTokens: 1000, lastRunAt: NOW - 60_000, tainted: false, moved: false, otherAccount: false, ...over });
 
 describe('fresh sessions', () => {
   test('a thread with no session has nothing to refresh', () => {
@@ -18,6 +18,12 @@ describe('fresh sessions', () => {
     expect(freshReason(thread({ lastRunAt: late }), Date.parse('2026-11-27T05:30:00Z'), 'UTC')).toBeNull();
     expect(freshReason(thread({ moved: true }), NOW, null)).toBe('moved');
     expect(freshReason(thread({ tainted: true, moved: true }), NOW, null)).toBe('tainted');
+  });
+
+  test("a session made under another account is never resumed, and says why", () => {
+    expect(freshReason(thread({ otherAccount: true }), NOW, null)).toBe('other-account');
+    expect(freshReason(thread({ otherAccount: true, tainted: true }), NOW, null)).toBe('tainted');
+    expect(freshSessionInput('other-account', [], 'hi').startsWith("This assistant's account changed")).toBe(true);
   });
 
   test('a fresh input carries the last four turns, clipped, then the message', () => {

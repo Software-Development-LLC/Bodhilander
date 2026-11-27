@@ -219,7 +219,7 @@ export class WslRuns {
     const mcpServers = crewMcpServers({ execPath: WSL_NODE, script: WSL_MCP_RELAY, socket: started.served.sockets.mcp, token: mcpToken });
     await this.write(mcpConfigPath, JSON.stringify({ mcpServers }), '0600');
 
-    const { sessionId, input } = chooseSession(d.db, job, threadKey, now, d.timeZone(job.hireId));
+    const { sessionId, input } = chooseSession(d.db, job, threadKey, now, d.timeZone(job.hireId), accountId);
     const gh = started.served.sockets.gh;
     return wslLaunch({
       command: CLAUDE_BIN,
