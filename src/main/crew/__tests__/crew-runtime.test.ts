@@ -50,7 +50,10 @@ function setup() {
     sendReply: (id: string, text: string) => (hub.replies.push([id, text]), true),
     sendUsage: (id: string, u: Record<string, unknown>) => (hub.usage.push([id, u]), true),
     sendEdit: (e: unknown) => (hub.edits.push(e), 'e1'),
+    cards: [] as [string, Record<string, unknown>][],
+    sendCard: (id: string, c: Record<string, unknown>) => (hub.cards.push([id, c]), true),
   });
+  const ended: string[] = [];
   const children: Child[] = [];
   const records = new Map<string, AccountUsage>();
   const reminders: string[] = [];
@@ -66,6 +69,7 @@ function setup() {
       children.push(c);
       return c;
     },
+    runEnded: (jobId) => void ended.push(jobId),
     now: () => clock,
     setInterval: (fn, ms) => {
       const t = { fn, ms, live: true };
@@ -75,7 +79,7 @@ function setup() {
     clearInterval: (h) => void ((h as { live: boolean }).live = false),
   });
   const job = (n: number) => raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(n), HIRE, PERSON);
-  return { raw, db, hub, rt, children, records, reminders, timers, signIn, job, advance: (ms: number) => (clock += ms) };
+  return { raw, db, hub, rt, children, records, reminders, timers, signIn, job, ended, advance: (ms: number) => (clock += ms) };
 }
 
 describe('crew runtime', () => {
@@ -145,5 +149,30 @@ describe('crew runtime', () => {
     expect(t.timers.every((x) => !x.live)).toBe(true);
     expect(t.children[0].signals).toEqual(['SIGINT']);
     expect(t.hub.listenerCount('job')).toBe(0);
+  });
+});
+
+describe('crew runtime cards', () => {
+  test('a run that parks on a card resumes from the decision on the same thread', async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job', { id: uuid(1) });
+    await flush();
+    const asked = t.rt.broker.ask({ jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', scope: 'owner', requestedBy: PERSON }, { tool_name: 'Bash', input: { command: 'x' } });
+    expect(t.hub.cards).toHaveLength(1);
+    const [jobId, card] = t.hub.cards[0];
+    expect(jobId).toBe(uuid(1));
+    expect(card).toMatchObject({ kind: 'permission', inboundId: uuid(1), tainted: false });
+    t.rt.loop.park(uuid(1));
+    t.children[0].finish();
+    await asked;
+    await flush();
+    expect(t.ended).toEqual([uuid(1)]);
+    expect((t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(uuid(1)) as { state: string }).state).toBe('parked');
+    t.hub.emit('card-decision', { type: 'card_decision', id: uuid(2), hireId: HIRE, epoch: 1, raiseId: card.id, decision: 'approved', decidedBy: PERSON });
+    await flush();
+    expect(t.children).toHaveLength(2);
+    const run = t.raw.query(`SELECT thread_key FROM crew_run WHERE job_id = ?`).get(uuid(2)) as { thread_key: string };
+    expect(run.thread_key).toBe('chat:owner');
   });
 });

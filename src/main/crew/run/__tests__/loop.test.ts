@@ -215,3 +215,23 @@ describe('run loop', () => {
     expect(threadKeyFor({ kind: 'routine', scope: 'owner' })).toBe('routine:owner');
   });
 });
+
+describe('parking', () => {
+  test('a parked run ends parked with no reply, and keeps its session for the decision', async () => {
+    const t = setup();
+    t.job(1);
+    await t.loop.tick();
+    expect(t.loop.park(uuid(1))).toBe(true);
+    t.children[0].finish('waiting on a card', 'sess-p');
+    expect(t.state(1).state).toBe('parked');
+    expect(t.replies).toEqual([]);
+    expect(t.lastRun().outcome).toBe('parked');
+    const thread = t.raw.query(`SELECT session_id FROM crew_thread WHERE hire_id = ?`).get(HIRE) as { session_id: string };
+    expect(thread.session_id).toBe('sess-p');
+  });
+
+  test('park names a job that is not running: nothing changes', async () => {
+    const t = setup();
+    expect(t.loop.park(uuid(9))).toBe(false);
+  });
+});

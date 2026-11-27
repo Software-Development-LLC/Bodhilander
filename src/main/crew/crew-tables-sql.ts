@@ -124,6 +124,23 @@ export const CREW_TABLES_SQL = `
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- A card this machine raised. A decision after the run parked resumes as decision_job_id.
+    CREATE TABLE IF NOT EXISTS crew_card (
+      raise_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      hire_id TEXT NOT NULL,
+      thread_key TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('owner', 'circle')),
+      requested_by TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      tool TEXT DEFAULT NULL,
+      input_hash TEXT DEFAULT NULL,
+      state TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'parked', 'decided', 'used')),
+      decision TEXT DEFAULT NULL,
+      decision_job_id TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS crew_sync_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

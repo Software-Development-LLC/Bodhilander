@@ -20,6 +20,7 @@ import {
   authMessage,
   type AuditFrame,
   type AuthFrame,
+  type CardRaiseFrame,
   type ChallengeFrame,
   type DeliverFrame,
   type EditResultFrame,
@@ -33,6 +34,7 @@ import {
   type ReplyFrame,
   type SyncPageFrame,
   type SyncPullFrame,
+  type TokenRequestFrame,
   type UsageRecordFrame,
   type WelcomeFrame,
 } from './protocol';
@@ -386,6 +388,13 @@ export class HubClient extends EventEmitter {
       case 'artifact':
         this.emit('artifact', frame);
         return;
+      case 'card_decision':
+        this.send({ type: 'ack', id: frame.id });
+        this.emit('card-decision', frame);
+        return;
+      case 'token':
+        this.emit('token', frame);
+        return;
       default:
         log.warn(`[Crew] ignored a ${frame.type} frame after welcome`);
     }
@@ -557,6 +566,22 @@ export class HubClient extends EventEmitter {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: UsageRecordFrame = { type: 'usage_record', id: derivedUuid(`usage:${jobId}`), hireId: stamp.hireId, epoch: stamp.epoch, ...usage };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  /** Queue a card raised by a job's run, stamped with the job's epoch. False when fenced or gone. */
+  sendCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: CardRaiseFrame = { type: 'card_raise', ...raise, hireId: stamp.hireId, epoch: stamp.epoch };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  /** Ask for a read token for a job's requester; the answer arrives as a `token` event with this id. */
+  sendTokenRequest(jobId: string, id: string, requestedBy: string, repos: string[]): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: TokenRequestFrame = { type: 'token_request', id, hireId: stamp.hireId, epoch: stamp.epoch, requestedBy, repos };
     return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
   }
 

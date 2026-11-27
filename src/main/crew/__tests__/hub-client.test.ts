@@ -859,3 +859,29 @@ describe('HubClient review fixes', () => {
     for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 });
+
+describe('HubClient cards and tokens', () => {
+  test('a card_decision is acked and handed on; a token frame is handed on', () => {
+    const t = setup();
+    const seen: unknown[] = [];
+    t.client.on('card-decision', (f) => seen.push(f));
+    t.client.on('token', (f) => seen.push(f));
+    t.online();
+    const decision = { type: 'card_decision', id: uuid(7), hireId: HIRE, epoch: 1, raiseId: uuid(8), decision: 'approved', decidedBy: 'p' };
+    t.sock().hub(decision);
+    t.sock().hub({ type: 'token', id: uuid(9), token: 'gh-read', expiresAt: 5, repos: ['o/r'] });
+    expect(t.sock().sent.filter((f) => f.type === 'ack')).toEqual([{ type: 'ack', id: uuid(7) }]);
+    expect(seen).toEqual([decision, { type: 'token', id: uuid(9), token: 'gh-read', expiresAt: 5, repos: ['o/r'] }]);
+  });
+
+  test('a card raise and a token request go out under the job\'s epoch, and not for a fenced job', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    expect(t.client.sendCard(uuid(1), { id: uuid(20), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 's' } })).toBe(true);
+    expect(t.client.sendTokenRequest(uuid(1), uuid(21), PERSON, ['o/r'])).toBe(true);
+    const sent = t.sock().sent.filter((f) => f.type === 'card_raise' || f.type === 'token_request');
+    expect(sent.map((f) => [f.type, f.hireId, f.epoch])).toEqual([['card_raise', HIRE, 1], ['token_request', HIRE, 1]]);
+    expect(t.client.sendCard(uuid(99), { id: uuid(22), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 's' } })).toBe(false);
+  });
+});

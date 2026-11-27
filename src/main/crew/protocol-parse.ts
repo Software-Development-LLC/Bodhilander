@@ -20,7 +20,7 @@ import {
 
 export type ParseResult =
   | { ok: true; frame: HubFrame }
-  | { ok: false; problem: 'not-json' | 'too-large' | 'unknown-type' | 'unhandled-type' | 'bad-shape'; type?: string };
+  | { ok: false; problem: 'not-json' | 'too-large' | 'unknown-type' | 'bad-shape'; type?: string };
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -34,9 +34,6 @@ const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isSaf
 const isEpoch = (v: unknown): v is number => isInt(v) && v >= 0;
 
 type Obj = Record<string, unknown>;
-
-/** Hub frame types no part of this build reads yet. */
-const UNHANDLED: ReadonlySet<HubFrameType> = new Set(['card_decision', 'usage', 'token']);
 
 function checkLeases(v: unknown): v is Lease[] {
   return Array.isArray(v) && v.every((l) => typeof l === 'object' && l !== null && isUuidV4((l as Obj).hireId) && isEpoch((l as Obj).epoch));
@@ -85,6 +82,17 @@ const SHAPES: Partial<Record<HubFrameType, (f: Obj) => boolean>> = {
     (f.why === undefined || isStr(f.why)) &&
     (f.current === undefined || isSyncObject(f.current)),
   artifact: (f) => isUuidV4(f.id) && isNonEmpty(f.name) && isNonEmpty(f.url) && isEpoch(f.expiresAt),
+  card_decision: (f) =>
+    isUuidV4(f.id) && isUuidV4(f.hireId) && isEpoch(f.epoch) && isUuidV4(f.raiseId) && (f.decision === 'approved' || f.decision === 'denied') && isNonEmpty(f.decidedBy),
+  token: (f) => isUuidV4(f.id) && isNonEmpty(f.token) && isEpoch(f.expiresAt) && Array.isArray(f.repos) && f.repos.every(isNonEmpty),
+  usage: (f) =>
+    isUuidV4(f.id) &&
+    isUuidV4(f.hireId) &&
+    isEpoch(f.since) &&
+    isEpoch(f.inputTokens) &&
+    isEpoch(f.outputTokens) &&
+    isEpoch(f.cacheCreationTokens) &&
+    isEpoch(f.records),
 };
 
 /**
@@ -107,7 +115,6 @@ export function parseHubFrame(raw: string): ParseResult {
     return { ok: false, problem: 'unknown-type', type: isStr(type) ? type : undefined };
   }
   const known = type as HubFrameType;
-  if (UNHANDLED.has(known)) return { ok: false, problem: 'unhandled-type', type };
   const shape = SHAPES[known];
   if (!shape?.(f)) return { ok: false, problem: 'bad-shape', type };
   return { ok: true, frame: f as unknown as HubFrame };
