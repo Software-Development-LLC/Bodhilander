@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3';
 import type { ClaudeAccount, CrewEditResult } from '../../shared/types';
 import type { ClaudeAccountRef } from './account-ref';
 import { writeAudit } from './audit';
-import type { CardDecisionFrame, MovePayload } from './protocol';
+import type { CardDecisionFrame, HireBody, MovePayload } from './protocol';
 
 export interface HomeDeps {
   db: Database.Database;
@@ -30,6 +30,11 @@ export function hireBody(db: Database.Database, hireId: string): Record<string, 
   } catch {
     return null;
   }
+}
+
+/** A body cached before the Hub published a field reads it as undefined. */
+export function cachedHire(db: Database.Database, hireId: string): HireBody | null {
+  return hireBody(db, hireId) as HireBody | null;
 }
 
 function refOf(body: Record<string, unknown>): ClaudeAccountRef | null {

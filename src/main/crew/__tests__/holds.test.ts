@@ -82,9 +82,8 @@ describe("the owner's day", () => {
     const paris = () => 'Europe/Paris';
     expect(hireTimeZone({ ownerTimezone: 'America/Chicago' }, paris)).toBe('America/Chicago');
     expect(hireTimeZone({ ownerTimezone: 'Not/AZone' }, paris)).toBe('Europe/Paris');
-    expect(hireTimeZone({ ownerTimezone: 42 }, paris)).toBe('Europe/Paris');
     expect(hireTimeZone({ ownerTimezone: null }, paris)).toBe('Europe/Paris');
     expect(hireTimeZone(null, paris)).toBe('Europe/Paris');
-    expect(hireTimeZone({}, () => null)).toBeNull();
+    expect(hireTimeZone({ ownerTimezone: null }, () => null)).toBeNull();
   });
 });

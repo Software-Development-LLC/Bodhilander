@@ -1,4 +1,4 @@
-// Copied verbatim from bodhi-service-crew src/protocol.ts at df5af52 (branch feat/1498-service-crew, head 8839c89b2eee76e247b387d8ffcedffb3e78edd8).
+// Copied verbatim from bodhi-service-crew src/protocol.ts at 1c49e41 (branch feat/1498-service-crew, head c64961ae905999afc62f02f82452c3da683e5984).
 // The machine protocol between the Crew Hub and Bodhilander, which keeps a verbatim copy at
 // src/main/crew/protocol.ts. Any frame change after phase 1 ships bumps PROTOCOL_VERSION.
 // Times (*At, hubTime) are epoch ms; every id on the wire is a lowercase UUIDv4; MAX_TEXT counts
@@ -228,7 +228,7 @@ export type UsageReadFrame = { type: 'usage_read'; id: string; hireId: string; e
 export type SyncRef = { kind: SyncKind; objectId: string };
 export type SyncPullFrame = { type: 'sync_pull'; id: string; since: number; fetch?: SyncRef[] };
 export type AccountRef = { accountUuid: string; email: string; label: string };
-export type HireBody = { name: string; roleId: string; skillBundleId: string; skillBundleHash: string; repos: string[]; sharedWith: string[]; accountRef: AccountRef; homeMachineId: string | null; epoch: number; state: HireState; dailyTokenCap: number | null };
+export type HireBody = { name: string; roleId: string; skillBundleId: string; skillBundleHash: string; repos: string[]; sharedWith: string[]; accountRef: AccountRef; homeMachineId: string | null; epoch: number; state: HireState; dailyTokenCap: number | null; ownerTimezone: string | null };
 export type HireFields = { name?: string; roleId?: string; repos?: string[]; accountRef?: AccountRef; dailyTokenCap?: number | null };
 export type RoutineBody = { hireId: string; cron: string; timezone: string; prompt: string; lastFired: number | null; lastRun: number | null };
 export type RoutineFields = { cron?: string; timezone?: string; prompt?: string };

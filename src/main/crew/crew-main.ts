@@ -23,7 +23,7 @@ import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCre
 import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
 import { sweepLetGo } from './let-go';
-import { hireBody, type HomeDeps } from './home';
+import { cachedHire, type HomeDeps } from './home';
 import { McpHost, hostSocketPath } from './mcp/host';
 import { resolveAccountRef } from './account-ref';
 import { HireDayUsage } from './run/hire-usage';
@@ -154,7 +154,7 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     onLost: (hireId) => runtime?.interrupt(hireId),
     handbook: (hireId) => handbookFor(db, hireId),
     skills: (hireId) => pinnedSkills(db, hireId),
-    timeZone: (hireId) => hireTimeZone(hireBody(db, hireId)),
+    timeZone: (hireId) => hireTimeZone(cachedHire(db, hireId)),
     audit: (event, detail) => writeAudit(db, null, event, detail),
     openExternal: (url) => void shell.openExternal(url),
     belongsTo: (accountId, _token, accountUuid) => {
@@ -198,7 +198,7 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
     home: os.homedir(),
     claudePath: claudePath(),
     env: process.env,
-    timeZone: (hireId) => hireTimeZone(hireBody(getDatabase(), hireId)),
+    timeZone: (hireId) => hireTimeZone(cachedHire(getDatabase(), hireId)),
     handbook: (hireId) => handbookFor(getDatabase(), hireId),
     restoreSkills: (paths, hireId) => restoreSkills(paths, pinnedSkills(getDatabase(), hireId)),
     holds,

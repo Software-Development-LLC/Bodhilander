@@ -5,6 +5,7 @@
  */
 import type { AccountUsage, UsageWindow } from '../../shared/types';
 import type { QuotaLimitHit } from '../quota-limit';
+import type { HireBody } from './protocol';
 import type { CrewAccountCap } from '../repositories/preferences';
 
 export type HoldCause = 'missing' | 'signed-out' | 'rate-limited' | 'crew-cap' | 'hire-cap';
@@ -58,11 +59,10 @@ export function machineTimeZone(read: () => string | undefined = resolvedZone): 
   }
 }
 
-/** The calendar day in the owner's timezone, so the hire cap resets at their midnight. */
 /** The zone a hire's day is counted in: its owner's, else this machine's; null means UTC. */
-export function hireTimeZone(body: Record<string, unknown> | null, machine: () => string | null = machineTimeZone): string | null {
+export function hireTimeZone(body: Pick<HireBody, 'ownerTimezone'> | null, machine: () => string | null = machineTimeZone): string | null {
   const owner = body?.ownerTimezone;
-  return (typeof owner === 'string' && machineTimeZone(() => owner)) || machine();
+  return (owner ? machineTimeZone(() => owner) : null) ?? machine();
 }
 
 export function capDay(now: number, timeZone: string | null): string {
