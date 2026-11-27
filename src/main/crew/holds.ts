@@ -44,6 +44,20 @@ export function capTokens(usage: { input_tokens?: number; cache_creation_input_t
   return (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.output_tokens ?? 0);
 }
 
+const resolvedZone = (): string | undefined => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** The owner's timezone as this machine knows it: the Hub sends no person.timezone, and the owner is the one at this machine. */
+export function machineTimeZone(read: () => string | undefined = resolvedZone): string | null {
+  try {
+    const zone = read();
+    if (!zone) return null;
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return zone;
+  } catch {
+    return null;
+  }
+}
+
 /** The calendar day in the owner's timezone, so the hire cap resets at their midnight. */
 export function capDay(now: number, timeZone: string | null): string {
   try {

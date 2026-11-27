@@ -16,7 +16,8 @@ import { getUsage, setUsage } from '../usage-store';
 import { CrewSignIn, type Reminder } from './crew-token';
 import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
 import { GithubGateway, runGh } from './gateway/github-gateway';
-import { Holds } from './holds';
+import { handbookFor, pinnedSkills, restoreSkills } from './handbook';
+import { Holds, machineTimeZone } from './holds';
 import type { HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
 import type { RefusedFrame, TokenFrame } from './protocol';
@@ -128,8 +129,9 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
     home: os.homedir(),
     claudePath: claudePath(),
     env: process.env,
-    timeZone: () => null,
-    handbook: () => '',
+    timeZone: () => machineTimeZone(),
+    handbook: (hireId) => handbookFor(getDatabase(), hireId),
+    restoreSkills: (paths, hireId) => restoreSkills(paths, pinnedSkills(getDatabase(), hireId)),
     holds,
     usage: getUsage,
     accountCap: getCrewAccountCap,

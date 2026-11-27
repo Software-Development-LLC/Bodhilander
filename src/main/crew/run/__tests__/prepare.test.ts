@@ -16,6 +16,7 @@ const { ServicesNotReady } = await import('../services');
 const { markTainted, isTainted } = await import('../../taint');
 const { Holds } = await import('../../holds');
 const { HireDayUsage } = await import('../hire-usage');
+const { SteeringUnavailable } = await import('../../handbook');
 import type { AccountUsage, ClaudeAccount } from '../../../../shared/types';
 import type { CrewJob, PreparedRun } from '../loop';
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
@@ -231,5 +232,24 @@ describe('run services in preparation', () => {
   test('services that are not ready yet hold the run for setup rather than failing it', async () => {
     const t = setup({ services: 'not-ready' });
     expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+  });
+
+  test('a role or bundle that has not synced holds the run for setup and rewrites nothing', async () => {
+    const t = setup();
+    fs.mkdirSync(path.join(t.root, 'owner'), { recursive: true });
+    fs.writeFileSync(path.join(t.root, 'owner', 'CLAUDE.md'), 'stale');
+    const deps = { ...t.deps, handbook: () => { throw new SteeringUnavailable('the role has not synced'); } };
+    expect(await prepareRun(deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    expect(fs.readFileSync(path.join(t.root, 'owner', 'CLAUDE.md'), 'utf8')).toBe('stale');
+    const restored: string[] = [];
+    const skills = { ...t.deps, restoreSkills: (_p: unknown, hireId: string) => { restored.push(hireId); throw new SteeringUnavailable('the skill bundle has not been fetched'); } };
+    expect(await prepareRun(skills, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    expect(restored).toEqual([HIRE]);
+  });
+
+  test('any other failure regenerating the steering paths still stops the run', async () => {
+    const t = setup();
+    const deps = { ...t.deps, restoreSkills: () => { throw new Error('disk full'); } };
+    await expect(prepareRun(deps, job(), 'chat:owner', 'run-1')).rejects.toThrow('disk full');
   });
 });

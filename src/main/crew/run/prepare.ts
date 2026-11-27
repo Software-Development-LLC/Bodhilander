@@ -11,6 +11,7 @@ import type { CrewAccountCap } from '../../repositories/preferences';
 import { resolveAccountRef, type ClaudeAccountRef } from '../account-ref';
 import type { CrewSignIn } from '../crew-token';
 import { holdState, type Holds } from '../holds';
+import { SteeringUnavailable } from '../handbook';
 import { consumeTaint, isTainted } from '../taint';
 import { runArgs, runEnv } from './env';
 import type { CrewJob, Prepared } from './loop';
@@ -35,13 +36,14 @@ export interface PrepareDeps {
   claudePath: string;
   env: Record<string, string | undefined>;
   timeZone(): string | null;
-  /** The role's handbook for CLAUDE.md; skills are restored by the caller's bundle step. */
+  /** The role's handbook for CLAUDE.md; throws SteeringUnavailable when the role has not synced. */
   handbook(hireId: string): string;
   holds: Holds;
   usage(accountId: string): AccountUsage | null;
   accountCap(accountId: string): CrewAccountCap;
   hireUsage: HireDayUsage;
-  restoreSkills?(paths: HirePaths): void;
+  /** Writes the hire's pinned bundle into skills/; throws SteeringUnavailable when it cannot be pinned. */
+  restoreSkills?(paths: HirePaths, hireId: string): void;
   /** The run's MCP servers, gateway sockets and shim env; throws when they cannot be set up. */
   services(job: CrewJob, threadKey: string, runId: string): Promise<RunServices>;
   sandbox(paths: HirePaths, job: CrewJob, configDir: string): Omit<SandboxInput, 'paths' | 'scope' | 'configDir' | 'userData' | 'home'>;
@@ -101,7 +103,8 @@ function lastTurns(db: Database.Database, hireId: string, threadKey: string): Tu
 const HIRE_GITCONFIG = '[core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n';
 const gitConfigPath = (paths: HirePaths): string => path.join(paths.git, 'gitconfig');
 
-function regenerate(paths: HirePaths, cwd: string, handbook: string, restoreSkills?: (p: HirePaths) => void): void {
+function regenerate(paths: HirePaths, cwd: string, readHandbook: () => string, restoreSkills?: (p: HirePaths) => void): void {
+  const handbook = readHandbook();
   for (const dir of [paths.owner, paths.circle, paths.run, paths.ghConfig, paths.shell, paths.git]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(gitConfigPath(paths), HIRE_GITCONFIG);
   fs.rmSync(path.join(cwd, '.claude'), { recursive: true, force: true });
@@ -143,7 +146,12 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
     throw err;
   }
   const cwd = cwdFor(paths, job.scope);
-  regenerate(paths, cwd, deps.handbook(job.hireId), deps.restoreSkills);
+  try {
+    regenerate(paths, cwd, () => deps.handbook(job.hireId), deps.restoreSkills && ((p) => deps.restoreSkills?.(p, job.hireId)));
+  } catch (err) {
+    if (err instanceof SteeringUnavailable) return { hold: HOLD_SETUP };
+    throw err;
+  }
   const settingsPath = settingsPathFor(paths, job.scope);
   const base = deps.sandbox(paths, job, account.configDir);
   const sandbox: SandboxInput = { ...base, sockets: [...base.sockets, ...services.sockets], paths, scope: job.scope, configDir: account.configDir, userData: deps.userData, home: deps.home };
