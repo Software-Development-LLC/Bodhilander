@@ -298,6 +298,25 @@ describe.skipIf(!hasNode)('crew-agent itself, under node', () => {
     expect(fs.existsSync(path.dirname(mcp))).toBe(false);
   });
 
+  const serveOnce = (root: string, frame: Record<string, unknown>) => {
+    const out = spawnSync('node', ['-e', `import(${JSON.stringify(AGENT)}).then(m=>m.serve(process.stdin, ${JSON.stringify(root)}))`], {
+      input: `${JSON.stringify({ t: 'serve', now: 1, uid: process.getuid?.() ?? 0, name: 'abcdefgh', ...frame })}\n`,
+      timeout: 10_000,
+    });
+    return out.stdout.toString().trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+  };
+
+  test('serve with no sockets is ready at once', () => {
+    const frames = serveOnce(path.join(tmp(), 'cr'), { sockets: [], private: [] });
+    expect(frames[1]).toMatchObject({ t: 'ready', sockets: {} });
+  });
+
+  test('a socket that cannot listen is an error frame, not a crash or a silent wait', () => {
+    const frames = serveOnce(path.join(tmp(), 'cr'), { sockets: ['x'.repeat(200)], private: [] });
+    expect(frames[1]).toMatchObject({ t: 'error', code: 'listen' });
+    expect(frames).toHaveLength(2);
+  });
+
   test('serve refuses a socket root it does not own at 0700', async () => {
     const root = path.join(tmp(), 'cr');
     fs.mkdirSync(root, { mode: 0o755 });

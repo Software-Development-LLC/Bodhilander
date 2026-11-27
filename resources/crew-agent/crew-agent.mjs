@@ -11,7 +11,7 @@ import { constants } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.1.1';
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const RUN_DIR_TRIES = 4;
 
@@ -84,6 +84,8 @@ export async function serve(input = process.stdin, root = null) {
       const sockets = {};
       const all = [...f.sockets, ...hidden];
       let pending = all.length;
+      let failed = false;
+      if (pending === 0) send({ t: 'ready', dir, sockets });
       for (const sock of all) {
         const p = path.join(hidden.includes(sock) ? privateDir : dir, `${sock}.sock`);
         const server = net.createServer((conn) => {
@@ -96,10 +98,15 @@ export async function serve(input = process.stdin, root = null) {
           conn.on('close', () => conns.delete(id));
         });
         servers.push(server);
+        server.on('error', (err) => {
+          if (failed) return;
+          failed = true;
+          send({ t: 'error', code: 'listen', sock, error: err.code ?? String(err.message) });
+        });
         server.listen(p, () => {
           fs.chmodSync(p, 0o600);
           sockets[sock] = p;
-          if ((pending -= 1) === 0) send({ t: 'ready', dir, sockets });
+          if ((pending -= 1) === 0 && !failed) send({ t: 'ready', dir, sockets });
         });
       }
     } else if (f.t === 'data') {
