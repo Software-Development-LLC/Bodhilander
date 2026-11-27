@@ -16,7 +16,8 @@ export interface LetGoDeps {
   /** The answer that arrives after the wait gave up; called once with it. */
   onLateResult(id: string, handle: (frame: EditResultFrame) => void): void;
   forget(hireId: string): void;
-  interrupt(hireId: string): void;
+  /** Resolves once the hire's run has exited. */
+  stop(hireId: string): Promise<void>;
   moveAside(hireId: string): void;
 }
 
@@ -32,18 +33,18 @@ export async function letGoHire(deps: LetGoDeps, hireId: string): Promise<CrewEd
   const answer = await deps.editResult(id);
   if (!answer) {
     deps.onLateResult(id, (late) => {
-      if (late.result === 'applied') cleanUp(deps, hireId);
+      if (late.result === 'applied') cleanUp(deps, hireId).catch((err) => log.warn('[Crew] could not finish a late let go', err));
     });
     return { ok: false, error: "Crew Hub hasn't answered yet. If it lets the hire go, this machine stops it then; check the hire in a minute." };
   }
   if (answer.result !== 'applied') return { ok: false, error: answer.why ?? 'Crew Hub refused the let go.' };
-  cleanUp(deps, hireId);
+  await cleanUp(deps, hireId);
   return { ok: true };
 }
 
-function cleanUp(deps: LetGoDeps, hireId: string): void {
+async function cleanUp(deps: LetGoDeps, hireId: string): Promise<void> {
   deps.forget(hireId);
-  deps.interrupt(hireId);
+  await deps.stop(hireId);
   try {
     deps.moveAside(hireId);
   } catch (err) {

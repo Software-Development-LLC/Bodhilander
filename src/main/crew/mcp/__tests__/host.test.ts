@@ -6,6 +6,7 @@ import * as path from 'node:path';
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 
 const { McpHost, hostSocketPath, textResult } = await import('../host');
+const { ServicesNotReady } = await import('../../run/services');
 import type { McpServerHandler } from '../host';
 import { HIRE, crewDb, uuid } from '../../__tests__/crew-db';
 
@@ -57,6 +58,7 @@ describe('MCP host', () => {
   test('the socket lives under userData, within the sun_path limit', () => {
     expect(hostSocketPath('/Users/a/Library/Application Support/Bodhilander')).toBe('/Users/a/Library/Application Support/Bodhilander/crew/mcp.sock');
     expect(() => hostSocketPath(`/${'x'.repeat(100)}`)).toThrow('sun_path');
+    expect(() => hostSocketPath(`/${'x'.repeat(100)}`)).toThrow(ServicesNotReady);
   });
 
   test('the relay lists and calls the registered run\'s server, end to end', async () => {

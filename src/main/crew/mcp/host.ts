@@ -9,6 +9,7 @@ import * as path from 'path';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
 import { writeAudit } from '../audit';
+import { ServicesNotReady } from '../run/services';
 import { newRunToken, SUN_PATH_MAX, tokenMatches } from '../run/sockets';
 
 export const MCP_SERVERS = ['approve', 'tools'] as const;
@@ -48,7 +49,7 @@ export const textResult = (text: string, isError = false): McpCallResult => ({ c
 
 export function hostSocketPath(userData: string): string {
   const p = path.join(userData, 'crew', 'mcp.sock');
-  if (Buffer.byteLength(p) >= SUN_PATH_MAX) throw new Error(`the Crew MCP socket path is over the sun_path limit: ${p}`);
+  if (Buffer.byteLength(p) >= SUN_PATH_MAX) throw new ServicesNotReady(`the Crew MCP socket path is over the sun_path limit: ${p}`);
   return p;
 }
 

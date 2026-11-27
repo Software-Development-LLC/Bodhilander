@@ -75,7 +75,7 @@ export async function letGoHire(hireId: string): Promise<CrewEditResult> {
       editResult: (id) => editResultFrom(hub, id, LET_GO_ANSWER_MS),
       onLateResult: (id, handle) => onLateEditResult(hub, id, handle),
       forget: (id) => hub.forgetHire(id),
-      interrupt: (id) => crewRuntime()?.interrupt(id),
+      stop: (id) => crewRuntime()?.stopHire(id) ?? Promise.resolve(),
       moveAside: (id) => moveHireAside(app.getPath('userData'), id, Date.now()),
     },
     hireId,

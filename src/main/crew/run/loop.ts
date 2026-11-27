@@ -117,6 +117,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 export class RunLoop {
   private readonly active = new Map<string, Active>();
+  private readonly idle = new Map<string, (() => void)[]>();
   private readonly holds = new Map<string, string>();
   private ticking: Promise<number> | null = null;
   private again = false;
@@ -254,6 +255,20 @@ export class RunLoop {
     return true;
   }
 
+  /** Resolves once the hire has no run going. */
+  whenIdle(hireId: string): Promise<void> {
+    if (!this.active.has(hireId)) return Promise.resolve();
+    return new Promise((resolve) => this.idle.set(hireId, [...(this.idle.get(hireId) ?? []), resolve]));
+  }
+
+  kill(hireId: string): void {
+    try {
+      this.active.get(hireId)?.child?.kill('SIGKILL');
+    } catch (err) {
+      log.warn('[Crew] could not kill a run', err);
+    }
+  }
+
   /** The run gave up waiting on a card: it ends parked, with no reply, and resumes from the decision. */
   park(jobId: string): boolean {
     const run = [...this.active.values()].find((r) => r.job.id === jobId);
@@ -388,6 +403,8 @@ export class RunLoop {
     }
     db.prepare(`UPDATE crew_run SET ended_at = CURRENT_TIMESTAMP, outcome = ?, pid = NULL WHERE id = ?`).run(outcome, run.runId);
     this.active.delete(run.job.hireId);
+    for (const resolve of this.idle.get(run.job.hireId) ?? []) resolve();
+    this.idle.delete(run.job.hireId);
     run.release();
     this.deps.onSettled?.(run.job.id, outcome);
   }

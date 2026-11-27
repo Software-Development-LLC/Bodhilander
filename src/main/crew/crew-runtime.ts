@@ -59,8 +59,22 @@ export interface CrewRuntime {
   changer: AccountChanger;
   broker: ApproveBroker;
   interrupt(hireId: string): void;
+  /** Interrupts the hire's run and resolves once it has exited, killing it after the grace period. */
+  stopHire(hireId: string, graceMs?: number): Promise<void>;
   checkReminders(): number;
   stop(): void;
+}
+
+export const STOP_GRACE_MS = 10_000;
+
+function within(done: Promise<void>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    void done.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
@@ -177,6 +191,12 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     broker,
     interrupt: (hireId) => {
       runLoop.interrupt(hireId);
+    },
+    stopHire: async (hireId, graceMs = STOP_GRACE_MS) => {
+      runLoop.interrupt(hireId);
+      if (await within(runLoop.whenIdle(hireId), graceMs)) return;
+      runLoop.kill(hireId);
+      await within(runLoop.whenIdle(hireId), graceMs);
     },
     checkReminders,
     stop: () => {

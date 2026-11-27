@@ -63,6 +63,18 @@ describe('reads denied by default on macOS', () => {
     ...input(scope), paths: homePaths, userData: UD, userDataEntries: ['crew', 'bodhilander.db'], listDir: (d: string) => tree[d] ?? [], ...over,
   });
 
+  test("a run never reads its own run/ folder, where its MCP token sits, nor the owner's ~/.claude.json", () => {
+    const withConfig = (d: string) => (d === '/Users/b' ? [...tree[d], '.claude.json'] : tree[d] ?? []);
+    for (const scope of ['owner', 'circle'] as const) {
+      const s = buildRunSettings(homeInput(scope, { listDir: withConfig, home: '/Users/b' }));
+      const { allowRead, denyRead } = s.sandbox.filesystem;
+      expect(denyRead).toContain('/Users');
+      expect(allowRead.some((a) => homePaths.run === a || homePaths.run.startsWith(`${a}/`))).toBe(false);
+      expect(allowRead.some((a) => '/Users/b/.claude.json'.startsWith(`${a}/`) || a === '/Users/b')).toBe(false);
+      expect(s.permissions.deny).toEqual(expect.arrayContaining([`Read(/${homePaths.run}/**)`, 'Read(//Users/b/.claude.json)', 'Grep(//Users/b/.claude.json)']));
+    }
+  });
+
   test('Bash reads nothing under /Users or /Volumes but what is re-opened, and the named denies stay', () => {
     const s = buildRunSettings(input('owner'));
     expect(s.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(['/Users', '/Volumes', '/System/Volumes/Data/Users', '/acct/a1', '/Users/b/.ssh', '/ud/crew/h2']));

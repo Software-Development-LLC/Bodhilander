@@ -268,8 +268,8 @@ function handleLoginCompleted(
     verified: loggedIn === true,
   });
   log.info(`[Accounts] Login completed for ${flow.accountId}${email ? ` (${email})` : ''}`);
-  settleLogin(ptyId, loggedIn === true);
   if (loggedIn !== true) return;
+  settleLogin(ptyId, true);
   try {
     loginCompletedHook?.(flow.accountId);
   } catch (err) {

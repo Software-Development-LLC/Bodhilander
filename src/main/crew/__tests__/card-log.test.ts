@@ -26,6 +26,14 @@ describe('card log', () => {
     expect(listCards(db)?.[0]).toMatchObject({ decision: 'denied', decidedBy: PERSON, state: 'decided' });
   });
 
+  test('a card whose run ended without a decision shows as closed', () => {
+    const { raw, db } = setup();
+    raw.query(`INSERT INTO crew_card (raise_id, job_id, hire_id, thread_key, scope, requested_by, kind, state) VALUES (?, ?, ?, 'chat:owner', 'owner', ?, 'permission', 'closed')`).run(uuid(1), uuid(9), HIRE, PERSON);
+    recordCardRaise(db, raise(1), 1000);
+    markCardAcked(db, uuid(1));
+    expect(listCards(db)?.[0].state).toBe('closed');
+  });
+
   test('a card whose run waited out the hold shows as parked', () => {
     const { raw, db } = setup();
     raw.query(`INSERT INTO crew_card (raise_id, job_id, hire_id, thread_key, scope, requested_by, kind, state) VALUES (?, ?, ?, 'chat:owner', 'owner', ?, 'permission', 'parked')`).run(uuid(1), uuid(9), HIRE, PERSON);

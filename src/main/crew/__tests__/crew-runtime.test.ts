@@ -164,6 +164,24 @@ describe('crew runtime', () => {
     expect(t.children[0].signals).toEqual(['SIGINT']);
   });
 
+  test('stopHire resolves once the run exits, and kills a run that ignores the interrupt', async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    let stopped = false;
+    const stopping = t.rt.stopHire(HIRE, 5).then(() => (stopped = true));
+    await flush();
+    expect(t.children[0].signals).toEqual(['SIGINT']);
+    expect(stopped).toBe(false);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(t.children[0].signals).toEqual(['SIGINT', 'SIGKILL']);
+    t.children[0].finish();
+    await stopping;
+    expect(stopped).toBe(true);
+    await t.rt.stopHire(HIRE, 5);
+  });
+
   test('an applied edit_result carries the account change; welcome settles orphans', () => {
     const t = setup();
     t.raw.query(`INSERT INTO crew_hire_cache (hire_id, rev) VALUES (?, 1)`).run(HIRE);

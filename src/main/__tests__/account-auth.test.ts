@@ -292,6 +292,20 @@ describe('resumeLoginFlow — signing in to an account that already exists', () 
     expect(await accountAuth.loginSettled('__login-none')).toBe(false);
   });
 
+  test('an unverified confirmation leaves loginSettled waiting, until a cancel ends it', async () => {
+    const pty = fakePtyManager();
+    const { id } = restoredAccount();
+    const flow = accountAuth.resumeLoginFlow(pty, null, id);
+    let answer: boolean | null = null;
+    void accountAuth.loginSettled(flow.ptyId).then((v) => (answer = v));
+    accountAuth.confirmLoginMacOS(null, flow.ptyId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(answer).toBeNull();
+    accountAuth.cancelLoginFlow(pty, flow.ptyId, false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(answer).toBe(false);
+  });
+
   test('a verified login tells the sign-in hook; an unverified one does not', () => {
     const signedIn: string[] = [];
     accountAuth.setLoginCompletedHook((accountId) => signedIn.push(accountId));
