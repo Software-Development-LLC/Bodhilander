@@ -60,6 +60,7 @@ function setup(opts: { mode?: 'login' | 'token'; parent?: string; agentVersion?:
   const sh = async (script: string) => {
     scripts.push(script);
     if (script.startsWith('p=/tmp/crt-1000')) return { code: 0, stdout: `PARENT ${opts.parent ?? 'directory|1000|300'}\nMADE\n`, stderr: '' };
+    if (script.startsWith('test -s')) return { code: opts.signedIn === false ? 1 : 0, stdout: '', stderr: '' };
     if (script.includes('printf')) return { code: 0, stdout: '/home/crew\n/home/other\n/home/crew/.bodhilander\n/home/crew/.bodhilander/crew\n/home/crew/.bodhilander/crew/hires\n', stderr: '' };
     return { code: 0, stdout: '', stderr: '' };
   };
@@ -181,13 +182,13 @@ describe('a run prepared inside BodhiCrew', () => {
     expect(t.runs.liveTmpNames().size).toBe(0);
   });
 
-  test('a signed-out account or a missing broker holds without touching the distro', async () => {
+  test('a signed-out account or a missing broker holds before anything is made in the distro', async () => {
     const t = setup({ signedIn: false });
     expect(await t.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SIGNED_OUT });
-    expect(t.scripts).toHaveLength(0);
+    expect(t.scripts).toEqual([`test -s '${wslAccountDir('a1')}/.credentials.json'`]);
     const u = setup({ broker: false });
     expect(await u.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
-    expect(u.scripts).toHaveLength(0);
+    expect(u.scripts.every((s) => s.startsWith('test -s'))).toBe(true);
   });
 
   test('an account id that is not a plain id is never turned into a distro path', () => {

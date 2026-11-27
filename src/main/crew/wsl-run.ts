@@ -90,7 +90,8 @@ export class WslRuns {
     const ref = hireAccountRef(d.db, job.hireId);
     const account = ref ? resolveAccountRef(ref, d.accounts()) : null;
     if (!account) return { hold: HOLD_MISSING };
-    if (!d.signIn.signedIn(account.id, undefined, now)) return { hold: HOLD_SIGNED_OUT };
+    const loggedIn = d.signIn.mode() === 'login' ? await this.loggedIn(account.id) : undefined;
+    if (!d.signIn.signedIn(account.id, loggedIn, now)) return { hold: HOLD_SIGNED_OUT };
     const token = d.signIn.mode() === 'token' ? d.signIn.tokenFor(account.id, now) : null;
     if (d.signIn.mode() === 'token' && token === null) return { hold: HOLD_SIGNED_OUT };
     const broker = d.broker();
@@ -196,6 +197,12 @@ export class WslRuns {
       sessionId,
       token,
     });
+  }
+
+  /** The login fallback's credentials live in the account's dir inside BodhiCrew. */
+  private async loggedIn(accountId: string): Promise<boolean> {
+    const r = await this.deps.sh(`test -s ${q(posix.join(wslAccountDir(accountId), '.credentials.json'))}`);
+    return r.code === 0;
   }
 
   private async write(dest: string, body: string, mode: string): Promise<void> {
