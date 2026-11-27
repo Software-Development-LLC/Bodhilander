@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { copyOfficeWork, findOfficeData, importFromOffice, officeEmployees, readOfficeEmployee } from '../import-office';
+import { copyOfficeWork, findOfficeData, importFromOffice, officeEmployees, readOfficeEmployee, type ImportPort } from '../import-office';
 import { HIRE } from './crew-db';
 
 const made: string[] = [];
@@ -63,21 +63,44 @@ describe('import from Office', () => {
     expect(read.skipped).toEqual(['skills/big/SKILL.md']);
   });
 
-  test('sends the bundle and owner notes, copies work, and leaves Office untouched', () => {
+  const BUNDLE = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const port = (over: Partial<ImportPort> = {}, calls: unknown[][] = []): ImportPort => ({
+    createBundle: async (...a) => (calls.push(['create', ...a]), { ok: true, objectId: BUNDLE }),
+    bundleHash: async (...a) => (calls.push(['hash', ...a]), 'hub-hash'),
+    pinBundle: async (...a) => (calls.push(['pin', ...a]), { ok: true }),
+    writeOwnerNote: (...a) => (calls.push(['note', ...a]), true),
+    ...over,
+  });
+
+  test('creates the bundle, pins it with the hash the Hub reports, sends owner notes, copies work, and leaves Office untouched', async () => {
     const o = office();
     const before = tree(o.data);
-    const bundles: unknown[] = [];
-    const notes: unknown[] = [];
-    const summary = importFromOffice(
-      { sendBundle: (...a) => (bundles.push(a), true), writeOwnerNote: (...a) => (notes.push(a), true) },
-      { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner },
-    );
+    const calls: unknown[][] = [];
+    const summary = await importFromOffice(port({}, calls), { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner });
     expect(summary).toEqual({ skills: 1, notes: 1, work: 2, skipped: ['skills/big/SKILL.md'], failed: [] });
-    expect(bundles).toEqual([[HIRE, 'product-owner', [{ path: 'backlog-triage/SKILL.md', content: '# Triage' }]]]);
-    expect(notes).toEqual([[HIRE, 'owner/plan.md', 'the plan']]);
+    expect(calls).toEqual([
+      ['create', HIRE, 'product-owner', [{ path: 'backlog-triage/SKILL.md', content: '# Triage' }]],
+      ['hash', BUNDLE],
+      ['pin', HIRE, BUNDLE, 'hub-hash'],
+      ['note', HIRE, 'owner/plan.md', 'the plan'],
+    ]);
     expect(fs.readFileSync(path.join(o.owner, 'work', 'deep', 'board.json'), 'utf8')).toBe('{}');
     expect(fs.existsSync(path.join(o.owner, 'work', 'link.txt'))).toBe(false);
     expect(tree(o.data)).toEqual(before);
+  });
+
+  test('a refused or conflicting create or pin, or a bundle that never arrives, is listed under failed', async () => {
+    const o = office();
+    const input = { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner };
+    const calls: unknown[][] = [];
+    const refused = await importFromOffice(port({ createBundle: async () => ({ ok: false, why: 'refused: too big' }) }, calls), input);
+    expect(refused).toMatchObject({ skills: 0, failed: ['skills (refused: too big)'] });
+    expect(calls.some((c) => c[0] === 'pin' || c[0] === 'hash')).toBe(false);
+    const conflict = await importFromOffice(port({ pinBundle: async () => ({ ok: false, why: 'conflict' }) }), input);
+    expect(conflict.failed).toContain('skill pin (conflict)');
+    expect(conflict.skills).toBe(1);
+    const missing = await importFromOffice(port({ bundleHash: async () => null }), input);
+    expect(missing.failed).toContain("skill pin (the bundle didn't arrive)");
   });
 
   test('a second copy lands beside the hire\'s work, and a third is refused', () => {
@@ -103,16 +126,16 @@ describe('import from Office', () => {
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
-  test('what could not be queued is reported', () => {
+  test('what could not be queued is reported', async () => {
     const o = office();
-    const summary = importFromOffice(
-      { sendBundle: () => false, writeOwnerNote: () => false },
+    const summary = await importFromOffice(
+      port({ createBundle: async () => ({ ok: false, why: 'not queued' }), writeOwnerNote: () => false }),
       { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner },
     );
-    expect(summary).toMatchObject({ skills: 0, notes: 0, failed: ['skills', 'notes/plan.md'] });
+    expect(summary).toMatchObject({ skills: 0, notes: 0, failed: ['skills (not queued)', 'notes/plan.md'] });
     fs.mkdirSync(path.join(o.owner, 'work-from-office', 'x'), { recursive: true });
     fs.mkdirSync(path.join(o.owner, 'work', 'x'), { recursive: true });
-    const again = importFromOffice({ sendBundle: () => true, writeOwnerNote: () => true }, { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner });
+    const again = await importFromOffice(port(), { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner });
     expect(again).toMatchObject({ work: 0, failed: ['work/'] });
   });
 });

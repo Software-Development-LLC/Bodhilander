@@ -108,9 +108,16 @@ export function copyOfficeWork(dataDir: string, handle: string, ownerDir: string
   }
 }
 
+/** A Hub edit's answer: applied (with the object it made), or why not. */
+export type EditOutcome = { ok: true; objectId?: string } | { ok: false; why: string };
+
 export interface ImportPort {
-  /** Queue a skill_bundle create for the hire; false when it could not be queued. */
-  sendBundle(hireId: string, role: string, files: SkillFile[]): boolean;
+  /** Create a skill_bundle for the hire and wait for the Hub's answer. */
+  createBundle(hireId: string, role: string, files: SkillFile[]): Promise<EditOutcome>;
+  /** The bundle's hash as the Hub computed it, once fetched; null when it never arrives. */
+  bundleHash(bundleId: string): Promise<string | null>;
+  /** Pin the bundle to the hire with a hire update at its current rev. */
+  pinBundle(hireId: string, bundleId: string, hash: string): Promise<EditOutcome>;
   /** Queue an owner/ note write for the hire; false when it could not be queued. */
   writeOwnerNote(hireId: string, notePath: string, content: string): boolean;
 }
@@ -123,10 +130,23 @@ export interface ImportSummary {
   failed: string[];
 }
 
-export function importFromOffice(port: ImportPort, input: { dataDir: string; handle: string; hireId: string; role: string; ownerDir: string }): ImportSummary {
+async function importSkills(port: ImportPort, hireId: string, role: string, files: SkillFile[], failed: string[]): Promise<number> {
+  if (files.length === 0) return 0;
+  const created = await port.createBundle(hireId, role, files);
+  if (!created.ok || !created.objectId) {
+    failed.push(`skills (${created.ok ? 'no bundle id' : created.why})`);
+    return 0;
+  }
+  const hash = await port.bundleHash(created.objectId);
+  const pinned = hash === null ? { ok: false as const, why: "the bundle didn't arrive" } : await port.pinBundle(hireId, created.objectId, hash);
+  if (!pinned.ok) failed.push(`skill pin (${pinned.why})`);
+  return files.length;
+}
+
+export async function importFromOffice(port: ImportPort, input: { dataDir: string; handle: string; hireId: string; role: string; ownerDir: string }): Promise<ImportSummary> {
   const read = readOfficeEmployee(input.dataDir, input.handle);
   const failed: string[] = [];
-  if (read.skills.length > 0 && !port.sendBundle(input.hireId, input.role, read.skills)) failed.push('skills');
+  const skills = await importSkills(port, input.hireId, input.role, read.skills, failed);
   let notes = 0;
   for (const note of read.notes) {
     if (port.writeOwnerNote(input.hireId, `owner/${note.path}`, note.content)) notes += 1;
@@ -134,5 +154,5 @@ export function importFromOffice(port: ImportPort, input: { dataDir: string; han
   }
   const work = copyOfficeWork(input.dataDir, input.handle, input.ownerDir);
   if (work === null) failed.push('work/');
-  return { skills: failed.includes('skills') ? 0 : read.skills.length, notes, work: work ?? 0, skipped: read.skipped, failed };
+  return { skills, notes, work: work ?? 0, skipped: read.skipped, failed };
 }

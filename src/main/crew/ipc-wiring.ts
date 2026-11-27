@@ -1,4 +1,5 @@
 /** The Crew IPC channels joined to the running Hub client and runtime. */
+import { randomUUID } from 'crypto';
 import { app, safeStorage, shell } from 'electron';
 import log from 'electron-log';
 import type { CrewCardList, CrewEditResult, CrewHireAccount, CrewHireInput, CrewHireResult, CrewLinkView, CrewOfficeImportResult } from '../../shared/types';
@@ -18,7 +19,8 @@ import { createHire, HIRE_ANSWER_MS, hireAccounts, type HireDeps } from './hire'
 import { crewStatusFrom, KEYCHAIN_NEEDED, linkViewFrom, registerCrewIpc } from './ipc';
 import { LET_GO_ANSWER_MS, letGoHire as letGo, moveHireAside } from './let-go';
 import type { EditResultFrame, UsageFrame } from './protocol';
-import { findOfficeData, importFromOffice, officeEmployees } from './import-office';
+import type { EditInput } from './sync';
+import { findOfficeData, importFromOffice, officeEmployees, type EditOutcome } from './import-office';
 import { cachedNote, parseNotePath } from './notes';
 import { hirePaths } from './run/scope';
 
@@ -110,7 +112,57 @@ function hireBody(hireId: string): Record<string, unknown> {
   }
 }
 
-export function importOfficeHere(hireId: string, handle: string): CrewOfficeImportResult {
+/** Send an edit and wait for the Hub's answer to it. */
+async function editAnswer(hub: HubClient, input: Omit<EditInput, 'id'>): Promise<EditOutcome> {
+  const id = randomUUID();
+  const answer = editResultFrom(hub, id, HIRE_ANSWER_MS);
+  try {
+    hub.sendEdit({ ...input, id });
+  } catch (err) {
+    log.warn('[Crew] could not queue an edit', err);
+    return { ok: false, why: 'not queued' };
+  }
+  const frame = await answer;
+  if (!frame) return { ok: false, why: 'no answer from Crew' };
+  if (frame.result === 'applied') return { ok: true, objectId: frame.objectId };
+  return { ok: false, why: frame.why ? `${frame.result}: ${frame.why}` : frame.result };
+}
+
+/** The bundle's hash as the Hub computed it; fetched when the cache has no body for it yet. */
+function fetchedBundleHash(hub: HubClient, bundleId: string, timeoutMs: number): Promise<string | null> {
+  const cached = (): string | null => {
+    const hash = hub.cachedBody('skill_bundle', bundleId)?.hash;
+    return typeof hash === 'string' && hash ? hash : null;
+  };
+  return new Promise((resolve) => {
+    const done = (hash: string | null) => {
+      clearTimeout(timer);
+      hub.off('synced', onSynced);
+      resolve(hash);
+    };
+    const onSynced = () => {
+      const hash = cached();
+      if (hash) done(hash);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    hub.on('synced', onSynced);
+    hub.fetchObject({ kind: 'skill_bundle', objectId: bundleId });
+  });
+}
+
+const pinEdit = (hub: HubClient, hireId: string, bundleId: string, hash: string): Promise<EditOutcome> =>
+  editAnswer(hub, { op: 'update', kind: 'hire', objectId: hireId, hireId, fields: { skillBundleId: bundleId, skillBundleHash: hash } });
+
+export async function pinSkillBundle(hireId: string, bundleId: string): Promise<CrewEditResult> {
+  const hub = getCrewHub();
+  if (!hub || hub.getStatus() !== 'online') return { ok: false, error: 'Crew is offline; try again once it reconnects.' };
+  const hash = await fetchedBundleHash(hub, bundleId, HIRE_ANSWER_MS);
+  if (!hash) return { ok: false, error: "That skill bundle hasn't reached this machine." };
+  const pinned = await pinEdit(hub, hireId, bundleId, hash);
+  return pinned.ok ? { ok: true } : { ok: false, error: `The pin was not applied (${pinned.why}).` };
+}
+
+export async function importOfficeHere(hireId: string, handle: string): Promise<CrewOfficeImportResult> {
   const hub = getCrewHub();
   const dataDir = findOfficeData(app.getPath('appData'));
   if (!hub || !dataDir) return { ok: false, error: "Crew or Office isn't on this machine." };
@@ -119,9 +171,11 @@ export function importOfficeHere(hireId: string, handle: string): CrewOfficeImpo
   const role = typeof body.roleId === 'string' ? body.roleId : '';
   const db = getDatabase();
   try {
-    const summary = importFromOffice(
+    const summary = await importFromOffice(
       {
-        sendBundle: (id, bundleRole, files) => !!hub.sendEdit({ op: 'create', kind: 'skill_bundle', hireId: id, fields: { role: bundleRole, files } }),
+        createBundle: (id, bundleRole, files) => editAnswer(hub, { op: 'create', kind: 'skill_bundle', hireId: id, fields: { role: bundleRole, files } }),
+        bundleHash: (bundleId) => fetchedBundleHash(hub, bundleId, HIRE_ANSWER_MS),
+        pinBundle: (id, bundleId, hash) => pinEdit(hub, id, bundleId, hash),
         writeOwnerNote: (id, notePath, content) => {
           const where = parseNotePath(notePath);
           return !!where && hub.sendOwnerNote(id, notePath, cachedNote(db, id, where)?.rev ?? 0, content);

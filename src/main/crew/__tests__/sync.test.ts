@@ -227,6 +227,23 @@ describe('CrewSync edits', () => {
 describe('CrewSync owed bodies', () => {
   const note = (over: Partial<SyncObject> = {}) => obj({ kind: 'note', objectId: 'n1', seq: 5, body: undefined, ...over });
 
+  test('a named object is fetched on the next pull, and its body lands in the cache', () => {
+    const t = setup();
+    const ref = { kind: 'skill_bundle' as const, objectId: 'b1' };
+    const p = t.sync.fetch(ref, 0);
+    expect(p?.fetch).toEqual([ref]);
+    t.sync.onPage(page(p!.id, [obj({ ...ref, rev: 1, seq: 7, body: { role: 'po', files: [], hash: 'hub-hash' } })], 7), 0);
+    expect(t.sync.cachedBody('skill_bundle', 'b1')).toEqual({ role: 'po', files: [], hash: 'hub-hash' });
+    expect(t.sync.cachedBody('skill_bundle', 'other')).toBeNull();
+  });
+
+  test('a fetch asked for while a pull is out goes on the pull after it', () => {
+    const t = setup();
+    const first = t.sync.onConnect(0);
+    expect(t.sync.fetch({ kind: 'skill_bundle', objectId: 'b1' }, 0)).toBeNull();
+    expect(t.sync.onPage(page(first.id, [], 0), 0)?.fetch).toEqual([{ kind: 'skill_bundle', objectId: 'b1' }]);
+  });
+
   test('a restart between a header page and its fetch still fetches the body', () => {
     const t = setup();
     const p = t.sync.onConnect(0);

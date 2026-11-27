@@ -41,7 +41,9 @@ import {
   type RoutineFiredFrame,
   type ReplyFrame,
   type SyncPageFrame,
+  type SyncKind,
   type SyncPullFrame,
+  type SyncRef,
   type TokenRequestFrame,
   type ArtifactRequestFrame,
   type MovePayload,
@@ -602,6 +604,15 @@ export class HubClient extends EventEmitter {
     if (!this.outbox.enqueue(frame, meta)) return false;
     if (this.phase === 'open') this.outbox.sendNow(frame.id, this.sender, this.clocks.wall());
     return true;
+  }
+
+  /** Ask the Hub for one object's body; it lands in the cache with a later 'synced'. */
+  fetchObject(ref: SyncRef): void {
+    this.sendPull(this.sync.fetch(ref, this.clocks.wall()));
+  }
+
+  cachedBody(kind: SyncKind, objectId: string): Record<string, unknown> | null {
+    return this.sync.cachedBody(kind, objectId);
   }
 
   /** Queue an edit against the cached rev; a hire's edit carries its newest known epoch. Returns the edit id. */

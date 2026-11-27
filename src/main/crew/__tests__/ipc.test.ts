@@ -244,7 +244,7 @@ describe('the channels', () => {
       officeEmployees: () => ['fresh-po'],
       makeHome: (hireId) => (imported.push([hireId, 'home']), { ok: true }),
       unlink: () => ({ ok: true }),
-      importFromOffice: (hireId, handle) => (imported.push([hireId, handle]), { ok: true, skills: 2, notes: 0, work: 3, skipped: [], failed: [] }),
+      importFromOffice: async (hireId, handle) => (imported.push([hireId, handle]), { ok: true, skills: 2, notes: 0, work: 3, skipped: [], failed: [] }),
       now: () => NOW,
     });
   });
@@ -297,11 +297,11 @@ describe('the channels', () => {
     expect(edits).toHaveLength(2);
   });
 
-  test('an Office import names a synced hire and an Office employee found here', () => {
+  test('an Office import names a synced hire and an Office employee found here', async () => {
     expect(call('crew:officeEmployees')).toEqual(['fresh-po']);
-    expect(call('crew:importFromOffice', HIRE, 'fresh-po')).toMatchObject({ ok: true, skills: 2, work: 3 });
-    expect((call('crew:importFromOffice', HIRE, '../core-po') as { ok: boolean }).ok).toBe(false);
-    expect((call('crew:importFromOffice', 'unknown', 'fresh-po') as { ok: boolean }).ok).toBe(false);
+    expect(await call('crew:importFromOffice', HIRE, 'fresh-po')).toMatchObject({ ok: true, skills: 2, work: 3 });
+    expect(((await call('crew:importFromOffice', HIRE, '../core-po')) as { ok: boolean }).ok).toBe(false);
+    expect(((await call('crew:importFromOffice', 'unknown', 'fresh-po')) as { ok: boolean }).ok).toBe(false);
     expect(imported).toEqual([[HIRE, 'fresh-po']]);
   });
 

@@ -124,6 +124,23 @@ export class CrewSync {
     return this.request(now);
   }
 
+  /** Ask for one object's body, on this pull or the next. */
+  fetch(ref: SyncRef, now: number): SyncPullFrame | null {
+    this.wanted.set(refKey(ref), { kind: ref.kind, objectId: ref.objectId });
+    this.saveWanted();
+    return this.request(now);
+  }
+
+  cachedBody(kind: SyncKind, objectId: string): Body | null {
+    const { table, id } = TABLES[kind];
+    const row = this.db.prepare(`SELECT data FROM ${table} WHERE ${id} = ?`).get(objectId) as { data: string } | undefined;
+    try {
+      return row ? (JSON.parse(row.data) as Body) : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Pull now, or right after the page already on its way. */
   request(now: number): SyncPullFrame | null {
     if (this.pending) {
