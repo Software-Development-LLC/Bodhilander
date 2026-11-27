@@ -153,8 +153,7 @@ describe('cutText', () => {
   });
 
   test('never ends the kept part on a lone high surrogate', () => {
-    const emoji = '\u{1F600}';
-    for (let pad = 0; pad < 2; pad += 1) {
+    for (const [pad, emoji] of [[0, '\u{1F600}'], [1, '\u{1F600}'], [0, '\u{10000}'], [1, '\u{10000}'], [0, '\u{10FFFF}'], [1, '\u{10FFFF}']] as const) {
       const cut = cutText('a'.repeat(pad) + emoji.repeat(MAX_TEXT));
       const kept = cut.slice(0, cut.indexOf('\n… (cut'));
       const lastCode = kept.charCodeAt(kept.length - 1);

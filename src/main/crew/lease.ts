@@ -23,7 +23,6 @@ export const systemClocks: Clocks = {
 interface Sent {
   mono: number;
   wall: number;
-  wake: number;
 }
 
 interface Held {
@@ -34,7 +33,6 @@ interface Held {
 
 export class LeaseClock {
   private seq = 0;
-  private wake = 0;
   private readonly sent = new Map<number, Sent>();
   private readonly leases = new Map<string, Held>();
   private readonly wasHeld = new Set<string>();
@@ -44,7 +42,7 @@ export class LeaseClock {
   /** The seq for the next heartbeat frame; its send time is recorded now. */
   sendHeartbeat(): number {
     this.seq += 1;
-    this.sent.set(this.seq, { mono: this.clocks.mono(), wall: this.clocks.wall(), wake: this.wake });
+    this.sent.set(this.seq, { mono: this.clocks.mono(), wall: this.clocks.wall() });
     return this.seq;
   }
 
@@ -53,7 +51,6 @@ export class LeaseClock {
     const hb = this.sent.get(seq);
     if (!hb) return [];
     this.sent.delete(seq);
-    if (hb.wake !== this.wake) return [];
     const renewed: string[] = [];
     for (const { hireId, epoch } of leases) {
       const current = this.leases.get(hireId);
@@ -65,8 +62,8 @@ export class LeaseClock {
     return renewed;
   }
 
+  /** Forgetting the sent heartbeats is what stops a renew for one from before the wake. */
   onResume(): void {
-    this.wake += 1;
     this.sent.clear();
     this.leases.clear();
   }

@@ -109,6 +109,8 @@ describe('HubClient handshake', () => {
     const t = setup({ machineId: null });
     t.client.start();
     expect(t.sockets).toEqual([]);
+    expect(t.client.getStatus()).toBe('idle');
+    expect(t.intervals).toEqual([]);
   });
 
   test('signs exactly the auth message over the challenge nonce, then waits for welcome', () => {
@@ -193,7 +195,7 @@ describe('HubClient close handling', () => {
     const t = setup();
     t.client.start();
     t.sock().hub({ type: 'error', reason: 'bad-auth' });
-    t.sock().drop(1011);
+    t.sock().drop(4409);
     expect(t.client.getStatus()).toBe('link-again');
   });
 

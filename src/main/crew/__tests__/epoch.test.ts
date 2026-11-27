@@ -75,6 +75,14 @@ describe('EpochFence', () => {
     expect(fence.stampFor(uuid(99))).toBeNull();
   });
 
+  test('a finished job from an older epoch gets no stamp', () => {
+    const { raw, fence } = setup();
+    fence.recordDelivery(deliver(1, 3));
+    raw.exec(`UPDATE crew_job SET state = 'done'`);
+    fence.observe(HIRE, 4);
+    expect(fence.stampFor(uuid(1))).toBeNull();
+  });
+
   test('dropHire stops every job and item at any epoch', () => {
     const { fence, state, outbox, outboxState } = setup();
     fence.recordDelivery(deliver(1, 3));
