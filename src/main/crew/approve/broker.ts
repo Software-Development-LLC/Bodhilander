@@ -135,7 +135,12 @@ export class ApproveBroker {
          VALUES (?, ?, ?, ?, ?, ?, 'permission', ?, ?)`,
       )
       .run(raiseId, run.jobId, run.hireId, run.threadKey, run.scope, run.requestedBy, tool, hash);
-    const raised = this.deps.raiseCard(run.jobId, raiseId, { kind: 'permission', payload: { tool, summary: permissionSummary(tool, input) }, tainted });
+    let raised = false;
+    try {
+      raised = this.deps.raiseCard(run.jobId, raiseId, { kind: 'permission', payload: { tool, summary: permissionSummary(tool, input) }, tainted });
+    } catch (err) {
+      writeAudit(this.deps.db, run.hireId, 'permission-raise-failed', { jobId: run.jobId, tool: tool.slice(0, 200), error: String(err).slice(0, 200) });
+    }
     if (!raised) {
       this.deps.db.prepare(`DELETE FROM crew_card WHERE raise_id = ?`).run(raiseId);
       return Promise.resolve({ behavior: 'deny', message: UNRAISED_MESSAGE });

@@ -174,4 +174,21 @@ describe('approve broker', () => {
     t.broker.release(RUN.jobId, 'parked');
     expect(t.raw.query(`SELECT state FROM crew_card WHERE raise_id = ?`).get(uuid(101))).toEqual({ state: 'parked' });
   });
+
+  test('a raise that throws refuses at once and leaves no card row', async () => {
+    const t = setup();
+    const broker = new ApproveBroker({
+      db: t.db,
+      raiseCard: () => {
+        throw new Error('malformed');
+      },
+      park: () => {},
+      newId: () => uuid(300),
+      setTimer: () => 0,
+      clearTimer: () => {},
+    });
+    expect(await broker.ask(RUN, ASK)).toEqual({ behavior: 'deny', message: UNRAISED_MESSAGE });
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_card`).get()).toEqual({ n: 0 });
+    expect(broker.waitingFor(RUN.jobId)).toBe(false);
+  });
 });
