@@ -11,7 +11,7 @@ import { constants } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.1.0';
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const RUN_DIR_TRIES = 4;
 
@@ -134,20 +134,58 @@ function readLine(stream) {
   });
 }
 
-/** Line one is the Crew token (empty on the login fallback), line two the run as JSON, then the prompt. */
+const STOP_GRACE_MS = 2000;
+const PARENT_POLL_MS = 1000;
+
+function signalGroup(pid, sig) {
+  try {
+    process.kill(-pid, sig);
+  } catch {}
+}
+
+/**
+ * Line one is the Crew token (empty on the login fallback), line two the run as JSON, then the prompt.
+ * claude leads its own process group, so a stop reaches everything it started. Stdin ending after the
+ * prompt is normal and is not a stop.
+ */
 export async function execRun(input = process.stdin) {
   const token = await readLine(input);
   const run = JSON.parse(await readLine(input));
-  const stdio = ['pipe', 'inherit', 'inherit', token ? 'pipe' : 'ignore'];
-  const child = spawn(run.argv[0], run.argv.slice(1), { cwd: run.cwd, env: run.env, stdio });
+  const stdio = ['pipe', 'pipe', 'pipe', token ? 'pipe' : 'ignore'];
+  const child = spawn(run.argv[0], run.argv.slice(1), { cwd: run.cwd, env: run.env, stdio, detached: true });
   if (token) {
     child.stdio[3].end(`${token}\n`);
   }
   input.pipe(child.stdin);
   input.resume();
   child.stdin.on('error', () => {});
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
-  return new Promise((resolve) => child.on('close', (code, signal) => resolve(code ?? (signal ? 128 + (constants.signals[signal] ?? 15) : 1))));
+  let stopping = false;
+  const stop = (sig) => {
+    if (stopping) return;
+    stopping = true;
+    signalGroup(child.pid, sig);
+    setTimeout(() => signalGroup(child.pid, 'SIGKILL'), STOP_GRACE_MS).unref();
+  };
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => stop(sig));
+  for (const [from, to] of [[child.stdout, process.stdout], [child.stderr, process.stderr]]) {
+    to.on('error', () => stop('SIGTERM'));
+    to.on('close', () => stop('SIGTERM'));
+    from.pipe(to);
+  }
+  const parent = process.ppid;
+  const watch = setInterval(() => process.ppid !== parent && stop('SIGTERM'), PARENT_POLL_MS);
+  watch.unref();
+  return new Promise((resolve) => {
+    let status = 1;
+    const done = () => resolve(status);
+    child.on('exit', (code, signal) => {
+      clearInterval(watch);
+      status = code ?? (signal ? 128 + (constants.signals[signal] ?? 15) : 1);
+      signalGroup(child.pid, 'SIGKILL');
+      setTimeout(done, STOP_GRACE_MS).unref();
+    });
+    child.on('close', done);
+  });
 }
 
 const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname);

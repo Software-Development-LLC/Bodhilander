@@ -165,6 +165,90 @@ describe.skipIf(!hasNode)('crew-agent itself, under node', () => {
     expect(JSON.parse(out)).toEqual({ tok: 'sk-ant-oat01-abc\n', stdin: 'the prompt', argv: ['-p'], env: 'y', hasTok: false });
   });
 
+  describe('stopping a run takes down everything claude started', () => {
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const until = async (ok: () => boolean, ms = 3000) => {
+      for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 25))) if (ok()) return true;
+      return ok();
+    };
+    // The fake claude starts a grandchild in its own group, records its pid, and writes a tick every 50 ms.
+    const fakeClaude = (dir: string) => {
+      const fake = path.join(dir, 'claude.js');
+      fs.writeFileSync(fake, `const {spawn}=require('child_process');const g=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('fs').writeFileSync(${JSON.stringify(path.join(dir, 'gpid'))},String(g.pid));setInterval(()=>process.stdout.write('tick\\n'),50)`);
+      return execRunInput('', { cwd: dir, env: { PATH: process.env.PATH ?? '' }, argv: ['node', fake] }, 'the prompt');
+    };
+    const grandchild = async (dir: string) => {
+      const f = path.join(dir, 'gpid');
+      expect(await until(() => fs.existsSync(f) && fs.readFileSync(f, 'utf8') !== '')).toBe(true);
+      return Number(fs.readFileSync(f, 'utf8'));
+    };
+    const pids: number[] = [];
+    afterEach(() => {
+      for (const p of pids.splice(0)) if (alive(p)) process.kill(p, 'SIGKILL');
+    });
+
+    for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+      test(`${sig} to exec-run ends claude and its grandchild, and exec-run reports 128 + the signal`, async () => {
+        const dir = tmp();
+        const child = spawn('node', [AGENT, 'exec-run'], { stdio: ['pipe', 'pipe', 'inherit'] });
+        child.stdout.resume();
+        child.stdin.end(fakeClaude(dir));
+        const g = await grandchild(dir);
+        pids.push(g);
+        const code = new Promise((r) => child.on('close', r));
+        child.kill(sig);
+        expect(await code).toBe(128 + os.constants.signals[sig]);
+        expect(await until(() => !alive(g))).toBe(true);
+      });
+    }
+
+    test("claude's last output reaches stdout before exec-run exits, and a grandchild it left behind is ended", async () => {
+      const dir = tmp();
+      const fake = path.join(dir, 'claude.js');
+      fs.writeFileSync(fake, `const {spawn}=require('child_process');const g=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('fs').writeFileSync(${JSON.stringify(path.join(dir, 'gpid'))},String(g.pid));process.stdout.write('x'.repeat(1<<20)+'END',()=>process.exit(0))`);
+      const child = spawn('node', [AGENT, 'exec-run'], { stdio: ['pipe', 'pipe', 'inherit'] });
+      let out = '';
+      child.stdout.on('data', (d) => (out += d));
+      child.stdin.end(execRunInput('', { cwd: dir, env: { PATH: process.env.PATH ?? '' }, argv: ['node', fake] }, 'p'));
+      expect(await new Promise((r) => child.on('close', r))).toBe(0);
+      expect(out.endsWith('END')).toBe(true);
+      const g = await grandchild(dir);
+      pids.push(g);
+      expect(await until(() => !alive(g))).toBe(true);
+    });
+
+    test('the reader of its stdout going away ends the run', async () => {
+      const dir = tmp();
+      const child = spawn('node', [AGENT, 'exec-run'], { stdio: ['pipe', 'pipe', 'inherit'] });
+      child.stdin.end(fakeClaude(dir));
+      const g = await grandchild(dir);
+      pids.push(g);
+      child.stdout.destroy();
+      expect(await until(() => !alive(g))).toBe(true);
+    });
+
+    test('its parent dying ends the run, while stdin ending after the prompt does not', async () => {
+      const dir = tmp();
+      const parent = spawn('node', ['-e', `const c=require('child_process').spawn('node',[${JSON.stringify(AGENT)},'exec-run'],{stdio:['pipe','ignore','ignore']});c.stdin.end(process.argv[1]);process.stdout.write(String(c.pid));setInterval(()=>{},1000)`, fakeClaude(dir)], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let agentPid = '';
+      parent.stdout.on('data', (d) => (agentPid += d));
+      const g = await grandchild(dir);
+      pids.push(g, Number(agentPid));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(alive(g)).toBe(true);
+      parent.kill('SIGKILL');
+      expect(await until(() => !alive(g))).toBe(true);
+      expect(await until(() => !alive(Number(agentPid)))).toBe(true);
+    });
+  });
+
   test('serve makes a 0700 run dir with a 0600 socket, relays bytes, and removes the dir when stdin closes', async () => {
     const root = path.join(tmp(), 'cr');
     const child = spawn('node', ['-e', `import(${JSON.stringify(AGENT)}).then(m=>m.serve(process.stdin, ${JSON.stringify(root)}))`], { stdio: ['pipe', 'pipe', 'inherit'] });
@@ -186,7 +270,7 @@ describe.skipIf(!hasNode)('crew-agent itself, under node', () => {
         buf = buf.slice(i + 1);
       }
     });
-    expect((await waitFor('hello')).version).toBe('1.0.0');
+    expect((await waitFor('hello')).version).toBe(JSON.parse(fs.readFileSync(path.join(path.dirname(AGENT), 'versions.json'), 'utf8')).crewAgent.version);
     child.stdin.write(`${JSON.stringify({ t: 'serve', now: 1, uid: process.getuid?.() ?? 0, name: 'abcdefgh', sockets: ['gh'], private: ['mcp'] })}\n`);
     const r = await waitFor('ready');
     const sock = (r.sockets as Record<string, string>).gh;
