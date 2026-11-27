@@ -9,7 +9,7 @@ import { getPreference } from '../repositories/preferences';
 import { accountRefFor, resolveAccountRef } from './account-ref';
 import { listCards } from './card-log';
 import { crewHomeDeps, crewRuntime } from './crew-main';
-import { makeHomeHere, unlinkHere } from './home';
+import { cachedHire, makeHomeHere, unlinkHere } from './home';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import type { LinkFlow } from './hub-link';
 import { getCrewHub, newLinkFlow } from './hub-service';
@@ -23,6 +23,8 @@ import type { EditInput } from './sync';
 import { findOfficeData, importFromOffice, officeEmployees, type EditOutcome } from './import-office';
 import { cachedNote, parseNotePath } from './notes';
 import { hirePaths } from './run/scope';
+import { hireTimeZone } from './holds';
+import { editRoutine, type RoutineRequest } from './routines';
 
 export function hubUsageRead(hub: HubClient, hireId: string, epoch: number, since: number): Promise<UsageFrame | null> {
   return hub.usageRead(hireId, epoch, since);
@@ -113,7 +115,7 @@ function hireBody(hireId: string): Record<string, unknown> {
 }
 
 /** Send an edit and wait for the Hub's answer to it. */
-async function editAnswer(hub: HubClient, input: Omit<EditInput, 'id'>): Promise<EditOutcome> {
+export async function editAnswer(hub: HubClient, input: Omit<EditInput, 'id'>): Promise<EditOutcome> {
   const id = randomUUID();
   const answer = editResultFrom(hub, id, HIRE_ANSWER_MS);
   try {
@@ -204,6 +206,21 @@ export async function letGoHire(hireId: string): Promise<CrewEditResult> {
       moveAside: (id) => moveHireAside(app.getPath('userData'), id, Date.now()),
     },
     hireId,
+  );
+}
+
+function routineHere(req: RoutineRequest): Promise<CrewEditResult> {
+  const hub = getCrewHub();
+  return editRoutine(
+    {
+      online: () => hub?.getStatus() === 'online',
+      routineHire: (routineId) => {
+        const row = getDatabase().prepare(`SELECT hire_id FROM crew_routine_cache WHERE routine_id = ?`).get(routineId) as { hire_id: string } | undefined;
+        return row?.hire_id ?? null;
+      },
+      edit: (input) => (hub ? editAnswer(hub, input) : Promise.resolve({ ok: false, why: 'not queued' })),
+    },
+    req,
   );
 }
 
@@ -302,6 +319,10 @@ export function wireCrewIpc(handle: (channel: string, handler: (...args: unknown
     },
     importFromOffice: (hireId, handle) => importOfficeHere(hireId, handle).finally(notify),
     pinSkillBundle: (hireId, bundleId) => pinSkillBundle(hireId, bundleId).finally(notify),
+    createRoutine: (hireId, input) => routineHere({ op: 'create', hireId, input }).finally(notify),
+    updateRoutine: (hireId, routineId, input) => routineHere({ op: 'update', hireId, routineId, input }).finally(notify),
+    deleteRoutine: (hireId, routineId) => routineHere({ op: 'delete', hireId, routineId }).finally(notify),
+    defaultTimezone: (hireId) => hireTimeZone(cachedHire(getDatabase(), hireId)),
     confirmLinkOwner: (isMe) => {
       const confirmed = link?.confirmOwner(isMe) ?? false;
       link = null;

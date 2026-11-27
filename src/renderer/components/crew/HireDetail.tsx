@@ -7,6 +7,8 @@ import type {
   CrewHireUsage,
   CrewOfficeEmployees,
   CrewOfficeImportResult,
+  CrewRoutine,
+  CrewRoutineInput,
   CrewSignInStarted,
 } from '../../../shared/types';
 import { DEFAULT_USAGE_WARN_THRESHOLD } from '../../../shared/usage';
@@ -32,6 +34,9 @@ export interface HireDetailApi {
   officeEmployees(): Promise<CrewOfficeEmployees>;
   makeHome(hireId: string): Promise<CrewEditResult>;
   importFromOffice(hireId: string, handle: string): Promise<CrewOfficeImportResult>;
+  createRoutine(hireId: string, input: CrewRoutineInput): Promise<CrewEditResult>;
+  updateRoutine(hireId: string, routineId: string, input: CrewRoutineInput): Promise<CrewEditResult>;
+  deleteRoutine(hireId: string, routineId: string): Promise<CrewEditResult>;
 }
 
 const windowApi = (): HireDetailApi => ({
@@ -50,7 +55,126 @@ const windowApi = (): HireDetailApi => ({
   officeEmployees: () => window.electronAPI.crewOfficeEmployees(),
   makeHome: (id) => window.electronAPI.crewMakeHome(id),
   importFromOffice: (id, handle) => window.electronAPI.crewImportFromOffice(id, handle),
+  createRoutine: (id, input) => window.electronAPI.crewCreateRoutine(id, input),
+  updateRoutine: (id, routineId, input) => window.electronAPI.crewUpdateRoutine(id, routineId, input),
+  deleteRoutine: (id, routineId) => window.electronAPI.crewDeleteRoutine(id, routineId),
 });
+
+const localZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+const RoutineForm: React.FC<{ initial: CrewRoutineInput; label: string; onSave(input: CrewRoutineInput): Promise<string | null>; onCancel(): void }> = ({ initial, label, onSave, onCancel }) => {
+  const [draft, setDraft] = useState(initial);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const set = (key: keyof CrewRoutineInput) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft({ ...draft, [key]: e.target.value });
+  const save = async () => {
+    setSaving(true);
+    const failed = await onSave(draft);
+    setSaving(false);
+    setError(failed);
+  };
+  return (
+    <div className="crew-detail__routine-form" aria-label={label} role="group">
+      <label>
+        Prompt
+        <textarea value={draft.prompt} onChange={set('prompt')} rows={3} />
+      </label>
+      <label>
+        Schedule (cron)
+        <input value={draft.cron} onChange={set('cron')} placeholder="0 8 * * 1-5" />
+      </label>
+      <label>
+        Time zone
+        <input value={draft.timezone} onChange={set('timezone')} />
+      </label>
+      <div className="crew-detail__row">
+        <button type="button" onClick={() => void save()} disabled={saving}>
+          Save routine
+        </button>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      {error && (
+        <div className="crew-detail__error" role="alert">
+          {error}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** The owner's routines: each can be edited or deleted, and a new one added; the Hub's answer shows inline. */
+const Routines: React.FC<{ hire: CrewHireDetail; api: HireDetailApi; reload(): Promise<void> }> = ({ hire, api, reload }) => {
+  const [editing, setEditing] = useState<string | 'new' | null>(null);
+  const [rowError, setRowError] = useState<{ id: string; text: string } | null>(null);
+  const answered = async (result: Promise<CrewEditResult>): Promise<string | null> => {
+    try {
+      const r = await result;
+      if (!r.ok) {
+        await reload();
+        return r.error;
+      }
+      setEditing(null);
+      await reload();
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  };
+  const remove = async (r: CrewRoutine) => {
+    const failed = await answered(api.deleteRoutine(hire.hireId, r.routineId));
+    setRowError(failed ? { id: r.routineId, text: failed } : null);
+  };
+  const blank: CrewRoutineInput = { prompt: '', cron: '0 8 * * 1-5', timezone: hire.defaultTimezone ?? localZone() };
+  return (
+    <section>
+      <h3>Routines</h3>
+      {hire.routines.length === 0 && editing !== 'new' && <p className="crew-detail__hint">No routines.</p>}
+      <ul className="crew-detail__routines">
+        {hire.routines.map((r) =>
+          editing === r.routineId ? (
+            <li key={r.routineId}>
+              <RoutineForm
+                label={`Edit routine ${r.prompt}`}
+                initial={{ prompt: r.prompt, cron: r.cron, timezone: r.timezone }}
+                onSave={(input) => answered(api.updateRoutine(hire.hireId, r.routineId, input))}
+                onCancel={() => setEditing(null)}
+              />
+            </li>
+          ) : (
+            <li key={r.routineId}>
+              <div>{r.prompt}</div>
+              <div className="crew-detail__hint">
+                {r.cron} ({r.timezone}){r.lastFired === null ? '' : ` · last fired ${new Date(r.lastFired).toLocaleString()}`}
+              </div>
+              <div className="crew-detail__row">
+                <button type="button" aria-label={`Edit routine ${r.prompt}`} onClick={() => setEditing(r.routineId)}>
+                  Edit
+                </button>
+                <button type="button" aria-label={`Delete routine ${r.prompt}`} onClick={() => void remove(r)}>
+                  Delete
+                </button>
+              </div>
+              {rowError?.id === r.routineId && (
+                <div className="crew-detail__error" role="alert">
+                  {rowError.text}
+                </div>
+              )}
+            </li>
+          ),
+        )}
+      </ul>
+      {editing === 'new' ? (
+        <RoutineForm label="New routine" initial={blank} onSave={(input) => answered(api.createRoutine(hire.hireId, input))} onCancel={() => setEditing(null)} />
+      ) : (
+        <button type="button" onClick={() => setEditing('new')}>
+          Add routine
+        </button>
+      )}
+    </section>
+  );
+};
 
 function importedText(r: CrewOfficeImportResult): string {
   if (!r.ok) return r.error;
@@ -311,23 +435,7 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
         <span className="crew-detail__hint">Adding a repo needs a grant card, which comes in a later phase.</span>
       </section>
 
-      <section>
-        <h3>Routines</h3>
-        {hire.routines.length === 0 ? (
-          <p className="crew-detail__hint">No routines.</p>
-        ) : (
-          <ul className="crew-detail__routines">
-            {hire.routines.map((r) => (
-              <li key={r.routineId}>
-                <div>{r.prompt}</div>
-                <div className="crew-detail__hint">
-                  {r.cron} ({r.timezone}){r.lastFired === null ? '' : ` · last fired ${new Date(r.lastFired).toLocaleString()}`}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <Routines hire={hire} api={api} reload={loadHire} />
 
       <section>
         <h3>Caps</h3>

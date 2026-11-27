@@ -255,6 +255,10 @@ describe('the channels', () => {
       unlink: () => ({ ok: true }),
       pinSkillBundle: async (hireId, bundleId) => (imported.push([hireId, `pin:${bundleId}`]), { ok: true }),
       importFromOffice: async (hireId, handle) => (imported.push([hireId, handle]), { ok: true, skills: 2, notes: 0, work: 3, skipped: [], failed: [] }),
+      createRoutine: async (hireId, input) => (imported.push([hireId, `routine-create:${JSON.stringify(input)}`]), { ok: true }),
+      updateRoutine: async (hireId, routineId) => (imported.push([hireId, `routine-update:${routineId}`]), { ok: true }),
+      deleteRoutine: async (hireId, routineId) => (imported.push([hireId, `routine-delete:${routineId}`]), { ok: true }),
+      defaultTimezone: () => 'Europe/London',
       now: () => NOW,
     });
   });
@@ -267,6 +271,8 @@ describe('the channels', () => {
       'crew:changeAccount',
       'crew:confirmLinkOwner',
       'crew:createHire',
+      'crew:createRoutine',
+      'crew:deleteRoutine',
       'crew:getHire',
       'crew:getHireUsage',
       'crew:getStatus',
@@ -283,7 +289,23 @@ describe('the channels', () => {
       'crew:setDailyCap',
       'crew:setRepos',
       'crew:unlink',
+      'crew:updateRoutine',
     ]);
+  });
+
+  test("routine edits reach the main process only for a known hire, and the hire carries the owner's zone", async () => {
+    expect(await call('crew:createRoutine', HIRE, { prompt: 'p', cron: '0 8 * * *', timezone: 'UTC' })).toEqual({ ok: true });
+    expect(await call('crew:updateRoutine', HIRE, 'r1', { prompt: 'p', cron: '0 8 * * *', timezone: 'UTC' })).toEqual({ ok: true });
+    expect(await call('crew:deleteRoutine', HIRE, 'r1')).toEqual({ ok: true });
+    for (const bad of [call('crew:createRoutine', 'unknown', {}), call('crew:updateRoutine', HIRE, 42, {}), call('crew:deleteRoutine', 'unknown', 'r1')]) {
+      expect(((await bad) as { ok: boolean }).ok).toBe(false);
+    }
+    expect(imported.filter(([, what]) => what.startsWith('routine'))).toEqual([
+      [HIRE, 'routine-create:{"prompt":"p","cron":"0 8 * * *","timezone":"UTC"}'],
+      [HIRE, 'routine-update:r1'],
+      [HIRE, 'routine-delete:r1'],
+    ]);
+    expect(((await call('crew:getHire', HIRE)) as { defaultTimezone?: string }).defaultTimezone).toBe('Europe/London');
   });
 
   test('a daily cap is a positive whole number of tokens, or null for off', () => {

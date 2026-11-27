@@ -19,6 +19,7 @@ import type {
   CrewLinkView,
   CrewRole,
   CrewRoutine,
+  CrewRoutineInput,
   CrewStatus,
   CrewOfficeEmployees,
   CrewOfficeImportResult,
@@ -264,6 +265,11 @@ export interface CrewIpcDeps extends UsageReadPort {
   unlink(): CrewEditResult;
   importFromOffice(hireId: string, handle: string): Promise<CrewOfficeImportResult>;
   pinSkillBundle(hireId: string, bundleId: string): Promise<CrewEditResult>;
+  createRoutine(hireId: string, input: CrewRoutineInput): Promise<CrewEditResult>;
+  updateRoutine(hireId: string, routineId: string, input: CrewRoutineInput): Promise<CrewEditResult>;
+  deleteRoutine(hireId: string, routineId: string): Promise<CrewEditResult>;
+  /** The zone a new routine of this hire starts in. */
+  defaultTimezone?(hireId: string): string | null;
   now(): number;
 }
 
@@ -276,7 +282,12 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
 
   deps.handle('crew:getStatus', () => deps.status());
   deps.handle('crew:listHires', () => readHires(deps.db(), deps.machineId(), deps.resolveAccount));
-  deps.handle('crew:getHire', (hireId) => (typeof hireId === 'string' ? readHire(deps.db(), hireId, deps.machineId(), deps.resolveAccount) : null));
+  deps.handle('crew:getHire', (hireId) => {
+    if (typeof hireId !== 'string') return null;
+    const hire = readHire(deps.db(), hireId, deps.machineId(), deps.resolveAccount);
+    const zone = hire ? deps.defaultTimezone?.(hireId) : null;
+    return hire && zone ? { ...hire, defaultTimezone: zone } : hire;
+  });
   deps.handle('crew:getHireUsage', (hireId) =>
     typeof hireId === 'string' ? readHireUsage(deps, hireId, deps.now()) : Promise.resolve({ available: false, reason: 'failed' }),
   );
@@ -324,6 +335,15 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
     if (typeof bundleId !== 'string' || !bundleId) return refuse('Choose a skill bundle to pin.');
     return deps.pinSkillBundle(hireId, bundleId);
   });
+  deps.handle('crew:createRoutine', async (hireId, input): Promise<CrewEditResult> =>
+    known(hireId) ? deps.createRoutine(hireId, input as CrewRoutineInput) : refuse('This hire has not synced to this machine yet.'),
+  );
+  deps.handle('crew:updateRoutine', async (hireId, routineId, input): Promise<CrewEditResult> =>
+    known(hireId) && typeof routineId === 'string' ? deps.updateRoutine(hireId, routineId, input as CrewRoutineInput) : refuse('That routine is not on this machine.'),
+  );
+  deps.handle('crew:deleteRoutine', async (hireId, routineId): Promise<CrewEditResult> =>
+    known(hireId) && typeof routineId === 'string' ? deps.deleteRoutine(hireId, routineId) : refuse('That routine is not on this machine.'),
+  );
   deps.handle('crew:importFromOffice', async (hireId, handle): Promise<CrewOfficeImportResult> => {
     if (!known(hireId)) return refuse('This hire has not synced to this machine yet.');
     if (typeof handle !== 'string' || !(deps.officeEmployees() ?? []).includes(handle)) return refuse('That Office employee is not on this machine.');

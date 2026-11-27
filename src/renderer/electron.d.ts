@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount, CrewOfficeEmployees, CrewOfficeImportResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewRoutineInput, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount, CrewOfficeEmployees, CrewOfficeImportResult } from '../shared/types';
 import type { CrewSavedCopy, CrewWindowsProgress, CrewWindowsRepairResult, CrewWindowsSetupResult, CrewWindowsSignInResult, CrewWindowsState } from '../shared/types';
 
 interface ElectronAPI {
@@ -217,6 +217,9 @@ interface ElectronAPI {
   crewUnlink: () => Promise<CrewEditResult>;
   crewImportFromOffice: (hireId: string, handle: string) => Promise<CrewOfficeImportResult>;
   crewPinSkillBundle: (hireId: string, bundleId: string) => Promise<CrewEditResult>;
+  crewCreateRoutine: (hireId: string, input: CrewRoutineInput) => Promise<CrewEditResult>;
+  crewUpdateRoutine: (hireId: string, routineId: string, input: CrewRoutineInput) => Promise<CrewEditResult>;
+  crewDeleteRoutine: (hireId: string, routineId: string) => Promise<CrewEditResult>;
   crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
   crewLetGo: (hireId: string) => Promise<CrewEditResult>;
   crewListRoles: () => Promise<CrewRole[]>;

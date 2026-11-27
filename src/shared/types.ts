@@ -1057,6 +1057,12 @@ export interface CrewHireSummary {
   accountLabel: string | null;
 }
 
+export interface CrewRoutineInput {
+  cron: string;
+  timezone: string;
+  prompt: string;
+}
+
 export interface CrewRoutine {
   routineId: string;
   cron: string;
@@ -1068,6 +1074,8 @@ export interface CrewRoutine {
 export interface CrewHireDetail extends CrewHireSummary {
   repos: string[];
   routines: CrewRoutine[];
+  /** The zone a new routine starts in: the owner's, else this machine's. */
+  defaultTimezone?: string;
   /** Tokens per day; null is off. */
   dailyTokenCap: number | null;
   skillBundleId: string;

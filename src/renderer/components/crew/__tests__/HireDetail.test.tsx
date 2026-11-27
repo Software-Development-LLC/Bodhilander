@@ -64,6 +64,9 @@ function api(over: Partial<HireDetailApi> = {}): HireDetailApi & { edits: unknow
     officeEmployees: async () => null,
     makeHome: async (...args) => (edits.push(['home', ...args]), ok()),
     importFromOffice: async (...args) => (edits.push(['import', ...args]), { ok: true, skills: 0, notes: 0, work: 0, skipped: [], failed: [] }),
+    createRoutine: async (...args) => (edits.push(['routine-create', ...args]), ok()),
+    updateRoutine: async (...args) => (edits.push(['routine-update', ...args]), ok()),
+    deleteRoutine: async (...args) => (edits.push(['routine-delete', ...args]), ok()),
     ...over,
   };
 }
@@ -347,5 +350,44 @@ describe("the hire's account on Windows", () => {
     } finally {
       w.electronAPI = before;
     }
+  });
+});
+
+describe("the hire's routines", () => {
+  test('adds a routine with the prompt, schedule and the owner\'s time zone by default', async () => {
+    const a = api({ getHire: async () => detail({ defaultTimezone: 'Europe/London' }) });
+    render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
+    fireEvent.click(await screen.findByText('Add routine'));
+    const form = screen.getByRole('group', { name: 'New routine' });
+    expect((form.querySelectorAll('input')[1] as HTMLInputElement).value).toBe('Europe/London');
+    fireEvent.change(form.querySelector('textarea')!, { target: { value: 'Triage the board' } });
+    fireEvent.change(form.querySelectorAll('input')[0], { target: { value: '0 8 * * *' } });
+    fireEvent.click(screen.getByText('Save routine'));
+    await waitFor(() => expect(a.edits).toEqual([['routine-create', 'h1', { prompt: 'Triage the board', cron: '0 8 * * *', timezone: 'Europe/London' }]]));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'New routine' })).toBeNull());
+  });
+
+  test('edits and deletes a routine', async () => {
+    const a = api();
+    render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
+    fireEvent.click(await screen.findByLabelText('Edit routine Morning standup'));
+    const form = screen.getByRole('group', { name: 'Edit routine Morning standup' });
+    fireEvent.change(form.querySelectorAll('input')[0], { target: { value: '30 9 * * 1-5' } });
+    fireEvent.click(screen.getByText('Save routine'));
+    await waitFor(() => expect(a.edits[0]).toEqual(['routine-update', 'h1', 'r1', { prompt: 'Morning standup', cron: '30 9 * * 1-5', timezone: 'America/Chicago' }]));
+    fireEvent.click(await screen.findByLabelText('Delete routine Morning standup'));
+    await waitFor(() => expect(a.edits[1]).toEqual(['routine-delete', 'h1', 'r1']));
+  });
+
+  test('a conflict or a refusal shows inline and keeps the form open', async () => {
+    const conflict = 'This routine changed somewhere else since it was shown. It has been refreshed; make the change again.';
+    const a = api({ updateRoutine: async () => ({ ok: false, error: conflict }), deleteRoutine: async () => ({ ok: false, error: 'Crew refused the routine (unknown).' }) });
+    render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
+    fireEvent.click(await screen.findByLabelText('Delete routine Morning standup'));
+    expect((await screen.findByRole('alert')).textContent).toBe('Crew refused the routine (unknown).');
+    fireEvent.click(screen.getByLabelText('Edit routine Morning standup'));
+    fireEvent.click(screen.getByText('Save routine'));
+    await waitFor(() => expect(screen.getAllByRole('alert').map((e) => e.textContent)).toContain(conflict));
+    expect(screen.getByRole('group', { name: 'Edit routine Morning standup' })).toBeTruthy();
   });
 });
