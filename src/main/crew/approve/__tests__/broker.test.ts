@@ -7,6 +7,7 @@ import type { CardRaise } from '../broker';
 import type { CardDecisionFrame } from '../../protocol';
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 import { markTainted } from '../../taint';
+import { initializeCrewTables } from '../../crew-tables-sql';
 
 const RUN = { jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', scope: 'owner' as const, requestedBy: PERSON };
 
@@ -79,6 +80,18 @@ describe('approve broker', () => {
     expect((t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(RUN.jobId) as { state: string }).state).toBe('done');
     expect(t.broker.threadOf(uuid(200))).toBe('chat:owner');
     expect(t.broker.decide(t.decision(uuid(101), 'approved', uuid(202)))).toBeNull();
+  });
+
+  test('a restart while a run waits on a card parks the job, so the decision resumes it once and nothing re-runs it', () => {
+    const t = setup();
+    void t.broker.ask(RUN, ASK);
+    initializeCrewTables(t.db);
+    expect(t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(RUN.jobId)).toEqual({ state: 'parked' });
+    expect(t.raw.query(`SELECT state FROM crew_card WHERE raise_id = ?`).get(uuid(101))).toEqual({ state: 'parked' });
+    const fresh = new ApproveBroker({ db: t.db, raiseCard: () => true, park: () => {} });
+    expect(fresh.decide(t.decision(uuid(101), 'approved'))).toBe('job');
+    const states = t.raw.query(`SELECT id, state FROM crew_job ORDER BY id`).all();
+    expect(states).toEqual([{ id: RUN.jobId, state: 'done' }, { id: uuid(200), state: 'queued' }]);
   });
 
   test('the resumed run repeating the approved call is allowed without a second card, and only once', async () => {

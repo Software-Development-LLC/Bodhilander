@@ -165,8 +165,17 @@ export function initializeCrewTables(database: Database.Database): void {
   addColumn('claude_accounts', 'crew_auth_failed_at', 'crew_auth_failed_at TEXT DEFAULT NULL');
   addColumn('claude_accounts', 'crew_reminded', 'crew_reminded TEXT DEFAULT NULL');
 
-  // A job left running by a quit or crash was interrupted, so it gets its attempt back and runs again once a lease is renewed.
-  database
-    .prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE state = 'running'`)
-    .run();
+  // A job left running by a quit or crash was interrupted: one waiting on a card parks, so the decision resumes it; the rest run again.
+  database.transaction(() => {
+    database
+      .prepare(
+        `UPDATE crew_job SET state = 'parked', updated_at = CURRENT_TIMESTAMP
+         WHERE state = 'running' AND id IN (SELECT job_id FROM crew_card WHERE state = 'waiting')`,
+      )
+      .run();
+    database.prepare(`UPDATE crew_card SET state = 'parked' WHERE state = 'waiting'`).run();
+    database
+      .prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE state = 'running'`)
+      .run();
+  })();
 }

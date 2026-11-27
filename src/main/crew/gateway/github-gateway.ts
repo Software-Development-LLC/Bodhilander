@@ -9,6 +9,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import type Database from 'better-sqlite3';
+import log from 'electron-log';
 import { writeAudit } from '../audit';
 import type { TokenFrame } from '../protocol';
 import { tokenMatches } from '../run/sockets';
@@ -60,8 +61,12 @@ function planApi(rest: string[], repos: readonly string[]): GhPlan {
       continue;
     }
     if (!API_VALUE_FLAGS.has(name)) continue;
-    const value = name === a ? rest[(i += 1)] : a.slice(a.indexOf('=') + 1);
-    if (name === '-X' || name === '--method') method = value ?? '';
+    let value = a.slice(a.indexOf('=') + 1);
+    if (name === a) {
+      i += 1;
+      value = rest[i] ?? '';
+    }
+    if (name === '-X' || name === '--method') method = value;
   }
   if (method !== null && method.toUpperCase() !== 'GET') return { kind: 'write' };
   const endpoint = positional.length === 1 ? positional[0] : null;
@@ -134,7 +139,7 @@ interface Pending {
 export class GithubGateway {
   private readonly cache = new Map<string, Cached>();
   private readonly pending = new Map<string, Pending>();
-  private readonly servers = new Map<string, net.Server>();
+  private readonly servers = new Map<string, { server: net.Server; conns: Set<net.Socket> }>();
   private readonly now: () => number;
   private readonly newId: () => string;
 
@@ -207,7 +212,10 @@ export class GithubGateway {
 
   /** One listener per run, on its 0600 socket. */
   listen(socketPath: string, run: GatewayRun): Promise<void> {
+    const conns = new Set<net.Socket>();
     const server = net.createServer((conn) => {
+      conns.add(conn);
+      conn.on('close', () => conns.delete(conn));
       let buffered = '';
       conn.setEncoding('utf8');
       conn.on('error', () => conn.destroy());
@@ -226,10 +234,12 @@ export class GithubGateway {
         void this.handle(run, request).then((r) => conn.end(`${JSON.stringify(r)}\n`));
       });
     });
-    this.servers.set(run.jobId, server);
+    this.servers.set(run.jobId, { server, conns });
     return new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(socketPath, () => {
+        server.off('error', reject);
+        server.on('error', (err) => log.warn('[Crew] the GitHub gateway socket failed', err));
         fs.chmodSync(socketPath, 0o600);
         resolve();
       });
@@ -237,8 +247,11 @@ export class GithubGateway {
   }
 
   close(jobId: string): void {
-    this.servers.get(jobId)?.close();
+    const entry = this.servers.get(jobId);
     this.servers.delete(jobId);
+    if (!entry) return;
+    entry.server.close();
+    for (const conn of entry.conns) conn.destroy();
   }
 
   stop(): void {

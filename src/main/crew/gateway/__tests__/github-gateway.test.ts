@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { GithubGateway, TOKEN_REUSE_MS, WRITE_MESSAGE, planGh } from '../github-gateway';
 import type { GatewayRun } from '../github-gateway';
+
+mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
+const { GithubGateway, TOKEN_REUSE_MS, WRITE_MESSAGE, planGh } = await import('../github-gateway');
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 
 const REPOS = ['acme/app'];

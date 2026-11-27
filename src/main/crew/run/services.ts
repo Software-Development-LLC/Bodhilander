@@ -69,7 +69,6 @@ export class RunServiceManager {
           CREW_GH_TOKEN: gatewayToken,
           CREW_NODE: this.deps.execPath,
           CREW_GH_SHIM_JS: path.join(this.deps.shimDir, 'gh-shim.js'),
-          ELECTRON_RUN_AS_NODE: '1',
         },
       };
     } catch (err) {
