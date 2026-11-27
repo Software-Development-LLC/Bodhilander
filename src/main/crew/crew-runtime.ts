@@ -23,6 +23,8 @@ import type { EditInput } from './sync';
 import { mergeRunObservation, usageRecordFor } from './usage-report';
 
 export const REMINDER_CHECK_MS = 60 * 60_000;
+/** Just over the Hub's 3 s floor per conversation, so network jitter never makes it drop one. */
+export const TYPING_EVERY_MS = 3_500;
 
 export interface CrewHubPort extends Pick<EventEmitter, 'on' | 'off'> {
   canStart(hireId: string, epoch: number): boolean;
@@ -31,6 +33,7 @@ export interface CrewHubPort extends Pick<EventEmitter, 'on' | 'off'> {
   sendAudit(event: string, detail: Record<string, unknown>, hireId?: string): string;
   sendEdit(input: EditInput): string;
   sendCard(jobId: string, raise: Unstamped<CardRaiseFrame>): boolean;
+  sendTyping(jobId: string): boolean;
 }
 
 export interface CrewRuntimeDeps {
@@ -107,6 +110,21 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     return row?.kind === 'message' ? { inboundId: jobId } : {};
   };
   let loop: RunLoop | null = null;
+  const setInt = deps.setInterval ?? ((fn: () => void, ms: number) => setInterval(fn, ms));
+  const clearInt = deps.clearInterval ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
+  const typingTimers = new Map<string, unknown>();
+  const typing = (jobId: string) => {
+    try {
+      deps.hub.sendTyping(jobId);
+    } catch (err) {
+      log.warn('[Crew] could not send typing', err);
+    }
+  };
+  const stopTyping = (jobId: string) => {
+    if (!typingTimers.has(jobId)) return;
+    clearInt(typingTimers.get(jobId));
+    typingTimers.delete(jobId);
+  };
   const reportedHold = new Map<string, string>();
   const broker = new ApproveBroker({
     db: deps.db,
@@ -145,7 +163,13 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       guard('reporting a hold release', () => deps.hub.sendAudit('hold', { state: 'active' }, hireId));
       reportedHold.set(hireId, 'active');
     },
+    onWorking: (job) => {
+      if (job.kind !== 'message' || typingTimers.has(job.id)) return;
+      typing(job.id);
+      typingTimers.set(job.id, setInt(() => typing(job.id), TYPING_EVERY_MS));
+    },
     onSettled: (jobId, outcome) => {
+      stopTyping(jobId);
       broker.release(jobId, outcome);
       guard('ending a run', () => deps.runEnded?.(jobId));
       if (outcome === 'held') return;
@@ -210,8 +234,6 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     ['card-decision', onCardDecision],
     ['card-refused', onCardRefused],
   ];
-  const setInt = deps.setInterval ?? ((fn: () => void, ms: number) => setInterval(fn, ms));
-  const clearInt = deps.clearInterval ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
   const schedule = deps.schedule;
   const scheduler = schedule
     ? new RoutineScheduler({ db: deps.db, hub: schedule.hub, machineId: schedule.machineId, tellOwner: schedule.tellOwner, queued: () => void tick(), now })
@@ -230,6 +252,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     clearInt(reminderTimer);
     if (scheduleTimer !== null) clearInt(scheduleTimer);
     for (const [event, fn] of listeners) deps.hub.off(event, fn);
+    for (const jobId of [...typingTimers.keys()]) stopTyping(jobId);
     runLoop.stop();
     broker.stop();
     runLoop.interruptAll();

@@ -6,7 +6,7 @@ mock.module('../../account-identity', () => ({
   resolveAccountIdentity: (dir: string) => ({ loggedIn: true, accountUuid: `u-${dir.split('/').pop()}`, email: 'w@x.com' }),
 }));
 
-const { startCrewRuntime, REMINDER_CHECK_MS } = await import('../crew-runtime');
+const { startCrewRuntime, REMINDER_CHECK_MS, TYPING_EVERY_MS } = await import('../crew-runtime');
 const { CrewSignIn, LOGIN_LIFETIME_MS } = await import('../crew-token');
 const { Holds } = await import('../holds');
 const { ERROR_REPLY } = await import('../run/loop');
@@ -64,6 +64,13 @@ function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
     sendCard: (id: string, c: Record<string, unknown>) => (hub.cards.push([id, c]), true),
     audits: [] as [string, Record<string, unknown>, string | undefined][],
     sendAudit: (e: string, d: Record<string, unknown>, h?: string) => (hub.audits.push([e, d, h]), 'au1'),
+    typing: [] as string[],
+    typingFails: false,
+    sendTyping: (id: string) => {
+      if (hub.typingFails) throw new Error('socket gone');
+      hub.typing.push(id);
+      return true;
+    },
   });
   const ended: string[] = [];
   const children: Child[] = [];
@@ -382,6 +389,48 @@ describe('crew runtime', () => {
     t.children[0].finish();
     await flush();
     expect(t.raw.query(`SELECT state, attempts FROM crew_job WHERE id = ?`).get(uuid(1))).toEqual({ state: 'queued', attempts: 0 });
+  });
+
+  test('a message run shows typing when it starts and on the cadence while it works, and stops before its reply', async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.hub.typing).toEqual([uuid(1)]);
+    const timer = t.timers.find((x) => x.ms === TYPING_EVERY_MS && x.live);
+    expect(timer).toBeDefined();
+    timer?.fn();
+    expect(t.hub.typing).toEqual([uuid(1), uuid(1)]);
+    t.children[0].finish();
+    expect(timer?.live).toBe(false);
+    expect(t.hub.replies).toEqual([[uuid(1), 'ok']]);
+  });
+
+  test('a routine run shows no typing', async () => {
+    const t = setup();
+    t.raw.query(`INSERT INTO crew_job (id, hire_id, kind, epoch, scope, requested_by, text) VALUES (?, ?, 'routine', 1, 'owner', ?, 'hi')`).run(uuid(2), HIRE, PERSON);
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.children).toHaveLength(1);
+    expect(t.hub.typing).toEqual([]);
+    expect(t.timers.some((x) => x.ms === TYPING_EVERY_MS)).toBe(false);
+  });
+
+  test('typing that fails never holds the run', async () => {
+    const t = setup();
+    t.hub.typingFails = true;
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.children).toHaveLength(1);
+    const timer = t.timers.find((x) => x.ms === TYPING_EVERY_MS && x.live);
+    expect(timer).toBeDefined();
+    expect(() => timer?.fn()).not.toThrow();
+    t.hub.typingFails = false;
+    timer?.fn();
+    expect(t.hub.typing).toEqual([uuid(1)]);
+    t.children[0].finish();
+    expect(t.hub.replies).toEqual([[uuid(1), 'ok']]);
   });
 
   test('stop clears the timer, unhooks the Hub and interrupts runs', async () => {

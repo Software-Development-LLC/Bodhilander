@@ -82,6 +82,8 @@ export interface RunLoopDeps {
   onFinished?(run: FinishedRun): void;
   onUsageObserved?(accountId: string, observation: UsageObservation): void;
   onSettled?(jobId: string, outcome: RunOutcome): void;
+  /** The run's process is up and has its input. Best effort: a throw is logged and the run goes on. */
+  onWorking?(job: CrewJob): void;
   /** Once per distinct hold of a hire, so the Hub can show it and route the hire's work elsewhere. */
   onHeld?(hireId: string, hold: string): void;
   /** A run of the hire got past every hold and is about to start. */
@@ -247,6 +249,12 @@ export class RunLoop {
     } catch (err) {
       log.warn('[Crew] could not start a run', err);
       this.settle(run);
+      return 'started';
+    }
+    try {
+      if (!run.settled) this.deps.onWorking?.(run.job);
+    } catch (err) {
+      log.warn('[Crew] could not report a run working', err);
     }
     return 'started';
   }
