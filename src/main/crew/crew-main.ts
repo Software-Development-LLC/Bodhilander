@@ -101,6 +101,20 @@ function ensureServices(): RunServiceManager {
   return services;
 }
 
+const realDir = (file: string): string => {
+  try {
+    return path.dirname(fs.realpathSync(file));
+  } catch {
+    return path.dirname(file);
+  }
+};
+
+function reopenedForRuns(): string[] {
+  const exec = process.execPath;
+  const bundle = exec.includes('.app/') ? exec.slice(0, exec.indexOf('.app/') + 4) : path.dirname(exec);
+  return [bundle, app.getAppPath(), crewResourcePaths().shimDir, realDir(claudePath())];
+}
+
 export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
   const userData = app.getPath('userData');
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
@@ -134,6 +148,8 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
       sockets: [],
       socketRoot: `/tmp/cr-${uid}`,
       allowedDomains: [],
+      reopen: reopenedForRuns(),
+      listDir,
     }),
   };
 }

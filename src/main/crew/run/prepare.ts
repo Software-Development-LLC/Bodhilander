@@ -14,7 +14,7 @@ import { holdState, type Holds } from '../holds';
 import { consumeTaint, isTainted } from '../taint';
 import { runArgs, runEnv } from './env';
 import type { CrewJob, Prepared } from './loop';
-import { runSettingsJson, type SandboxInput } from './sandbox-settings';
+import { buildRunSettings, type SandboxInput } from './sandbox-settings';
 import { ServicesNotReady, type RunServices } from './services';
 import { SocketRootError } from './sockets';
 import { cwdFor, hirePaths, settingsPathFor, underTempDir, type HirePaths } from './scope';
@@ -98,8 +98,12 @@ function lastTurns(db: Database.Database, hireId: string, threadKey: string): Tu
 }
 
 /** The cwd's steering paths come from the role and the bundle on every run, so nothing a run left there survives. */
+const HIRE_GITCONFIG = '[core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n';
+const gitConfigPath = (paths: HirePaths): string => path.join(paths.git, 'gitconfig');
+
 function regenerate(paths: HirePaths, cwd: string, handbook: string, restoreSkills?: (p: HirePaths) => void): void {
-  for (const dir of [paths.owner, paths.circle, paths.run, paths.ghConfig, paths.shell]) fs.mkdirSync(dir, { recursive: true });
+  for (const dir of [paths.owner, paths.circle, paths.run, paths.ghConfig, paths.shell, paths.git]) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(gitConfigPath(paths), HIRE_GITCONFIG);
   fs.rmSync(path.join(cwd, '.claude'), { recursive: true, force: true });
   fs.writeFileSync(path.join(cwd, 'CLAUDE.md'), handbook);
   restoreSkills?.(paths);
@@ -143,7 +147,8 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   const settingsPath = settingsPathFor(paths, job.scope);
   const base = deps.sandbox(paths, job, account.configDir);
   const sandbox: SandboxInput = { ...base, sockets: [...base.sockets, ...services.sockets], paths, scope: job.scope, configDir: account.configDir, userData: deps.userData, home: deps.home };
-  fs.writeFileSync(settingsPath, runSettingsJson(sandbox), { mode: 0o600 });
+  const settings = buildRunSettings(sandbox);
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
   const mcpConfigPath = path.join(paths.run, `mcp-${job.scope}.json`);
   fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: services.mcpServers }), { mode: 0o600 });
 
@@ -174,7 +179,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
     command: deps.claudePath,
     args: runArgs({ sessionId, settingsPath, mcpConfigPath, model: deps.model?.(job.hireId) }),
     cwd,
-    env: runEnv(deps.env, { configDir: account.configDir, ghConfigDir: paths.ghConfig, shellDir: paths.shell, tokenOnFd: token !== null, pathFirst: services.pathFirst, extra: services.env }),
+    env: runEnv(deps.env, { configDir: account.configDir, ghConfigDir: paths.ghConfig, shellDir: paths.shell, tokenOnFd: token !== null, pathFirst: services.pathFirst, extra: services.env, home: deps.home, reopened: settings.sandbox.filesystem.allowRead, gitConfig: gitConfigPath(paths) }),
     input,
     accountId: account.id,
     sessionId,

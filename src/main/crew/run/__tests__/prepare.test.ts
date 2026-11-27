@@ -85,6 +85,15 @@ describe('preparing a run', () => {
     expect(p.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR).toBeUndefined();
   });
 
+  test("git reads the hire's own global config, which ignores no file and sets no attributes", async () => {
+    const t = setup();
+    const p = (await prepareRun(t.deps, job(), 'chat:owner', 'run-1')) as PreparedRun;
+    expect(p.env.GIT_CONFIG_GLOBAL).toBe(path.join(t.root, 'git', 'gitconfig'));
+    expect(fs.readFileSync(p.env.GIT_CONFIG_GLOBAL, 'utf8')).toBe('[core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n');
+    const s = JSON.parse(fs.readFileSync(p.args[p.args.indexOf('--settings') + 1], 'utf8'));
+    expect(s.sandbox.filesystem.denyWrite).toContain(path.join(t.root, 'git'));
+  });
+
   test('a circle run works in circle/', async () => {
     const t = setup();
     const p = (await prepareRun(t.deps, job({ scope: 'circle' }), 'chat:circle', 'run-1')) as PreparedRun;

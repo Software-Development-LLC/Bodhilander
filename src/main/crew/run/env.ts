@@ -19,6 +19,20 @@ export interface RunEnvInput {
   pathFirst?: string;
   /** The run's gateway socket and token, for the shim. */
   extra?: Record<string, string>;
+  /** With `home`, PATH keeps only entries outside it or under a re-opened path. */
+  home?: string;
+  reopened?: readonly string[];
+  /** The hire's own git config, so the user's global one is never read. */
+  gitConfig?: string;
+}
+
+const under = (p: string, root: string): boolean => p === root || p.startsWith(root.endsWith('/') ? root : `${root}/`);
+
+function trimPath(value: string, home: string, reopened: readonly string[]): string {
+  return value
+    .split(':')
+    .filter((entry) => entry !== '' && (!under(entry, home) || reopened.some((r) => under(entry, r))))
+    .join(':');
 }
 
 export function runEnv(parent: Record<string, string | undefined>, input: RunEnvInput): Record<string, string> {
@@ -28,6 +42,9 @@ export function runEnv(parent: Record<string, string | undefined>, input: RunEnv
   env.GH_CONFIG_DIR = input.ghConfigDir;
   env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR = '1';
   Object.assign(env, { SHELL: '/bin/zsh', ZDOTDIR: input.shellDir, BASH_ENV: '', ENV: '' });
+  if (env.PATH && input.home) env.PATH = trimPath(env.PATH, input.home, input.reopened ?? []);
+  if (!env.PATH) delete env.PATH;
+  if (input.gitConfig) env.GIT_CONFIG_GLOBAL = input.gitConfig;
   if (input.pathFirst) env.PATH = env.PATH ? `${input.pathFirst}:${env.PATH}` : input.pathFirst;
   Object.assign(env, input.extra ?? {});
   if (input.tokenOnFd) {
