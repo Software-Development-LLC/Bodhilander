@@ -60,7 +60,7 @@ describe('Crew on Windows, as the main process runs it', () => {
     const { db } = crewDb();
     const crew = createWindowsCrew({
       db, signIn: {} as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
-      onLost: () => {}, handbook: () => '', timeZone: () => null, audit: (e) => void audits.push(e), openExternal: () => {}, belongsTo: () => false,
+      onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: (e) => void audits.push(e), openExternal: () => {}, belongsTo: () => false,
       resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'),
       exec: async (args) => {
         if (args.join(' ').includes('find /tmp/crt-1000')) sweeps++;
@@ -80,7 +80,7 @@ describe('Crew on Windows, as the main process runs it', () => {
     const { db } = crewDb();
     const crew = createWindowsCrew({
       db, signIn: {} as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
-      onLost: () => {}, handbook: () => '', timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
+      onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
       resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'),
       exec: async (args) => (calls.push(args.join(' ')), { code: 1, stdout: '', stderr: '' }),
     });

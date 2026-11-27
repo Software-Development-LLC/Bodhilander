@@ -108,7 +108,7 @@ function lastTurns(db: Database.Database, hireId: string, threadKey: string): Tu
 }
 
 /** The cwd's steering paths come from the role and the bundle on every run, so nothing a run left there survives. */
-const HIRE_GITCONFIG = '[core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n';
+export const HIRE_GITCONFIG = '[core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n';
 const gitConfigPath = (paths: HirePaths): string => path.join(paths.git, 'gitconfig');
 
 function regenerate(paths: HirePaths, cwd: string, readHandbook: () => string, restoreSkills?: (p: HirePaths) => void): void {

@@ -6,6 +6,8 @@ mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, 
 const { WslRuns, wslAccountDir, WSL_MCP_RELAY } = await import('../wsl-run');
 const { CrewSignIn } = await import('../crew-token');
 const { HOLD_SETUP, HOLD_SIGNED_OUT } = await import('../run/prepare');
+const { SteeringUnavailable } = await import('../handbook');
+import type { SkillFile } from '../protocol';
 import type { ClaudeAccount } from '../../../shared/types';
 import type { CrewJob, PreparedRun } from '../run/loop';
 import type { AgentChild } from '../wsl-agent';
@@ -40,7 +42,7 @@ class FakeAgent implements AgentChild {
   emit(f: Record<string, unknown>) { for (const cb of this.lines) cb(JSON.stringify(f)); }
 }
 
-function setup(opts: { mode?: 'login' | 'token'; parent?: string; agentVersion?: string; broker?: boolean; agentAnswer?: 'ready' | 'socket-root'; signedIn?: boolean } = {}) {
+function setup(opts: { mode?: 'login' | 'token'; parent?: string; agentVersion?: string; broker?: boolean; agentAnswer?: 'ready' | 'socket-root'; signedIn?: boolean; timeZone?: string; skills?: () => SkillFile[]; handbook?: (hireId: string) => string } = {}) {
   const { raw, db } = crewDb();
   raw.query(`INSERT INTO claude_accounts (id, label, config_dir, email) VALUES ('a1', 'Work Max', 'C:\\\\acct\\\\a1', 'b@x.com')`).run();
   raw.query(`INSERT INTO crew_hire_cache (hire_id, rev, data) VALUES (?, 1, ?)`).run(HIRE, JSON.stringify({ accountRef: { accountUuid: 'u-a1', email: 'b@x.com', label: 'Work Max' } }));
@@ -88,11 +90,12 @@ function setup(opts: { mode?: 'login' | 'token'; parent?: string; agentVersion?:
     },
     reinstallAgent: async () => (reinstalls.push(1), true),
     onLost: (h) => void lost.push(h),
-    handbook: () => '# Role\n',
-    timeZone: () => 'UTC',
+    handbook: opts.handbook ?? (() => '# Role\n'),
+    skills: opts.skills ?? (() => []),
+    timeZone: () => opts.timeZone ?? 'UTC',
     now: () => NOW,
   });
-  return { runs, scripts, writes, recorded, agents, gatewayConns, hostConns, registered, unregistered, lost, reinstalls };
+  return { raw, runs, scripts, writes, recorded, agents, gatewayConns, hostConns, registered, unregistered, lost, reinstalls };
 }
 
 describe('a run prepared inside BodhiCrew', () => {
@@ -189,6 +192,49 @@ describe('a run prepared inside BodhiCrew', () => {
     const u = setup({ broker: false });
     expect(await u.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
     expect(u.scripts.every((s) => s.startsWith('test -s'))).toBe(true);
+  });
+
+  test("the hire's handbook is the cwd's CLAUDE.md and its pinned skills replace the hire's skills dir", async () => {
+    const t = setup({ handbook: (id) => `# Handbook for ${id}\n`, skills: () => [{ path: 'triage.md', content: '# Triage\n' }, { path: 'board/read.md', content: '# Board\n' }] });
+    await t.runs.prepare(job(), 'chat:owner', 'run-1');
+    const H = `/home/crew/.bodhilander/crew/hires/${HIRE}`;
+    expect(t.writes.get(`${H}/owner/CLAUDE.md`)).toBe(`# Handbook for ${HIRE}\n`);
+    expect(t.writes.get(`${H}/skills/triage.md`)).toBe('# Triage\n');
+    expect(t.writes.get(`${H}/skills/board/read.md`)).toBe('# Board\n');
+    expect(t.scripts.some((s) => /rm -rf .*'[^']*\/skills' && mkdir -p '[^']*\/skills'/.test(s) && s.includes(`'${H}/skills'`))).toBe(true);
+    expect(t.writes.get(`${H}/git/gitconfig`)).toContain('excludesFile = /dev/null');
+  });
+
+  test('a skill path that leaves the skills dir is refused', async () => {
+    const t = setup({ skills: () => [{ path: '../owner/CLAUDE.md', content: 'x' }] });
+    expect(await t.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+  });
+
+  test('steering the Hub has not synced holds setup before any agent starts', async () => {
+    const t = setup({ handbook: () => { throw new SteeringUnavailable('the role has not synced'); } });
+    expect(await t.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    expect(t.agents).toHaveLength(0);
+    const u = setup({ skills: () => { throw new SteeringUnavailable('no bundle'); } });
+    expect(await u.runs.prepare(job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    expect(u.agents).toHaveLength(0);
+  });
+
+  test("the machine's time zone decides whether the thread's session is resumed", async () => {
+    const resumed = async (timeZone: string) => {
+      const t = setup({ timeZone });
+      t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, updated_at) VALUES (?, 'chat:owner', 's-1', '2026-11-27 01:00:00')`).run(HIRE);
+      const p = (await t.runs.prepare(job(), 'chat:owner', 'run-1')) as PreparedRun;
+      return p.sessionId;
+    };
+    expect(await resumed('UTC')).toBe('s-1');
+    expect(await resumed('America/Los_Angeles')).toBeNull();
+  });
+
+  test('the run reads its own git config, never the global one', async () => {
+    const t = setup();
+    const p = (await t.runs.prepare(job(), 'chat:owner', 'run-1')) as PreparedRun;
+    const run = JSON.parse(p.input.split('\n')[1]) as { env: Record<string, string> };
+    expect(run.env.GIT_CONFIG_GLOBAL).toBe(`/home/crew/.bodhilander/crew/hires/${HIRE}/git/gitconfig`);
   });
 
   test('an account id that is not a plain id is never turned into a distro path', () => {

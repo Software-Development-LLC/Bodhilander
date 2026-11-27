@@ -32,7 +32,7 @@ describe('WSL2 run settings', () => {
   test('only the run own paths are opened again, the install dirs read-only', () => {
     const s = buildWslRunSettings(input()).sandbox;
     expect(s.filesystem.allowRead).toEqual([`${H}/owner`, `${H}/circle`, `${H}/projects/repo`, `${H}/skills`, `${H}/empty-shell`, `${H}/gh-config`, `${H}/git`, WSL_NODE_DIR, WSL_BIN_DIR, '/tmp/cr-1000/abcdefgh']);
-    expect(s.filesystem.denyWrite).toEqual(expect.arrayContaining([WSL_NODE_DIR, WSL_BIN_DIR, '/mnt', '/run/WSL', '/init']));
+    expect(s.filesystem.denyWrite).toEqual(expect.arrayContaining([`${H}/git`, WSL_NODE_DIR, WSL_BIN_DIR, '/mnt', '/run/WSL', '/init']));
     expect(s.filesystem.allowRead).not.toContain(`${H}/run`);
     expect(s.network.allowAllUnixSockets).toBe(true);
     expect(s.network).not.toHaveProperty('allowUnixSockets');

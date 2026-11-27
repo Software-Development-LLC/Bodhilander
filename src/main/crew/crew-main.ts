@@ -126,6 +126,7 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     repos: hireRepos,
     onLost: (hireId) => runtime?.interrupt(hireId),
     handbook: (hireId) => handbookFor(db, hireId),
+    skills: (hireId) => pinnedSkills(db, hireId),
     timeZone: () => machineTimeZone(),
     audit: (event, detail) => writeAudit(db, null, event, detail),
     openExternal: (url) => void shell.openExternal(url),

@@ -8,16 +8,19 @@ import { duplexPair, type Duplex } from 'stream';
 import type Database from 'better-sqlite3';
 import type { ClaudeAccount } from '../../shared/types';
 import { resolveAccountRef } from './account-ref';
+import { SteeringUnavailable } from './handbook';
 import type { ApproveBroker } from './approve/broker';
 import type { CrewSignIn } from './crew-token';
 import type { GatewayRun } from './gateway/github-gateway';
 import type { McpRun, McpServerHandler } from './mcp/host';
+import type { SkillFile } from './protocol';
 import { runArgs, wslRunEnv } from './run/env';
 import type { CrewJob, Prepared } from './run/loop';
 import { crewMcpServers } from './run/mcp-config';
-import { chooseSession, HOLD_MISSING, HOLD_SETUP, HOLD_SIGNED_OUT, hireAccountRef } from './run/prepare';
+import { chooseSession, HIRE_GITCONFIG, HOLD_MISSING, HOLD_SETUP, HOLD_SIGNED_OUT, hireAccountRef } from './run/prepare';
 import { buildWslRunSettings, WSL_BIN_DIR, WSL_CREW_DIR, WSL_HIRES_DIR, WSL_HOME_ROOT, WSL_NODE_DIR, wslHirePaths } from './run/sandbox-settings';
-import { cwdFor } from './run/scope';
+import { cwdFor, type HirePaths } from './run/scope';
+import { bundlePath } from './tools/server';
 import { makeWslTmpDir, newRunToken, removeWslTmpDir, runDirName, SocketRootError, type DistroSh, type TmpRecords } from './run/sockets';
 import { CREW_HOME, type WslExec } from './wsl';
 import { AgentVersionError, startAgent, wslLaunch, type AgentChild, type AgentSession } from './wsl-agent';
@@ -52,7 +55,9 @@ export interface WslRunDeps {
   reinstallAgent(): Promise<boolean>;
   /** The agent's stdio closed mid-run: the run is interrupted and its job re-queued. */
   onLost(hireId: string): void;
+  /** These two throw SteeringUnavailable when the Hub's steering for the hire has not synced. */
   handbook(hireId: string): string;
+  skills(hireId: string): SkillFile[];
   timeZone(): string | null;
   model?(hireId: string): string | undefined;
   allowedDomains?(): string[];
@@ -67,6 +72,13 @@ interface Open {
 
 export const shQuote = (s: string): string => "'" + s.replaceAll("'", String.raw`'\''`) + "'";
 const q = shQuote;
+const SAFE_SKILL_PATH = /^[\w.\/-]+$/;
+
+function skillTarget(paths: HirePaths, file: SkillFile): string {
+  const p = bundlePath(file.path);
+  if (!p || !SAFE_SKILL_PATH.test(p)) throw new SteeringUnavailable(`a skill path BodhiCrew cannot hold: ${file.path}`);
+  return posix.join(paths.skills, p);
+}
 
 /** Each directory from /home down to the hires dir, with its entries, for the file-tool denies. */
 async function listLevels(sh: DistroSh): Promise<Record<string, string[]>> {
@@ -116,7 +128,7 @@ export class WslRuns {
       return await this.build({ job, threadKey, runId, accountId: account.id, token, broker, open, now });
     } catch (err) {
       this.end(job.id);
-      if (err instanceof SocketRootError || err instanceof AgentVersionError) return { hold: HOLD_SETUP };
+      if (err instanceof SocketRootError || err instanceof AgentVersionError || err instanceof SteeringUnavailable) return { hold: HOLD_SETUP };
       throw err;
     }
   }
@@ -124,6 +136,9 @@ export class WslRuns {
   private async build(b: Build): Promise<Prepared> {
     const { job, threadKey, runId, accountId, token, broker, open, now } = b;
     const d = this.deps;
+    const paths = wslHirePaths(job.hireId);
+    const handbook = d.handbook(job.hireId);
+    const skills = d.skills(job.hireId).map((f) => ({ target: skillTarget(paths, f), content: f.content }));
     const records: TmpRecords = {
       add: (name) => {
         open.tmpName = name;
@@ -165,13 +180,15 @@ export class WslRuns {
     });
     open.session = started.session;
 
-    const paths = wslHirePaths(job.hireId);
     const cwd = cwdFor(paths, job.scope);
     const configDir = wslAccountDir(accountId);
-    const mk = [paths.owner, paths.circle, paths.run, paths.ghConfig, paths.shell, configDir].map(q).join(' ');
-    const regen = await d.sh(`umask 077 && mkdir -p ${mk} && rm -rf ${q(posix.join(cwd, '.claude'))}`);
+    const gitConfig = posix.join(paths.git, 'gitconfig');
+    const mk = [paths.owner, paths.circle, paths.run, paths.ghConfig, paths.shell, paths.git, configDir].map(q).join(' ');
+    const regen = await d.sh(`umask 077 && mkdir -p ${mk} && rm -rf ${q(posix.join(cwd, '.claude'))} ${q(paths.skills)} && mkdir -p ${q(paths.skills)}`);
     if (regen.code !== 0) throw new SocketRootError({ type: 'hire-folder', uid: null, mode: null });
-    await this.write(posix.join(cwd, 'CLAUDE.md'), d.handbook(job.hireId), '0644');
+    await this.write(posix.join(cwd, 'CLAUDE.md'), handbook, '0644');
+    await this.write(gitConfig, HIRE_GITCONFIG, '0644');
+    for (const s of skills) await this.write(s.target, s.content, '0644');
 
     const settings = buildWslRunSettings({
       hireId: job.hireId,
@@ -201,6 +218,7 @@ export class WslRuns {
         configDir,
         ghConfigDir: paths.ghConfig,
         shellDir: paths.shell,
+        gitConfig,
         tokenOnFd: token !== null,
         pathFirst: WSL_GH_SHIM_DIR,
         extra: { CREW_GH_SOCKET: gh, CREW_GH_TOKEN: gatewayToken, CREW_NODE: WSL_NODE, CREW_GH_SHIM_JS: `${WSL_GH_SHIM_DIR}/gh-shim.js` },
