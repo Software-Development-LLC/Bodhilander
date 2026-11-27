@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createInterface } from 'readline';
 import { parseVersions, type CrewVersions } from './artifacts';
-import type { PrepareDeps } from './run/prepare';
+import { HOLD_SETUP, type PrepareDeps } from './run/prepare';
 import { removeTmpOrphans, sweepTmpParentScript, type DistroSh, type TmpRecords } from './run/sockets';
 import { asCrew, asRoot, decodeWslOutput, type WslExec } from './wsl';
 import { agentServeArgs, WSL_EXE, windowsEnv, type AgentChild } from './wsl-agent';
@@ -185,13 +185,23 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   let started: Promise<unknown> | null = null;
   const start = async () => {
     started ??= gate.atStart();
-    await started;
+    try {
+      await started;
+    } catch (err) {
+      started = null;
+      throw err;
+    }
   };
   return {
     windows: {
       gate: async () => {
-        await start();
-        return gate.gate();
+        try {
+          await start();
+          return await gate.gate();
+        } catch (err) {
+          deps.audit('windows-check-failed', { error: err instanceof Error ? err.message : String(err) });
+          return HOLD_SETUP;
+        }
       },
       prepare: (job, threadKey, runId) => runs.prepare(job, threadKey, runId),
     },

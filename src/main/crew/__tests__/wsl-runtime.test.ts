@@ -52,6 +52,27 @@ describe('Crew on Windows, as the main process runs it', () => {
     ]);
   });
 
+  test('a check that throws holds the run for setup, and the next run checks again', async () => {
+    const dir = tmp();
+    fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
+    const audits: string[] = [];
+    let sweeps = 0;
+    const { db } = crewDb();
+    const crew = createWindowsCrew({
+      db, signIn: {} as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
+      onLost: () => {}, handbook: () => '', timeZone: () => null, audit: (e) => void audits.push(e), openExternal: () => {}, belongsTo: () => false,
+      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'),
+      exec: async (args) => {
+        if (args.join(' ').includes('find /tmp/crt-1000')) sweeps++;
+        throw new Error('getent passwd failed');
+      },
+    });
+    expect(await crew.windows.gate()).toBe('held:setup');
+    expect(await crew.windows.gate()).toBe('held:setup');
+    expect(sweeps).toBe(2);
+    expect(audits.filter((e) => e === 'windows-check-failed')).toHaveLength(2);
+  });
+
   test('the first run sweeps and checks once, and runs are held until the check passes', async () => {
     const dir = tmp();
     fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
