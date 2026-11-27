@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
-import { startCrewHub } from './crew/hub-service';
+import { startCrewHub, stopCrewHub } from './crew/hub-service';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1911,6 +1911,11 @@ app.on('before-quit', (event) => {
           getRelayClient().stop();
         } catch (e) {
           log.error('Error stopping relay client on quit:', e);
+        }
+        try {
+          stopCrewHub();
+        } catch (e) {
+          log.error('Error stopping Crew on quit:', e);
         }
         stopBoardWatcherService();
         stopRunLoopService();

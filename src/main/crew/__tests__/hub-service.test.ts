@@ -36,7 +36,7 @@ mock.module('../../api/relay/relay-identity', () => ({
   signWithIdentity: () => Buffer.from('s'),
 }));
 
-const { crewHubUrl, newLinkFlow, startCrewHub } = await import('../hub-service');
+const { crewHubUrl, newLinkFlow, startCrewHub, stopCrewHub } = await import('../hub-service');
 import * as os from 'os';
 
 describe('the app Crew connection', () => {
@@ -61,7 +61,7 @@ describe('the app Crew connection', () => {
     };
     for (const cb of powerHandlers.resume ?? []) cb();
     expect(resumed).toBe(1);
-    for (const cb of appHandlers['will-quit'] ?? []) cb();
+    stopCrewHub();
     expect(sockets[0].closed).toBe(true);
   });
 
@@ -77,5 +77,6 @@ describe('the app Crew connection', () => {
   test('the app starts it after ready', async () => {
     const src = await Bun.file(new URL('../../index.ts', import.meta.url)).text();
     expect(src).toMatch(/startCrewHub\(\);/);
+    expect(src).toMatch(/stopCrewHub\(\);/);
   });
 });

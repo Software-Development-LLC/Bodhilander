@@ -110,7 +110,8 @@ export async function requestLinkCode(deps: LinkDeps): Promise<LinkResult> {
     if (retried.has(attempt.retry)) return { kind: 'cannot-link', error: attempt.retry };
     retried.add(attempt.retry);
     if (attempt.retry === 'replayed') {
-      issuedAt = Math.max(deps.now(), issuedAt + 1);
+      // After a skew retry the Hub's clock is the one to stay on.
+      issuedAt = retried.has('clock-skew') ? issuedAt + 1 : Math.max(deps.now(), issuedAt + 1);
     } else if (typeof attempt.hubTime === 'number' && Number.isSafeInteger(attempt.hubTime)) {
       issuedAt = attempt.hubTime;
     } else {

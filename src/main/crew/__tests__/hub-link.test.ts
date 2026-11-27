@@ -97,9 +97,7 @@ describe('requestLinkCode', () => {
       { status: 200, body: code },
     ]);
     expect((await requestLinkCode(d)).kind).toBe('code');
-    expect(calls.length).toBe(3);
-    expect(calls[1].body.issuedAt).toBe(5);
-    expect(Number(calls[2].body.issuedAt)).toBeGreaterThan(5);
+    expect(calls.map((c) => c.body.issuedAt)).toEqual([1_700_000_000_000, 5, 6]);
   });
 
   test('replayed re-signs once with a fresh issuedAt', async () => {

@@ -43,10 +43,14 @@ export function startCrewHub(): HubClient {
   });
   client = hub;
   powerMonitor.on('resume', () => hub.onResume());
-  app.on('will-quit', () => hub.stop());
   hub.on('status', (status) => log.info(`[Crew] Hub ${status}`));
   hub.start();
   return hub;
+}
+
+/** Part of the quit cleanup; `will-quit` never fires after the hard exit there. */
+export function stopCrewHub(): void {
+  client?.stop();
 }
 
 function machineName(): string {
