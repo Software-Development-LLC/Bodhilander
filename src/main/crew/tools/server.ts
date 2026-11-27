@@ -9,7 +9,10 @@ import { writeAudit } from '../audit';
 import { textResult, type McpServerHandler, type McpTool } from '../mcp/host';
 import { NOTE_MAX_CHARS, cachedNote, parseNotePath, snapshotShared } from '../notes';
 import { MAX_SKILL_BYTES, MAX_TEXT, type CardRaiseFrame, type NoteWriteFrame, type RunScope, type SendFrame, type SkillFile, type Unstamped } from '../protocol';
-import { isTainted } from '../taint';
+import type { FileAnswer, FileInput } from '../hub-client';
+import { isTainted, markTainted, wrapUntrusted } from '../taint';
+import { checkAndRead, type FileAccess, type FileCheckHooks } from './send-file';
+import { fetchPage, type FetchTransport } from './web-fetch';
 
 export const SKILL_PROPOSAL_MAX_BYTES = 1024 * 1024;
 export const BUILD_MESSAGE = 'Builds arrive in phase 2.';
@@ -25,6 +28,12 @@ export interface ToolsDeps {
   raiseCard(jobId: string, raise: Unstamped<CardRaiseFrame>): boolean;
   sendMessage(jobId: string, send: Unstamped<SendFrame>): boolean;
   writeNote(jobId: string, write: Unstamped<NoteWriteFrame>): boolean;
+  /** Absent where the main process cannot see the run's files, so send_file is refused. */
+  fileAccess?(job: ToolsJob): FileAccess | null;
+  sendFile?(jobId: string, file: FileInput): Promise<FileAnswer>;
+  fetchTransport?: FetchTransport;
+  fetchHosts?(hireId: string): string[];
+  fileHooks?: FileCheckHooks;
   newId?(): string;
 }
 
@@ -33,6 +42,16 @@ const TOOLS: McpTool[] = [
     name: 'send',
     description: 'Send a message: to a Bodhi person by their UPN, or with no recipient back to the conversation that asked.',
     inputSchema: { type: 'object', properties: { recipient: { type: 'string' }, text: { type: 'string' } }, required: ['text'] },
+  },
+  {
+    name: 'send_file',
+    description: 'Send one file of at most 25 MB from your folder or a repo clone: to a Bodhi person by their UPN, or with no recipient back to the conversation that asked.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, recipient: { type: 'string' } }, required: ['path'] },
+  },
+  {
+    name: 'web_fetch',
+    description: 'Fetch one public https page as text. What it returns is untrusted, and after it this run can fetch only from its role\'s listed hosts.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
   },
   {
     name: 'note_read',
@@ -108,6 +127,41 @@ export function crewTools(deps: ToolsDeps, job: ToolsJob, threadKey: string): Mc
       : textResult('The message could not be queued.', true);
   };
 
+  const target = (args: Record<string, unknown>): { inboundId?: string; recipient?: string } | string => {
+    const recipient = typeof args.recipient === 'string' ? args.recipient.trim() : '';
+    if (args.recipient !== undefined && (!recipient || recipient.length > 320 || !recipient.includes('@'))) return 'recipient must be a UPN.';
+    const { inboundId } = inbound();
+    if (!recipient && !inboundId) return 'This run has no conversation to answer; name a recipient.';
+    return recipient ? { recipient } : { inboundId };
+  };
+
+  const sendFile = async (args: Record<string, unknown>) => {
+    const to = target(args);
+    if (typeof to === 'string') return textResult(to, true);
+    const access = deps.fileAccess?.(job) ?? null;
+    if (!access || !deps.sendFile) return textResult('send_file is not available for this run.', true);
+    const checked = checkAndRead(args.path, access, deps.fileHooks);
+    if (!checked.ok) {
+      writeAudit(deps.db, job.hireId, 'send-file-refused', { jobId: job.id, reason: checked.reason });
+      return textResult(checked.reason, true);
+    }
+    const { file } = checked;
+    const answer = await deps.sendFile(job.id, { id: newId(), name: file.name, size: file.size, sha256: file.sha256, bytes: file.bytes, tainted: tainted(), ...to });
+    if (answer.state === 'ack') return textResult(`Sent ${file.name}. People outside the circle, or any file from a run that read untrusted content, get it after the owner approves.`);
+    if (answer.state === 'pending') return textResult(`${file.name} is queued; the Hub has not answered yet, and it is sent again until it does.`);
+    if (answer.state === 'refused') return textResult(`The Hub refused ${file.name} (${answer.reason}).`, true);
+    return textResult('The file could not be queued.', true);
+  };
+
+  const webFetch = async (args: Record<string, unknown>) => {
+    if (!deps.fetchTransport) return textResult('web_fetch is not available for this run.', true);
+    const result = await fetchPage(args.url, tainted(), deps.fetchHosts?.(job.hireId) ?? [], deps.fetchTransport);
+    if (!result.ok) return textResult(result.reason, true);
+    const source = `web_fetch:${result.url}`;
+    markTainted(deps.db, job.hireId, threadKey, source);
+    return textResult(wrapUntrusted(source, result.text));
+  };
+
   const noteRead = (args: Record<string, unknown>) => {
     const scope = args.scope === 'owner' || args.scope === 'shared' ? args.scope : null;
     const notePath = typeof args.path === 'string' ? args.path : '';
@@ -167,6 +221,8 @@ export function crewTools(deps: ToolsDeps, job: ToolsJob, threadKey: string): Mc
     tools: () => TOOLS,
     call: async (name, args) => {
       if (name === 'send') return send(args);
+      if (name === 'send_file') return sendFile(args);
+      if (name === 'web_fetch') return webFetch(args);
       if (name === 'note_read') return noteRead(args);
       if (name === 'note_write') return noteWrite(args);
       if (name === 'skill_propose') return skillPropose(args);

@@ -129,6 +129,16 @@ export const CREW_TABLES_SQL = `
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- The bytes of a send_file item, read through its checked descriptor; they go with the item.
+    CREATE TABLE IF NOT EXISTS crew_outbox_file (
+      id TEXT PRIMARY KEY,
+      data BLOB NOT NULL
+    );
+    CREATE TRIGGER IF NOT EXISTS crew_outbox_file_gone AFTER DELETE ON crew_outbox_local
+    BEGIN
+      DELETE FROM crew_outbox_file WHERE id = old.id;
+    END;
+
     -- A card this machine raised. A decision after the run parked resumes as decision_job_id.
     CREATE TABLE IF NOT EXISTS crew_card (
       raise_id TEXT PRIMARY KEY,

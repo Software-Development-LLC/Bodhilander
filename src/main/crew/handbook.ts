@@ -51,6 +51,20 @@ export function parseRoleMd(md: string): RoleText {
   return { name: field('name'), description: field('description'), body: (front ? md.slice(front[0].length) : md).trim() };
 }
 
+/** The front matter's `fetchHosts` list: the hosts a tainted run may still fetch from. */
+export function parseFetchHosts(md: string): string[] {
+  const lines = FRONT.exec(md)?.[1].split(/\r?\n/) ?? [];
+  const start = lines.findIndex((l) => /^fetchHosts:\s*$/.test(l));
+  if (start < 0) return [];
+  const hosts: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const item = /^\s+-\s+(\S+)\s*$/.exec(line);
+    if (!item) break;
+    hosts.push(item[1].toLowerCase());
+  }
+  return hosts;
+}
+
 export const signature = (hireName: string): string => `— ${hireName}, AI assistant (${CREW_NAME})`;
 
 export interface HandbookInput {
@@ -131,6 +145,14 @@ export function handbookFor(db: Database.Database, hireId: string): string {
   if (!role || role.deleted || typeof role.roleMd !== 'string') throw new SteeringUnavailable(`the role ${roleId || '(none)'} has not synced`);
   const repos = Array.isArray(hire.repos) ? hire.repos.filter((r): r is string => typeof r === 'string') : [];
   return generateHandbook({ hireName: typeof hire.name === 'string' ? hire.name : hireId, role: parseRoleMd(role.roleMd), repos });
+}
+
+/** The hire's role's fetchHosts; none when the hire or its role has not synced. */
+export function roleFetchHosts(db: Database.Database, hireId: string): string[] {
+  const hire = row(db, `SELECT data FROM crew_hire_cache WHERE hire_id = ? AND rev > 0`, hireId);
+  const roleId = typeof hire?.roleId === 'string' ? hire.roleId : '';
+  const role = roleId ? row(db, `SELECT data FROM crew_role_cache WHERE role_id = ?`, roleId) : null;
+  return role && !role.deleted && typeof role.roleMd === 'string' ? parseFetchHosts(role.roleMd) : [];
 }
 
 /** The hire's pinned bundle, only when its content hashes to the pin and every path stays inside skills/. */

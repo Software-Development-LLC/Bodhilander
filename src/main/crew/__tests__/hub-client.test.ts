@@ -4,11 +4,13 @@ mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, 
 
 const { HubClient, resolveHubUrl, HUB_URL_DEVELOPMENT, HUB_URL_PRODUCTION } = await import('../hub-client');
 import type { HubSocket } from '../hub-client';
-import { HEARTBEAT_MS, LEASE_MS } from '../protocol';
+import { FILE_CHUNK_BYTES, FILE_MAX_BYTES, HEARTBEAT_MS, LEASE_MS, MAX_FRAME_BYTES, parseMachineFrame } from '../protocol';
+import { createHash } from 'crypto';
 import { HIRE, MACHINE, PERSON, crewDb, uuid } from './crew-db';
 
 class FakeSocket {
   sent: Record<string, unknown>[] = [];
+  bufferedAmount = 0;
   closed: number | null = null;
   private handlers: Record<string, ((arg: unknown) => void)[]> = {};
   on(event: string, cb: (arg: unknown) => void) {
@@ -1103,5 +1105,138 @@ describe('HubClient cards and tokens', () => {
     expect(t.sock().sent.filter((f) => f.type === 'send')).toEqual([{ type: 'send', id: uuid(30), text: 'hello', tainted: false, recipient: 'a@b.c', hireId: HIRE, epoch: 1 }]);
     expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local WHERE frame_type = 'send'`).get()).toEqual({ n: 1 });
     expect(t.client.sendMessage(uuid(99), { id: uuid(31), text: 'x', tainted: false, recipient: 'a@b.c' })).toBe(false);
+  });
+});
+
+describe('HubClient send_file', () => {
+  const fileOf = (bytes: Buffer, id = uuid(40)) => ({
+    id,
+    name: 'report.pdf',
+    size: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    tainted: false,
+    bytes,
+    recipient: 'a@b.c',
+  });
+  const pace = (t: ReturnType<typeof setup>, max = 10_000) => {
+    for (let i = 0; i < max; i++) {
+      const next = t.timeouts.findIndex((x) => x.ms <= 10);
+      if (next < 0) return;
+      t.timeouts.splice(next, 1)[0].fn();
+    }
+  };
+  const chunks = (s: FakeSocket) => s.sent.filter((f) => f.type === 'file');
+
+  test('a 25 MB file goes as chunk frames under MAX_FRAME_BYTES, head on chunk 0, and the Hub answers once after final', async () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    const bytes = Buffer.alloc(FILE_MAX_BYTES, 7);
+    bytes.write('start');
+    const answer = t.client.sendFile(uuid(1), fileOf(bytes));
+    pace(t);
+    const sent = chunks(t.sock());
+    expect(sent.length).toBe(Math.ceil(FILE_MAX_BYTES / FILE_CHUNK_BYTES));
+    for (const [i, f] of sent.entries()) {
+      const text = JSON.stringify(f);
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(MAX_FRAME_BYTES);
+      expect(parseMachineFrame(text).ok).toBe(true);
+      expect(f.index).toBe(i);
+      expect(f.final).toBe(i === sent.length - 1);
+      expect(f.name !== undefined).toBe(i === 0);
+      expect(Buffer.from(f.data as string, 'base64').length).toBeLessThanOrEqual(FILE_CHUNK_BYTES);
+    }
+    expect(sent[0]).toMatchObject({ id: uuid(40), hireId: HIRE, epoch: 1, size: FILE_MAX_BYTES, recipient: 'a@b.c', tainted: false });
+    expect(Buffer.concat(sent.map((f) => Buffer.from(f.data as string, 'base64'))).equals(bytes)).toBe(true);
+    t.sock().hub({ type: 'ack', id: uuid(40) });
+    expect(await answer).toEqual({ state: 'ack' });
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_file`).get()).toEqual({ n: 0 });
+  });
+
+  test('a chunk waits while the socket still holds the last, so a heartbeat goes between chunks and renews the lease', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    void t.client.sendFile(uuid(1), fileOf(Buffer.alloc(FILE_CHUNK_BYTES * 4, 1)));
+    expect(chunks(t.sock()).length).toBe(1);
+    t.sock().bufferedAmount = FILE_CHUNK_BYTES;
+    pace(t, 50);
+    expect(chunks(t.sock()).length).toBe(1);
+    t.advance(HEARTBEAT_MS);
+    t.intervals.find((x) => x.live && x.ms === HEARTBEAT_MS)!.fn();
+    const hb = t.sock().sent.filter((f) => f.type === 'heartbeat');
+    t.sock().hub(renewFor(hb[hb.length - 1].seq as number));
+    expect(t.client.canStart(HIRE, 1)).toBe(true);
+    t.sock().bufferedAmount = 0;
+    pace(t);
+    const order = t.sock().sent.filter((f) => f.type === 'file' || f.type === 'heartbeat').map((f) => (f.type === 'file' ? `c${f.index}` : 'hb'));
+    expect(order.slice(-5)).toEqual(['c0', 'hb', 'c1', 'c2', 'c3']);
+  });
+
+  test('a file mid-send is never re-sent on the timer; after final it is', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    void t.client.sendFile(uuid(1), fileOf(Buffer.alloc(FILE_CHUNK_BYTES * 3, 1)));
+    t.sock().bufferedAmount = 1;
+    t.advance(10 * 60_000);
+    t.intervals.find((x) => x.live && x.ms === HEARTBEAT_MS)!.fn();
+    expect(chunks(t.sock()).map((f) => f.index)).toEqual([0]);
+    t.sock().bufferedAmount = 0;
+    pace(t);
+    t.advance(10 * 60_000);
+    t.intervals.find((x) => x.live && x.ms === HEARTBEAT_MS)!.fn();
+    pace(t);
+    expect(chunks(t.sock()).map((f) => f.index)).toEqual([0, 1, 2, 0, 1, 2]);
+  });
+
+  test('a disconnect mid-file stops the chunks, and the next connection re-sends from chunk 0', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    void t.client.sendFile(uuid(1), fileOf(Buffer.alloc(FILE_CHUNK_BYTES * 4, 1)));
+    t.timeouts.find((x) => x.ms <= 10)!.fn();
+    const first = t.sock();
+    first.drop(1006);
+    pace(t);
+    expect(chunks(first).map((f) => f.index)).toEqual([0, 1]);
+    t.timeouts[t.timeouts.length - 1].fn();
+    t.sock().hub({ type: 'challenge', version: 2, nonce: 'n2', hubTime: t.c.w });
+    t.sock().hub({ type: 'welcome', machineId: MACHINE, hubTime: t.c.w, ownerName: 'Ann', ownerUpn: 'ann@x' });
+    pace(t);
+    expect(t.sock()).not.toBe(first);
+    expect(chunks(t.sock()).map((f) => f.index)).toEqual([0, 1, 2, 3]);
+    expect(chunks(t.sock())[0].sha256).toBeDefined();
+  });
+
+  test('one file at a time: a second file starts after the first one\'s final chunk', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    void t.client.sendFile(uuid(1), fileOf(Buffer.alloc(FILE_CHUNK_BYTES * 2, 1), uuid(40)));
+    void t.client.sendFile(uuid(1), fileOf(Buffer.alloc(10, 2), uuid(41)));
+    pace(t);
+    expect(chunks(t.sock()).map((f) => `${f.id === uuid(40) ? 'a' : 'b'}${f.index}`)).toEqual(['a0', 'a1', 'b0']);
+  });
+
+  test('a refusal is reported back, the job is dead on malformed, and a fenced job queues nothing', async () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    const answer = t.client.sendFile(uuid(1), fileOf(Buffer.from('x')));
+    t.sock().hub({ type: 'refused', id: uuid(40), reason: 'malformed' });
+    expect(await answer).toEqual({ state: 'refused', reason: 'malformed' });
+    expect(t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(uuid(1))).toEqual({ state: 'dead' });
+    expect(await t.client.sendFile(uuid(99), fileOf(Buffer.from('x'), uuid(42)))).toEqual({ state: 'not-queued' });
+  });
+
+  test('with no answer in time the run is told the file is still queued', async () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    const answer = t.client.sendFile(uuid(1), fileOf(Buffer.from('x')), 5);
+    t.timeouts.find((x) => x.ms === 5)!.fn();
+    expect(await answer).toEqual({ state: 'pending' });
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local WHERE frame_type = 'file'`).get()).toEqual({ n: 1 });
   });
 });

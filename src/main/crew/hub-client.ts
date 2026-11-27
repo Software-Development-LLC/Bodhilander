@@ -25,6 +25,8 @@ import {
   type CardDecisionFrame,
   type CardRaiseFrame,
   type SendFrame,
+  type FileFrame,
+  type RefusedReason,
   type UsageFrame,
   type UsageReadFrame,
   type ChallengeFrame,
@@ -53,6 +55,15 @@ import {
 } from './protocol';
 
 export type UsageInput = Omit<UsageRecordFrame, 'type' | 'id' | 'hireId' | 'epoch'>;
+
+/** A send_file item, as the tool read it: the bytes travel, never the path. */
+export type FileInput = { id: string; name: string; size: number; sha256: string; tainted: boolean; bytes: Uint8Array; inboundId?: string; recipient?: string };
+/** The Hub's one answer per file, or `pending` while it is still being sent or re-sent. */
+export type FileAnswer = { state: 'ack' } | { state: 'refused'; reason: RefusedReason | string } | { state: 'pending' } | { state: 'not-queued' };
+
+export const FILE_ANSWER_WAIT_MS = 120_000;
+/** How often a paced file send looks again while the socket still holds the last chunk. */
+export const FILE_PACE_MS = 10;
 
 export const HUB_URL_PRODUCTION = 'https://crew.bodhi.software';
 export const HUB_URL_DEVELOPMENT = 'https://crew-dev.bodhi.software';
@@ -128,6 +139,8 @@ export type HubStatus =
 /** The subset of `ws`'s WebSocket this client uses. */
 export interface HubSocket {
   send(data: string): void;
+  /** Bytes queued but not yet written; a file's next chunk waits until it is 0. */
+  readonly bufferedAmount?: number;
   close(code?: number): void;
   terminate(): void;
   on(event: 'open', cb: () => void): unknown;
@@ -198,6 +211,9 @@ export class HubClient extends EventEmitter {
   private skewMs = 0;
   private ownerName: string | null = null;
   private ownerUpn: string | null = null;
+  private files: { id: string; chunks: Iterator<string>; last: number; sent: (sentAt: number, ms: number) => void }[] = [];
+  private filePump: unknown = null;
+  private readonly fileWaiters = new Map<string, (answer: FileAnswer) => void>();
 
   constructor(private readonly deps: HubClientDeps) {
     super();
@@ -265,6 +281,32 @@ export class HubClient extends EventEmitter {
     this.sync.onClosed();
     this.heartbeatSentAt.clear();
     this.pullSentAt = null;
+    this.stopFiles();
+  }
+
+  private stopFiles(): void {
+    this.files = [];
+    if (this.filePump !== null) this.timers.clearTimeout(this.filePump);
+    this.filePump = null;
+  }
+
+  /** One file at a time, one chunk per turn, and only once the socket has written the last: a heartbeat waits behind at most one chunk. */
+  private pumpFiles(): void {
+    this.filePump = null;
+    const file = this.files[0];
+    if (!file || this.phase !== 'open' || !this.socket) return;
+    if ((this.socket.bufferedAmount ?? 0) > 0) {
+      this.filePump = this.timers.setTimeout(() => this.guarded('file', () => this.pumpFiles()), FILE_PACE_MS);
+      return;
+    }
+    const next = file.chunks.next();
+    if (next.done) {
+      this.files.shift();
+      file.sent(file.last, this.clocks.wall());
+    } else {
+      file.last = this.sender.send(next.value);
+    }
+    if (this.files.length > 0) this.filePump = this.timers.setTimeout(() => this.guarded('file', () => this.pumpFiles()), 0);
   }
 
   /** powerMonitor `resume`: every lease lapses until a heartbeat sent after the wake is renewed. */
@@ -323,6 +365,11 @@ export class HubClient extends EventEmitter {
       this.socket?.send(text);
       this.sendIndex += 1;
       return this.sendIndex;
+    },
+    sendFile: (id: string, chunks: () => Iterable<string>, sent: (sentAt: number, ms: number) => void): void => {
+      if (this.files.some((f) => f.id === id)) return;
+      this.files.push({ id, chunks: chunks()[Symbol.iterator](), last: 0, sent });
+      if (this.filePump === null) this.pumpFiles();
     },
   };
 
@@ -530,6 +577,7 @@ export class HubClient extends EventEmitter {
   }
 
   private onAck(id: string): void {
+    this.fileWaiters.get(id)?.({ state: 'ack' });
     if (!this.outbox.onAck(id)) log.info(`[Crew] ack for ${id} matched no outbox item`);
     markCardAcked(this.deps.db, id);
   }
@@ -549,6 +597,7 @@ export class HubClient extends EventEmitter {
 
   private onRefused(frame: RefusedFrame): void {
     const result = this.outbox.onRefused(frame.id, frame.reason);
+    this.fileWaiters.get(frame.id)?.({ state: 'refused', reason: frame.reason });
     const usageWaiter = this.usageWaiters.get(frame.id);
     if (usageWaiter) return usageWaiter(null);
     if (!result) {
@@ -689,6 +738,25 @@ export class HubClient extends EventEmitter {
     if (!stamp) return false;
     const frame: SendFrame = { type: 'send', ...send, text: cutText(send.text), hireId: stamp.hireId, epoch: stamp.epoch };
     return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  /** Queue one file as one item, chunked as it is sent; resolves with the Hub's answer, or `pending` after `waitMs`. */
+  sendFile(jobId: string, file: FileInput, waitMs = FILE_ANSWER_WAIT_MS): Promise<FileAnswer> {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return Promise.resolve({ state: 'not-queued' });
+    const { bytes, ...head } = file;
+    const frame: FileFrame & { index: 0 } = { type: 'file', ...head, hireId: stamp.hireId, epoch: stamp.epoch, index: 0, final: false, data: '' };
+    return new Promise((resolve) => {
+      const settle = (answer: FileAnswer) => {
+        this.timers.clearTimeout(timer);
+        this.fileWaiters.delete(file.id);
+        resolve(answer);
+      };
+      const timer = this.timers.setTimeout(() => settle({ state: 'pending' }), waitMs);
+      this.fileWaiters.set(file.id, settle);
+      if (!this.outbox.enqueueFile(frame, bytes, { hireId: stamp.hireId, epoch: stamp.epoch, jobId })) return settle({ state: 'not-queued' });
+      if (this.phase === 'open') this.outbox.sendNow(frame.id, this.sender, this.clocks.wall());
+    });
   }
 
   /**

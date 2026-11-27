@@ -8,7 +8,9 @@ import {
   contentHash,
   generateHandbook,
   handbookFor,
+  parseFetchHosts,
   parseRoleMd,
+  roleFetchHosts,
   pinnedSkills,
   restoreSkills,
   signature,
@@ -66,6 +68,19 @@ describe('the role file', () => {
     expect(role.name).toBe('Product Owner');
     expect(role.description).toBe('Grounds, triages and documents one Bodhi product.');
     expect(role.body).toBe('You are the product owner for one Bodhi product.\n\n- Keep answers short.');
+  });
+
+  test("reads fetchHosts from the front matter, and none when it is absent or outside it", () => {
+    expect(parseFetchHosts(ROLE_MD)).toEqual(['docs.github.com']);
+    expect(parseFetchHosts('---\nname: X\nfetchHosts:\n  - A.example\n  - b.example\ndescription: d\n---\nbody')).toEqual(['a.example', 'b.example']);
+    expect(parseFetchHosts('---\nname: X\n---\nfetchHosts:\n  - evil.example\n')).toEqual([]);
+  });
+
+  test("a hire's fetchHosts come from its synced role, and none before it syncs", () => {
+    const { db } = crewDb();
+    expect(roleFetchHosts(db, HIRE)).toEqual([]);
+    seed(db);
+    expect(roleFetchHosts(db, HIRE)).toEqual(['docs.github.com']);
   });
 
   test('a role with no front matter is all body', () => {

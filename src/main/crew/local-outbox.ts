@@ -8,7 +8,7 @@ import log from 'electron-log';
 import { writeAudit } from './audit';
 import type { EpochFence } from './epoch';
 import { assertSendable } from './protocol-parse';
-import { MACHINE_FRAME_TYPES, PROTOCOL_VERSION, type MachineFrame, type RefusedReason } from './protocol';
+import { FILE_CHUNK_BYTES, MACHINE_FRAME_TYPES, PROTOCOL_VERSION, type FileFrame, type MachineFrame, type RefusedReason } from './protocol';
 
 export const RESEND_FIRST_MS = 30_000;
 export const RESEND_CAP_MS = 10 * 60_000;
@@ -48,10 +48,26 @@ interface InFlight {
   overtaken: boolean;
   /** A parked item gets one try per start or Send again, and no timed re-sends. */
   once: boolean;
+  /** A file whose chunks are still going out: it has no answer to wait for yet. */
+  sending?: boolean;
 }
 
 export interface Sender {
   send(text: string): number;
+  /** Sends a file's chunk frames in order, paced, then calls `sent` with the final chunk's send index. */
+  sendFile?(id: string, chunks: () => Iterable<string>, sent: (sentAt: number, ms: number) => void): void;
+}
+
+/** A file's chunk frames, from chunk 0: the head fields ride on chunk 0 only. */
+export function* fileChunks(head: FileFrame, bytes: Uint8Array): Generator<string> {
+  const buf = Buffer.from(bytes);
+  const count = Math.max(1, Math.ceil(buf.length / FILE_CHUNK_BYTES));
+  const { name, size, sha256, tainted, inboundId, recipient, ...base } = head;
+  for (let index = 0; index < count; index++) {
+    const data = buf.subarray(index * FILE_CHUNK_BYTES, (index + 1) * FILE_CHUNK_BYTES).toString('base64');
+    const first = index === 0 ? { name, size, sha256, tainted, inboundId, recipient } : {};
+    yield assertSendable({ ...base, ...first, index, final: index === count - 1, data });
+  }
 }
 
 export class LocalOutbox {
@@ -74,6 +90,26 @@ export class LocalOutbox {
       )
       .run(frame.id, meta.hireId ?? null, meta.epoch ?? null, meta.jobId ?? null, frame.type, PROTOCOL_VERSION, body);
     return result.changes > 0;
+  }
+
+  /** One file is one item: its head frame, and the bytes beside it. */
+  enqueueFile(head: FileFrame & { index: 0 }, bytes: Uint8Array, meta: { hireId?: string; epoch?: number; jobId?: string } = {}): boolean {
+    const body = assertSendable({ ...head, final: false, data: '' });
+    return this.db.transaction(() => {
+      const added = this.db
+        .prepare(
+          `INSERT INTO crew_outbox_local (id, hire_id, epoch, job_id, frame_type, protocol_version, body)
+           VALUES (?, ?, ?, ?, 'file', ?, ?) ON CONFLICT(id) DO NOTHING`,
+        )
+        .run(head.id, meta.hireId ?? null, meta.epoch ?? null, meta.jobId ?? null, PROTOCOL_VERSION, body).changes > 0;
+      if (added) this.db.prepare(`INSERT INTO crew_outbox_file (id, data) VALUES (?, ?)`).run(head.id, Buffer.from(bytes));
+      return added;
+    })();
+  }
+
+  private chunksOf(row: Row): Iterable<string> {
+    const file = this.db.prepare('SELECT data FROM crew_outbox_file WHERE id = ?').get(row.id) as { data: Uint8Array } | undefined;
+    return file ? fileChunks(JSON.parse(row.body) as FileFrame, file.data) : [];
   }
 
   /** At start: rows this build no longer speaks, and rows fenced or unlinked for good, are deleted and audited. */
@@ -111,8 +147,21 @@ export class LocalOutbox {
 
   private sendRow(row: Row, sender: Sender, now: number, once: boolean): void {
     const prior = this.inFlight.get(row.id);
+    if (row.frame_type === 'file') return this.sendFileRow(row, sender, now, once, prior);
     const sentAt = sender.send(row.body);
     this.inFlight.set(row.id, { sentAt, sentMs: now, attempts: (prior?.attempts ?? 0) + 1, overtaken: false, once });
+  }
+
+  private sendFileRow(row: Row, sender: Sender, now: number, once: boolean, prior: InFlight | undefined): void {
+    if (prior?.sending || !sender.sendFile) return;
+    const flight: InFlight = { sentAt: Number.MAX_SAFE_INTEGER, sentMs: now, attempts: (prior?.attempts ?? 0) + 1, overtaken: false, once, sending: true };
+    this.inFlight.set(row.id, flight);
+    sender.sendFile(row.id, () => this.chunksOf(row), (sentAt, ms) => {
+      if (this.inFlight.get(row.id) !== flight) return;
+      flight.sentAt = sentAt;
+      flight.sentMs = ms;
+      flight.sending = false;
+    });
   }
 
   /** On every welcome: every unanswered item, in its original order. */
@@ -155,7 +204,7 @@ export class LocalOutbox {
     const rows = this.db.prepare(`SELECT * FROM crew_outbox_local WHERE state = 'pending' ORDER BY seq`).all() as Row[];
     for (const row of rows) {
       const flight = this.inFlight.get(row.id);
-      if (!flight || flight.once) continue;
+      if (!flight || flight.once || flight.sending) continue;
       if (now - flight.sentMs < this.delay(flight.attempts)) continue;
       if (this.fenced(row)) {
         this.inFlight.delete(row.id);

@@ -16,7 +16,7 @@ import { getUsage, setUsage } from '../usage-store';
 import { CrewSignIn, type Reminder } from './crew-token';
 import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
 import { GithubGateway, runGh } from './gateway/github-gateway';
-import { handbookFor, pinnedSkills, restoreSkills } from './handbook';
+import { handbookFor, pinnedSkills, restoreSkills, roleFetchHosts } from './handbook';
 import { Holds, hireTimeZone } from './holds';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
@@ -27,7 +27,10 @@ import { cachedHire, type HomeDeps } from './home';
 import { McpHost, hostSocketPath } from './mcp/host';
 import { resolveAccountRef } from './account-ref';
 import { HireDayUsage } from './run/hire-usage';
-import { prepareRun, type PrepareDeps } from './run/prepare';
+import { hireAccountRef, prepareRun, type PrepareDeps } from './run/prepare';
+import { sendFileAccess } from './run/sandbox-settings';
+import { hirePaths } from './run/scope';
+import { httpsTransport } from './tools/web-fetch';
 import { RunServiceManager, ServicesNotReady } from './run/services';
 import { reapLeftoverRuns, systemReap } from './run/reap';
 import { socketRoot, sweepRunDirs } from './run/sockets';
@@ -133,6 +136,29 @@ function crewToolDeps(db: ReturnType<typeof getDatabase>): Parameters<typeof cre
     raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false,
     sendMessage: (jobId, send) => runtimeHub?.sendMessage(jobId, send) ?? false,
     writeNote: (jobId, write) => runtimeHub?.sendNoteWrite(jobId, write) ?? false,
+    sendFile: (jobId, file) => runtimeHub?.sendFile(jobId, file) ?? Promise.resolve({ state: 'not-queued' }),
+    fileAccess: (job) => {
+      if (process.platform === 'win32') return null;
+      const ref = hireAccountRef(db, job.hireId);
+      const account = ref ? resolveAccountRef(ref, getAllAccounts()) : null;
+      if (!account) return null;
+      const userData = app.getPath('userData');
+      return sendFileAccess({
+        paths: hirePaths(userData, job.hireId),
+        scope: job.scope,
+        configDir: account.configDir,
+        accountDirs: getAllAccounts().map((a) => a.configDir),
+        userData,
+        userDataEntries: listDir(userData),
+        crewEntries: listDir(path.join(userData, 'crew')),
+        home: os.homedir(),
+        sockets: [],
+        socketRoot: '',
+        allowedDomains: [],
+      });
+    },
+    fetchTransport: httpsTransport,
+    fetchHosts: (hireId) => roleFetchHosts(db, hireId),
   };
 }
 

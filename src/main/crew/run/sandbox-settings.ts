@@ -5,7 +5,7 @@
 import * as path from 'path';
 import type { RunScope } from '../protocol';
 import { trimTrailingSlashes } from '../protocol-parse';
-import type { HirePaths } from './scope';
+import { cwdFor, type HirePaths } from './scope';
 
 export interface SandboxInput {
   paths: HirePaths;
@@ -98,6 +98,11 @@ export function namedDenyCovers(input: SandboxInput, resolved: string): boolean 
 function scopeRoots(input: SandboxInput): string[] {
   const clones = [...(input.clones ?? [])];
   return input.scope === 'circle' ? [input.paths.circle, ...clones] : [input.paths.owner, input.paths.circle, ...clones];
+}
+
+/** What send_file may read for this run: the scope's roots, from the scope's cwd, minus every named deny. */
+export function sendFileAccess(input: SandboxInput): { cwd: string; roots: string[]; denied(resolved: string): boolean } {
+  return { cwd: cwdFor(input.paths, input.scope), roots: scopeRoots(input), denied: (p) => namedDenyCovers(input, p) };
 }
 
 /** What Bash may read under the default deny: the scope's roots, the hire's own run inputs, and the app and `claude` where a deny covers them. */
