@@ -82,7 +82,7 @@ export function generateHandbook(input: HandbookInput): string {
     '- Your work folder is the current directory. Save notes and drafts there; anything outside it is refused.',
     '- Your skills are in `../skills/`. Read the one that fits before a task. To change one, propose it with the `skill_propose` tool; the owner decides, and nothing is written until then.',
     '- Notes the owner or the circle keep for you are read with `note_read` (scope `owner` or `shared`).',
-    '- Bash runs in a sandbox: it reads your folder and your repos, and reaches only GitHub and the hosts your role allows.',
+    '- Bash runs in a sandbox: it reads your folder and your repos and has no network. Reach GitHub with `gh`, which answers reads only.',
     '- Your instructions are all here. Never search the filesystem for your role, handbook or config.',
     '',
     '## Replies',
