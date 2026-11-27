@@ -9,6 +9,7 @@ mock.module('../../account-identity', () => ({
 const { startCrewRuntime, REMINDER_CHECK_MS } = await import('../crew-runtime');
 const { CrewSignIn, LOGIN_LIFETIME_MS } = await import('../crew-token');
 const { Holds } = await import('../holds');
+const { ERROR_REPLY } = await import('../run/loop');
 import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
 import type { CrewJob, Prepared, RunChild } from '../run/loop';
 import { RunSlots } from '../run/slots';
@@ -96,6 +97,18 @@ function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
 }
 
 describe('crew runtime', () => {
+  test('a job the crash cap marked dead gets the error reply once, at the next start', () => {
+    const t = setup();
+    t.rt.stop();
+    t.raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts, reply_owed) VALUES (?, ?, 1, 'owner', ?, 'dead', 2, 1)`).run(uuid(90), HIRE, PERSON);
+    t.raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, state, attempts) VALUES (?, ?, 1, 'owner', ?, 'dead', 2)`).run(uuid(91), HIRE, PERSON);
+    const first = startCrewRuntime(t.deps);
+    expect(t.hub.replies).toEqual([[uuid(90), ERROR_REPLY]]);
+    first.stop();
+    startCrewRuntime(t.deps).stop();
+    expect(t.hub.replies).toEqual([[uuid(90), ERROR_REPLY]]);
+  });
+
   test("a move card's decision goes to the owner, not the approval broker", () => {
     const t = setup();
     t.rt.stop();

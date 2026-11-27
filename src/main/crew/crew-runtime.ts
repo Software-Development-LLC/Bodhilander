@@ -16,7 +16,7 @@ import type { UsageInput } from './hub-client';
 import { isMoveRaisedHere, moveDecided, type HomeDeps } from './home';
 import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame, Unstamped } from './protocol';
 import { HOLD_STATES } from './protocol';
-import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
+import { ERROR_REPLY, RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
 import { RunSlots } from './run/slots';
 import { RoutineScheduler, SCHEDULE_TICK_MS, type SchedulerHub } from './schedule/scheduler';
 import type { EditInput } from './sync';
@@ -84,6 +84,15 @@ function within(done: Promise<void>, ms: number): Promise<boolean> {
       resolve(true);
     });
   });
+}
+
+/** The crash cap runs before the Hub client exists, so its error replies are owed and sent here. */
+export function replyForCrashCapped(db: Database.Database, reply: (jobId: string, text: string) => boolean): void {
+  const owed = db.prepare(`SELECT id FROM crew_job WHERE state = 'dead' AND reply_owed = 1`).all() as { id: string }[];
+  for (const { id } of owed) {
+    if (!reply(id, ERROR_REPLY)) log.warn(`[Crew] the error reply for crash-capped job ${id} could not be queued`);
+    db.prepare(`UPDATE crew_job SET reply_owed = 0 WHERE id = ?`).run(id);
+  }
 }
 
 export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
@@ -200,6 +209,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const scheduleTimer = scheduler ? setInt(fireRoutines, SCHEDULE_TICK_MS) : null;
   for (const [event, fn] of listeners) deps.hub.on(event, fn);
   settle();
+  guard('replying for crash-capped jobs', () => replyForCrashCapped(deps.db, (jobId, text) => deps.hub.sendReply(jobId, text)));
   const reminderTimer = setInt(() => {
     checkReminders();
   }, REMINDER_CHECK_MS);

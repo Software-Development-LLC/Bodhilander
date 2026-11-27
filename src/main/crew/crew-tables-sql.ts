@@ -181,9 +181,11 @@ export function initializeCrewTables(database: Database.Database): void {
   addColumn('claude_accounts', 'crew_auth_failed_at', 'crew_auth_failed_at TEXT DEFAULT NULL');
   addColumn('claude_accounts', 'crew_reminded', 'crew_reminded TEXT DEFAULT NULL');
   addColumn('crew_run', 'pid', 'pid INTEGER DEFAULT NULL');
+  addColumn('crew_job', 'reply_owed', 'reply_owed INTEGER NOT NULL DEFAULT 0');
 
   // A job left running by a quit or crash was interrupted: one waiting on a card parks, so the decision resumes it.
-  // The rest run again, and the interrupted attempt counts, so a job that crashes the app stops at the limit.
+  // The rest run again, and the interrupted attempt counts, so a job that crashes the app stops at the limit
+  // and owes its requester the error reply, sent once the runtime is up.
   database.transaction(() => {
     database
       .prepare(
@@ -194,7 +196,7 @@ export function initializeCrewTables(database: Database.Database): void {
     database.prepare(`UPDATE crew_card SET state = 'parked' WHERE state = 'waiting'`).run();
     const spent = database.prepare(`SELECT id, hire_id, attempts FROM crew_job WHERE state = 'running' AND attempts >= ?`).all(CREW_JOB_MAX_ATTEMPTS) as { id: string; hire_id: string; attempts: number }[];
     for (const job of spent) {
-      database.prepare(`UPDATE crew_job SET state = 'dead', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(job.id);
+      database.prepare(`UPDATE crew_job SET state = 'dead', reply_owed = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(job.id);
       database.prepare(`INSERT INTO crew_audit (hire_id, event, detail) VALUES (?, 'job-crash-limit', ?)`).run(job.hire_id, JSON.stringify({ jobId: job.id, attempts: job.attempts }));
     }
     database.prepare(`UPDATE crew_job SET state = 'queued', updated_at = CURRENT_TIMESTAMP WHERE state = 'running'`).run();
