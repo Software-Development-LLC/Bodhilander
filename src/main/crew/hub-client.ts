@@ -486,8 +486,12 @@ export class HubClient extends EventEmitter {
   private onEditResult(frame: EditResultFrame): void {
     const sent = this.outbox.frameOf(frame.id);
     if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
-    if (sent?.type === 'note_write') applyNoteResult(this.deps.db, sent, frame);
-    this.sendPull(this.sync.onEditResult(frame, this.clocks.wall(), sent?.type === 'edit' ? sent : null));
+    try {
+      if (sent?.type === 'note_write') applyNoteResult(this.deps.db, sent, frame);
+      this.sendPull(this.sync.onEditResult(frame, this.clocks.wall(), sent?.type === 'edit' ? sent : null));
+    } catch (err) {
+      log.warn(`[Crew] could not apply edit_result ${frame.id}; the next sync catches up`, err);
+    }
     this.emit('edit-result', frame);
   }
 

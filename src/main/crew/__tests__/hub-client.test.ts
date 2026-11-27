@@ -533,6 +533,21 @@ describe('HubClient queued frames', () => {
     expect(results).toEqual([{ type: 'edit_result', id, result: 'applied', objectId: HIRE, rev: 4 }]);
   });
 
+  test('an edit_result the sync cannot apply is still announced, so a pending account change hears it', () => {
+    const t = setup();
+    const results: unknown[] = [];
+    t.client.on('edit-result', (r) => results.push(r));
+    t.online();
+    t.sock().hub(deliver(1, 5));
+    t.client.sync.apply({ kind: 'hire', objectId: HIRE, rev: 3, seq: 1, hash: 'h', deleted: false, body: {} });
+    const id = t.client.sendEdit({ op: 'update', kind: 'hire', objectId: HIRE, hireId: HIRE, fields: { name: 'PO' } });
+    t.client.sync.onEditResult = () => {
+      throw new Error('disk');
+    };
+    t.sock().hub({ type: 'edit_result', id, result: 'applied', objectId: HIRE, rev: 4 });
+    expect(results).toHaveLength(1);
+  });
+
   test('a conflicting edit shows the Hub copy', () => {
     const t = setup();
     t.online();

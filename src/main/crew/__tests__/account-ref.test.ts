@@ -118,6 +118,25 @@ describe('changing a hire\'s account', () => {
     expect(later.settle()).toEqual([]);
   });
 
+  test('a carry that throws in settle is kept for the next one and does not stop the others', async () => {
+    const { AccountChanger, deps, raw } = await seed();
+    raw.query(`INSERT INTO crew_hire_cache (hire_id, rev) VALUES ('h2', 2)`).run();
+    raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id) VALUES ('h2', 't2', 's2', 'a')`).run();
+    let calls = 0;
+    const changer = new AccountChanger({ ...deps, carry: () => {
+      calls += 1;
+      if (calls === 1) throw new Error('disk');
+      return true;
+    } });
+    changer.change('h1', account('b'));
+    changer.change('h2', account('b'));
+    for (const id of ['e1', 'e2']) raw.query(`UPDATE crew_sync_state SET value = json_set(value, '$.applied', json('true')) WHERE key = ?`).run(`account-change:${id}`);
+    expect(changer.settle()).toEqual([{ carried: 1, fresh: 0 }]);
+    expect(raw.query(`SELECT key FROM crew_sync_state WHERE key LIKE 'account-change:%'`).all()).toEqual([{ key: 'account-change:e1' }]);
+    expect(changer.settle()).toEqual([{ carried: 1, fresh: 0 }]);
+    expect(pendingRows(raw)).toBe(0);
+  });
+
   test('settle forgets a change whose edit the fence, a purge or a refusal removed, and keeps one still queued', async () => {
     const { changer, raw, queued, thread } = await seed();
     changer.change('h1', account('b'));
