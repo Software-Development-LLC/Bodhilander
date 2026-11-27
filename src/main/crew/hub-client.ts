@@ -7,6 +7,7 @@ import { EventEmitter } from 'events';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
 import { writeAudit } from './audit';
+import { dropRefusedCard, markCardAcked, recordCardDecision, recordCardRaise } from './card-log';
 import { EpochFence } from './epoch';
 import { LeaseClock, systemClocks, type Clocks } from './lease';
 import { LocalOutbox } from './local-outbox';
@@ -23,6 +24,8 @@ import {
   type CardDecisionFrame,
   type CardRaiseFrame,
   type SendFrame,
+  type UsageFrame,
+  type UsageReadFrame,
   type ChallengeFrame,
   type DeliverFrame,
   type EditResultFrame,
@@ -98,6 +101,7 @@ export const CLOSE_CODES: Record<number, ErrorReason> = {
 export const BACKOFF_FIRST_MS = 1000;
 export const BACKOFF_CAP_MS = 30_000;
 export const SKEW_LIMIT_MS = 2 * 60_000;
+export const USAGE_READ_TIMEOUT_MS = 10_000;
 /** Heartbeats left unrenewed before the socket is treated as dead: the Hub's own offline window. */
 export const MISSED_RENEWS_LIMIT = OFFLINE_AFTER_MS / HEARTBEAT_MS;
 
@@ -161,6 +165,7 @@ export class HubClient extends EventEmitter {
   readonly outbox: LocalOutbox;
   readonly sync: CrewSync;
   private readonly clocks: Clocks;
+  private readonly usageWaiters = new Map<string, (frame: UsageFrame | null) => void>();
   private readonly timers: Timers;
   private readonly random: () => number;
   private readonly hubHost: string;
@@ -246,6 +251,7 @@ export class HubClient extends EventEmitter {
 
   private connectionClosed(): void {
     this.phase = 'challenge';
+    for (const settle of [...this.usageWaiters.values()]) settle(null);
     this.lease.onConnectionClosed();
     this.outbox.onConnectionClosed();
     this.sync.onClosed();
@@ -392,6 +398,9 @@ export class HubClient extends EventEmitter {
         return;
       case 'card_decision':
         return this.onCardDecision(frame);
+      case 'usage':
+        this.usageWaiters.get(frame.id)?.(frame);
+        return;
       case 'token':
         this.emit('token', frame);
         return;
@@ -494,6 +503,7 @@ export class HubClient extends EventEmitter {
     }
     if (this.fence.observe(frame.hireId, frame.epoch)) this.onNewerEpoch(frame.hireId, frame.epoch, before);
     this.emit('card-decision', frame);
+    recordCardDecision(this.deps.db, frame.raiseId, frame.decision, frame.decidedBy);
     this.send({ type: 'ack', id: frame.id });
   }
 
@@ -505,6 +515,7 @@ export class HubClient extends EventEmitter {
 
   private onAck(id: string): void {
     if (!this.outbox.onAck(id)) log.info(`[Crew] ack for ${id} matched no outbox item`);
+    markCardAcked(this.deps.db, id);
   }
 
   private onRenew(frame: RenewFrame): void {
@@ -522,11 +533,16 @@ export class HubClient extends EventEmitter {
 
   private onRefused(frame: RefusedFrame): void {
     const result = this.outbox.onRefused(frame.id, frame.reason);
+    const usageWaiter = this.usageWaiters.get(frame.id);
+    if (usageWaiter) return usageWaiter(null);
     if (!result) {
       this.emit('refused', frame);
       return;
     }
-    if (result.frameType === 'card_raise') this.emit('card-refused', frame.id);
+    if (result.frameType === 'card_raise') {
+      dropRefusedCard(this.deps.db, frame.id, frame.reason);
+      this.emit('card-refused', frame.id);
+    }
     if (result.action === 'sync' && !this.syncRequested) {
       this.syncRequested = true;
       this.sendPull(this.sync.request(this.clocks.wall()));
@@ -588,7 +604,9 @@ export class HubClient extends EventEmitter {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: CardRaiseFrame = { type: 'card_raise', ...raise, hireId: stamp.hireId, epoch: stamp.epoch };
-    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+    const queued = this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+    if (queued) recordCardRaise(this.deps.db, frame, this.clocks.wall());
+    return queued;
   }
 
   /** Queue a run's send through the outbox, stamped with its job's epoch. False when fenced or gone. */
@@ -609,6 +627,23 @@ export class HubClient extends EventEmitter {
     const frame: TokenRequestFrame = { type: 'token_request', id, hireId: stamp.hireId, epoch: stamp.epoch, requestedBy, repos };
     this.send(frame);
     return true;
+  }
+
+  /** A hire's usage since `since`, asked live. Null when offline, refused, closed or unanswered in time. */
+  usageRead(hireId: string, epoch: number, since: number, timeoutMs = USAGE_READ_TIMEOUT_MS): Promise<UsageFrame | null> {
+    if (this.phase !== 'open') return Promise.resolve(null);
+    const id = this.newId();
+    return new Promise((resolve) => {
+      const timer = this.timers.setTimeout(() => settle(null), timeoutMs);
+      const settle = (frame: UsageFrame | null) => {
+        this.usageWaiters.delete(id);
+        this.timers.clearTimeout(timer);
+        resolve(frame);
+      };
+      this.usageWaiters.set(id, settle);
+      const frame: UsageReadFrame = { type: 'usage_read', id, hireId, epoch, since };
+      this.send(frame);
+    });
   }
 
   /** Ship a local audit entry; one about a hire carries its newest known epoch. */

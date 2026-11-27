@@ -1070,6 +1070,8 @@ export interface CrewCard {
   raisedAt: number;
   decision: 'approved' | 'denied' | null;
   decidedBy: string | null;
+  /** sending: not yet acked by the Hub. parked: the run stopped waiting and resumes on the decision. */
+  state?: 'sending' | 'waiting' | 'parked' | 'decided';
 }
 
 /** null when this machine cannot read its cards, so the inbox never claims to be empty when it does not know. */

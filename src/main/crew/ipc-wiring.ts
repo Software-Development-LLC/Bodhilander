@@ -1,38 +1,69 @@
-/**
- * The Crew IPC channels joined to the running Hub client and runtime.
- * The stubs below are owed by the main side and answer "not available" until then.
- */
+/** The Crew IPC channels joined to the running Hub client and runtime. */
+import { app, shell } from 'electron';
 import log from 'electron-log';
 import type { CrewCardList, CrewEditResult, CrewLinkView } from '../../shared/types';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
 import { getPreference } from '../repositories/preferences';
 import { resolveAccountRef } from './account-ref';
+import { listCards } from './card-log';
 import { crewRuntime } from './crew-main';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import type { LinkFlow } from './hub-link';
 import { getCrewHub, newLinkFlow } from './hub-service';
 import { crewStatusFrom, KEYCHAIN_NEEDED, linkViewFrom, registerCrewIpc } from './ipc';
-import type { UsageFrame } from './protocol';
+import { LET_GO_ANSWER_MS, letGoHire as letGo, moveHireAside } from './let-go';
+import type { EditResultFrame, UsageFrame } from './protocol';
 
-/** Owed: send `usage_read` for the hire and resolve with the Hub's `usage` answer, or null on timeout. */
-export async function hubUsageRead(_hub: HubClient, _hireId: string, _epoch: number, _since: number): Promise<UsageFrame | null> {
-  return null;
+export function hubUsageRead(hub: HubClient, hireId: string, epoch: number, since: number): Promise<UsageFrame | null> {
+  return hub.usageRead(hireId, epoch, since);
 }
 
-/** Owed: the cards this machine raised, with any decision delivered for them. */
+/** The cards this machine raised, from the local log; null when it cannot be read. */
 export function hubCards(): CrewCardList {
-  return null;
+  try {
+    return listCards(getDatabase());
+  } catch (err) {
+    log.warn('[Crew] could not read the card log', err);
+    return null;
+  }
 }
 
-/** Owed: open the card where it is decided. */
+/** Cards are decided in Teams, and there is no deep link to one: open Teams itself. */
 export function openHubCard(_raiseId: string): boolean {
-  return false;
+  shell.openExternal('msteams:/').catch(() => shell.openExternal('https://teams.microsoft.com/').catch((err) => log.warn('[Crew] could not open Teams', err)));
+  return true;
 }
 
-/** Owed: tell the Hub, then move the hire folder aside. */
-export async function letGoHire(_hireId: string): Promise<CrewEditResult> {
-  return { ok: false, error: "Let go isn't available on this machine yet." };
+function editResultFrom(hub: HubClient, id: string, timeoutMs: number): Promise<EditResultFrame | null> {
+  return new Promise((resolve) => {
+    const onResult = (frame: EditResultFrame) => {
+      if (frame.id !== id) return;
+      clearTimeout(timer);
+      hub.off('edit-result', onResult);
+      resolve(frame);
+    };
+    const timer = setTimeout(() => {
+      hub.off('edit-result', onResult);
+      resolve(null);
+    }, timeoutMs);
+    hub.on('edit-result', onResult);
+  });
+}
+
+export async function letGoHire(hireId: string): Promise<CrewEditResult> {
+  const hub = getCrewHub();
+  if (!hub) return { ok: false, error: "Crew isn't running on this machine." };
+  return letGo(
+    {
+      online: () => hub.getStatus() === 'online',
+      sendDelete: (id) => hub.sendEdit({ op: 'delete', kind: 'hire', objectId: id, hireId: id, fields: {} }),
+      editResult: (id) => editResultFrom(hub, id, LET_GO_ANSWER_MS),
+      interrupt: (id) => crewRuntime()?.interrupt(id),
+      moveAside: (id) => moveHireAside(app.getPath('userData'), id, Date.now()),
+    },
+    hireId,
+  );
 }
 
 const CHANGE_EVENTS = ['status', 'synced', 'job', 'renewed', 'epoch', 'revoked', 'edit-result', 'lapsed', 'welcome'] as const;

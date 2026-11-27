@@ -885,6 +885,45 @@ describe('HubClient cards and tokens', () => {
     expect(t.client.sendCard(uuid(99), { id: uuid(22), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 's' } })).toBe(false);
   });
 
+  test('the inbox log follows a raise: sending, waiting once acked, decided on its decision, gone when refused', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    const state = () => t.raw.query(`SELECT raise_id AS id, acked, decision, decided_by AS by FROM crew_card_log ORDER BY raise_id`).all();
+    t.client.sendCard(uuid(1), { id: uuid(20), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 's' } });
+    t.client.sendCard(uuid(1), { id: uuid(22), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 't' } });
+    expect(state()).toEqual([{ id: uuid(20), acked: 0, decision: null, by: null }, { id: uuid(22), acked: 0, decision: null, by: null }]);
+    t.sock().hub({ type: 'ack', id: uuid(20) });
+    t.sock().hub({ type: 'card_decision', id: uuid(7), hireId: HIRE, epoch: 1, raiseId: uuid(20), decision: 'approved', decidedBy: 'p' });
+    t.sock().hub({ type: 'refused', id: uuid(22), reason: 'scope' });
+    expect(state()).toEqual([{ id: uuid(20), acked: 1, decision: 'approved', by: 'p' }]);
+  });
+
+  test('a usage read answers with the Hub\'s usage frame, or null on a refusal, a timeout, a close or offline', async () => {
+    const t = setup();
+    expect(await t.client.usageRead(HIRE, 1, 0)).toBe(null);
+    t.online();
+    const answered = t.client.usageRead(HIRE, 1, 5);
+    const read = t.sock().sent.find((f) => f.type === 'usage_read') as { id: string };
+    expect(read).toMatchObject({ type: 'usage_read', hireId: HIRE, epoch: 1, since: 5 });
+    const usage = { type: 'usage', id: read.id, hireId: HIRE, since: 5, inputTokens: 1, outputTokens: 2, cacheCreationTokens: 3, records: 4 };
+    t.sock().hub(usage);
+    expect(await answered).toEqual(usage);
+
+    const refused = t.client.usageRead(HIRE, 1, 0);
+    const id = (t.sock().sent.filter((f) => f.type === 'usage_read')[1] as { id: string }).id;
+    t.sock().hub({ type: 'refused', id, reason: 'wrong-hire' });
+    expect(await refused).toBe(null);
+
+    const timedOut = t.client.usageRead(HIRE, 1, 0);
+    t.timeouts.at(-1)?.fn();
+    expect(await timedOut).toBe(null);
+
+    const closed = t.client.usageRead(HIRE, 1, 0);
+    t.sock().drop(1006);
+    expect(await closed).toBe(null);
+  });
+
   test('a card_decision is acked only after it was handled; a handler that throws leaves it unacked', () => {
     const t = setup();
     t.online();

@@ -141,6 +141,18 @@ export const CREW_TABLES_SQL = `
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Every card this machine sent, for the desktop inbox. It decides nothing.
+    CREATE TABLE IF NOT EXISTS crew_card_log (
+      raise_id TEXT PRIMARY KEY,
+      hire_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      raised_at INTEGER NOT NULL,
+      acked INTEGER NOT NULL DEFAULT 0,
+      decision TEXT DEFAULT NULL CHECK (decision IN ('approved', 'denied')),
+      decided_by TEXT DEFAULT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS crew_sync_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

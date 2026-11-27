@@ -19,6 +19,7 @@ import type { HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
 import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
+import { sweepLetGo } from './let-go';
 import { McpHost, hostSocketPath } from './mcp/host';
 import { prepareRun, type PrepareDeps } from './run/prepare';
 import { RunServiceManager, ServicesNotReady } from './run/services';
@@ -160,6 +161,7 @@ function attach(hub: HubClient): CrewRuntime {
 }
 
 export function startCrew(): CrewRuntime {
+  sweepLetGo(app.getPath('userData'), Date.now());
   setCrewHubReplaced((hub) => attach(hub));
   setCrewInterrupt((hireId) => runtime?.interrupt(hireId));
   const hub = startCrewHub();
