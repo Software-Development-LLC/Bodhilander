@@ -35,6 +35,18 @@ function setup(raises = true) {
 const ASK = { tool_name: 'Bash', input: { command: 'git push' }, tool_use_id: 'tu-1' };
 
 describe('approve broker', () => {
+  test("a card job's reply answers the message that parked first, through a card raised by a card run", () => {
+    const t = setup();
+    const card = t.raw.query(`INSERT INTO crew_card (raise_id, job_id, hire_id, thread_key, scope, requested_by, kind, state, decision_job_id) VALUES (?, ?, ?, 'chat:owner', 'owner', ?, 'permission', 'decided', ?)`);
+    card.run(uuid(10), uuid(1), HIRE, PERSON, uuid(2));
+    card.run(uuid(11), uuid(2), HIRE, PERSON, uuid(3));
+    expect(t.broker.replyIdOf(uuid(3))).toBe(uuid(1));
+    expect(t.broker.replyIdOf(uuid(2))).toBe(uuid(1));
+    expect(t.broker.replyIdOf(uuid(1))).toBe(uuid(1));
+    card.run(uuid(12), uuid(3), HIRE, PERSON, uuid(1));
+    expect([uuid(1), uuid(2), uuid(3)]).toContain(t.broker.replyIdOf(uuid(1)));
+  });
+
   test('a request raises a permission card with the tool and its input, tainted as the thread is', async () => {
     const t = setup();
     markTainted(t.db, HIRE, 'chat:owner', 'web_fetch');

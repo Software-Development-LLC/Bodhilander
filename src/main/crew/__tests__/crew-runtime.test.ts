@@ -57,7 +57,14 @@ function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
     usage: [] as [string, Record<string, unknown>][],
     edits: [] as unknown[],
     canStart: () => hub.leased,
-    sendReply: (id: string, text: string) => (hub.replies.push([id, text]), true),
+    inbound: null as Set<string> | null,
+    accepted: [] as [string, string][],
+    sendReply: (id: string, text: string) => {
+      hub.replies.push([id, text]);
+      if (hub.inbound && !hub.inbound.has(id)) return false;
+      hub.accepted.push([id, text]);
+      return true;
+    },
     sendUsage: (id: string, u: Record<string, unknown>) => (hub.usage.push([id, u]), true),
     sendEdit: (e: unknown) => (hub.edits.push(e), 'e1'),
     cards: [] as [string, Record<string, unknown>][],
@@ -467,6 +474,26 @@ describe('crew runtime cards', () => {
     expect(t.children).toHaveLength(2);
     const run = t.raw.query(`SELECT thread_key FROM crew_run WHERE job_id = ?`).get(uuid(2)) as { thread_key: string };
     expect(run.thread_key).toBe('chat:owner');
+  });
+
+  test("the decided card's run replies to the parked message's inbound row, which the Hub accepts", async () => {
+    const t = setup();
+    t.hub.inbound = new Set([uuid(1)]);
+    t.job(1);
+    t.hub.emit('job', { id: uuid(1) });
+    await flush();
+    const asked = t.rt.broker.ask({ jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', scope: 'owner', requestedBy: PERSON }, { tool_name: 'Bash', input: { command: 'x' } });
+    const [, card] = t.hub.cards[0];
+    t.rt.loop.park(uuid(1));
+    t.children[0].finish();
+    await asked;
+    await flush();
+    t.hub.emit('card-decision', { type: 'card_decision', id: uuid(2), hireId: HIRE, epoch: 1, raiseId: card.id, decision: 'approved', decidedBy: PERSON });
+    await flush();
+    t.children[1].finish();
+    await flush();
+    expect(t.hub.replies).toEqual([[uuid(1), 'ok']]);
+    expect(t.hub.accepted).toEqual([[uuid(1), 'ok']]);
   });
 
   test('a card the Hub refused answers the waiting call at once', async () => {

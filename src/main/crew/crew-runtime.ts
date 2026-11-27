@@ -141,7 +141,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     prepare: deps.prepare,
     threadKeyOf: (job) => (job.kind === 'card' ? broker.threadOf(job.id) : null),
     spawn: deps.spawn ?? spawnRun,
-    reply: (jobId, text) => deps.hub.sendReply(jobId, text),
+    reply: (jobId, text) => deps.hub.sendReply(broker.replyIdOf(jobId), text),
     onSignedOut: (_hireId, accountId) => deps.signIn.recordAuthFailure(accountId, now()),
     onRateLimited: (accountId, until) => deps.holds.recordRateLimit(accountId, until),
     onUsageObserved: (accountId: string, observation: UsageObservation) => {
@@ -243,7 +243,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const scheduleTimer = scheduler ? setInt(fireRoutines, SCHEDULE_TICK_MS) : null;
   for (const [event, fn] of listeners) deps.hub.on(event, fn);
   settle();
-  guard('replying for crash-capped jobs', () => replyForCrashCapped(deps.db, (jobId, text) => deps.hub.sendReply(jobId, text)));
+  guard('replying for crash-capped jobs', () => replyForCrashCapped(deps.db, (jobId, text) => deps.hub.sendReply(broker.replyIdOf(jobId), text)));
   const reminderTimer = setInt(() => {
     checkReminders();
   }, REMINDER_CHECK_MS);

@@ -225,6 +225,20 @@ export class ApproveBroker {
     return row?.thread_key ?? null;
   }
 
+  /** The job a reply answers: a card job's is the parked job's, followed back to the message that started it. */
+  replyIdOf(jobId: string): string {
+    const parkedOf = this.deps.db.prepare(`SELECT job_id FROM crew_card WHERE decision_job_id = ?`);
+    const seen = new Set([jobId]);
+    let id = jobId;
+    let row = parkedOf.get(id) as { job_id: string } | undefined;
+    while (row && !seen.has(row.job_id)) {
+      id = row.job_id;
+      seen.add(id);
+      row = parkedOf.get(id) as { job_id: string } | undefined;
+    }
+    return id;
+  }
+
   /** A run that ended stops waiting: a parked run keeps its card open for the decision, any other end closes it. */
   release(jobId: string, outcome: string): void {
     const state = outcome === 'parked' ? 'parked' : 'closed';
