@@ -93,10 +93,11 @@ describe('Crew on Windows, as the main process runs it', () => {
     const dir = tmp();
     fs.copyFileSync(SHIPPED_VERSIONS, path.join(dir, 'versions.json'));
     const calls: string[] = [];
+    const audits: Array<[string, Record<string, unknown>]> = [];
     const { db } = crewDb();
     const crew = createWindowsCrew({
       db, signIn: { mode: () => 'token' } as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
-      onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
+      onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: (e, d) => void audits.push([e, d]), openExternal: () => {}, belongsTo: () => false,
       resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'), linked: () => true, artifactHub: () => null, crewDir: dir, onRepaired: async () => {},
       exec: async (args) => (calls.push(args.join(' ')), { code: 0, stdout: '  NAME       STATE    VERSION\n* BodhiCrew  Stopped  1\n', stderr: '' }),
     });
@@ -104,6 +105,8 @@ describe('Crew on Windows, as the main process runs it', () => {
     expect(await crew.setup.repair(true)).toEqual({ ok: false, message: BUILD_NOT_READY, repair: false });
     expect(await crew.setup.setup(() => {})).toEqual({ ok: false, message: BUILD_NOT_READY, repair: false });
     expect(await crew.windows.gate()).toBe('held:setup');
+    expect(await crew.windows.gate()).toBe('held:setup');
+    expect(audits).toEqual([['held:setup', { message: BUILD_NOT_READY, step: 'build' }]]);
     expect(calls).toEqual([]);
     expect(calls.some((c) => c.includes('--import') || c.includes('--unregister') || c.includes('--set-version'))).toBe(false);
   });

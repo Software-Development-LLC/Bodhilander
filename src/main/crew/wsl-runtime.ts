@@ -13,7 +13,7 @@ import { removeTmpOrphans, sweepTmpParentScript, type DistroSh, type TmpRecords 
 import { asCrew, asRoot, checkWsl, decodeWslOutput, repairLock, repairWsl1, type WslExec } from './wsl';
 import { agentServeArgs, WSL_EXE, windowsEnv, type AgentChild } from './wsl-agent';
 import { WslRuns, WSL_GH_SHIM_DIR, WSL_MCP_RELAY, type WslRunDeps } from './wsl-run';
-import { buildCanSetUp, installShipped, LINK_WAITING, repairUser, runSetup, WindowsGate, type ShippedFiles } from './wsl-setup';
+import { BUILD_NOT_READY, buildCanSetUp, installShipped, LINK_WAITING, repairUser, runSetup, WindowsGate, type ShippedFiles } from './wsl-setup';
 import { WindowsSetupService } from './wsl-setup-service';
 import { WslSignIn, type SignInChild, type WslSignInDeps } from './wsl-sign-in';
 
@@ -196,6 +196,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   const shipped = shippedFiles(deps.resources, versions);
   const source = { read: (f: string) => fs.readFileSync(f) };
   const unbuilt = !buildCanSetUp(versions, shipped);
+  let unbuiltAudited = false;
   const reinstallAgent = async () => (await installShipped(exec, shipped, source)).ok;
   const runs = new WslRuns({
     ...deps,
@@ -279,6 +280,10 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   return {
     windows: {
       gate: async () => {
+        if (unbuilt && !unbuiltAudited) {
+          unbuiltAudited = true;
+          deps.audit('held:setup', { message: BUILD_NOT_READY, step: 'build' });
+        }
         if (unbuilt || setup.busy) return HOLD_SETUP;
         try {
           await start();
