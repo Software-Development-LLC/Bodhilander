@@ -417,6 +417,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   crewSetRepos: (hireId: string, repos: string[]): Promise<CrewEditResult> => ipcRenderer.invoke('crew:setRepos', hireId, repos),
   crewChangeAccount: (hireId: string, accountId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:changeAccount', hireId, accountId),
   crewLetGo: (hireId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:letGo', hireId),
+  crewSignInAgain: (accountId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:signInAgain', accountId),
   crewListCards: (): Promise<CrewCardList> => ipcRenderer.invoke('crew:listCards'),
   crewOpenCard: (raiseId: string): Promise<boolean> => ipcRenderer.invoke('crew:openCard', raiseId),
   crewBeginLink: (): Promise<CrewLinkView> => ipcRenderer.invoke('crew:beginLink'),

@@ -204,6 +204,7 @@ interface ElectronAPI {
   crewSetRepos: (hireId: string, repos: string[]) => Promise<CrewEditResult>;
   crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
   crewLetGo: (hireId: string) => Promise<CrewEditResult>;
+  crewSignInAgain: (accountId: string) => Promise<CrewEditResult>;
   crewListCards: () => Promise<CrewCardList>;
   crewOpenCard: (raiseId: string) => Promise<boolean>;
   crewBeginLink: () => Promise<CrewLinkView>;

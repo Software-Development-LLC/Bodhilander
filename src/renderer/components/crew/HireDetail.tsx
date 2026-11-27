@@ -14,6 +14,7 @@ export interface HireDetailApi {
   setRepos(hireId: string, repos: string[]): Promise<CrewEditResult>;
   changeAccount(hireId: string, accountId: string): Promise<CrewEditResult>;
   letGo(hireId: string): Promise<CrewEditResult>;
+  signInAgain(accountId: string): Promise<CrewEditResult>;
 }
 
 const windowApi = (): HireDetailApi => ({
@@ -25,6 +26,7 @@ const windowApi = (): HireDetailApi => ({
   setRepos: (id, repos) => window.electronAPI.crewSetRepos(id, repos),
   changeAccount: (id, accountId) => window.electronAPI.crewChangeAccount(id, accountId),
   letGo: (id) => window.electronAPI.crewLetGo(id),
+  signInAgain: (accountId) => window.electronAPI.crewSignInAgain(accountId),
 });
 
 const NOT_AVAILABLE: Record<'offline' | 'unreachable' | 'failed', string> = {
@@ -127,6 +129,8 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
   if (hire === undefined) return <div className="crew-detail">Loading…</div>;
   if (hire === null) return <div className="crew-detail">This hire isn't on this machine.</div>;
 
+  const signInAccount = hire.activity === 'held' && hire.cause === 'signed-out' ? hire.accountId : null;
+
   const saveCap = () => {
     const parsed = parseDailyCap(capText);
     if (!parsed.ok) return setMessage(CAP_REFUSED);
@@ -153,6 +157,11 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
       <div className="crew-detail__state">
         {hire.roleId} · {activityText(hire)}
       </div>
+      {signInAccount && (
+        <button type="button" onClick={() => void apply(api.signInAgain(signInAccount), 'Signed in.')}>
+          Sign in again
+        </button>
+      )}
       {message && (
         <output className="crew-detail__hint">
           {message}

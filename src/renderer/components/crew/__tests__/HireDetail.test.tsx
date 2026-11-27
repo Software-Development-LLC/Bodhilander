@@ -56,6 +56,7 @@ function api(over: Partial<HireDetailApi> = {}): HireDetailApi & { edits: unknow
     setRepos: async (...args) => (edits.push(['repos', ...args]), ok()),
     changeAccount: async (...args) => (edits.push(['account', ...args]), ok()),
     letGo: async (...args) => (edits.push(['letGo', ...args]), ok()),
+    signInAgain: async (...args) => (edits.push(['signIn', ...args]), ok()),
     ...over,
   };
 }
@@ -162,5 +163,36 @@ describe('the rest of the hire page', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Let go…' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let go of Fresh PO' }));
     await screen.findByText("Let go isn't available on this machine yet.");
+  });
+
+  test('a hire held because its account signed out offers sign in again for that account', async () => {
+    const a = api({ getHire: async () => detail({ activity: 'held', cause: 'signed-out' }) });
+    render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+    await waitFor(() => expect(a.edits).toEqual([['signIn', 'acc-1']]));
+  });
+
+  test('a refused sign in is shown', async () => {
+    const a = api({
+      getHire: async () => detail({ activity: 'held', cause: 'signed-out' }),
+      signInAgain: async () => ({ ok: false, error: 'Sign-in was cancelled.' }),
+    });
+    render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+    await screen.findByText('Sign-in was cancelled.');
+  });
+
+  test('sign in again is offered only for a signed-out hold on an account this machine has', async () => {
+    const cases: Partial<CrewHireDetail>[] = [
+      { activity: 'idle', cause: null },
+      { activity: 'held', cause: 'rate-limited' },
+      { activity: 'held', cause: 'signed-out', accountId: null },
+    ];
+    for (const over of cases) {
+      render(<HireDetail hireId="h1" api={api({ getHire: async () => detail(over) })} now={() => NOW} />);
+      await screen.findByRole('heading', { name: 'Fresh PO' });
+      expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
+      cleanup();
+    }
   });
 });
