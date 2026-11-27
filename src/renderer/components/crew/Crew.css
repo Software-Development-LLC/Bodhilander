@@ -274,10 +274,8 @@
 }
 
 .crew-hire-modal label {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   font-size: var(--font-size-xs);
+  margin-bottom: -6px;
 }
 
 .crew-hire-modal textarea {

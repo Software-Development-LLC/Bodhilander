@@ -67,36 +67,28 @@ export const HireModal: React.FC<HireModalProps> = ({ api: injected, onHired, on
         <form onSubmit={(e) => void submit(e)}>
           <h3 id="crew-hire-title">Hire</h3>
           {roles?.length === 0 && <p className="crew-hire-modal__empty">No roles have synced to this machine yet.</p>}
-          <label>
-            Role
-            <select value={roleId} onChange={(e) => setRoleId(e.target.value)}>
-              <option value="">Pick a role</option>
-              {(roles ?? []).map((r) => (
-                <option key={r.roleId} value={r.roleId}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Name
-            <input value={name} maxLength={64} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            Repos
-            <textarea value={repos} placeholder="owner/name, one per line" onChange={(e) => setRepos(e.target.value)} />
-          </label>
-          <label>
-            Claude account
-            <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              <option value="">Pick an account</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <label htmlFor="crew-hire-role">Role</label>
+          <select id="crew-hire-role" value={roleId} onChange={(e) => setRoleId(e.target.value)}>
+            <option value="">Pick a role</option>
+            {(roles ?? []).map((r) => (
+              <option key={r.roleId} value={r.roleId}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="crew-hire-name">Name</label>
+          <input id="crew-hire-name" value={name} maxLength={64} onChange={(e) => setName(e.target.value)} />
+          <label htmlFor="crew-hire-repos">Repos</label>
+          <textarea id="crew-hire-repos" value={repos} placeholder="owner/name, one per line" onChange={(e) => setRepos(e.target.value)} />
+          <label htmlFor="crew-hire-account">Claude account</label>
+          <select id="crew-hire-account" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">Pick an account</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+              </option>
+            ))}
+          </select>
           {error && (
             <p className="crew-hire-modal__error" role="alert">
               {error}
