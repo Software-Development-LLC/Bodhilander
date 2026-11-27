@@ -35,6 +35,9 @@ asarUnpack:
 extraResources:
   - from: build/icon.png
     to: icon.png
+  # A Crew run's gh shim, put first on the run's PATH.
+  - from: resources/crew
+    to: crew
   - from: resources/sounds
     to: sounds
   # The Claude Desktop extension, opened by Settings → Claude Desktop.

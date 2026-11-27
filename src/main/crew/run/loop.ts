@@ -69,7 +69,7 @@ export interface RunLoopDeps {
   db: Database.Database;
   slots: RunSlots;
   canStart(hireId: string, epoch: number): boolean;
-  prepare(job: CrewJob, threadKey: string): Promise<Prepared>;
+  prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
   /** The thread a card job resumes on; other jobs use threadKeyFor. */
   threadKeyOf?(job: CrewJob): string | null;
   spawn(run: PreparedRun): RunChild;
@@ -174,7 +174,7 @@ export class RunLoop {
     const record = () => db.prepare(`INSERT INTO crew_run (id, job_id, hire_id, thread_key) VALUES (?, ?, ?, ?)`).run(run.runId, job.id, job.hireId, run.threadKey);
     let prepared: Prepared;
     try {
-      prepared = await this.deps.prepare(run.job, run.threadKey);
+      prepared = await this.deps.prepare(run.job, run.threadKey, run.runId);
     } catch (err) {
       log.warn('[Crew] could not prepare a run', err);
       record();

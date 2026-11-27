@@ -13,7 +13,7 @@ const { crewDb, HIRE, PERSON, uuid } = await import('./crew-db');
 const { db, raw } = crewDb();
 mock.module('../../database', () => ({ getDatabase: () => db }));
 mock.module('../../repositories/accounts', () => ({ getAllAccounts: () => [] }));
-mock.module('../../run-engine/machine-config', () => ({ claudePath: () => 'claude' }));
+mock.module('../../run-engine/machine-config', () => ({ claudePath: () => 'claude', ghPath: () => 'gh' }));
 const fakeHub = () => Object.assign(new EventEmitter(), {
   canStart: () => true, sendReply: () => true, sendUsage: () => true, sendEdit: () => 'e',
 });
@@ -29,24 +29,27 @@ mock.module('../hub-service', () => ({
   setCrewHubReplaced: (fn: typeof replaced) => (replaced = fn),
 }));
 
-const { startCrew, stopCrew, APPROVE_BROKER_READY } = await import('../crew-main');
+const { startCrew, stopCrew } = await import('../crew-main');
 
 describe('Crew in the main process', () => {
-  test('starts the Hub and the runtime once, holds runs until the approve broker is served, and stops both', async () => {
+  test('starts the Hub and the runtime once, prepares runs for real, and stops both', async () => {
     const rt = startCrew();
     expect(startCrew()).toBe(rt);
     expect(events).toEqual(['hub-start', 'hub-start']);
     expect(typeof interrupt).toBe('function');
-    expect(APPROVE_BROKER_READY).toBe(false);
     raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(1), HIRE, PERSON);
     hub.emit('job', {});
     await new Promise((r) => setTimeout(r, 0));
     expect(raw.query(`SELECT state, attempts FROM crew_job`).get()).toEqual({ state: 'queued', attempts: 0 });
-    expect(raw.query(`SELECT detail FROM crew_audit WHERE event = 'run-held'`).all()).toHaveLength(1);
+    expect(raw.query(`SELECT detail FROM crew_audit WHERE event = 'run-held'`).all()).toEqual([{ detail: JSON.stringify({ jobId: uuid(1), hold: 'held:missing' }) }]);
+    expect(hub.listenerCount('token')).toBe(1);
+    expect(hub.listenerCount('card-decision')).toBe(1);
     stopCrew();
     expect(events).toEqual(['hub-start', 'hub-start', 'hub-stop']);
     expect(interrupt).toBeNull();
     expect(hub.listenerCount('job')).toBe(0);
+    expect(hub.listenerCount('token')).toBe(0);
+    expect(hub.listenerCount('refused')).toBe(0);
     expect(replaced).toBeNull();
   });
 

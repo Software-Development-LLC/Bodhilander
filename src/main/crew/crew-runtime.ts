@@ -33,7 +33,7 @@ export interface CrewRuntimeDeps {
   hub: CrewHubPort;
   signIn: CrewSignIn;
   accounts(): ClaudeAccount[];
-  prepare(job: CrewJob, threadKey: string): Promise<Prepared>;
+  prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
   usage: { get(id: string): AccountUsage | null; set(u: AccountUsage): void };
   remind(reminder: Reminder, account: ClaudeAccount): void;
   /** A run ended, whatever its outcome: its MCP registration and sockets go with it. */

@@ -11,6 +11,7 @@ mock.module('../../../account-identity', () => ({
 
 const { prepareRun, HOLD_MISSING, HOLD_SIGNED_OUT, HOLD_SETUP } = await import('../prepare');
 const { CrewSignIn } = await import('../../crew-token');
+const { SocketRootError } = await import('../sockets');
 const { markTainted, isTainted } = await import('../../taint');
 import type { ClaudeAccount } from '../../../../shared/types';
 import type { CrewJob, PreparedRun } from '../loop';
@@ -25,7 +26,7 @@ const job = (over: Partial<CrewJob> = {}): CrewJob => ({
   id: uuid(1), hireId: HIRE, kind: 'message', epoch: 1, scope: 'owner', requestedBy: PERSON, sender: 'B', text: 'do the thing', attempts: 1, ...over,
 });
 
-function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown } = {}) {
+function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; services?: 'root' } = {}) {
   const { raw, db } = crewDb();
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-prep-'));
   dirs.push(userData);
@@ -39,7 +40,10 @@ function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown } = {}
   const deps = {
     db, signIn, accounts: () => accounts, loggedIn: () => opts.loggedIn ?? true, userData, home: '/Users/me', claudePath: '/usr/local/bin/claude',
     env: { PATH: '/usr/bin', GH_TOKEN: 'ghp_x', ANTHROPIC_API_KEY: 'k' }, timeZone: () => 'UTC', handbook: () => '# Role\n',
-    mcpServers: () => ({ crew_approve: { command: 'x' } }),
+    services: async () => {
+      if (opts.services === 'root') throw new SocketRootError({ type: 'symlink', uid: 0, mode: '777' });
+      return { mcpServers: { crew_approve: { command: 'x' } }, sockets: ['/tmp/cr-501/abcdefgh/gh.sock'], pathFirst: '/shim', env: { CREW_GH_SOCKET: '/tmp/cr-501/abcdefgh/gh.sock' } };
+    },
     sandbox: () => ({ accountDirs: ['/acct/a1'], userDataEntries: [], crewEntries: [], sockets: [], socketRoot: '/tmp/cr-501', allowedDomains: [] }),
     now: () => Date.parse('2026-11-27T12:00:00Z'), underTemp: () => false,
   };
@@ -51,7 +55,7 @@ describe('preparing a run', () => {
     const t = setup();
     fs.mkdirSync(path.join(t.root, 'owner', '.claude'), { recursive: true });
     fs.writeFileSync(path.join(t.root, 'owner', '.claude', 'settings.json'), '{"hooks":{}}');
-    const p = (await prepareRun(t.deps, job(), 'chat:owner')) as PreparedRun;
+    const p = (await prepareRun(t.deps, job(), 'chat:owner', 'run-1')) as PreparedRun;
     expect(p.accountId).toBe('a1');
     expect(p.cwd).toBe(path.join(t.root, 'owner'));
     expect(p.input).toBe('do the thing');
@@ -70,23 +74,23 @@ describe('preparing a run', () => {
 
   test('a circle run works in circle/', async () => {
     const t = setup();
-    const p = (await prepareRun(t.deps, job({ scope: 'circle' }), 'chat:circle')) as PreparedRun;
+    const p = (await prepareRun(t.deps, job({ scope: 'circle' }), 'chat:circle', 'run-1')) as PreparedRun;
     expect(p.cwd).toBe(path.join(t.root, 'circle'));
   });
 
   test('no local account for the reference holds the hire missing', async () => {
-    expect(await prepareRun(setup({ ref: { accountUuid: 'u-gone', email: 'z@x.com', label: 'Gone' } }).deps, job(), 'chat:owner')).toEqual({ hold: HOLD_MISSING });
-    expect(await prepareRun(setup({ ref: null }).deps, job(), 'chat:owner')).toEqual({ hold: HOLD_MISSING });
+    expect(await prepareRun(setup({ ref: { accountUuid: 'u-gone', email: 'z@x.com', label: 'Gone' } }).deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_MISSING });
+    expect(await prepareRun(setup({ ref: null }).deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_MISSING });
   });
 
   test('a signed-out account holds the hire signed out', async () => {
-    expect(await prepareRun(setup({ loggedIn: false }).deps, job(), 'chat:owner')).toEqual({ hold: HOLD_SIGNED_OUT });
-    expect(await prepareRun(setup({ ships: true }).deps, job(), 'chat:owner')).toEqual({ hold: HOLD_SIGNED_OUT });
+    expect(await prepareRun(setup({ loggedIn: false }).deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SIGNED_OUT });
+    expect(await prepareRun(setup({ ships: true }).deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SIGNED_OUT });
   });
 
   test('a hire folder under a temp dir starts nothing', async () => {
     const t = setup();
-    expect(await prepareRun({ ...t.deps, underTemp: () => true }, job(), 'chat:owner')).toEqual({ hold: HOLD_SETUP });
+    expect(await prepareRun({ ...t.deps, underTemp: () => true }, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
     expect(fs.existsSync(t.root)).toBe(false);
   });
 
@@ -96,7 +100,7 @@ describe('preparing a run', () => {
     t.raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text, state) VALUES (?, ?, 1, 'owner', ?, 'earlier ask', 'done')`).run(uuid(9), HIRE, PERSON);
     t.raw.query(`INSERT INTO crew_run (id, job_id, hire_id, thread_key, outcome, reply_text) VALUES (?, ?, ?, 'chat:owner', 'done', 'earlier answer')`).run(uuid(10), uuid(9), HIRE);
     markTainted(t.db, HIRE, 'chat:owner', 'issue-body');
-    const p = (await prepareRun(t.deps, job(), 'chat:owner')) as PreparedRun;
+    const p = (await prepareRun(t.deps, job(), 'chat:owner', 'run-1')) as PreparedRun;
     expect(p.sessionId).toBeNull();
     expect(p.args).not.toContain('--resume');
     expect(p.input).toContain('untrusted content');
@@ -110,15 +114,31 @@ describe('preparing a run', () => {
     const t = setup({ ships: true });
     t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id, updated_at) VALUES (?, 'chat:owner', 'old', 'a1', '2026-11-27 11:00:00')`).run(HIRE);
     markTainted(t.db, HIRE, 'chat:owner', 'issue-body');
-    expect(await prepareRun(t.deps, job(), 'chat:owner')).toEqual({ hold: HOLD_SIGNED_OUT });
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SIGNED_OUT });
     expect(isTainted(t.db, HIRE, 'chat:owner')).toBe(true);
   });
 
   test('an untainted thread on the same day resumes its session', async () => {
     const t = setup();
     t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id, updated_at) VALUES (?, 'chat:owner', 'old', 'a1', '2026-11-27 11:00:00')`).run(HIRE);
-    const p = (await prepareRun(t.deps, job(), 'chat:owner')) as PreparedRun;
+    const p = (await prepareRun(t.deps, job(), 'chat:owner', 'run-1')) as PreparedRun;
     expect(p.sessionId).toBe('old');
     expect(p.args.slice(0, 3)).toEqual(['-p', '--resume', 'old']);
+  });
+});
+
+describe('run services in preparation', () => {
+  test('the gateway socket joins the sandbox, the shim leads PATH, and its env reaches the run', async () => {
+    const t = setup();
+    const p = (await prepareRun(t.deps, job(), 'chat:owner', 'run-1')) as PreparedRun;
+    const settings = JSON.parse(fs.readFileSync(p.args[p.args.indexOf('--settings') + 1], 'utf8'));
+    expect(JSON.stringify(settings)).toContain('/tmp/cr-501/abcdefgh/gh.sock');
+    expect(p.env.PATH).toBe('/shim:/usr/bin');
+    expect(p.env.CREW_GH_SOCKET).toBe('/tmp/cr-501/abcdefgh/gh.sock');
+  });
+
+  test('a socket root that fails its check holds the machine for setup', async () => {
+    const t = setup({ services: 'root' });
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
   });
 });

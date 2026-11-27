@@ -10,20 +10,27 @@ import log from 'electron-log';
 import { resolveAccountIdentity } from '../account-identity';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
-import { claudePath } from '../run-engine/machine-config';
+import { claudePath, ghPath } from '../run-engine/machine-config';
 import { getUsage, setUsage } from '../usage-store';
 import { CrewSignIn, type Reminder } from './crew-token';
 import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
+import { GithubGateway, runGh } from './gateway/github-gateway';
 import type { HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
+import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
-import { HOLD_SETUP, prepareRun, type PrepareDeps } from './run/prepare';
-
-/** Runs stay held until the approve broker their --permission-prompt-tool names is served. */
-export const APPROVE_BROKER_READY = false;
+import { McpHost, hostSocketPath } from './mcp/host';
+import { prepareRun, type PrepareDeps } from './run/prepare';
+import { RunServiceManager } from './run/services';
+import { crewTools } from './tools/server';
 
 let runtime: CrewRuntime | null = null;
 let runtimeHub: HubClient | null = null;
+let host: McpHost | null = null;
+let hostReady: Promise<boolean> | null = null;
+let gateway: GithubGateway | null = null;
+let services: RunServiceManager | null = null;
+let detachHub: (() => void) | null = null;
 
 const listDir = (dir: string): string[] => {
   try {
@@ -36,6 +43,57 @@ const listDir = (dir: string): string[] => {
 function reminderText(reminder: Reminder, label: string): string {
   const when = new Date(reminder.endsAt).toLocaleString();
   return reminder.mode === 'token' ? `${label}'s Crew sign-in ends ${when}. Set up the token again before then.` : `${label}'s Crew sign-in ends ${when}. Sign in again for Crew before then.`;
+}
+
+/** In dev the sources under the app; packaged, the unpacked build and the extra resources. */
+export function crewResourcePaths(): { relayScript: string; shimDir: string } {
+  if (!app.isPackaged) {
+    return { relayScript: path.join(app.getAppPath(), 'scripts', 'crew-mcp.js'), shimDir: path.join(app.getAppPath(), 'resources', 'crew', 'gh-shim') };
+  }
+  return {
+    relayScript: path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'scripts', 'crew-mcp.js'),
+    shimDir: path.join(process.resourcesPath, 'crew', 'gh-shim'),
+  };
+}
+
+function hireRepos(hireId: string): string[] {
+  const row = getDatabase().prepare(`SELECT data FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as { data: string } | undefined;
+  try {
+    const repos = (JSON.parse(row?.data ?? '{}') as { repos?: unknown }).repos;
+    return Array.isArray(repos) ? repos.filter((r): r is string => typeof r === 'string').map((r) => r.toLowerCase()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function ensureServices(): RunServiceManager {
+  const db = getDatabase();
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  host ??= new McpHost(db, hostSocketPath(app.getPath('userData')));
+  hostReady ??= host.listen().then(
+    () => true,
+    (err) => {
+      log.error('[Crew] the MCP host could not listen', err);
+      return false;
+    },
+  );
+  gateway ??= new GithubGateway({
+    db,
+    requestToken: (jobId, id, requestedBy, repos) => runtimeHub?.sendTokenRequest(jobId, id, requestedBy, repos) ?? false,
+    run: runGh(ghPath()),
+  });
+  const gw = gateway;
+  services ??= new RunServiceManager({
+    host,
+    broker: () => runtime?.broker ?? null,
+    tools: (job, threadKey) => crewTools({ db, raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false }, job, threadKey),
+    gateway: gw,
+    repos: hireRepos,
+    uid,
+    execPath: process.execPath,
+    ...crewResourcePaths(),
+  });
+  return services;
 }
 
 export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
@@ -52,7 +110,11 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
     env: process.env,
     timeZone: () => null,
     handbook: () => '',
-    mcpServers: () => ({}),
+    services: async (job, threadKey, runId) => {
+      const manager = ensureServices();
+      if (!(await hostReady)) throw new Error('the Crew MCP host is not listening');
+      return manager.start(job, threadKey, runId);
+    },
     sandbox: () => ({
       accountDirs: getAllAccounts().map((a) => a.configDir),
       userDataEntries: listDir(userData),
@@ -66,6 +128,7 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
 
 function attach(hub: HubClient): CrewRuntime {
   runtime?.stop();
+  detachHub?.();
   const db = getDatabase();
   const signIn = new CrewSignIn(db, safeStorage);
   const prepareDeps = crewPrepareDeps(signIn);
@@ -75,8 +138,9 @@ function attach(hub: HubClient): CrewRuntime {
     hub,
     signIn,
     accounts: getAllAccounts,
-    prepare: (job: CrewJob, threadKey: string): Promise<Prepared> =>
-      APPROVE_BROKER_READY ? prepareRun(prepareDeps, job, threadKey) : Promise.resolve({ hold: HOLD_SETUP }),
+    prepare: (job: CrewJob, threadKey: string, runId: string): Promise<Prepared> =>
+      prepareRun(prepareDeps, job, threadKey, runId),
+    runEnded: (jobId) => services?.end(jobId),
     usage: { get: getUsage, set: setUsage },
     remind: (reminder, account) => {
       try {
@@ -86,6 +150,14 @@ function attach(hub: HubClient): CrewRuntime {
       }
     },
   });
+  const onToken = (frame: TokenFrame) => gateway?.onToken(frame);
+  const onRefused = (frame: RefusedFrame) => gateway?.onRefused(frame.id);
+  hub.on('token', onToken);
+  hub.on('refused', onRefused);
+  detachHub = () => {
+    hub.off('token', onToken);
+    hub.off('refused', onRefused);
+  };
   return runtime;
 }
 
@@ -99,6 +171,15 @@ export function startCrew(): CrewRuntime {
 export function stopCrew(): void {
   setCrewHubReplaced(null);
   runtime?.stop();
+  detachHub?.();
+  detachHub = null;
+  services?.endAll();
+  gateway?.stop();
+  host?.close();
+  services = null;
+  gateway = null;
+  host = null;
+  hostReady = null;
   runtime = null;
   runtimeHub = null;
   setCrewInterrupt(null);
