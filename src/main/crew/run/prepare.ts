@@ -112,6 +112,18 @@ function regenerate(paths: HirePaths, cwd: string, readHandbook: () => string, r
   restoreSkills?.(paths);
 }
 
+/** False when the Hub's steering for the hire has not synced; any other failure throws. */
+function steer(deps: PrepareDeps, hireId: string, paths: HirePaths, cwd: string): boolean {
+  const restore = deps.restoreSkills;
+  try {
+    regenerate(paths, cwd, () => deps.handbook(hireId), restore && ((p) => restore(p, hireId)));
+    return true;
+  } catch (err) {
+    if (err instanceof SteeringUnavailable) return false;
+    throw err;
+  }
+}
+
 /** The tainted session is dropped with its mark, so no later run can resume it. */
 function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: string): void {
   db.transaction(() => {
@@ -146,12 +158,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
     throw err;
   }
   const cwd = cwdFor(paths, job.scope);
-  try {
-    regenerate(paths, cwd, () => deps.handbook(job.hireId), deps.restoreSkills && ((p) => deps.restoreSkills?.(p, job.hireId)));
-  } catch (err) {
-    if (err instanceof SteeringUnavailable) return { hold: HOLD_SETUP };
-    throw err;
-  }
+  if (!steer(deps, job.hireId, paths, cwd)) return { hold: HOLD_SETUP };
   const settingsPath = settingsPathFor(paths, job.scope);
   const base = deps.sandbox(paths, job, account.configDir);
   const sandbox: SandboxInput = { ...base, sockets: [...base.sockets, ...services.sockets], paths, scope: job.scope, configDir: account.configDir, userData: deps.userData, home: deps.home };

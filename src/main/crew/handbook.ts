@@ -24,7 +24,7 @@ function sortKeys(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(sortKeys);
   if (v === null || typeof v !== 'object') return v;
   const out: Record<string, unknown> = Object.create(null);
-  for (const k of Object.keys(v).sort()) out[k] = sortKeys((v as Record<string, unknown>)[k]);
+  for (const k of Object.keys(v).sort((a, b) => (a < b ? -1 : Number(a > b)))) out[k] = sortKeys((v as Record<string, unknown>)[k]);
   return out;
 }
 
@@ -46,7 +46,7 @@ export function parseRoleMd(md: string): RoleText {
   const field = (key: string): string | null => {
     const line = front?.[1].split(/\r?\n/).find((l) => l.startsWith(`${key}:`));
     const value = line?.slice(key.length + 1).trim();
-    return value ? value : null;
+    return value || null;
   };
   return { name: field('name'), description: field('description'), body: (front ? md.slice(front[0].length) : md).trim() };
 }
@@ -62,8 +62,9 @@ export interface HandbookInput {
 export function generateHandbook(input: HandbookInput): string {
   const { hireName, role, repos } = input;
   const roleName = role.name ?? 'Crew hire';
+  const repoList = repos.map((r) => '`' + r + '`').join(', ');
   const repoLine = repos.length > 0
-    ? `- Repos: ${repos.map((r) => `\`${r}\``).join(', ')}. Your GitHub access covers only these; anything else \`gh\` returns is short without an error, so say so when a list may be.`
+    ? `- Repos: ${repoList}. Your GitHub access covers only these; anything else \`gh\` returns is short without an error, so say so when a list may be.`
     : '- No repos are granted to you yet. Say so in one line if a task needs one.';
   return [
     `# ${hireName}`,
