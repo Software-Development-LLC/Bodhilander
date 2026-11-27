@@ -1083,3 +1083,9 @@ export type CrewLinkView =
   | { step: 'stopped'; message: string };
 
 export type CrewEditResult = { ok: true } | { ok: false; error: string };
+
+/** The login pty Crew's Sign in again started, for the renderer to show. */
+export interface CrewSignInStarted {
+  accountId: string;
+  ptyId: string;
+}

@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import type { AccountUsageMap, ClaudeAccount, CrewEditResult, CrewHireDetail, CrewHireUsage } from '../../../shared/types';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { AccountUsageMap, ClaudeAccount, CrewEditResult, CrewHireDetail, CrewHireUsage, CrewSignInStarted } from '../../../shared/types';
 import { DEFAULT_USAGE_WARN_THRESHOLD } from '../../../shared/usage';
 import { activityText, formatTokens, hireTokenTotal, parseDailyCap } from '../../store/crew';
 import { UsageMeters } from '../UsageMeters';
+import { AppLoginTerminal, SignInTerminal } from './SignInTerminal';
 import './Crew.css';
 
 export interface HireDetailApi {
@@ -15,6 +16,9 @@ export interface HireDetailApi {
   changeAccount(hireId: string, accountId: string): Promise<CrewEditResult>;
   letGo(hireId: string): Promise<CrewEditResult>;
   signInAgain(accountId: string): Promise<CrewEditResult>;
+  onSignInStarted(fn: (started: CrewSignInStarted) => void): () => void;
+  closeSignIn(ptyId: string): Promise<void>;
+  confirmSignInMac(ptyId: string): Promise<void>;
 }
 
 const windowApi = (): HireDetailApi => ({
@@ -27,6 +31,9 @@ const windowApi = (): HireDetailApi => ({
   changeAccount: (id, accountId) => window.electronAPI.crewChangeAccount(id, accountId),
   letGo: (id) => window.electronAPI.crewLetGo(id),
   signInAgain: (accountId) => window.electronAPI.crewSignInAgain(accountId),
+  onSignInStarted: (fn) => window.electronAPI.onCrewSignInStarted(fn),
+  closeSignIn: (ptyId) => window.electronAPI.cancelAccountLogin(ptyId, false),
+  confirmSignInMac: (ptyId) => window.electronAPI.confirmAccountLoginMacOS(ptyId),
 });
 
 const NOT_AVAILABLE: Record<'offline' | 'unreachable' | 'failed', string> = {
@@ -66,12 +73,13 @@ export interface HireDetailProps {
   api?: HireDetailApi;
   now?: () => number;
   onLetGo?: () => void;
+  LoginTerminal?: React.FC<{ ptyId: string }>;
 }
 
 const CAP_REFUSED = 'A daily cap is a whole number of tokens above 0, or empty for off.';
 
 /** One hire: its account and usage, repos, routines, cap and skill bundle. Shows no cost. */
-export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, now = Date.now, onLetGo }) => {
+export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, now = Date.now, onLetGo, LoginTerminal = AppLoginTerminal }) => {
   const [api] = useState<HireDetailApi>(() => injected ?? windowApi());
   const [hire, setHire] = useState<CrewHireDetail | null | undefined>(undefined);
   const [usage, setUsage] = useState<CrewHireUsage | null>(null);
@@ -81,6 +89,20 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
   const [message, setMessage] = useState<string | null>(null);
   const [capText, setCapText] = useState('');
   const [confirmingLetGo, setConfirmingLetGo] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [loginPty, setLoginPty] = useState<string | null>(null);
+  const loginPtyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    loginPtyRef.current = loginPty;
+  }, [loginPty]);
+
+  useEffect(
+    () => () => {
+      if (loginPtyRef.current) void api.closeSignIn(loginPtyRef.current).catch(() => {});
+    },
+    [api],
+  );
 
   const loadHire = useCallback(async () => {
     try {
@@ -137,6 +159,25 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
   const removeRepo = (repo: string) => {
     void apply(api.setRepos(hire.hireId, hire.repos.filter((r) => r !== repo)), `Removed ${repo}.`);
   };
+  const signIn = async (accountId: string) => {
+    if (signingIn) return;
+    setSigningIn(true);
+    let ptyId: string | null = null;
+    const off = api.onSignInStarted((started) => {
+      if (started.accountId !== accountId) return;
+      ptyId = started.ptyId;
+      setLoginPty(started.ptyId);
+    });
+    try {
+      await apply(api.signInAgain(accountId), 'Signed in.');
+    } finally {
+      off();
+      if (ptyId) void api.closeSignIn(ptyId).catch(() => {});
+      loginPtyRef.current = null;
+      setLoginPty(null);
+      setSigningIn(false);
+    }
+  };
   const letGo = async () => {
     setConfirmingLetGo(false);
     try {
@@ -155,9 +196,19 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
         {hire.roleId} · {activityText(hire)}
       </div>
       {signInAccount && (
-        <button type="button" onClick={() => void apply(api.signInAgain(signInAccount), 'Signed in.')}>
+        <button type="button" disabled={signingIn} onClick={() => void signIn(signInAccount)}>
           Sign in again
         </button>
+      )}
+      {loginPty && (
+        <SignInTerminal
+          accountLabel={hire.accountLabel ?? 'this account'}
+          ptyId={loginPty}
+          isMac={window.electronAPI?.platform === 'darwin'}
+          LoginTerminal={LoginTerminal}
+          onCancel={() => void api.closeSignIn(loginPty).catch(() => {})}
+          onConfirmMac={() => void api.confirmSignInMac(loginPty).catch(() => {})}
+        />
       )}
       {message && (
         <output className="crew-detail__hint">

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { HireDetail, type HireDetailApi } from '../HireDetail';
 import type { AccountUsage, ClaudeAccount, CrewEditResult, CrewHireDetail, CrewHireUsage } from '../../../../shared/types';
@@ -57,6 +57,9 @@ function api(over: Partial<HireDetailApi> = {}): HireDetailApi & { edits: unknow
     changeAccount: async (...args) => (edits.push(['account', ...args]), ok()),
     letGo: async (...args) => (edits.push(['letGo', ...args]), ok()),
     signInAgain: async (...args) => (edits.push(['signIn', ...args]), ok()),
+    onSignInStarted: () => () => {},
+    closeSignIn: async (...args) => void edits.push(['closeSignIn', ...args]),
+    confirmSignInMac: async (...args) => void edits.push(['confirmMac', ...args]),
     ...over,
   };
 }
@@ -193,5 +196,87 @@ describe('the rest of the hire page', () => {
       expect(screen.queryByRole('button', { name: 'Sign in again' })).toBeNull();
       cleanup();
     }
+  });
+});
+
+describe('sign in again shows the login terminal', () => {
+  const FakeTerminal: React.FC<{ ptyId: string }> = ({ ptyId }) => <div data-testid="login-terminal">{ptyId}</div>;
+
+  function signingIn() {
+    let started: ((e: { accountId: string; ptyId: string }) => void) | null = null;
+    let finish: (r: CrewEditResult) => void = () => {};
+    const unsubscribed: string[] = [];
+    const a = api({
+      getHire: async () => detail({ activity: 'held', cause: 'signed-out' }),
+      onSignInStarted: (fn) => {
+        started = fn;
+        return () => void unsubscribed.push('off');
+      },
+      signInAgain: (...args) => {
+        a.edits.push(['signIn', ...args]);
+        return new Promise<CrewEditResult>((resolve) => (finish = resolve));
+      },
+    });
+    return {
+      a,
+      unsubscribed,
+      start: (e: { accountId: string; ptyId: string }) => act(() => started?.(e)),
+      finish: (r: CrewEditResult) => act(async () => finish(r)),
+    };
+  }
+
+  test('the terminal appears once the login pty starts, and closes when the sign in ends', async () => {
+    const s = signingIn();
+    render(<HireDetail hireId="h1" api={s.a} now={() => NOW} LoginTerminal={FakeTerminal} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    s.start({ accountId: 'acc-1', ptyId: 'pty-acc-1' });
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('/login');
+    expect(screen.getByTestId('login-terminal').textContent).toBe('pty-acc-1');
+    await s.finish({ ok: true });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await screen.findByText('Signed in.');
+    expect(s.a.edits).toContainEqual(['closeSignIn', 'pty-acc-1']);
+    expect(s.unsubscribed).toEqual(['off']);
+  });
+
+  test("another account's login is not shown here", async () => {
+    const s = signingIn();
+    render(<HireDetail hireId="h1" api={s.a} now={() => NOW} LoginTerminal={FakeTerminal} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+    s.start({ accountId: 'acc-2', ptyId: 'pty-acc-2' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  test('cancel ends the login, and the cancelled sign in is shown', async () => {
+    const s = signingIn();
+    render(<HireDetail hireId="h1" api={s.a} now={() => NOW} LoginTerminal={FakeTerminal} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+    s.start({ accountId: 'acc-1', ptyId: 'pty-acc-1' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel sign in' }));
+    expect(s.a.edits).toContainEqual(['closeSignIn', 'pty-acc-1']);
+    await s.finish({ ok: false, error: 'Sign-in was cancelled.' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await screen.findByText('Sign-in was cancelled.');
+  });
+
+  test('a second press while signing in does not start another login', async () => {
+    const s = signingIn();
+    render(<HireDetail hireId="h1" api={s.a} now={() => NOW} LoginTerminal={FakeTerminal} />);
+    const button = await screen.findByRole('button', { name: 'Sign in again' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(s.a.edits.filter((e) => e[0] === 'signIn')).toHaveLength(1);
+  });
+
+  test('leaving the page mid-login ends the login pty', async () => {
+    const s = signingIn();
+    const view = render(<HireDetail hireId="h1" api={s.a} now={() => NOW} LoginTerminal={FakeTerminal} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+    s.start({ accountId: 'acc-1', ptyId: 'pty-acc-1' });
+    await screen.findByRole('dialog');
+    view.unmount();
+    expect(s.a.edits).toContainEqual(['closeSignIn', 'pty-acc-1']);
   });
 });

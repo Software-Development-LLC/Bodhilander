@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -205,6 +205,7 @@ interface ElectronAPI {
   crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
   crewLetGo: (hireId: string) => Promise<CrewEditResult>;
   crewSignInAgain: (accountId: string) => Promise<CrewEditResult>;
+  onCrewSignInStarted: (callback: (data: CrewSignInStarted) => void) => () => void;
   crewListCards: () => Promise<CrewCardList>;
   crewOpenCard: (raiseId: string) => Promise<boolean>;
   crewBeginLink: () => Promise<CrewLinkView>;
