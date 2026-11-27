@@ -200,6 +200,10 @@ describe('parseHubFrame', () => {
 });
 
 describe('cutText', () => {
+  test('drops NUL and replaces a lone surrogate, so the reply stays sendable', () => {
+    expect(cutText('a\0b\uD800c\uDC00d\u{1F600}')).toBe('ab\uFFFDc\uFFFDd\u{1F600}');
+  });
+
   test('leaves text at the limit alone', () => {
     const text = 'a'.repeat(MAX_TEXT);
     expect(cutText(text)).toBe(text);

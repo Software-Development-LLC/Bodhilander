@@ -144,8 +144,11 @@ export function assertSendable(frame: MachineFrame): string {
 
 const CUT_NOTICE = '\n… (cut at 28,000 characters)';
 
-/** Cut text to MAX_TEXT with the notice inside the limit, never splitting a surrogate pair. */
-export function cutText(text: string): string {
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** Sendable text: no NUL, no lone surrogate, cut to MAX_TEXT with the notice inside the limit. */
+export function cutText(raw: string): string {
+  const text = raw.replace(/\0/g, '').replace(LONE_SURROGATE, '\uFFFD');
   if (text.length <= MAX_TEXT) return text;
   let end = MAX_TEXT - CUT_NOTICE.length;
   const last = text.charCodeAt(end - 1);

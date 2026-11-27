@@ -1,12 +1,6 @@
 /**
- * A Crew run's MCP server, as `claude` starts it from crew.json:
- *
- *   node crew-mcp.js <approve|tools>    CREW_MCP_SOCKET, CREW_MCP_TOKEN in its env
- *
- * It decides nothing. Each tools/list and tools/call goes to Bodhilander's
- * main process over the socket, one connection per request, and the answer
- * comes back verbatim. Plain node, because the app's native modules are
- * built for Electron's ABI.
+ * A Crew run's MCP relay: `node crew-mcp.js <approve|tools>`. It decides
+ * nothing; each request goes to the main process over CREW_MCP_SOCKET.
  */
 'use strict';
 

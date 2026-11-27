@@ -11,6 +11,24 @@ const SHIM_DIR = path.join(import.meta.dir, '..', '..', '..', '..', '..', 'resou
 const OTHER = '55555555-5555-4555-8555-555555555555';
 
 describe('planGh', () => {
+  test('a second repo flag, a flag value posing as the endpoint, or a URL never widens the read', () => {
+    const refused = (argv: string[]) => expect(planGh(argv, REPOS).kind).toBe('refused');
+    refused(['issue', 'list', '-R', 'acme/app', '-R', 'evil/x']);
+    refused(['issue', 'list', '--repo=acme/app', '--repo', 'evil/x']);
+    refused(['api', '-q', 'repos/acme/app/x', '/user/repos']);
+    refused(['api', '-H', 'repos/acme/app', 'user/repos']);
+    refused(['api', '--jq=.x', 'repos/acme/app/../../user']);
+    refused(['api', '--hostname', 'evil.example', 'repos/acme/app']);
+    refused(['api', 'repos/acme/app', 'repos/acme/app/issues']);
+    refused(['issue', 'view', 'https://github.com/evil/x/issues/1']);
+    refused(['search', 'issues', 'repo:evil/x bug']);
+    refused(['issue', 'list', '-Revil/x']);
+    expect(planGh(['api', '-XPOST', 'repos/acme/app/issues'], REPOS).kind).toBe('refused');
+    expect(planGh(['api', '-X', 'POST', 'repos/acme/app/issues'], REPOS).kind).toBe('write');
+    expect(planGh(['api', '--method=DELETE', 'repos/acme/app'], REPOS).kind).toBe('write');
+    expect(planGh(['api', '-q', '.[].title', '--paginate', 'repos/acme/app/issues'], REPOS).kind).toBe('read');
+  });
+
   test('reads pass, scoped to the hire\'s repo', () => {
     expect(planGh(['issue', 'list'], REPOS)).toEqual({ kind: 'read', args: ['issue', 'list', '-R', 'acme/app'] });
     expect(planGh(['pr', 'view', '3', '-R', 'Acme/App'], REPOS)).toEqual({ kind: 'read', args: ['pr', 'view', '3', '-R', 'Acme/App'] });

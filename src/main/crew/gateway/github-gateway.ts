@@ -1,8 +1,6 @@
 /**
- * The read-only GitHub gateway. A run's `gh` shim connects to its per-run
- * socket with the run token; the gateway runs a read command with a read
- * token the Hub minted for the job's requester, held in memory and reused
- * for at most 5 minutes after its mint. Every write is refused.
+ * The read-only GitHub gateway behind a run's `gh` shim. Reads run with a
+ * token the Hub minted for the job's requester, reused for under 5 minutes.
  */
 import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
@@ -30,39 +28,66 @@ const READS: Record<string, readonly string[]> = {
   label: ['list'],
 };
 const API_WRITE_FLAGS = new Set(['-f', '-F', '--field', '--raw-field', '--input']);
+const API_VALUE_FLAGS = new Set(['-H', '--header', '-q', '--jq', '-t', '--template', '-p', '--preview', '--cache', '-X', '--method']);
+const API_REFUSED_FLAGS = new Set(['--hostname']);
 const REPO_FLAGS = new Set(['-R', '--repo']);
 
 export type GhPlan = { kind: 'read'; args: string[] } | { kind: 'write' } | { kind: 'refused'; why: string };
 
-function flagValue(args: string[], names: Set<string>): { value: string | null; index: number } {
+const flagName = (a: string): string => (a.startsWith('--') && a.includes('=') ? a.slice(0, a.indexOf('=')) : a);
+
+/** Every value given for any of `names`, in order. */
+function flagValues(args: string[], names: Set<string>): string[] {
+  const values: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
-    if (names.has(a)) return { value: args[i + 1] ?? '', index: i };
-    for (const n of names) if (n.startsWith('--') && a.startsWith(`${n}=`)) return { value: a.slice(n.length + 1), index: i };
+    if (names.has(a)) values.push(args[i + 1] ?? '');
+    else if (a.startsWith('--') && a.includes('=') && names.has(flagName(a))) values.push(a.slice(a.indexOf('=') + 1));
   }
-  return { value: null, index: -1 };
+  return values;
 }
 
 function planApi(rest: string[], repos: readonly string[]): GhPlan {
-  if (rest.some((a) => API_WRITE_FLAGS.has(a) || [...API_WRITE_FLAGS].some((f) => f.startsWith('--') && a.startsWith(`${f}=`)))) return { kind: 'write' };
-  const method = flagValue(rest, new Set(['-X', '--method'])).value;
+  const positional: string[] = [];
+  let method: string | null = null;
+  for (let i = 0; i < rest.length; i += 1) {
+    const a = rest[i];
+    const name = flagName(a);
+    if (API_WRITE_FLAGS.has(name)) return { kind: 'write' };
+    if (API_REFUSED_FLAGS.has(name)) return { kind: 'refused', why: 'gh api reaches github.com only.' };
+    if (!a.startsWith('-')) {
+      positional.push(a);
+      continue;
+    }
+    if (!API_VALUE_FLAGS.has(name)) continue;
+    const value = name === a ? rest[(i += 1)] : a.slice(a.indexOf('=') + 1);
+    if (name === '-X' || name === '--method') method = value ?? '';
+  }
   if (method !== null && method.toUpperCase() !== 'GET') return { kind: 'write' };
-  const endpoint = rest.find((a) => !a.startsWith('-') && /^\/?repos\//.test(a)) ?? rest.find((a) => !a.startsWith('-'));
-  const m = endpoint ? /^\/?repos\/([^/]+\/[^/?]+)/.exec(endpoint) : null;
-  if (!m) return { kind: 'refused', why: 'gh api reaches only repos/<owner>/<repo>/… of this hire.' };
+  const endpoint = positional.length === 1 ? positional[0] : null;
+  const m = endpoint && !/\.\.|%|\\/.test(endpoint) ? /^\/?repos\/([^/]+\/[^/?#]+)(?:[/?#]|$)/.exec(endpoint) : null;
+  if (!m) return { kind: 'refused', why: 'gh api takes one endpoint, under repos/<owner>/<repo>/ of this hire.' };
   if (!repos.includes(m[1].toLowerCase())) return { kind: 'refused', why: `${m[1]} is not one of this hire's repos.` };
   return { kind: 'read', args: ['api', ...rest] };
 }
 
 /** What a run's `gh` argv may do. Repos are lowercase owner/name. */
+const GROUPED_SHORT = /^-[^-].+/;
+const SEARCH_SCOPE = /(^|\s)-?(repo|org|user|owner):/i;
+
 export function planGh(argv: string[], repos: readonly string[]): GhPlan {
+  if (argv.some((a) => GROUPED_SHORT.test(a))) return { kind: 'refused', why: 'Give each short flag on its own, with its value as the next argument.' };
   const [group, sub, ...rest] = argv;
   if (group === 'api') return planApi(argv.slice(1), repos);
   if (!group || !(group in READS)) return { kind: 'write' };
   if (!sub || !READS[group].includes(sub)) return { kind: 'write' };
   if (rest.some((a) => a === '-w' || a === '--web')) return { kind: 'refused', why: 'A run cannot open a browser.' };
-  const repo = flagValue(rest, REPO_FLAGS);
+  const named = flagValues(rest, REPO_FLAGS);
+  if (named.length > 1) return { kind: 'refused', why: 'Name one repo with -R.' };
+  const repo = { value: named[0] ?? null };
   if (repo.value !== null && !repos.includes(repo.value.toLowerCase())) return { kind: 'refused', why: `${repo.value} is not one of this hire's repos.` };
+  if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
+  if (group === 'search' && rest.some((a) => SEARCH_SCOPE.test(a))) return { kind: 'refused', why: 'Search names repos with --repo, never a qualifier.' };
   if (group === 'search') {
     if (rest.some((a) => a === '--owner' || a.startsWith('--owner='))) return { kind: 'refused', why: 'Search names repos with --repo, never --owner.' };
     return { kind: 'read', args: repo.value === null ? [...argv, ...repos.flatMap((r) => ['--repo', r])] : argv };
@@ -120,7 +145,7 @@ export class GithubGateway {
 
   /** Never across requesters: the key is the requester and the exact repo set. */
   private key(requestedBy: string, repos: string[]): string {
-    return `${requestedBy}\n${[...repos].sort().join(',')}`;
+    return `${requestedBy}\n${[...repos].sort((a, b) => a.localeCompare(b)).join(',')}`;
   }
 
   onToken(frame: TokenFrame): void {
@@ -162,7 +187,8 @@ export class GithubGateway {
       writeAudit(this.deps.db, run.hireId, 'gateway-refused', { jobId: run.jobId, reason: 'token' });
       return { code: 1, stdout: '', stderr: 'refused\n' };
     }
-    const args = Array.isArray(request.args) && request.args.every((a) => typeof a === 'string') ? (request.args as string[]) : [];
+    const raw: unknown = request.args;
+    const args: string[] = Array.isArray(raw) && raw.every((a): a is string => typeof a === 'string') ? raw : [];
     const plan = planGh(args, run.repos);
     if (plan.kind === 'write') {
       writeAudit(this.deps.db, run.hireId, 'gh-write-refused', { jobId: run.jobId, command: args.slice(0, 2).join(' ') });

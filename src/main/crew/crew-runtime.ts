@@ -66,7 +66,9 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const broker = new ApproveBroker({
     db: deps.db,
     raiseCard: (jobId, raiseId, raise) => deps.hub.sendCard(jobId, { id: raiseId, ...raise, ...inboundOf(jobId) }),
-    park: (jobId) => void loop?.park(jobId),
+    park: (jobId) => {
+      loop?.park(jobId);
+    },
     holdMs: deps.cardHoldMs,
   });
   loop = new RunLoop({

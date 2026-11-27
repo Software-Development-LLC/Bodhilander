@@ -278,7 +278,7 @@ export class RunLoop {
     if (result && result.is_error !== true && run.prepared) return this.finishDone(run, result, resultText);
     if (run.job.attempts < MAX_ATTEMPTS) return this.finishAs(run, 'died', { retry: true });
     this.finishAs(run, 'dead', {});
-    this.deps.reply(run.job.id, ERROR_REPLY);
+    this.sendReply(run.job.id, ERROR_REPLY);
   }
 
   private keepSession(run: Active, result: Record<string, unknown>): string | null {
@@ -300,11 +300,28 @@ export class RunLoop {
     const usage = runUsage(result);
     db.prepare(`UPDATE crew_run SET session_id = ?, reply_text = ?, usage = ? WHERE id = ?`).run(sessionId, text, JSON.stringify(usage), run.runId);
     this.finishAs(run, 'done', {});
-    this.deps.reply(run.job.id, text);
+    this.sendReply(run.job.id, text);
     const startedAt = run.startedAt;
-    this.deps.onFinished?.({
-      runId: run.runId, job: run.job, accountId: prepared.accountId, startedAt, durationMs: this.now() - startedAt, model: run.model, usage, observation: run.observation,
-    });
+    try {
+      this.deps.onFinished?.({
+        runId: run.runId, job: run.job, accountId: prepared.accountId, startedAt, durationMs: this.now() - startedAt, model: run.model, usage, observation: run.observation,
+      });
+    } catch (err) {
+      log.warn('[Crew] could not report a finished run', err);
+    }
+  }
+
+  private sendReply(jobId: string, text: string): void {
+    try {
+      this.deps.reply(jobId, text);
+    } catch (err) {
+      log.warn('[Crew] could not send a reply', err);
+      try {
+        this.deps.reply(jobId, ERROR_REPLY);
+      } catch (again) {
+        log.error('[Crew] could not send the error reply', again);
+      }
+    }
   }
 
   /** A requeue gives the attempt back; a retry keeps it spent. A job the fence dropped meanwhile is left dropped. */
