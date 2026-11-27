@@ -45,6 +45,7 @@ mock.module('../crew/crew-main', () => ({
   crewRecordSignIn: () => calls.push('signed-in'),
   stopCrew: () => calls.push('stop'),
   crewRuntime: () => null,
+  crewHomeDeps: () => null,
 }));
 
 describe('the main process', () => {
