@@ -276,6 +276,18 @@ describe('HubClient after welcome', () => {
     expect(jobs).toEqual([{ id: uuid(1), hireId: HIRE, outcome: 'stored' }]);
   });
 
+  test('a delivery is acked only once it is written, so one that failed to store comes again', () => {
+    const t = setup();
+    t.online();
+    t.raw.exec(`CREATE TRIGGER no_jobs BEFORE INSERT ON crew_job BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    t.sock().hub(deliver(1));
+    expect(t.sock().sent.filter((f) => f.type === 'ack')).toEqual([]);
+    t.raw.exec(`DROP TRIGGER no_jobs`);
+    t.sock().hub(deliver(1));
+    expect(t.sock().sent.filter((f) => f.type === 'ack')).toEqual([{ type: 'ack', id: uuid(1) }]);
+    expect((t.raw.query(`SELECT COUNT(*) AS n FROM crew_job`).get() as { n: number }).n).toBe(1);
+  });
+
   test('a renew for the heartbeat holds the lease; nothing starts without it', () => {
     const t = setup();
     t.online();
