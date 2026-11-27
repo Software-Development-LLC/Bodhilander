@@ -105,11 +105,15 @@ describe('resolveHubUrl', () => {
   test('packaged builds use production, unpackaged development, and the preference wins', () => {
     expect(resolveHubUrl(true, null)).toBe(HUB_URL_PRODUCTION);
     expect(resolveHubUrl(false, null)).toBe(HUB_URL_DEVELOPMENT);
-    expect(resolveHubUrl(true, ' https://h.example// ')).toBe('https://h.example');
+    expect(resolveHubUrl(false, ' https://h.example// ')).toBe('https://h.example');
     expect(resolveHubUrl(false, '')).toBe(HUB_URL_DEVELOPMENT);
     expect(resolveHubUrl(false, 'http://localhost:8080/')).toBe('http://localhost:8080');
     expect(resolveHubUrl(false, 'http://127.0.0.1:8080')).toBe('http://127.0.0.1:8080');
     expect(resolveHubUrl(false, 'http://[::1]:8080')).toBe('http://[::1]:8080');
+  });
+
+  test('a packaged build ignores the override, whatever it names', () => {
+    for (const o of ['https://h.example', 'http://localhost:8080', ' https://h.example// ']) expect(resolveHubUrl(true, o)).toBe(HUB_URL_PRODUCTION);
   });
 
   test('a plain http override off this machine is ignored', () => {
@@ -120,9 +124,9 @@ describe('resolveHubUrl', () => {
   });
 
   test('an https override that does not parse, or names no host, is ignored', () => {
-    expect(resolveHubUrl(true, 'https://')).toBe(HUB_URL_PRODUCTION);
-    expect(resolveHubUrl(true, 'https://bad host')).toBe(HUB_URL_PRODUCTION);
-    expect(resolveHubUrl(true, 'https://h.example/crew/')).toBe('https://h.example/crew');
+    expect(resolveHubUrl(false, 'https://')).toBe(HUB_URL_DEVELOPMENT);
+    expect(resolveHubUrl(false, 'https://bad host')).toBe(HUB_URL_DEVELOPMENT);
+    expect(resolveHubUrl(false, 'https://h.example/crew/')).toBe('https://h.example/crew');
   });
 });
 

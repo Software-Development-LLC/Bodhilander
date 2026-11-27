@@ -100,12 +100,13 @@ function isHttps(url: string): boolean {
   }
 }
 
-/** Packaged builds on either channel use production; `crew.hubUrl` overrides with https, or http on loopback. */
+/** Packaged builds on either channel use production; unpackaged, `crew.hubUrl` overrides with https, or http on loopback. */
 export function resolveHubUrl(isPackaged: boolean, override: string | null): string {
+  if (isPackaged) return HUB_URL_PRODUCTION;
   const trimmed = override?.trim();
   if (trimmed && (isHttps(trimmed) || isLoopbackHttp(trimmed))) return trimTrailingSlashes(trimmed);
   if (trimmed) log.warn('[Crew] ignored crew.hubUrl: it must be https, or http on this machine');
-  return isPackaged ? HUB_URL_PRODUCTION : HUB_URL_DEVELOPMENT;
+  return HUB_URL_DEVELOPMENT;
 }
 
 export const CLOSE_CODES: Record<number, ErrorReason> = {

@@ -7,8 +7,9 @@ const appHandlers: Record<string, (() => void)[]> = {};
 const sockets: { url: string; closed: boolean }[] = [];
 const { db } = crewDb();
 
+const app = { isPackaged: true, on: (e: string, cb: () => void) => (appHandlers[e] ??= []).push(cb) };
 mock.module('electron', () => ({
-  app: { isPackaged: true, on: (e: string, cb: () => void) => (appHandlers[e] ??= []).push(cb) },
+  app,
   powerMonitor: { on: (e: string, cb: () => void) => (powerHandlers[e] ??= []).push(cb) },
   shell: { openExternal: async () => {} },
 }));
@@ -40,10 +41,13 @@ const { crewHubUrl, newLinkFlow, startCrewHub, stopCrewHub } = await import('../
 import * as os from 'os';
 
 describe('the app Crew connection', () => {
-  test('a packaged build talks to production unless crew.hubUrl says otherwise', () => {
+  test('a packaged build talks to production whatever crew.hubUrl says; an unpackaged one takes the override', () => {
     expect(crewHubUrl()).toBe('https://crew.bodhi.software');
     prefs.set('crew.hubUrl', 'https://h.example');
+    expect(crewHubUrl()).toBe('https://crew.bodhi.software');
+    app.isPackaged = false;
     expect(crewHubUrl()).toBe('https://h.example');
+    app.isPackaged = true;
     prefs.delete('crew.hubUrl');
   });
 
@@ -66,6 +70,7 @@ describe('the app Crew connection', () => {
   });
 
   test('a changed crew.hubUrl or a new link starts a fresh connection', () => {
+    app.isPackaged = false;
     const first = startCrewHub();
     prefs.set('crew.hubUrl', 'https://other.example');
     const moved = startCrewHub();
@@ -85,6 +90,7 @@ describe('the app Crew connection', () => {
     expect(powerHandlers.resume).toHaveLength(1);
     prefs.delete('crew.hubUrl');
     stopCrewHub();
+    app.isPackaged = true;
   });
 
     test('the link request names the machine as the relay does, else by host name', () => {
