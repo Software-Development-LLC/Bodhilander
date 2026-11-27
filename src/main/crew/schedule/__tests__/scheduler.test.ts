@@ -133,13 +133,14 @@ describe('RoutineScheduler', () => {
     expect(onTime.scheduler.tick()).toHaveLength(1);
   });
 
-  test('the owner id falls back to an owner-scope delivery, and with none the routine waits', () => {
+  test("the owner id comes from the hire body alone; a body without one waits and complains once, even with an owner's message on file", () => {
     const none = setup({ owner: false });
     none.state.now = at('2026-11-02', '08:00') + 10_000;
-    expect(none.scheduler.tick()).toEqual([]);
     none.db.prepare(`INSERT INTO crew_job (id, hire_id, kind, epoch, scope, requested_by, state) VALUES (?, ?, 'message', 3, 'owner', ?, 'done')`).run(uuid(2), HIRE, PERSON);
-    expect(none.scheduler.tick()).toHaveLength(1);
-    expect(jobs(none.db).find((j) => j.kind === 'routine')?.requested_by).toBe(PERSON);
+    expect(none.scheduler.tick()).toEqual([]);
+    expect(none.scheduler.tick()).toEqual([]);
+    expect(jobs(none.db).some((j) => j.kind === 'routine')).toBe(false);
+    expect(none.db.prepare(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'routine-no-owner'`).get()).toEqual({ n: 1 });
   });
 
   test('an unreadable cron or zone is audited once and fires nothing', () => {

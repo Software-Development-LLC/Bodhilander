@@ -4,6 +4,7 @@
  * is skipped when the next firing is near. A skewed clock holds every routine.
  */
 import type Database from 'better-sqlite3';
+import type { HireBody } from '../protocol';
 import { writeAudit } from '../audit';
 import { derivedUuid } from '../hub-client';
 import { cronMatchesDay, parseCron, type Cron } from './cron';
@@ -74,15 +75,11 @@ export function nextOccurrence(cron: Cron, tz: string, after: Date): Date | null
   return null;
 }
 
-/** The hire owner's person id: the Hub sets it on owner-scope deliveries. */
+/** The hire owner's person id, from the hire body; null for a body cached before the Hub published it. */
 export function ownerPersonId(db: Database.Database, hireId: string): string | null {
   const hire = db.prepare(`SELECT data FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as { data: string } | undefined;
-  const owner = parse(hire?.data).ownerId;
-  if (typeof owner === 'string' && owner) return owner;
-  const row = db
-    .prepare(`SELECT requested_by FROM crew_job WHERE hire_id = ? AND kind = 'message' AND scope = 'owner' ORDER BY created_at DESC, rowid DESC LIMIT 1`)
-    .get(hireId) as { requested_by: string } | undefined;
-  return row && row.requested_by !== '' ? row.requested_by : null;
+  const owner = (parse(hire?.data) as Partial<Pick<HireBody, 'ownerId'>>).ownerId;
+  return typeof owner === 'string' && owner ? owner : null;
 }
 
 function parse(data: string | undefined): Record<string, unknown> {
