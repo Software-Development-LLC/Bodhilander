@@ -52,6 +52,8 @@ const q = shQuote;
 export class WslSignIn {
   private child: SignInChild | null = null;
   private tmpName: string | null = null;
+  private busy = false;
+  private cancelled = false;
 
   constructor(private readonly deps: WslSignInDeps) {}
 
@@ -61,12 +63,22 @@ export class WslSignIn {
   }
 
   get active(): boolean {
-    return this.child !== null;
+    return this.busy;
   }
 
   /** Resolves when claude exits: a token stored, a login recorded, or why not. */
   async start(accountId: string): Promise<SignInOutcome> {
-    if (this.child) return { ok: false, reason: 'busy' };
+    if (this.busy) return { ok: false, reason: 'busy' };
+    this.busy = true;
+    this.cancelled = false;
+    try {
+      return await this.run(accountId);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async run(accountId: string): Promise<SignInOutcome> {
     const d = this.deps;
     const configDir = wslAccountDir(accountId);
     const mode = d.signIn.mode();
@@ -86,6 +98,7 @@ export class WslSignIn {
     let output = '';
     let opened = false;
     const code = await new Promise<number | null>((resolve) => {
+      if (this.cancelled) return resolve(null);
       const child = d.spawn(args);
       this.child = child;
       child.onOutput((text) => {
@@ -125,6 +138,7 @@ export class WslSignIn {
   }
 
   cancel(): void {
+    this.cancelled = true;
     this.child?.kill();
   }
 

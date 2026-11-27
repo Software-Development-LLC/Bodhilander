@@ -52,7 +52,7 @@ describe('Crew on Windows, as the main process runs it', () => {
     ]);
   });
 
-  test('runs are held until the start check passes, and the start sweeps first', async () => {
+  test('the first run sweeps and checks once, and runs are held until the check passes', async () => {
     const dir = tmp();
     fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
     const calls: string[] = [];
@@ -63,9 +63,11 @@ describe('Crew on Windows, as the main process runs it', () => {
       resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'),
       exec: async (args) => (calls.push(args.join(' ')), { code: 1, stdout: '', stderr: '' }),
     });
+    expect(calls).toEqual([]);
     expect(await crew.windows.gate()).toBe('held:setup');
-    await crew.start();
     expect(calls[0]).toContain('find /tmp/crt-1000');
+    const sweeps = calls.filter((c) => c.includes('find /tmp/crt-1000')).length;
     expect(await crew.windows.gate()).toBe('held:setup');
+    expect(calls.filter((c) => c.includes('find /tmp/crt-1000')).length).toBe(sweeps);
   });
 });

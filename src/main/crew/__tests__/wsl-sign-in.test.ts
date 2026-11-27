@@ -113,6 +113,19 @@ describe('Sign in for Crew on Windows', () => {
     expect(u.s.liveTmpNames()).toEqual([]);
   });
 
+  test('two sign-ins started together spawn one claude, and a cancel before the spawn spawns none', async () => {
+    const u = setup('token');
+    let spawns = 0;
+    const first = u.s.start('a1');
+    const second = u.s.start('a1');
+    expect(await second).toEqual({ ok: false, reason: 'busy' });
+    u.s.cancel();
+    expect(await first).toEqual({ ok: false, reason: 'cancelled' });
+    spawns = u.spawned().length;
+    expect(spawns).toBe(0);
+    expect(u.s.active).toBe(false);
+  });
+
   test('a second sign-in waits for the first, and cancel ends it', async () => {
     const u = setup('token');
     const done = u.s.start('a1');

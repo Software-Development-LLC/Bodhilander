@@ -206,12 +206,7 @@ export function startCrew(): CrewRuntime {
   setCrewHubReplaced((hub) => attach(hub));
   setCrewInterrupt((hireId) => runtime?.interrupt(hireId));
   const hub = startCrewHub();
-  const rt = runtime && runtimeHub === hub ? runtime : attach(hub);
-  windowsCrew
-    ?.start()
-    .then(() => void rt.loop.tick())
-    .catch((err) => log.warn('[Crew] the Windows setup check failed', err));
-  return rt;
+  return runtime && runtimeHub === hub ? runtime : attach(hub);
 }
 
 /** Sign in for Crew on Windows; null off Windows or before Crew has started. */

@@ -148,7 +148,7 @@ export type WindowsCrewDeps = Omit<WslRunDeps, 'exec' | 'sh' | 'records' | 'agen
 
 export interface WindowsCrew {
   windows: NonNullable<PrepareDeps['windows']>;
-  /** At Bodhilander start: the sweep, then the full check with interop. Runs are held until it passes. */
+  /** The sweep, then the full check with interop, once, on the first run this launch. Runs are held until it passes. */
   start(): Promise<void>;
   afterRepair(): Promise<void>;
   signIn: WslSignIn;
@@ -182,11 +182,20 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
       if (live.size === 0) await sh(sweepTmpParentScript(CREW_UID), true);
     },
   });
+  let started: Promise<unknown> | null = null;
+  const start = async () => {
+    started ??= gate.atStart();
+    await started;
+  };
   return {
-    windows: { gate: () => gate.gate(), prepare: (job, threadKey, runId) => runs.prepare(job, threadKey, runId) },
-    start: async () => {
-      await gate.atStart();
+    windows: {
+      gate: async () => {
+        await start();
+        return gate.gate();
+      },
+      prepare: (job, threadKey, runId) => runs.prepare(job, threadKey, runId),
     },
+    start,
     afterRepair: async () => {
       await gate.afterRepair();
     },
