@@ -51,15 +51,13 @@ export const WindowsSignIn: React.FC<WindowsSignInProps> = ({ accountId, label, 
       {waiting && (
         <>
           <p>Your browser opened to sign in {label}. When it shows a code, paste it here.</p>
-          <label>
-            Code
-            <input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" />
-          </label>
+          <label htmlFor="crew-windows-sign-in-code">Code</label>
+          <input id="crew-windows-sign-in-code" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" />
           <button type="button" onClick={send}>Send code</button>
           <button type="button" onClick={() => void doCancel()}>Cancel</button>
         </>
       )}
-      {note && <p role="status">{note}</p>}
+      {note && <output>{note}</output>}
     </div>
   );
 };

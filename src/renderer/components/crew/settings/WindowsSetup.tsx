@@ -95,9 +95,9 @@ export const WindowsSetup: React.FC<WindowsSetupProps> = ({ checkState, setup, r
           <button type="button" onClick={() => setPrompt(null)}>Cancel</button>
         </div>
       )}
-      {busy && step && <p role="status">{step.message ?? STEP_TEXT[step.step] ?? step.step}</p>}
+      {busy && step && <output>{step.message ?? STEP_TEXT[step.step] ?? step.step}</output>}
       {failed && <p role="alert">{failed.message}</p>}
-      {result?.ok && result.message && <p role="status">{result.message}</p>}
+      {result?.ok && result.message && <output>{result.message}</output>}
     </section>
   );
 };

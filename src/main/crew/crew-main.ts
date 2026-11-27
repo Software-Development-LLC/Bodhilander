@@ -138,7 +138,9 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     },
     resources: { dir, relayScript: res.relayScript, shimDir: res.shimDir },
     recordsFile: path.join(app.getPath('userData'), 'crew', 'wsl-tmp.json'),
-    ...windowsSetupDeps(async () => void runtime?.loop.tick()),
+    ...windowsSetupDeps(async () => {
+      await runtime?.loop.tick();
+    }),
   });
   return windowsCrew;
 }
