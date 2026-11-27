@@ -70,7 +70,8 @@ export function ensureSocketRoot(root: string, uid: number, fsx: SocketFs = fs):
   }
   const mode = st.mode & 0o777;
   if (st.isSymbolicLink() || !st.isDirectory() || st.uid !== uid || mode !== 0o700) {
-    const type = st.isSymbolicLink() ? 'symlink' : st.isDirectory() ? 'directory' : 'other';
+    let type = st.isDirectory() ? 'directory' : 'other';
+    if (st.isSymbolicLink()) type = 'symlink';
     throw new SocketRootError({ type, uid: st.uid, mode: mode.toString(8) });
   }
 }
