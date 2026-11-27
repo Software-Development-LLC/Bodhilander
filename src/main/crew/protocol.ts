@@ -1,4 +1,4 @@
-// Copied verbatim from bodhi-service-crew src/protocol.ts at 7535aca (branch head 7640546a5f6902fc6bcc019ff62f864e73b08a21), plus the hire, routine, note, role and skill-bundle body types of arch amendment 3, ahead of the Hub.
+// Copied verbatim from bodhi-service-crew src/protocol.ts at df5af52 (branch feat/1498-service-crew, head 8839c89b2eee76e247b387d8ffcedffb3e78edd8).
 // The machine protocol between the Crew Hub and Bodhilander, which keeps a verbatim copy at
 // src/main/crew/protocol.ts. Any frame change after phase 1 ships bumps PROTOCOL_VERSION.
 // Times (*At, hubTime) are epoch ms; every id on the wire is a lowercase UUIDv4; MAX_TEXT counts
@@ -168,9 +168,7 @@ export type ReplyFrame = { type: 'reply'; id: string; hireId: string; epoch: num
 export type TypingFrame = { type: 'typing'; hireId: string; epoch: number; inboundId: string };
 // Live only, never through the outbox, never answered.
 export type LeaseRevokedFrame = { type: 'lease_revoked'; hireId: string; epoch: number };
-// One chunk of one file. name, size, sha256 and tainted are on index 0 only, with the target: inboundId
-// (the conversation of that inbound row) or recipient (a Bodhi person's UPN), exactly one of the two.
-// The Hub turns a tainted file, or one outside the circle, into an `outbound` card.
+// One chunk of one file. name, size, sha256 and tainted are on index 0 only, with the target as for send.
 export type FileFrame = {
   type: 'file';
   id: string;
@@ -186,7 +184,8 @@ export type FileFrame = {
   recipient?: string;
   tainted?: boolean;
 };
-// A message to inboundId's conversation or to recipient's UPN, exactly one; the Hub decides whether it needs an outbound card.
+// A message to inboundId's conversation or to recipient (a Bodhi person's UPN), exactly one. From a
+// tainted run, or to anyone outside the circle, the Hub raises an `outbound` card for the owner first.
 export type SendFrame = { type: 'send'; id: string; hireId: string; epoch: number; text: string; tainted: boolean; inboundId?: string; recipient?: string };
 export type PermissionPayload = { tool: string; summary: string };
 export type SkillFile = { path: string; content: string };
@@ -410,6 +409,7 @@ const list = (each: Check, max: number): Check => v => Array.isArray(v) && v.len
 const shape = (spec: Spec): Check => v => record(v) && fits(v as Record<string, unknown>, spec);
 const b64 = (maxChars: number): Check => v => typeof v === 'string' && v.length <= maxChars && /^[A-Za-z0-9+/]*={0,2}$/.test(v) && v.length % 4 === 0;
 const sha256Hex: Check = v => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+export const isRepo: Check = v => repo(v);
 const repo: Check = v => typeof v === 'string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(v);
 
 // A key spec: the check, and whether the key may be absent.
@@ -544,7 +544,7 @@ export function parseMachineFrame(raw: string): Parsed {
   if (!fits(o, SPECS[o.type])) return malformed;
   if (o.type === 'card_raise' && !fits(o.payload as Record<string, unknown>, PAYLOADS[o.kind as MachineCardKind])) return malformed;
   if (o.type === 'file' && !fileChunkFits(o)) return malformed;
-  if (o.type === 'send' && (o.inboundId === undefined) === (o.recipient === undefined)) return malformed;
+  if (o.type === 'send' && [o.inboundId, o.recipient].filter(t => t !== undefined).length !== 1) return malformed;
   if (o.type === 'edit' && o.op !== 'create' && (o.objectId === undefined || o.rev === undefined)) return malformed;
   return { ok: true, frame: o as unknown as MachineFrame };
 }
