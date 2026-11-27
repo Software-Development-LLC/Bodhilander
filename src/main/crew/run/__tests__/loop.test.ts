@@ -39,7 +39,7 @@ class FakeChild implements RunChild {
   }
 }
 
-function setup(opts: { maxRuns?: number; leased?: boolean; prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
+function setup(opts: { maxRuns?: number; leased?: boolean; prepare?: (job: CrewJob) => Promise<Prepared>; replyThrows?: string; finishedThrows?: boolean } = {}) {
   const { raw, db } = crewDb();
   const children: FakeChild[] = [];
   const replies: [string, string][] = [];
@@ -61,9 +61,16 @@ function setup(opts: { maxRuns?: number; leased?: boolean; prepare?: (job: CrewJ
       children.push(c);
       return c;
     },
-    reply: (jobId, text) => (replies.push([jobId, text]), true),
+    reply: (jobId, text) => {
+      if (text === opts.replyThrows) throw new Error('refusing to send');
+      replies.push([jobId, text]);
+      return true;
+    },
     onSignedOut: (hireId, accountId) => signedOut.push([hireId, accountId]),
-    onFinished: (run) => finished.push(run),
+    onFinished: (run) => {
+      if (opts.finishedThrows) throw new Error('report failed');
+      finished.push(run);
+    },
     onUsageObserved: (accountId, obs) => observed.push([accountId, obs]),
     now: () => clock,
     newId: () => uuid(500 + ++ids),
@@ -91,6 +98,16 @@ describe('run loop', () => {
     const thread = t.raw.query(`SELECT thread_key, session_id, account_id FROM crew_thread`).get();
     expect(thread).toEqual({ thread_key: 'chat:owner', session_id: 'sess-1', account_id: 'acct-a' });
     expect(t.finished).toEqual([expect.objectContaining({ runId: uuid(501), durationMs: 250, usage: expect.objectContaining({ input_tokens: 10, output_tokens: 5 }) })]);
+    expect(t.loop.running()).toEqual([]);
+  });
+
+  test('a reply the Hub would refuse falls back to the error reply, and a failing report loses nothing', async () => {
+    const t = setup({ replyThrows: 'bad', finishedThrows: true });
+    t.job(1);
+    await t.loop.tick();
+    expect(() => t.children[0].finish('bad')).not.toThrow();
+    expect(t.state(1).state).toBe('done');
+    expect(t.replies).toEqual([[uuid(1), ERROR_REPLY]]);
     expect(t.loop.running()).toEqual([]);
   });
 
@@ -213,5 +230,25 @@ describe('run loop', () => {
     expect(threadKeyFor({ kind: 'message', scope: 'owner' })).toBe('chat:owner');
     expect(threadKeyFor({ kind: 'message', scope: 'circle' })).toBe('chat:circle');
     expect(threadKeyFor({ kind: 'routine', scope: 'owner' })).toBe('routine:owner');
+  });
+});
+
+describe('parking', () => {
+  test('a parked run ends parked with no reply, and keeps its session for the decision', async () => {
+    const t = setup();
+    t.job(1);
+    await t.loop.tick();
+    expect(t.loop.park(uuid(1))).toBe(true);
+    t.children[0].finish('waiting on a card', 'sess-p');
+    expect(t.state(1).state).toBe('parked');
+    expect(t.replies).toEqual([]);
+    expect(t.lastRun().outcome).toBe('parked');
+    const thread = t.raw.query(`SELECT session_id FROM crew_thread WHERE hire_id = ?`).get(HIRE) as { session_id: string };
+    expect(thread.session_id).toBe('sess-p');
+  });
+
+  test('park names a job that is not running: nothing changes', async () => {
+    const t = setup();
+    expect(t.loop.park(uuid(9))).toBe(false);
   });
 });

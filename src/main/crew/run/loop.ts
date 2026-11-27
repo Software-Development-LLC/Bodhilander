@@ -63,13 +63,15 @@ export interface FinishedRun {
   observation: UsageObservation | null;
 }
 
-export type RunOutcome = 'done' | 'interrupted' | 'signed-out' | 'lost-session' | 'held' | 'died' | 'dead';
+export type RunOutcome = 'done' | 'interrupted' | 'signed-out' | 'lost-session' | 'held' | 'parked' | 'died' | 'dead';
 
 export interface RunLoopDeps {
   db: Database.Database;
   slots: RunSlots;
   canStart(hireId: string, epoch: number): boolean;
-  prepare(job: CrewJob, threadKey: string): Promise<Prepared>;
+  prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
+  /** The thread a card job resumes on; other jobs use threadKeyFor. */
+  threadKeyOf?(job: CrewJob): string | null;
   spawn(run: PreparedRun): RunChild;
   reply(jobId: string, text: string): boolean;
   onSignedOut(hireId: string, accountId: string): void;
@@ -87,6 +89,7 @@ interface Active {
   release(): void;
   startedAt: number;
   interrupted: boolean;
+  parked: boolean;
   settled: boolean;
   child: RunChild | null;
   prepared: PreparedRun | null;
@@ -164,14 +167,14 @@ export class RunLoop {
       return false;
     }
     const run: Active = {
-      runId: this.newId(), job: { ...job, attempts: job.attempts + 1 }, threadKey: threadKeyFor(job), release: () => slot.release(), startedAt: this.now(),
-      interrupted: false, settled: false, child: null, prepared: null, result: null, model: '', authFailed: false, stderr: [], observation: null,
+      runId: this.newId(), job: { ...job, attempts: job.attempts + 1 }, threadKey: this.deps.threadKeyOf?.(job) ?? threadKeyFor(job), release: () => slot.release(), startedAt: this.now(),
+      interrupted: false, parked: false, settled: false, child: null, prepared: null, result: null, model: '', authFailed: false, stderr: [], observation: null,
     };
     this.active.set(job.hireId, run);
     const record = () => db.prepare(`INSERT INTO crew_run (id, job_id, hire_id, thread_key) VALUES (?, ?, ?, ?)`).run(run.runId, job.id, job.hireId, run.threadKey);
     let prepared: Prepared;
     try {
-      prepared = await this.deps.prepare(run.job, run.threadKey);
+      prepared = await this.deps.prepare(run.job, run.threadKey, run.runId);
     } catch (err) {
       log.warn('[Crew] could not prepare a run', err);
       record();
@@ -219,6 +222,14 @@ export class RunLoop {
     return true;
   }
 
+  /** The run gave up waiting on a card: it ends parked, with no reply, and resumes from the decision. */
+  park(jobId: string): boolean {
+    const run = [...this.active.values()].find((r) => r.job.id === jobId);
+    if (!run || run.settled) return false;
+    run.parked = true;
+    return true;
+  }
+
   interruptAll(): void {
     for (const hireId of [...this.active.keys()]) this.interrupt(hireId);
   }
@@ -251,6 +262,10 @@ export class RunLoop {
     const result = run.result;
     const resultText = typeof result?.result === 'string' ? result.result : '';
     if (run.interrupted) return this.finishAs(run, 'interrupted', { requeue: true });
+    if (run.parked) {
+      if (result && run.prepared) this.keepSession(run, result);
+      return this.finishAs(run, 'parked', { park: true });
+    }
     if (run.authFailed || (result?.is_error === true && isAuthFailure(resultText))) {
       this.finishAs(run, 'signed-out', { requeue: true });
       if (run.prepared) this.deps.onSignedOut(run.job.hireId, run.prepared.accountId);
@@ -263,34 +278,61 @@ export class RunLoop {
     if (result && result.is_error !== true && run.prepared) return this.finishDone(run, result, resultText);
     if (run.job.attempts < MAX_ATTEMPTS) return this.finishAs(run, 'died', { retry: true });
     this.finishAs(run, 'dead', {});
-    this.deps.reply(run.job.id, ERROR_REPLY);
+    this.sendReply(run.job.id, ERROR_REPLY);
+  }
+
+  private keepSession(run: Active, result: Record<string, unknown>): string | null {
+    const prepared = run.prepared as PreparedRun;
+    const sessionId = typeof result.session_id === 'string' ? result.session_id : prepared.sessionId;
+    this.deps.db
+      .prepare(
+        `INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id) VALUES (?, ?, ?, ?)
+         ON CONFLICT(hire_id, thread_key) DO UPDATE SET session_id = excluded.session_id, account_id = excluded.account_id, updated_at = CURRENT_TIMESTAMP`,
+      )
+      .run(run.job.hireId, run.threadKey, sessionId, prepared.accountId);
+    return sessionId;
   }
 
   private finishDone(run: Active, result: Record<string, unknown>, text: string): void {
     const prepared = run.prepared as PreparedRun;
     const db = this.deps.db;
-    const sessionId = typeof result.session_id === 'string' ? result.session_id : prepared.sessionId;
-    db.prepare(
-      `INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id) VALUES (?, ?, ?, ?)
-       ON CONFLICT(hire_id, thread_key) DO UPDATE SET session_id = excluded.session_id, account_id = excluded.account_id, updated_at = CURRENT_TIMESTAMP`,
-    ).run(run.job.hireId, run.threadKey, sessionId, prepared.accountId);
+    const sessionId = this.keepSession(run, result);
     const usage = runUsage(result);
     db.prepare(`UPDATE crew_run SET session_id = ?, reply_text = ?, usage = ? WHERE id = ?`).run(sessionId, text, JSON.stringify(usage), run.runId);
     this.finishAs(run, 'done', {});
-    this.deps.reply(run.job.id, text);
+    this.sendReply(run.job.id, text);
     const startedAt = run.startedAt;
-    this.deps.onFinished?.({
-      runId: run.runId, job: run.job, accountId: prepared.accountId, startedAt, durationMs: this.now() - startedAt, model: run.model, usage, observation: run.observation,
-    });
+    try {
+      this.deps.onFinished?.({
+        runId: run.runId, job: run.job, accountId: prepared.accountId, startedAt, durationMs: this.now() - startedAt, model: run.model, usage, observation: run.observation,
+      });
+    } catch (err) {
+      log.warn('[Crew] could not report a finished run', err);
+    }
+  }
+
+  private sendReply(jobId: string, text: string): void {
+    try {
+      this.deps.reply(jobId, text);
+    } catch (err) {
+      log.warn('[Crew] could not send a reply', err);
+      try {
+        this.deps.reply(jobId, ERROR_REPLY);
+      } catch (again) {
+        log.error('[Crew] could not send the error reply', again);
+      }
+    }
   }
 
   /** A requeue gives the attempt back; a retry keeps it spent. A job the fence dropped meanwhile is left dropped. */
-  private finishAs(run: Active, outcome: RunOutcome, how: { requeue?: boolean; retry?: boolean }): void {
+  private finishAs(run: Active, outcome: RunOutcome, how: { requeue?: boolean; retry?: boolean; park?: boolean }): void {
     run.settled = true;
     const db = this.deps.db;
     const live = `id = ? AND state IN ('running', 'queued')`;
     if (how.requeue) {
       db.prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(run.job.id);
+    } else if (how.park) {
+      db.prepare(`UPDATE crew_job SET state = 'parked', updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(run.job.id);
     } else {
       let state = outcome === 'done' ? 'done' : 'dead';
       if (how.retry) state = 'queued';

@@ -9,9 +9,10 @@ import log from 'electron-log';
 import type { AccountUsage, ClaudeAccount } from '../../shared/types';
 import type { UsageObservation } from '../usage-meter';
 import { AccountChanger, accountRefFor } from './account-ref';
+import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
 import type { UsageInput } from './hub-client';
-import type { EditResultFrame } from './protocol';
+import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame } from './protocol';
 import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
 import { RunSlots } from './run/slots';
 import type { EditInput } from './sync';
@@ -24,6 +25,7 @@ export interface CrewHubPort extends Pick<EventEmitter, 'on' | 'off'> {
   sendReply(jobId: string, text: string): boolean;
   sendUsage(jobId: string, usage: UsageInput): boolean;
   sendEdit(input: EditInput): string;
+  sendCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean;
 }
 
 export interface CrewRuntimeDeps {
@@ -31,9 +33,12 @@ export interface CrewRuntimeDeps {
   hub: CrewHubPort;
   signIn: CrewSignIn;
   accounts(): ClaudeAccount[];
-  prepare(job: CrewJob, threadKey: string): Promise<Prepared>;
+  prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
   usage: { get(id: string): AccountUsage | null; set(u: AccountUsage): void };
   remind(reminder: Reminder, account: ClaudeAccount): void;
+  /** A run ended, whatever its outcome: its MCP registration and sockets go with it. */
+  runEnded?(jobId: string): void;
+  cardHoldMs?: number;
   maxRuns?(): number;
   spawn?(run: PreparedRun): RunChild;
   now?(): number;
@@ -44,6 +49,7 @@ export interface CrewRuntimeDeps {
 export interface CrewRuntime {
   loop: RunLoop;
   changer: AccountChanger;
+  broker: ApproveBroker;
   interrupt(hireId: string): void;
   checkReminders(): number;
   stop(): void;
@@ -52,11 +58,25 @@ export interface CrewRuntime {
 export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const now = deps.now ?? Date.now;
   const accountOf = (id: string) => deps.accounts().find((a) => a.id === id) ?? null;
-  const loop = new RunLoop({
+  const inboundOf = (jobId: string): { inboundId?: string } => {
+    const row = deps.db.prepare(`SELECT kind FROM crew_job WHERE id = ?`).get(jobId) as { kind: string } | undefined;
+    return row?.kind === 'message' ? { inboundId: jobId } : {};
+  };
+  let loop: RunLoop | null = null;
+  const broker = new ApproveBroker({
+    db: deps.db,
+    raiseCard: (jobId, raiseId, raise) => deps.hub.sendCard(jobId, { id: raiseId, ...raise, ...inboundOf(jobId) }),
+    park: (jobId) => {
+      loop?.park(jobId);
+    },
+    holdMs: deps.cardHoldMs,
+  });
+  loop = new RunLoop({
     db: deps.db,
     slots: new RunSlots(deps.maxRuns),
     canStart: (hireId, epoch) => deps.hub.canStart(hireId, epoch),
     prepare: deps.prepare,
+    threadKeyOf: (job) => (job.kind === 'card' ? broker.threadOf(job.id) : null),
     spawn: deps.spawn ?? spawnRun,
     reply: (jobId, text) => deps.hub.sendReply(jobId, text),
     onSignedOut: (_hireId, accountId) => deps.signIn.recordAuthFailure(accountId, now()),
@@ -69,7 +89,11 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       if (!uuid) return log.warn('[Crew] a finished run has no account uuid; its usage is not reported');
       deps.hub.sendUsage(run.job.id, usageRecordFor(run, uuid, deps.usage.get(run.accountId)));
     },
-    onSettled: () => void tick(),
+    onSettled: (jobId) => {
+      broker.release(jobId);
+      guard('ending a run', () => deps.runEnded?.(jobId));
+      void tick();
+    },
     now,
   });
   const changer = new AccountChanger({
@@ -85,9 +109,14 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       log.error(`[Crew] ${what} failed`, err);
     }
   };
-  const tick = () => loop.tick().catch((err) => log.error('[Crew] the run loop failed', err));
+  const runLoop = loop;
+  const tick = () => runLoop.tick().catch((err) => log.error('[Crew] the run loop failed', err));
   const settle = () => guard('settling account changes', () => changer.settle());
   const onEditResult = (frame: EditResultFrame): void => guard('carrying sessions', () => changer.onEditResult(frame));
+  const onCardDecision = (frame: CardDecisionFrame): void =>
+    guard('a card decision', () => {
+      if (broker.decide(frame) === 'job') tick();
+    });
 
   const checkReminders = (): number => {
     let sent = 0;
@@ -116,6 +145,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     ['revoked', settle],
     ['sync-needed', settle],
     ['edit-result', onEditResult],
+    ['card-decision', onCardDecision],
   ];
   for (const [event, fn] of listeners) deps.hub.on(event, fn);
   settle();
@@ -127,16 +157,18 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   checkReminders();
 
   return {
-    loop,
+    loop: runLoop,
     changer,
+    broker,
     interrupt: (hireId) => {
-      loop.interrupt(hireId);
+      runLoop.interrupt(hireId);
     },
     checkReminders,
     stop: () => {
       clearInt(reminderTimer);
       for (const [event, fn] of listeners) deps.hub.off(event, fn);
-      loop.interruptAll();
+      broker.stop();
+      runLoop.interruptAll();
     },
   };
 }

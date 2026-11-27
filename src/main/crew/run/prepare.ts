@@ -13,6 +13,8 @@ import { consumeTaint, isTainted } from '../taint';
 import { runArgs, runEnv } from './env';
 import type { CrewJob, Prepared } from './loop';
 import { runSettingsJson, type SandboxInput } from './sandbox-settings';
+import type { RunServices } from './services';
+import { SocketRootError } from './sockets';
 import { cwdFor, hirePaths, settingsPathFor, underTempDir, type HirePaths } from './scope';
 import { freshReason, freshSessionInput, type Turn } from './sessions';
 
@@ -33,7 +35,8 @@ export interface PrepareDeps {
   /** The role's handbook for CLAUDE.md; skills are restored by the caller's bundle step. */
   handbook(hireId: string): string;
   restoreSkills?(paths: HirePaths): void;
-  mcpServers(paths: HirePaths, job: CrewJob): Record<string, unknown>;
+  /** The run's MCP servers, gateway sockets and shim env; throws when they cannot be set up. */
+  services(job: CrewJob, threadKey: string, runId: string): Promise<RunServices>;
   sandbox(paths: HirePaths, job: CrewJob, configDir: string): Omit<SandboxInput, 'paths' | 'scope' | 'configDir' | 'userData' | 'home'>;
   model?(hireId: string): string | undefined;
   now?(): number;
@@ -77,7 +80,7 @@ function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: 
   })();
 }
 
-export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: string): Promise<Prepared> {
+export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
   const now = deps.now?.() ?? Date.now();
   const ref = hireAccountRef(deps.db, job.hireId);
   const account = ref ? resolveAccountRef(ref, deps.accounts()) : null;
@@ -91,13 +94,21 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   const underTemp = deps.underTemp ?? ((dir: string) => underTempDir(dir, deps.env.TMPDIR));
   if (underTemp(deps.userData) || underTemp(paths.root)) return { hold: HOLD_SETUP };
 
+  let services: RunServices;
+  try {
+    services = await deps.services(job, threadKey, runId);
+  } catch (err) {
+    if (err instanceof SocketRootError) return { hold: HOLD_SETUP };
+    throw err;
+  }
   const cwd = cwdFor(paths, job.scope);
   regenerate(paths, cwd, deps.handbook(job.hireId), deps.restoreSkills);
   const settingsPath = settingsPathFor(paths, job.scope);
-  const sandbox: SandboxInput = { ...deps.sandbox(paths, job, account.configDir), paths, scope: job.scope, configDir: account.configDir, userData: deps.userData, home: deps.home };
+  const base = deps.sandbox(paths, job, account.configDir);
+  const sandbox: SandboxInput = { ...base, sockets: [...base.sockets, ...services.sockets], paths, scope: job.scope, configDir: account.configDir, userData: deps.userData, home: deps.home };
   fs.writeFileSync(settingsPath, runSettingsJson(sandbox), { mode: 0o600 });
   const mcpConfigPath = path.join(paths.run, `mcp-${job.scope}.json`);
-  fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: deps.mcpServers(paths, job) }), { mode: 0o600 });
+  fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: services.mcpServers }), { mode: 0o600 });
 
   const thread = deps.db.prepare(`SELECT session_id, account_id, updated_at FROM crew_thread WHERE hire_id = ? AND thread_key = ?`).get(job.hireId, threadKey) as
     | { session_id: string | null; account_id: string | null; updated_at: string | null }
@@ -126,7 +137,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
     command: deps.claudePath,
     args: runArgs({ sessionId, settingsPath, mcpConfigPath, model: deps.model?.(job.hireId) }),
     cwd,
-    env: runEnv(deps.env, { configDir: account.configDir, ghConfigDir: paths.ghConfig, shellDir: paths.shell, tokenOnFd: token !== null }),
+    env: runEnv(deps.env, { configDir: account.configDir, ghConfigDir: paths.ghConfig, shellDir: paths.shell, tokenOnFd: token !== null, pathFirst: services.pathFirst, extra: services.env }),
     input,
     accountId: account.id,
     sessionId,

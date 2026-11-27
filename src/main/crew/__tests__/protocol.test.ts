@@ -119,8 +119,15 @@ describe('parseHubFrame', () => {
     expect(parseHubFrame('"x"'.padEnd(MAX_FRAME_BYTES + 1, ' '))).toEqual({ ok: false, problem: 'too-large' });
   });
 
-  test('a known type no part of this build reads yet is dropped', () => {
-    expect(parseHubFrame(JSON.stringify({ type: 'card_decision' }))).toEqual({ ok: false, problem: 'unhandled-type', type: 'card_decision' });
+  test('card_decision, token and usage parse only in their shapes', () => {
+    const decision = { type: 'card_decision', id: uuid(1), hireId: HIRE, epoch: 2, raiseId: uuid(2), decision: 'approved', decidedBy: 'p' };
+    expect(parseHubFrame(JSON.stringify(decision)).ok).toBe(true);
+    expect(parseHubFrame(JSON.stringify({ ...decision, decision: 'maybe' }))).toEqual({ ok: false, problem: 'bad-shape', type: 'card_decision' });
+    expect(parseHubFrame(JSON.stringify({ type: 'token', id: uuid(1), token: 't', expiresAt: 5, repos: ['o/r'] })).ok).toBe(true);
+    expect(parseHubFrame(JSON.stringify({ type: 'token', id: uuid(1), token: '', expiresAt: 5, repos: [] })).ok).toBe(false);
+    const usage = { type: 'usage', id: uuid(1), hireId: HIRE, since: 1, inputTokens: 1, outputTokens: 2, cacheCreationTokens: 3, records: 1 };
+    expect(parseHubFrame(JSON.stringify(usage)).ok).toBe(true);
+    expect(parseHubFrame(JSON.stringify({ ...usage, inputTokens: -1 })).ok).toBe(false);
   });
 
   test('renew needs integer epoch-ms hubTime and well-formed leases', () => {
@@ -193,6 +200,10 @@ describe('parseHubFrame', () => {
 });
 
 describe('cutText', () => {
+  test('drops NUL and replaces a lone surrogate, so the reply stays sendable', () => {
+    expect(cutText('a\0b\uD800c\uDC00d\u{1F600}')).toBe('ab\uFFFDc\uFFFDd\u{1F600}');
+  });
+
   test('leaves text at the limit alone', () => {
     const text = 'a'.repeat(MAX_TEXT);
     expect(cutText(text)).toBe(text);

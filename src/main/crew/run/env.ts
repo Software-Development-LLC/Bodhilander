@@ -15,6 +15,10 @@ export interface RunEnvInput {
   shellDir: string;
   /** The Crew token goes on descriptor 3; on the login fallback neither variable is set. */
   tokenOnFd: boolean;
+  /** Put first on PATH: the directory holding the run's `gh` shim. */
+  pathFirst?: string;
+  /** The run's gateway socket and token, for the shim. */
+  extra?: Record<string, string>;
 }
 
 export function runEnv(parent: Record<string, string | undefined>, input: RunEnvInput): Record<string, string> {
@@ -24,6 +28,8 @@ export function runEnv(parent: Record<string, string | undefined>, input: RunEnv
   env.GH_CONFIG_DIR = input.ghConfigDir;
   env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR = '1';
   Object.assign(env, { SHELL: '/bin/zsh', ZDOTDIR: input.shellDir, BASH_ENV: '', ENV: '' });
+  if (input.pathFirst) env.PATH = env.PATH ? `${input.pathFirst}:${env.PATH}` : input.pathFirst;
+  Object.assign(env, input.extra ?? {});
   if (input.tokenOnFd) {
     env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR = String(TOKEN_FD);
     env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1';

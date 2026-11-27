@@ -124,6 +124,23 @@ export const CREW_TABLES_SQL = `
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- A card this machine raised. A decision after the run parked resumes as decision_job_id.
+    CREATE TABLE IF NOT EXISTS crew_card (
+      raise_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      hire_id TEXT NOT NULL,
+      thread_key TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('owner', 'circle')),
+      requested_by TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      tool TEXT DEFAULT NULL,
+      input_hash TEXT DEFAULT NULL,
+      state TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'parked', 'decided', 'used')),
+      decision TEXT DEFAULT NULL,
+      decision_job_id TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS crew_sync_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -148,8 +165,17 @@ export function initializeCrewTables(database: Database.Database): void {
   addColumn('claude_accounts', 'crew_auth_failed_at', 'crew_auth_failed_at TEXT DEFAULT NULL');
   addColumn('claude_accounts', 'crew_reminded', 'crew_reminded TEXT DEFAULT NULL');
 
-  // A job left running by a quit or crash was interrupted, so it gets its attempt back and runs again once a lease is renewed.
-  database
-    .prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE state = 'running'`)
-    .run();
+  // A job left running by a quit or crash was interrupted: one waiting on a card parks, so the decision resumes it; the rest run again.
+  database.transaction(() => {
+    database
+      .prepare(
+        `UPDATE crew_job SET state = 'parked', updated_at = CURRENT_TIMESTAMP
+         WHERE state = 'running' AND id IN (SELECT job_id FROM crew_card WHERE state = 'waiting')`,
+      )
+      .run();
+    database.prepare(`UPDATE crew_card SET state = 'parked' WHERE state = 'waiting'`).run();
+    database
+      .prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE state = 'running'`)
+      .run();
+  })();
 }
