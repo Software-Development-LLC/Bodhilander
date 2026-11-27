@@ -363,7 +363,7 @@ export interface UsageWindow {
 }
 
 /** Where the newest observation in a usage record came from. */
-export type UsageSource = 'poll' | 'statusline';
+export type UsageSource = 'poll' | 'statusline' | 'run';
 
 /** Why an account has no current usage reading. */
 export type UsageUnavailableReason =
