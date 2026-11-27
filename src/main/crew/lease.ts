@@ -77,7 +77,6 @@ export class LeaseClock {
   revokeAll(): string[] {
     const hires = [...this.leases.keys()];
     this.leases.clear();
-    this.wasHeld.clear();
     return hires;
   }
 

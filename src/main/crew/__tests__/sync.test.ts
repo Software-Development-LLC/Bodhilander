@@ -136,6 +136,16 @@ describe('CrewSync applying objects', () => {
     expect(t.rows('SELECT body FROM crew_note')).toEqual([{ body: 'x' }]);
   });
 
+  test('every header on a page is fetched together', () => {
+    const t = setup();
+    const p = t.sync.onConnect(0);
+    const headers = ['n1', 'n2'].map((id, i) => obj({ kind: 'note', objectId: id, seq: i + 1, body: undefined }));
+    expect(t.sync.onPage(page(p.id, headers, 2), 0)?.fetch).toEqual([
+      { kind: 'note', objectId: 'n1' },
+      { kind: 'note', objectId: 'n2' },
+    ]);
+  });
+
   test('a fetch the Hub cannot answer is not asked for again', () => {
     const t = setup();
     const p = t.sync.onConnect(0);

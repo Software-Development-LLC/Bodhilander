@@ -644,3 +644,28 @@ describe('HubClient connection health', () => {
     });
   }
 });
+
+describe('HubClient sync edges', () => {
+  test('resumes while offline send nothing, so the next connection is not taken for dead', () => {
+    const t = setup();
+    t.online();
+    t.sock().drop(1006);
+    for (let i = 0; i < 3; i += 1) t.client.onResume();
+    t.timeouts[0].fn();
+    t.sock().hub({ type: 'challenge', version: 2, nonce: 'n2', hubTime: t.c.w });
+    t.sock().hub({ type: 'welcome', machineId: MACHINE, hubTime: t.c.w, ownerName: 'A', ownerUpn: 'a' });
+    expect(t.sock().terminated).toBe(false);
+    expect(t.client.getStatus()).toBe('online');
+  });
+
+  test('a conflict answered without the current object pulls', () => {
+    const t = setup();
+    t.online();
+    const first = t.sock().sent.find((f) => f.type === 'sync_pull') as { id: string };
+    t.sock().hub({ type: 'sync_page', id: first.id, changes: [], next: 0, more: false });
+    t.client.sync.apply({ kind: 'routine', objectId: 'r1', rev: 1, seq: 1, hash: 'h', deleted: false, body: {} });
+    const id = t.client.sendEdit({ op: 'update', kind: 'routine', objectId: 'r1', fields: {} });
+    t.sock().hub({ type: 'edit_result', id, result: 'conflict', objectId: 'r1' });
+    expect(t.sock().sent.filter((f) => f.type === 'sync_pull')).toHaveLength(2);
+  });
+});

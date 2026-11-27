@@ -216,7 +216,7 @@ export class HubClient extends EventEmitter {
     this.lease.onResume();
     this.heartbeatSentAt.clear();
     this.sweep();
-    if (this.phase === 'open' && this.socket) this.heartbeat();
+    if (this.phase === 'open') this.heartbeat();
   }
 
   canStart(hireId: string, epoch: number): boolean {
@@ -521,10 +521,8 @@ export class HubClient extends EventEmitter {
 
   /** No renew for the Hub's offline window: the connection is gone even if TCP has not said so. */
   private dropDeadSocket(): void {
-    const socket = this.socket;
     log.warn('[Crew] no renew from the Hub; dropping the connection');
-    this.socket = null;
-    socket?.terminate();
+    this.socket?.terminate();
     this.onClose(1006);
   }
 
