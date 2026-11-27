@@ -153,6 +153,7 @@ describe('Crew on Windows, as the main process runs it', () => {
     const repair = crew.setup.repair(false);
     await new Promise((r) => setTimeout(r, 0));
     expect(await crew.windows.gate()).toBe('held:setup');
+    expect(await crew.windows.prepare?.({ id: 'j1', hireId: 'h1' } as never, 'chat:owner', 'run-1')).toEqual({ hold: 'held:setup' });
     expect(calls).toEqual(['-l -v']);
     release();
     await repair;

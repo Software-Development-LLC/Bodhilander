@@ -110,6 +110,7 @@ export class WslRuns {
   constructor(private readonly deps: WslRunDeps) {}
 
   async prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
+    // Counted before the first await, so setup's busy check and this count never interleave.
     this.preparing.add(job.id);
     try {
       return await this.prepareRun(job, threadKey, runId);

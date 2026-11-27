@@ -293,7 +293,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
           return HOLD_SETUP;
         }
       },
-      prepare: (job, threadKey, runId) => runs.prepare(job, threadKey, runId),
+      prepare: (job, threadKey, runId) => (setup.busy ? Promise.resolve({ hold: HOLD_SETUP }) : runs.prepare(job, threadKey, runId)),
     },
     start,
     afterRepair,
