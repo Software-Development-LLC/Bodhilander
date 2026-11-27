@@ -135,4 +135,26 @@ describe('approve broker', () => {
   test('the grant is keyed to the exact input', () => {
     expect(inputHash('Bash', { command: 'a' })).not.toBe(inputHash('Bash', { command: 'b' }));
   });
+
+  test('a refused raise answers the waiting call at once and removes its card', async () => {
+    const t = setup();
+    const answer = t.broker.ask(RUN, ASK);
+    expect(t.broker.waitingFor(RUN.jobId)).toBe(true);
+    expect(t.broker.refused(uuid(101))).toBe(true);
+    expect(await answer).toEqual({ behavior: 'deny', message: UNRAISED_MESSAGE });
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_card`).get()).toEqual({ n: 0 });
+    expect(t.broker.waitingFor(RUN.jobId)).toBe(false);
+    expect(t.broker.refused(uuid(101))).toBe(false);
+  });
+
+  test('a decision for a card whose job the fence dropped makes no card job', async () => {
+    const t = setup();
+    const answer = t.broker.ask(RUN, ASK);
+    t.timers[0]();
+    await answer;
+    t.raw.query(`UPDATE crew_job SET state = 'dropped' WHERE id = ?`).run(RUN.jobId);
+    expect(t.broker.decide(t.decision(uuid(101), 'approved'))).toBeNull();
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_job WHERE kind = 'card'`).get()).toEqual({ n: 0 });
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'card-decision-fenced'`).get()).toEqual({ n: 1 });
+  });
 });

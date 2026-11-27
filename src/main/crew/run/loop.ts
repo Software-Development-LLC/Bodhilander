@@ -78,6 +78,8 @@ export interface RunLoopDeps {
   onFinished?(run: FinishedRun): void;
   onUsageObserved?(accountId: string, observation: UsageObservation): void;
   onSettled?(jobId: string, outcome: RunOutcome): void;
+  /** A run held on an undecided card parks on an interrupt instead of being re-queued. */
+  waitingOnCard?(jobId: string): boolean;
   now?(): number;
   newId?(): string;
 }
@@ -113,6 +115,7 @@ export class RunLoop {
   private readonly active = new Map<string, Active>();
   private readonly holds = new Map<string, string>();
   private ticking: Promise<number> | null = null;
+  private again = false;
   private readonly now: () => number;
   private readonly newId: () => string;
 
@@ -125,12 +128,28 @@ export class RunLoop {
     return [...this.active.keys()];
   }
 
-  /** Start what can start now. Calls made while a tick is in progress share it. */
+  /** Start what can start now. A call made while a tick runs makes it run once more when it ends. */
   tick(): Promise<number> {
-    this.ticking ??= this.startQueued().finally(() => {
+    if (this.ticking) {
+      this.again = true;
+      return this.ticking;
+    }
+    this.ticking = this.drain().finally(() => {
       this.ticking = null;
     });
     return this.ticking;
+  }
+
+  /** Each job is tried once per tick, and a held hire is not tried again until the next one. */
+  private async drain(): Promise<number> {
+    const tried = new Set<string>();
+    const heldHires = new Set<string>();
+    let started = 0;
+    do {
+      this.again = false;
+      started += await this.startQueued(tried, heldHires);
+    } while (this.again);
+    return started;
   }
 
   private queued(): CrewJob[] {
@@ -145,26 +164,31 @@ export class RunLoop {
     }));
   }
 
-  private async startQueued(): Promise<number> {
-    const jobs = this.queued().filter((j) => !this.active.has(j.hireId) && this.deps.canStart(j.hireId, j.epoch));
-    const byId = new Map(jobs.map((j) => [j.id, j]));
-    const picked = this.deps.slots.pick(jobs.map((j) => ({ id: j.id, hireId: j.hireId, kind: slotKind(j) })));
+  private async startQueued(tried: Set<string>, heldHires: Set<string>): Promise<number> {
     let started = 0;
-    for (const { id } of picked) {
-      const job = byId.get(id);
-      if (job && (await this.start(job))) started += 1;
+    for (;;) {
+      const jobs = this.queued().filter((j) => !tried.has(j.id) && !heldHires.has(j.hireId) && !this.active.has(j.hireId) && this.deps.canStart(j.hireId, j.epoch));
+      const byId = new Map(jobs.map((j) => [j.id, j]));
+      const picked = this.deps.slots.pick(jobs.map((j) => ({ id: j.id, hireId: j.hireId, kind: slotKind(j) })));
+      if (picked.length === 0) return started;
+      for (const { id } of picked) {
+        const job = byId.get(id) as CrewJob;
+        tried.add(job.id);
+        const outcome = await this.start(job);
+        if (outcome === 'started') started += 1;
+        if (outcome === 'held') heldHires.add(job.hireId);
+      }
     }
-    return started;
   }
 
-  private async start(job: CrewJob): Promise<boolean> {
+  private async start(job: CrewJob): Promise<'started' | 'held' | 'skipped'> {
     const slot = this.deps.slots.tryAcquire(job.hireId, slotKind(job));
-    if (!slot) return false;
+    if (!slot) return 'skipped';
     const db = this.deps.db;
     const marked = db.prepare(`UPDATE crew_job SET state = 'running', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state = 'queued'`).run(job.id);
     if (marked.changes === 0) {
       slot.release();
-      return false;
+      return 'skipped';
     }
     const run: Active = {
       runId: this.newId(), job: { ...job, attempts: job.attempts + 1 }, threadKey: this.deps.threadKeyOf?.(job) ?? threadKeyFor(job), release: () => slot.release(), startedAt: this.now(),
@@ -179,13 +203,13 @@ export class RunLoop {
       log.warn('[Crew] could not prepare a run', err);
       record();
       this.settle(run);
-      return true;
+      return 'started';
     }
     if ('hold' in prepared) {
       this.finishAs(run, 'held', { requeue: true });
       if (this.holds.get(job.hireId) !== prepared.hold) writeAudit(db, job.hireId, 'run-held', { jobId: job.id, hold: prepared.hold });
       this.holds.set(job.hireId, prepared.hold);
-      return false;
+      return 'held';
     }
     this.holds.delete(job.hireId);
     record();
@@ -193,7 +217,7 @@ export class RunLoop {
     db.prepare(`UPDATE crew_run SET account_id = ?, session_id = ? WHERE id = ?`).run(prepared.accountId, prepared.sessionId, run.runId);
     if (run.interrupted) {
       this.settle(run);
-      return true;
+      return 'started';
     }
     try {
       const child = this.deps.spawn(prepared);
@@ -206,7 +230,7 @@ export class RunLoop {
       log.warn('[Crew] could not start a run', err);
       this.settle(run);
     }
-    return true;
+    return 'started';
   }
 
   /** Crew's own flag is set before the signal, so the exit is read as interrupted whatever its code. */
@@ -214,6 +238,7 @@ export class RunLoop {
     const run = this.active.get(hireId);
     if (!run || run.settled) return false;
     run.interrupted = true;
+    if (this.deps.waitingOnCard?.(run.job.id)) run.parked = true;
     try {
       run.child?.kill('SIGINT');
     } catch (err) {
@@ -261,11 +286,11 @@ export class RunLoop {
     if (run.settled) return;
     const result = run.result;
     const resultText = typeof result?.result === 'string' ? result.result : '';
-    if (run.interrupted) return this.finishAs(run, 'interrupted', { requeue: true });
     if (run.parked) {
       if (result && run.prepared) this.keepSession(run, result);
       return this.finishAs(run, 'parked', { park: true });
     }
+    if (run.interrupted) return this.finishAs(run, 'interrupted', { requeue: true });
     if (run.authFailed || (result?.is_error === true && isAuthFailure(resultText))) {
       this.finishAs(run, 'signed-out', { requeue: true });
       if (run.prepared) this.deps.onSignedOut(run.job.hireId, run.prepared.accountId);

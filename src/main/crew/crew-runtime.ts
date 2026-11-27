@@ -89,11 +89,12 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       if (!uuid) return log.warn('[Crew] a finished run has no account uuid; its usage is not reported');
       deps.hub.sendUsage(run.job.id, usageRecordFor(run, uuid, deps.usage.get(run.accountId)));
     },
-    onSettled: (jobId) => {
+    onSettled: (jobId, outcome) => {
       broker.release(jobId);
       guard('ending a run', () => deps.runEnded?.(jobId));
-      void tick();
+      if (outcome !== 'held') void tick();
     },
+    waitingOnCard: (jobId) => broker.waitingFor(jobId),
     now,
   });
   const changer = new AccountChanger({
@@ -113,10 +114,11 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const tick = () => runLoop.tick().catch((err) => log.error('[Crew] the run loop failed', err));
   const settle = () => guard('settling account changes', () => changer.settle());
   const onEditResult = (frame: EditResultFrame): void => guard('carrying sessions', () => changer.onEditResult(frame));
-  const onCardDecision = (frame: CardDecisionFrame): void =>
-    guard('a card decision', () => {
-      if (broker.decide(frame) === 'job') tick();
-    });
+  /** Not guarded: a decision that throws reaches the Hub client, which leaves it unacked to come again. */
+  const onCardDecision = (frame: CardDecisionFrame): void => {
+    if (broker.decide(frame) === 'job') void tick();
+  };
+  const onCardRefused = (raiseId: string): void => guard('a refused card', () => broker.refused(raiseId));
 
   const checkReminders = (): number => {
     let sent = 0;
@@ -146,6 +148,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     ['sync-needed', settle],
     ['edit-result', onEditResult],
     ['card-decision', onCardDecision],
+    ['card-refused', onCardRefused],
   ];
   for (const [event, fn] of listeners) deps.hub.on(event, fn);
   settle();

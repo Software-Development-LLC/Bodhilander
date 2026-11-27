@@ -172,6 +172,11 @@ export class ApproveBroker {
       writeAudit(db, frame.hireId, 'card-decision-ignored', { raiseId: frame.raiseId, known: !!card });
       return null;
     }
+    const job = db.prepare(`SELECT state FROM crew_job WHERE id = ?`).get(card.job_id) as { state: string } | undefined;
+    if (job?.state === 'dropped') {
+      writeAudit(db, frame.hireId, 'card-decision-fenced', { raiseId: frame.raiseId, jobId: card.job_id });
+      return null;
+    }
     const waiter = this.waiting.get(card.raise_id);
     if (waiter && card.state === 'waiting') {
       db.prepare(`UPDATE crew_card SET state = 'used', decision = ? WHERE raise_id = ?`).run(frame.decision, card.raise_id);
@@ -186,6 +191,24 @@ export class ApproveBroker {
       db.prepare(`UPDATE crew_job SET state = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state = 'parked'`).run(card.job_id);
     })();
     return 'job';
+  }
+
+  /** The Hub refused the raise: the waiting call is answered now rather than after the hold. */
+  refused(raiseId: string): boolean {
+    const card = this.deps.db.prepare(`SELECT hire_id FROM crew_card WHERE raise_id = ? AND state IN ('waiting', 'parked')`).get(raiseId) as
+      | { hire_id: string }
+      | undefined;
+    if (!card) return false;
+    this.deps.db.prepare(`DELETE FROM crew_card WHERE raise_id = ?`).run(raiseId);
+    writeAudit(this.deps.db, card.hire_id, 'card-refused', { raiseId });
+    this.waiting.get(raiseId)?.settle({ behavior: 'deny', message: UNRAISED_MESSAGE });
+    return true;
+  }
+
+  /** Whether the job's run is held on a card right now. */
+  waitingFor(jobId: string): boolean {
+    const row = this.deps.db.prepare(`SELECT COUNT(*) AS n FROM crew_card WHERE job_id = ? AND state = 'waiting'`).get(jobId) as { n: number };
+    return row.n > 0;
   }
 
   /** The thread a card job resumes: the one its parked job ran on. */

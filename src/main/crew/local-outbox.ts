@@ -206,7 +206,7 @@ export class LocalOutbox {
   }
 
   /** A refusal is final. Returns null when no item has that id. */
-  onRefused(id: string, reason: string): { action: RefusalAction; hireId: string | null; jobId: string | null } | null {
+  onRefused(id: string, reason: string): { action: RefusalAction; hireId: string | null; jobId: string | null; frameType: string } | null {
     const row = this.db.prepare('SELECT * FROM crew_outbox_local WHERE id = ?').get(id) as Row | undefined;
     if (!row) return null;
     const sentAt = this.sentIndex(id);
@@ -224,7 +224,7 @@ export class LocalOutbox {
         this.db.prepare(`UPDATE crew_job SET state = 'dead', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(row.job_id);
       }
     })();
-    return { action, hireId: row.hire_id, jobId: row.job_id };
+    return { action, hireId: row.hire_id, jobId: row.job_id, frameType: row.frame_type };
   }
 
   onConnectionClosed(): void {

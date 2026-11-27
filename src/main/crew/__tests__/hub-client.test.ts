@@ -884,4 +884,64 @@ describe('HubClient cards and tokens', () => {
     expect(sent.map((f) => [f.type, f.hireId, f.epoch])).toEqual([['card_raise', HIRE, 1], ['token_request', HIRE, 1]]);
     expect(t.client.sendCard(uuid(99), { id: uuid(22), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 's' } })).toBe(false);
   });
+
+  test('a card_decision is acked only after it was handled; a handler that throws leaves it unacked', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    const decision = { type: 'card_decision', id: uuid(7), hireId: HIRE, epoch: 1, raiseId: uuid(8), decision: 'approved', decidedBy: 'p' };
+    const ackedWhenHandled: boolean[] = [];
+    const onDecision = () => {
+      ackedWhenHandled.push(t.sock().sent.some((f) => f.type === 'ack' && f.id === uuid(7)));
+      throw new Error('boom');
+    };
+    t.client.on('card-decision', onDecision);
+    t.sock().hub(decision);
+    expect(t.sock().sent.some((f) => f.type === 'ack' && f.id === uuid(7))).toBe(false);
+    t.client.off('card-decision', onDecision);
+    t.client.on('card-decision', () => ackedWhenHandled.push(t.sock().sent.some((f) => f.type === 'ack' && f.id === uuid(7))));
+    t.sock().hub(decision);
+    expect(ackedWhenHandled).toEqual([false, false]);
+    expect(t.sock().sent.filter((f) => f.type === 'ack' && f.id === uuid(7))).toHaveLength(1);
+  });
+
+  test('a card_decision under an older epoch is acked and dropped; a newer one fences the older jobs first', () => {
+    const t = setup();
+    const seen: unknown[] = [];
+    t.client.on('card-decision', (f) => seen.push(f));
+    t.online();
+    t.sock().hub(deliver(1, 2));
+    t.sock().hub({ type: 'card_decision', id: uuid(7), hireId: HIRE, epoch: 1, raiseId: uuid(8), decision: 'approved', decidedBy: 'p' });
+    expect(seen).toEqual([]);
+    expect(t.sock().sent.some((f) => f.type === 'ack' && f.id === uuid(7))).toBe(true);
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'card-decision-stale'`).get()).toEqual({ n: 1 });
+    t.sock().hub({ type: 'card_decision', id: uuid(9), hireId: HIRE, epoch: 3, raiseId: uuid(8), decision: 'approved', decidedBy: 'p' });
+    expect(seen).toHaveLength(1);
+    expect(t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(uuid(1))).toEqual({ state: 'dropped' });
+  });
+
+  test('a token request is sent directly, never queued: refused at once offline, and a refusal reaches its caller', () => {
+    const t = setup();
+    const refused: unknown[] = [];
+    t.client.on('refused', (f) => refused.push(f));
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    expect(t.client.sendTokenRequest(uuid(1), uuid(21), PERSON, ['o/r'])).toBe(true);
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local WHERE frame_type = 'token_request'`).get()).toEqual({ n: 0 });
+    t.sock().hub({ type: 'refused', id: uuid(21), reason: 'scope' });
+    expect(refused).toEqual([{ type: 'refused', id: uuid(21), reason: 'scope' }]);
+    t.sock().drop(1006);
+    expect(t.client.sendTokenRequest(uuid(1), uuid(22), PERSON, ['o/r'])).toBe(false);
+  });
+
+  test('a refused card raise is handed on as card-refused with its raise id', () => {
+    const t = setup();
+    const cards: unknown[] = [];
+    t.client.on('card-refused', (id) => cards.push(id));
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    expect(t.client.sendCard(uuid(1), { id: uuid(20), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 's' } })).toBe(true);
+    t.sock().hub({ type: 'refused', id: uuid(20), reason: 'scope' });
+    expect(cards).toEqual([uuid(20)]);
+  });
 });

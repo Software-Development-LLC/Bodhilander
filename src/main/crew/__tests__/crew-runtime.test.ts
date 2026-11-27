@@ -175,4 +175,41 @@ describe('crew runtime cards', () => {
     const run = t.raw.query(`SELECT thread_key FROM crew_run WHERE job_id = ?`).get(uuid(2)) as { thread_key: string };
     expect(run.thread_key).toBe('chat:owner');
   });
+
+  test('a card the Hub refused answers the waiting call at once', async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job', { id: uuid(1) });
+    await flush();
+    const asked = t.rt.broker.ask({ jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', scope: 'owner', requestedBy: PERSON }, { tool_name: 'Bash', input: { command: 'x' } });
+    const [, card] = t.hub.cards[0];
+    t.hub.emit('card-refused', card.id);
+    expect(await asked).toMatchObject({ behavior: 'deny' });
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_card`).get()).toEqual({ n: 0 });
+  });
+
+  test('an interrupt while a run waits on a card parks the job; only the decision runs it again', async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job', { id: uuid(1) });
+    await flush();
+    void t.rt.broker.ask({ jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', scope: 'owner', requestedBy: PERSON }, { tool_name: 'Bash', input: { command: 'x' } });
+    const [, card] = t.hub.cards[0];
+    t.rt.interrupt(HIRE);
+    t.children[0].finish();
+    await flush();
+    expect(t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(uuid(1))).toEqual({ state: 'parked' });
+    t.hub.emit('renewed', [{ hireId: HIRE, epoch: 1 }]);
+    await flush();
+    expect(t.children).toHaveLength(1);
+    t.hub.emit('card-decision', { type: 'card_decision', id: uuid(2), hireId: HIRE, epoch: 1, raiseId: card.id, decision: 'approved', decidedBy: PERSON });
+    await flush();
+    expect(t.children).toHaveLength(2);
+  });
+
+  test('a card decision that cannot be handled throws to the Hub client, which then does not ack it', () => {
+    const t = setup();
+    t.raw.exec('DROP TABLE crew_card');
+    expect(() => t.hub.emit('card-decision', { type: 'card_decision', id: uuid(2), hireId: HIRE, epoch: 1, raiseId: uuid(3), decision: 'approved', decidedBy: PERSON })).toThrow();
+  });
 });

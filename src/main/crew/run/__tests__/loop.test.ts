@@ -39,7 +39,10 @@ class FakeChild implements RunChild {
   }
 }
 
-function setup(opts: { maxRuns?: number; leased?: boolean; prepare?: (job: CrewJob) => Promise<Prepared>; replyThrows?: string; finishedThrows?: boolean } = {}) {
+function setup(opts: {
+  maxRuns?: number; leased?: boolean; prepare?: (job: CrewJob) => Promise<Prepared>; replyThrows?: string; finishedThrows?: boolean;
+  waitingOnCard?: (jobId: string) => boolean; onSettled?: (jobId: string, outcome: string) => void;
+} = {}) {
   const { raw, db } = crewDb();
   const children: FakeChild[] = [];
   const replies: [string, string][] = [];
@@ -72,6 +75,8 @@ function setup(opts: { maxRuns?: number; leased?: boolean; prepare?: (job: CrewJ
       finished.push(run);
     },
     onUsageObserved: (accountId, obs) => observed.push([accountId, obs]),
+    waitingOnCard: opts.waitingOnCard,
+    onSettled: (jobId, outcome) => opts.onSettled?.(jobId, outcome),
     now: () => clock,
     newId: () => uuid(500 + ++ids),
   });
@@ -250,5 +255,60 @@ describe('parking', () => {
   test('park names a job that is not running: nothing changes', async () => {
     const t = setup();
     expect(t.loop.park(uuid(9))).toBe(false);
+  });
+
+  test('an interrupt while the run waits on a card parks it, so the decision resumes it and nothing re-runs it', async () => {
+    const t = setup({ waitingOnCard: (jobId) => jobId === uuid(1) });
+    t.job(1);
+    await t.loop.tick();
+    expect(t.loop.interrupt(HIRE)).toBe(true);
+    expect(t.children[0].signals).toEqual(['SIGINT']);
+    t.children[0].exit();
+    expect(t.state(1).state).toBe('parked');
+    expect(t.lastRun().outcome).toBe('parked');
+    expect(await t.loop.tick()).toBe(0);
+  });
+
+  test('a held hire frees its slot for the next job in the same tick', async () => {
+    const t = setup({ maxRuns: 1, prepare: async (job) => (job.hireId === HIRE ? { hold: 'held:signed-out' } : { command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a', sessionId: null, token: null }) });
+    t.job(1);
+    t.job(2, HIRE_B);
+    expect(await t.loop.tick()).toBe(1);
+    expect(t.state(2).state).toBe('running');
+  });
+
+  test('a tick asked for while one runs runs again after it, so a slot freed meanwhile is not left idle', async () => {
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => (release = r));
+    const t = setup({
+      maxRuns: 2,
+      prepare: async (job) => {
+        if (job.id === uuid(2)) await gate;
+        return { command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a', sessionId: null, token: null };
+      },
+    });
+    t.job(1);
+    await t.loop.tick();
+    t.job(2, HIRE_B);
+    t.job(3, uuid(77));
+    const first = t.loop.tick();
+    await Promise.resolve();
+    t.children[0].finish();
+    void t.loop.tick();
+    release!();
+    expect(await first).toBe(2);
+    expect(t.state(3).state).toBe('running');
+  });
+
+  test('a settle that asks for a tick on every outcome does not spin on a held job', async () => {
+    let prepares = 0;
+    let t: ReturnType<typeof setup>;
+    t = setup({
+      prepare: async () => (prepares++, { hold: 'held:setup' }),
+      onSettled: () => void t.loop.tick(),
+    });
+    t.job(1);
+    await t.loop.tick();
+    expect(prepares).toBe(1);
   });
 });

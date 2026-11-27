@@ -20,6 +20,7 @@ import {
   authMessage,
   type AuditFrame,
   type AuthFrame,
+  type CardDecisionFrame,
   type CardRaiseFrame,
   type ChallengeFrame,
   type DeliverFrame,
@@ -389,9 +390,7 @@ export class HubClient extends EventEmitter {
         this.emit('artifact', frame);
         return;
       case 'card_decision':
-        this.send({ type: 'ack', id: frame.id });
-        this.emit('card-decision', frame);
-        return;
+        return this.onCardDecision(frame);
       case 'token':
         this.emit('token', frame);
         return;
@@ -484,6 +483,19 @@ export class HubClient extends EventEmitter {
     if (outcome !== 'duplicate') this.emit('job', { id: frame.id, hireId: frame.hireId, outcome });
   }
 
+  /** Fenced like a delivery, and acked only once handled, so a decision that failed comes again. */
+  private onCardDecision(frame: CardDecisionFrame): void {
+    const before = this.fence.known(frame.hireId);
+    if (before !== null && frame.epoch < before) {
+      this.audit('card-decision-stale', { hireId: frame.hireId, raiseId: frame.raiseId, epoch: frame.epoch, known: before });
+      this.send({ type: 'ack', id: frame.id });
+      return;
+    }
+    if (this.fence.observe(frame.hireId, frame.epoch)) this.onNewerEpoch(frame.hireId, frame.epoch, before);
+    this.emit('card-decision', frame);
+    this.send({ type: 'ack', id: frame.id });
+  }
+
   /** The fence has already dropped the older jobs; a run for one of them must not finish. */
   private onNewerEpoch(hireId: string, epoch: number, before: number | null): void {
     if (before !== null) this.deps.interruptRun(hireId);
@@ -513,6 +525,7 @@ export class HubClient extends EventEmitter {
       this.emit('refused', frame);
       return;
     }
+    if (result.frameType === 'card_raise') this.emit('card-refused', frame.id);
     if (result.action === 'sync' && !this.syncRequested) {
       this.syncRequested = true;
       this.sendPull(this.sync.request(this.clocks.wall()));
@@ -577,12 +590,16 @@ export class HubClient extends EventEmitter {
     return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
   }
 
-  /** Ask for a read token for a job's requester; the answer arrives as a `token` event with this id. */
+  /**
+   * Ask for a read token for a job's requester; the answer arrives as a `token` or `refused` event with this id.
+   * Sent only on an open connection and never queued: nobody is waiting for a token minted after a reconnect.
+   */
   sendTokenRequest(jobId: string, id: string, requestedBy: string, repos: string[]): boolean {
     const stamp = this.fence.stampFor(jobId);
-    if (!stamp) return false;
+    if (!stamp || this.phase !== 'open') return false;
     const frame: TokenRequestFrame = { type: 'token_request', id, hireId: stamp.hireId, epoch: stamp.epoch, requestedBy, repos };
-    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+    this.send(frame);
+    return true;
   }
 
   /** Ship a local audit entry; one about a hire carries its newest known epoch. */
