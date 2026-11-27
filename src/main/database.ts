@@ -3,6 +3,7 @@ import { RUN_TABLES_SQL } from './run-tables-sql';
 import * as path from 'path';
 import log from 'electron-log';
 import { RELAY_SHARING_SCHEMA } from './api/relay/grant-sql';
+import { initializeCrewTables } from './crew/crew-tables-sql';
 
 let db: Database.Database | null = null;
 export function getDatabase(): Database.Database {
@@ -25,6 +26,7 @@ export function getDatabase(): Database.Database {
   initializeTables(db);
   initializeArenaTables(db);
   initializeRunTables(db);
+  initializeCrewTables(db);
   clearCooldownsFromOutputScanning(db);
 
   // Reclaim for the removed code-indexing and memory features. Each drop

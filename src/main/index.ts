@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
+import { startCrewHub } from './crew/hub-service';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1743,6 +1744,11 @@ app.whenReady().then(() => {
     // A loop that fails to start must not take the app down with it: the app
     // is a session manager first, and the engine ships behind it.
     log.error('[Main] Failed to start the run loop:', error);
+  }
+  try {
+    startCrewHub();
+  } catch (error) {
+    log.error('[Main] Failed to start Crew:', error);
   }
 }).catch((error) => {
   log.error('[Main] Failed to initialize app:', error);

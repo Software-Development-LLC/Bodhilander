@@ -40,3 +40,34 @@ export function getWindowBounds(): WindowBounds | null {
 export function setWindowBounds(bounds: WindowBounds): void {
   setPreference('windowBounds', JSON.stringify(bounds));
 }
+
+export interface CrewAccountCap {
+  fiveHourPct: number;
+  sevenDayPct: number;
+}
+
+export const DEFAULT_CREW_ACCOUNT_CAP: CrewAccountCap = { fiveHourPct: 90, sevenDayPct: 90 };
+
+const crewAccountCapKey = (accountId: string): string => `crew.accountCap.${accountId}`;
+
+const isPct = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
+
+/** Above either reported window's cap, no new Crew run starts on the account. */
+export function getCrewAccountCap(accountId: string): CrewAccountCap {
+  const value = getPreference(crewAccountCapKey(accountId));
+  if (!value) return { ...DEFAULT_CREW_ACCOUNT_CAP };
+  try {
+    const parsed = JSON.parse(value) as Partial<CrewAccountCap>;
+    return {
+      fiveHourPct: isPct(parsed.fiveHourPct) ? parsed.fiveHourPct : DEFAULT_CREW_ACCOUNT_CAP.fiveHourPct,
+      sevenDayPct: isPct(parsed.sevenDayPct) ? parsed.sevenDayPct : DEFAULT_CREW_ACCOUNT_CAP.sevenDayPct,
+    };
+  } catch {
+    return { ...DEFAULT_CREW_ACCOUNT_CAP };
+  }
+}
+
+export function setCrewAccountCap(accountId: string, cap: CrewAccountCap): void {
+  if (!isPct(cap.fiveHourPct) || !isPct(cap.sevenDayPct)) throw new Error('a Crew cap is a percent from 0 to 100');
+  setPreference(crewAccountCapKey(accountId), JSON.stringify(cap));
+}

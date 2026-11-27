@@ -83,6 +83,7 @@ describe('resolveAccountIdentity', () => {
     expect(resolveAccountIdentity(configDir)).toEqual({
       loggedIn: true,
       email: 'will@acme.test',
+      accountUuid: '11111111-2222-3333-4444-555555555555',
     });
   });
 
@@ -91,12 +92,13 @@ describe('resolveAccountIdentity', () => {
     expect(resolveAccountIdentity(configDir)).toEqual({
       loggedIn: true,
       email: 'will@linux.test',
+      accountUuid: null,
     });
   });
 
   test('a token file with no address still proves the login', () => {
     write('.credentials.json', { claudeAiOauth: { accessToken: 'not-a-real-token' } });
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null, accountUuid: null });
   });
 
   test('the older auth.json name is honoured too', () => {
@@ -104,32 +106,34 @@ describe('resolveAccountIdentity', () => {
     expect(resolveAccountIdentity(configDir)).toEqual({
       loggedIn: true,
       email: 'will@old.test',
+      accountUuid: null,
     });
   });
 
   test('a profile with a uuid but no address is a login, not an anonymous dir', () => {
     write('.claude.json', { oauthAccount: { accountUuid: 'u1', organizationName: 'Acme' } });
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null, accountUuid: 'u1' });
   });
 
   test('a started-but-never-logged-in dir is logged out', () => {
     writeFreshLayout();
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null, accountUuid: null });
   });
 
   test('an empty config dir is logged out', () => {
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null, accountUuid: null });
   });
 
   test('a dir that does not exist is logged out rather than throwing', () => {
     expect(resolveAccountIdentity(path.join(configDir, 'nope'))).toEqual({
       loggedIn: false,
       email: null,
+      accountUuid: null,
     });
   });
 
   test('a config dir the row never recorded is logged out', () => {
-    expect(resolveAccountIdentity('')).toEqual({ loggedIn: false, email: null });
+    expect(resolveAccountIdentity('')).toEqual({ loggedIn: false, email: null, accountUuid: null });
   });
 
   test('a truncated .claude.json falls through to the token file beside it', () => {
@@ -138,12 +142,13 @@ describe('resolveAccountIdentity', () => {
     expect(resolveAccountIdentity(configDir)).toEqual({
       loggedIn: true,
       email: 'will@linux.test',
+      accountUuid: null,
     });
   });
 
   test('a truncated token file still counts, since only writing it creates it', () => {
     fs.writeFileSync(path.join(configDir, '.credentials.json'), '{"claudeAiOau');
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null, accountUuid: null });
   });
 
   // Claude Code rewrites .claude.json about once a minute. On the macOS layout
@@ -162,17 +167,17 @@ describe('resolveAccountIdentity', () => {
 
   test('a file holding bare JSON null is no login, not an unreadable one', () => {
     fs.writeFileSync(path.join(configDir, '.claude.json'), 'null');
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null, accountUuid: null });
   });
 
   test('an oauthAccount of the wrong shape is not mistaken for a profile', () => {
     write('.claude.json', { oauthAccount: 'will@acme.test' });
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: false, email: null, accountUuid: null });
   });
 
   test('a blank address is as unidentified as a missing one', () => {
     write('.claude.json', { oauthAccount: { accountUuid: 'u1', emailAddress: '  ' } });
-    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null });
+    expect(resolveAccountIdentity(configDir)).toEqual({ loggedIn: true, email: null, accountUuid: 'u1' });
   });
 
   test('an address is trimmed, so the chip spends its one line on the address', () => {
