@@ -10,7 +10,7 @@ import log from 'electron-log';
 import { resolveAccountIdentity } from '../account-identity';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
-import { getCrewAccountCap } from '../repositories/preferences';
+import { getCrewAccountCap, getPreference } from '../repositories/preferences';
 import { claudePath, ghPath } from '../run-engine/machine-config';
 import { getUsage, setUsage } from '../usage-store';
 import { CrewSignIn, type Reminder } from './crew-token';
@@ -18,7 +18,7 @@ import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
 import { GithubGateway, runGh } from './gateway/github-gateway';
 import { handbookFor, pinnedSkills, restoreSkills } from './handbook';
 import { Holds, machineTimeZone } from './holds';
-import type { HubClient } from './hub-client';
+import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
 import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
@@ -185,6 +185,17 @@ function attach(hub: HubClient): CrewRuntime {
       } catch (err) {
         log.warn('[Crew] could not show a sign-in reminder', err);
       }
+    },
+    schedule: {
+      hub,
+      machineId: () => getPreference(MACHINE_ID_PREF),
+      tellOwner: (text) => {
+        try {
+          new Notification({ title: 'Bodhi Crew', body: text }).show();
+        } catch (err) {
+          log.warn('[Crew] could not tell the owner about routines', err);
+        }
+      },
     },
   });
   const onToken = (frame: TokenFrame) => gateway?.onToken(frame);

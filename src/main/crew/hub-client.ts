@@ -36,6 +36,7 @@ import {
   type MachineFrame,
   type RefusedFrame,
   type RenewFrame,
+  type RoutineFiredFrame,
   type ReplyFrame,
   type SyncPageFrame,
   type SyncPullFrame,
@@ -614,6 +615,18 @@ export class HubClient extends EventEmitter {
     const queued = this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
     if (queued) recordCardRaise(this.deps.db, frame, this.clocks.wall());
     return queued;
+  }
+
+  /** A routine's job was queued: the Hub moves the routine's lastFired to dueAt and lastRun to startedAt. */
+  sendRoutineFired(jobId: string, routineId: string, dueAt: number, startedAt: number): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: RoutineFiredFrame = { type: 'routine_fired', id: derivedUuid(`routine-fired:${jobId}`), hireId: stamp.hireId, epoch: stamp.epoch, routineId, dueAt, startedAt };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  knownEpoch(hireId: string): number | null {
+    return this.fence.known(hireId);
   }
 
   /** Queue a run's send through the outbox, stamped with its job's epoch. False when fenced or gone. */

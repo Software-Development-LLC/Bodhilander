@@ -16,6 +16,7 @@ import type { UsageInput } from './hub-client';
 import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame } from './protocol';
 import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
 import { RunSlots } from './run/slots';
+import { RoutineScheduler, SCHEDULE_TICK_MS, type SchedulerHub } from './schedule/scheduler';
 import type { EditInput } from './sync';
 import { mergeRunObservation, usageRecordFor } from './usage-report';
 
@@ -52,6 +53,8 @@ export interface CrewRuntimeDeps {
   now?(): number;
   setInterval?(fn: () => void, ms: number): unknown;
   clearInterval?(handle: unknown): void;
+  /** Routines fire only where this is given: the Hub client, this machine's id, and a way to tell the owner. */
+  schedule?: { hub: SchedulerHub; machineId(): string | null; tellOwner(text: string): void };
 }
 
 export interface CrewRuntime {
@@ -62,6 +65,7 @@ export interface CrewRuntime {
   /** Interrupts the hire's run and resolves once it has exited, killing it after the grace period. */
   stopHire(hireId: string, graceMs?: number): Promise<void>;
   checkReminders(): number;
+  scheduler: RoutineScheduler | null;
   stop(): void;
 }
 
@@ -176,10 +180,17 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     ['card-decision', onCardDecision],
     ['card-refused', onCardRefused],
   ];
-  for (const [event, fn] of listeners) deps.hub.on(event, fn);
-  settle();
   const setInt = deps.setInterval ?? ((fn: () => void, ms: number) => setInterval(fn, ms));
   const clearInt = deps.clearInterval ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
+  const schedule = deps.schedule;
+  const scheduler = schedule
+    ? new RoutineScheduler({ db: deps.db, hub: schedule.hub, machineId: schedule.machineId, tellOwner: schedule.tellOwner, queued: () => void tick(), now })
+    : null;
+  const fireRoutines = () => guard('firing routines', () => scheduler?.tick());
+  if (scheduler) listeners.push(['renewed', fireRoutines]);
+  const scheduleTimer = scheduler ? setInt(fireRoutines, SCHEDULE_TICK_MS) : null;
+  for (const [event, fn] of listeners) deps.hub.on(event, fn);
+  settle();
   const reminderTimer = setInt(() => {
     checkReminders();
   }, REMINDER_CHECK_MS);
@@ -199,8 +210,10 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       await within(runLoop.whenIdle(hireId), graceMs);
     },
     checkReminders,
+    scheduler,
     stop: () => {
       clearInt(reminderTimer);
+      if (scheduleTimer !== null) clearInt(scheduleTimer);
       for (const [event, fn] of listeners) deps.hub.off(event, fn);
       runLoop.stop();
       broker.stop();

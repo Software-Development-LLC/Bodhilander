@@ -53,7 +53,7 @@ export interface PrepareDeps {
   platform?: NodeJS.Platform;
 }
 
-function hireAccountRef(db: Database.Database, hireId: string): ClaudeAccountRef | null {
+export function hireAccountRef(db: Database.Database, hireId: string): ClaudeAccountRef | null {
   const row = db.prepare(`SELECT data FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as { data: string } | undefined;
   try {
     const ref = (JSON.parse(row?.data ?? '{}') as { accountRef?: Partial<ClaudeAccountRef> }).accountRef;

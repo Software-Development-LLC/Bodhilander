@@ -187,6 +187,10 @@ describe('HubClient handshake', () => {
     expect(t.client.routinesHeldForSkew()).toBe(true);
     t.sock().hub({ type: 'welcome', machineId: MACHINE, hubTime: t.c.w + 120_000, ownerName: 'A', ownerUpn: 'a' });
     expect(t.client.routinesHeldForSkew()).toBe(false);
+    t.sock().hub({ type: 'renew', seq: 1, hubTime: t.c.w - 3 * 3_600_000, leases: [] });
+    expect(t.client.routinesHeldForSkew()).toBe(true);
+    t.sock().hub({ type: 'renew', seq: 2, hubTime: t.c.w + 60_000, leases: [] });
+    expect(t.client.routinesHeldForSkew()).toBe(false);
   });
 });
 
@@ -551,6 +555,18 @@ describe('HubClient queued frames', () => {
     t.sock().hub(deliver(2, 3));
     expect(t.client.sendUsage(uuid(1), usage)).toBe(false);
     expect(sentOf(t, 'usage_record')).toHaveLength(1);
+  });
+
+  test('routine_fired is stamped with its job epoch under an id apart from the job, so the job can still reply', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 2));
+    expect(t.client.sendRoutineFired(uuid(1), uuid(60), 1000, 2000)).toBe(true);
+    const [sent] = sentOf(t, 'routine_fired');
+    expect(sent).toEqual({ type: 'routine_fired', id: sent.id, hireId: HIRE, epoch: 2, routineId: uuid(60), dueAt: 1000, startedAt: 2000 });
+    expect(sent.id).not.toBe(uuid(1));
+    expect(t.client.sendReply(uuid(1), 'done')).toBe(true);
+    expect(t.client.sendRoutineFired(uuid(99), uuid(60), 1000, 2000)).toBe(false);
   });
 
   test('an audit about a hire carries its newest epoch; one about the machine carries neither', () => {
