@@ -603,6 +603,17 @@ describe('HubClient queued frames', () => {
     expect(t.client.sendNoteWrite(uuid(99), write)).toBe(false);
   });
 
+  test('an owner note from this machine carries the newest epoch and owner scope; only owner/ paths, only a known hire', () => {
+    const t = setup();
+    t.online();
+    expect(t.client.sendOwnerNote(HIRE, 'owner/plan.md', 0, 'x')).toBe(false);
+    t.sock().hub(deliver(1, 4));
+    expect(t.client.sendOwnerNote(HIRE, 'shared/plan.md', 0, 'x')).toBe(false);
+    expect(t.client.sendOwnerNote(HIRE, 'owner/plan.md', 0, 'x')).toBe(true);
+    expect(sentOf(t, 'note_write')).toEqual([expect.objectContaining({ hireId: HIRE, epoch: 4, scope: 'owner', path: 'owner/plan.md', rev: 0, content: 'x', deleted: false })]);
+    expect(sentOf(t, 'note_write')[0]).not.toHaveProperty('inboundId');
+  });
+
   test('an audit about a hire carries its newest epoch; one about the machine carries neither', () => {
     const t = setup();
     t.online();

@@ -59,6 +59,8 @@ function api(over: Partial<HireDetailApi> = {}): HireDetailApi & { edits: unknow
     signInAgain: async (...args) => (edits.push(['signIn', ...args]), ok()),
     onSignInStarted: () => () => {},
     closeSignIn: async (...args) => void edits.push(['closeSignIn', ...args]),
+    officeEmployees: async () => null,
+    importFromOffice: async (...args) => (edits.push(['import', ...args]), { ok: true, skills: 0, notes: 0, work: 0, skipped: [], failed: [] }),
     ...over,
   };
 }
@@ -278,5 +280,23 @@ describe('sign in again shows the login terminal', () => {
     await screen.findByRole('dialog');
     view.unmount();
     expect(s.a.edits).toContainEqual(['closeSignIn', 'pty-acc-1']);
+  });
+});
+
+describe('import from Office', () => {
+  test('offered only when Office is on this machine, and the result is said plainly', async () => {
+    const plain = render(<HireDetail hireId="h1" api={api()} now={() => NOW} />);
+    await screen.findByText('Fresh PO');
+    expect(screen.queryByText('Import from Office')).toBeNull();
+    plain.unmount();
+
+    const a = api({
+      officeEmployees: async () => ['fresh-po'],
+      importFromOffice: async (...args) => (a.edits.push(['import', ...args]), { ok: true, skills: 3, notes: 1, work: 47, skipped: ['skills/big/SKILL.md'], failed: [] }),
+    });
+    render(<HireDetail hireId="h1" api={a} now={() => NOW} />);
+    fireEvent.click(await screen.findByText('Import fresh-po'));
+    await screen.findByText('Imported 3 skill files, 1 notes and 47 work files. Skipped skills/big/SKILL.md.');
+    expect(a.edits).toEqual([['import', 'h1', 'fresh-po']]);
   });
 });

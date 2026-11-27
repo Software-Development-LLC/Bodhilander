@@ -43,6 +43,7 @@ import {
   type SyncPageFrame,
   type SyncPullFrame,
   type TokenRequestFrame,
+  type Unstamped,
   type UsageRecordFrame,
   type WelcomeFrame,
 } from './protocol';
@@ -611,7 +612,7 @@ export class HubClient extends EventEmitter {
   }
 
   /** Queue a card raised by a job's run, stamped with the job's epoch. False when fenced or gone. */
-  sendCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+  sendCard(jobId: string, raise: Unstamped<CardRaiseFrame>): boolean {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: CardRaiseFrame = { type: 'card_raise', ...raise, hireId: stamp.hireId, epoch: stamp.epoch };
@@ -621,11 +622,19 @@ export class HubClient extends EventEmitter {
   }
 
   /** Queue a run's note write, stamped with its job's epoch. False when fenced or gone. */
-  sendNoteWrite(jobId: string, write: Omit<NoteWriteFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+  sendNoteWrite(jobId: string, write: Unstamped<NoteWriteFrame>): boolean {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: NoteWriteFrame = { type: 'note_write', ...write, hireId: stamp.hireId, epoch: stamp.epoch };
     return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  /** An owner/ note written by the owner's own action on this machine, not by a run. */
+  sendOwnerNote(hireId: string, notePath: string, rev: number, content: string): boolean {
+    const epoch = this.fence.known(hireId);
+    if (epoch === null || !notePath.startsWith('owner/')) return false;
+    const frame: NoteWriteFrame = { type: 'note_write', id: this.newId(), hireId, epoch, scope: 'owner', path: notePath, rev, content, deleted: false };
+    return this.queue(frame, { hireId, epoch });
   }
 
   /** A routine's job was queued: the Hub moves the routine's lastFired to dueAt and lastRun to startedAt. */
@@ -641,7 +650,7 @@ export class HubClient extends EventEmitter {
   }
 
   /** Queue a run's send through the outbox, stamped with its job's epoch. False when fenced or gone. */
-  sendMessage(jobId: string, send: Omit<SendFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+  sendMessage(jobId: string, send: Unstamped<SendFrame>): boolean {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: SendFrame = { type: 'send', ...send, text: cutText(send.text), hireId: stamp.hireId, epoch: stamp.epoch };

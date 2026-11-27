@@ -1,7 +1,7 @@
 /** The Crew IPC channels joined to the running Hub client and runtime. */
 import { app, safeStorage, shell } from 'electron';
 import log from 'electron-log';
-import type { CrewCardList, CrewEditResult, CrewHireAccount, CrewHireInput, CrewHireResult, CrewLinkView } from '../../shared/types';
+import type { CrewCardList, CrewEditResult, CrewHireAccount, CrewHireInput, CrewHireResult, CrewLinkView, CrewOfficeImportResult } from '../../shared/types';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
 import { getPreference } from '../repositories/preferences';
@@ -17,6 +17,9 @@ import { createHire, HIRE_ANSWER_MS, hireAccounts, type HireDeps } from './hire'
 import { crewStatusFrom, KEYCHAIN_NEEDED, linkViewFrom, registerCrewIpc } from './ipc';
 import { LET_GO_ANSWER_MS, letGoHire as letGo, moveHireAside } from './let-go';
 import type { EditResultFrame, UsageFrame } from './protocol';
+import { findOfficeData, importFromOffice, officeEmployees } from './import-office';
+import { cachedNote, parseNotePath } from './notes';
+import { hirePaths } from './run/scope';
 
 export function hubUsageRead(hub: HubClient, hireId: string, epoch: number, since: number): Promise<UsageFrame | null> {
   return hub.usageRead(hireId, epoch, since);
@@ -95,6 +98,41 @@ export async function hireFromHere(input: CrewHireInput): Promise<CrewHireResult
     },
     input,
   );
+}
+
+function hireBody(hireId: string): Record<string, unknown> {
+  const row = getDatabase().prepare(`SELECT data FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as { data: string } | undefined;
+  try {
+    return JSON.parse(row?.data ?? '{}') as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+export function importOfficeHere(hireId: string, handle: string): CrewOfficeImportResult {
+  const hub = getCrewHub();
+  const dataDir = findOfficeData(app.getPath('appData'));
+  if (!hub || !dataDir) return { ok: false, error: "Crew or Office isn't on this machine." };
+  const body = hireBody(hireId);
+  if (body.homeMachineId !== getPreference(MACHINE_ID_PREF)) return { ok: false, error: 'Import on the home machine of this hire.' };
+  const role = typeof body.roleId === 'string' ? body.roleId : '';
+  const db = getDatabase();
+  try {
+    const summary = importFromOffice(
+      {
+        sendBundle: (id, bundleRole, files) => !!hub.sendEdit({ op: 'create', kind: 'skill_bundle', hireId: id, fields: { role: bundleRole, files } }),
+        writeOwnerNote: (id, notePath, content) => {
+          const where = parseNotePath(notePath);
+          return !!where && hub.sendOwnerNote(id, notePath, cachedNote(db, id, where)?.rev ?? 0, content);
+        },
+      },
+      { dataDir, handle, hireId, role, ownerDir: hirePaths(app.getPath('userData'), hireId).owner },
+    );
+    return { ok: true, ...summary };
+  } catch (err) {
+    log.warn('[Crew] the Office import failed', err);
+    return { ok: false, error: 'The import stopped partway; see the log.' };
+  }
 }
 
 export async function letGoHire(hireId: string): Promise<CrewEditResult> {
@@ -190,6 +228,15 @@ export function wireCrewIpc(handle: (channel: string, handler: (...args: unknown
         return KEYCHAIN_NEEDED;
       }
       return linkViewFrom(await link.begin());
+    },
+    officeEmployees: () => {
+      const dataDir = findOfficeData(app.getPath('appData'));
+      return dataDir ? officeEmployees(dataDir) : null;
+    },
+    importFromOffice: (hireId, handle) => {
+      const result = importOfficeHere(hireId, handle);
+      notify();
+      return result;
     },
     confirmLinkOwner: (isMe) => {
       const confirmed = link?.confirmOwner(isMe) ?? false;
