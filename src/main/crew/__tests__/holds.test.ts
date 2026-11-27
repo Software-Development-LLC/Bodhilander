@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { Holds, capDay, capTokens, machineTimeZone, overCrewCap, readWindow, type HoldInputs } from '../holds';
+import { Holds, capDay, capTokens, hireTimeZone, machineTimeZone, overCrewCap, readWindow, type HoldInputs } from '../holds';
 
 const NOW = 1_700_000_000_000;
 const win = (pct: number, resetsAt: number | null = NOW + 1000) => ({ pct, resetsAt, observedAt: NOW });
@@ -76,5 +76,15 @@ describe("the owner's day", () => {
     expect(machineTimeZone(() => {
       throw new Error('no Intl');
     })).toBeNull();
+  });
+
+  test("a hire's zone is its owner's when valid, else this machine's, else UTC", () => {
+    const paris = () => 'Europe/Paris';
+    expect(hireTimeZone({ ownerTimezone: 'America/Chicago' }, paris)).toBe('America/Chicago');
+    expect(hireTimeZone({ ownerTimezone: 'Not/AZone' }, paris)).toBe('Europe/Paris');
+    expect(hireTimeZone({ ownerTimezone: 42 }, paris)).toBe('Europe/Paris');
+    expect(hireTimeZone({ ownerTimezone: null }, paris)).toBe('Europe/Paris');
+    expect(hireTimeZone(null, paris)).toBe('Europe/Paris');
+    expect(hireTimeZone({}, () => null)).toBeNull();
   });
 });

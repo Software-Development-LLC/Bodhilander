@@ -206,6 +206,19 @@ describe('usage holds before a run', () => {
     expect(calls.length).toBe(2);
   });
 
+  test("the cap's day follows the hire's zone, and a zone change re-reads at the next check", async () => {
+    const calls: number[] = [];
+    const asked: string[] = [];
+    let zone = 'America/New_York';
+    const t = setup({ dailyTokenCap: 1000, hub: async (_h, _e, since) => (calls.push(since), 0) });
+    t.deps.timeZone = (hireId: string) => (asked.push(hireId), zone);
+    await prepareRun(t.deps, job(), 'chat:owner', 'run-1');
+    zone = 'Asia/Tokyo';
+    await prepareRun(t.deps, job(), 'chat:owner', 'run-1');
+    expect(calls).toEqual([Date.parse('2026-11-27T05:00:00Z'), Date.parse('2026-11-26T15:00:00Z')]);
+    expect(new Set(asked)).toEqual(new Set([HIRE]));
+  });
+
   test('with the cap off the Hub is never asked', async () => {
     let asked = false;
     const t = setup({ hub: async () => ((asked = true), 10 ** 9) });

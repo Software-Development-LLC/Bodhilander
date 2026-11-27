@@ -17,13 +17,13 @@ import { CrewSignIn, type Reminder } from './crew-token';
 import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
 import { GithubGateway, runGh } from './gateway/github-gateway';
 import { handbookFor, pinnedSkills, restoreSkills } from './handbook';
-import { Holds, machineTimeZone } from './holds';
+import { Holds, hireTimeZone } from './holds';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
 import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
 import { sweepLetGo } from './let-go';
-import type { HomeDeps } from './home';
+import { hireBody, type HomeDeps } from './home';
 import { McpHost, hostSocketPath } from './mcp/host';
 import { resolveAccountRef } from './account-ref';
 import { HireDayUsage } from './run/hire-usage';
@@ -157,7 +157,7 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
     home: os.homedir(),
     claudePath: claudePath(),
     env: process.env,
-    timeZone: () => machineTimeZone(),
+    timeZone: (hireId) => hireTimeZone(hireBody(getDatabase(), hireId)),
     handbook: (hireId) => handbookFor(getDatabase(), hireId),
     restoreSkills: (paths, hireId) => restoreSkills(paths, pinnedSkills(getDatabase(), hireId)),
     holds,

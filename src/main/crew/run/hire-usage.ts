@@ -10,6 +10,7 @@ export type HubUsageRead = (hireId: string, epoch: number, since: number) => Pro
 
 interface Read {
   day: string;
+  zone: string | null;
   epoch: number;
   total: number;
   readAt: number;
@@ -42,12 +43,12 @@ export class HireDayUsage {
     const day = capDay(now, timeZone);
     const start = dayStart(now, timeZone);
     let read = this.reads.get(hireId);
-    if (!read || read.day !== day || read.epoch !== epoch) {
+    if (!read || read.day !== day || read.zone !== timeZone || read.epoch !== epoch) {
       this.reads.delete(hireId);
       read = undefined;
       const total = this.hub ? await this.hub(hireId, epoch, start).catch(() => null) : null;
       if (total !== null) {
-        read = { day, epoch, total, readAt: now };
+        read = { day, zone: timeZone, epoch, total, readAt: now };
         this.reads.set(hireId, read);
       }
     }

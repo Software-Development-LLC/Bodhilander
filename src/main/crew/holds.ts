@@ -46,7 +46,7 @@ export function capTokens(usage: { input_tokens?: number; cache_creation_input_t
 
 const resolvedZone = (): string | undefined => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/** The owner's timezone as this machine knows it: the Hub sends no person.timezone, and the owner is the one at this machine. */
+/** This machine's IANA zone, or null when it has none Intl accepts. */
 export function machineTimeZone(read: () => string | undefined = resolvedZone): string | null {
   try {
     const zone = read();
@@ -59,6 +59,12 @@ export function machineTimeZone(read: () => string | undefined = resolvedZone): 
 }
 
 /** The calendar day in the owner's timezone, so the hire cap resets at their midnight. */
+/** The zone a hire's day is counted in: its owner's, else this machine's; null means UTC. */
+export function hireTimeZone(body: Record<string, unknown> | null, machine: () => string | null = machineTimeZone): string | null {
+  const owner = body?.ownerTimezone;
+  return (typeof owner === 'string' && machineTimeZone(() => owner)) || machine();
+}
+
 export function capDay(now: number, timeZone: string | null): string {
   try {
     return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone ?? 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);

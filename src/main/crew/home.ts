@@ -22,7 +22,7 @@ export interface HomeDeps {
 
 const refuse = (error: string): CrewEditResult => ({ ok: false, error });
 
-function hireBody(db: Database.Database, hireId: string): Record<string, unknown> | null {
+export function hireBody(db: Database.Database, hireId: string): Record<string, unknown> | null {
   const row = db.prepare(`SELECT data FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as { data: string } | undefined;
   if (!row) return null;
   try {

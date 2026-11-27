@@ -35,7 +35,7 @@ export interface PrepareDeps {
   home: string;
   claudePath: string;
   env: Record<string, string | undefined>;
-  timeZone(): string | null;
+  timeZone(hireId: string): string | null;
   /** The role's handbook for CLAUDE.md; throws SteeringUnavailable when the role has not synced. */
   handbook(hireId: string): string;
   holds: Holds;
@@ -77,7 +77,7 @@ function hireDailyCap(db: Database.Database, hireId: string): number | null {
 /** Rate limit, the account's Crew cap, then the hire's own daily cap; the hire cap needs today's total only when it is set. */
 async function usageHold(deps: PrepareDeps, job: CrewJob, accountId: string, now: number): Promise<string | null> {
   const dailyTokens = hireDailyCap(deps.db, job.hireId);
-  const usedToday = dailyTokens === null ? 0 : await deps.hireUsage.usedToday(job.hireId, job.epoch, now, deps.timeZone());
+  const usedToday = dailyTokens === null ? 0 : await deps.hireUsage.usedToday(job.hireId, job.epoch, now, deps.timeZone(job.hireId));
   const cause = deps.holds.evaluate({
     accountId,
     signedIn: true,
@@ -180,7 +180,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
       moved: false,
     },
     now,
-    deps.timeZone(),
+    deps.timeZone(job.hireId),
   );
   let sessionId = thread?.session_id ?? null;
   let input = job.text;
