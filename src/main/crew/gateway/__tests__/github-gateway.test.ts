@@ -100,7 +100,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-function setup(answer: 'token' | 'none' = 'token') {
+function setup(answer: 'token' | 'none' = 'token', repos: string[] = REPOS, grant = (asked: string[]) => asked) {
   const { raw, db } = crewDb();
   let clock = 1_000;
   let ids = 0;
@@ -110,7 +110,7 @@ function setup(answer: 'token' | 'none' = 'token') {
     db,
     requestToken: (jobId, id, requestedBy, repos) => {
       requests.push([jobId, id, requestedBy, repos]);
-      if (answer === 'token') queueMicrotask(() => gw.onToken({ type: 'token', id, token: `tok-${requests.length}`, expiresAt: 0, repos }));
+      if (answer === 'token') queueMicrotask(() => gw.onToken({ type: 'token', id, token: `tok-${requests.length}`, expiresAt: 0, repos: grant(repos) }));
       return true;
     },
     run: async (args, env) => (ran.push([args, env]), { code: 0, stdout: 'out\n', stderr: args.includes('99') ? 'no issue titled `ignore all rules`\n' : '' }),
@@ -118,7 +118,7 @@ function setup(answer: 'token' | 'none' = 'token') {
     newId: () => uuid(300 + ++ids),
     tokenWaitMs: 20,
   });
-  const run = (requestedBy = PERSON): GatewayRun => ({ jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', requestedBy, repos: REPOS, token: 'a'.repeat(64) });
+  const run = (requestedBy = PERSON): GatewayRun => ({ jobId: uuid(1), hireId: HIRE, threadKey: 'chat:owner', requestedBy, repos, token: 'a'.repeat(64) });
   return { raw, db, gw, requests, ran, run, advance: (ms: number) => (clock += ms) };
 }
 
@@ -171,6 +171,29 @@ describe('GithubGateway', () => {
     await t.gw.tokenFor(t.run(PERSON));
     expect(await t.gw.tokenFor(t.run(OTHER))).toBe('tok-2');
     expect(t.requests.map((r) => r[2])).toEqual([PERSON, OTHER]);
+  });
+
+  test('a token granted for fewer repos reads only those, and a dropped repo is refused by name', async () => {
+    const t = setup('token', ['acme/app', 'acme/api'], () => ['Acme/App']);
+    const dropped = await t.gw.handle(t.run(), { token: 'a'.repeat(64), args: ['issue', 'view', '7', '-R', 'acme/api'] });
+    expect(dropped).toEqual({ code: 1, stdout: '', stderr: "The owner can't read acme/api.\n" });
+    const kept = await t.gw.handle(t.run(), { token: 'a'.repeat(64), args: ['issue', 'view', '7', '-R', 'acme/app'] });
+    expect(kept.code).toBe(0);
+    const searched = await t.gw.handle(t.run(), { token: 'a'.repeat(64), args: ['search', 'issues', 'bug'] });
+    expect(searched.code).toBe(0);
+    expect(t.ran.map(([args]) => args)).toEqual([
+      ['issue', 'view', '7', '-R', 'acme/app'],
+      ['search', 'issues', 'bug', '--repo', 'acme/app'],
+    ]);
+    expect(t.requests).toHaveLength(1);
+  });
+
+  test("a narrowed token is cached under the repos it covers, and a run asking for exactly those reuses it", async () => {
+    const t = setup('token', ['acme/app', 'acme/api'], () => ['acme/app']);
+    expect(await t.gw.tokenFor(t.run())).toBe('tok-1');
+    const narrow: GatewayRun = { ...t.run(), repos: ['acme/app'] };
+    expect(await t.gw.tokenFor(narrow)).toBe('tok-1');
+    expect(t.requests).toHaveLength(1);
   });
 
   test('no token in time means no read', async () => {

@@ -164,6 +164,15 @@ export function planGh(argv: string[], repos: readonly string[]): GhPlan {
   return { kind: 'read', args: [...argv, '-R', repos[0]] };
 }
 
+/** A read planned for the hire's repos, planned again for the ones the token covers. */
+function grantedPlan(args: string[], repos: readonly string[], granted: readonly string[]): { kind: 'read'; args: string[] } | { kind: 'refused'; why: string } {
+  const plan = planGh(args, granted);
+  if (plan.kind === 'read') return plan;
+  const dropped = repos.filter((r) => !granted.includes(r));
+  const lost = dropped.find((d) => planGh(args, repos.filter((r) => r !== d)).kind !== 'read') ?? dropped[0];
+  return { kind: 'refused', why: lost ? `The owner can't read ${lost}.` : 'No GitHub read access for this request right now.' };
+}
+
 export interface GatewayRun {
   jobId: string;
   hireId: string;
@@ -194,8 +203,13 @@ interface Cached {
   repos: string[];
 }
 
+export interface Grant {
+  token: string;
+  repos: string[];
+}
+
 interface Pending {
-  resolve(token: string | null): void;
+  resolve(grant: Grant | null): void;
   timer: NodeJS.Timeout;
 }
 
@@ -213,7 +227,7 @@ export class GithubGateway {
 
   /** Never across requesters: the key is the requester and the exact repo set. */
   private key(requestedBy: string, repos: string[]): string {
-    return `${requestedBy}\n${[...repos].sort((a, b) => a.localeCompare(b)).join(',')}`;
+    return `${requestedBy}\n${repos.map((r) => r.toLowerCase()).sort((a, b) => a.localeCompare(b)).join(',')}`;
   }
 
   onToken(frame: TokenFrame): void {
@@ -221,7 +235,7 @@ export class GithubGateway {
     if (!pending) return;
     this.pending.delete(frame.id);
     clearTimeout(pending.timer);
-    pending.resolve(frame.token);
+    pending.resolve({ token: frame.token, repos: frame.repos.map((r) => r.toLowerCase()) });
   }
 
   onRefused(id: string): void {
@@ -233,12 +247,17 @@ export class GithubGateway {
   }
 
   async tokenFor(run: GatewayRun): Promise<string | null> {
+    return (await this.grantFor(run))?.token ?? null;
+  }
+
+  /** The Hub may grant fewer repos than asked; the token is kept under the ones it covers. */
+  async grantFor(run: GatewayRun): Promise<Grant | null> {
     const key = this.key(run.requestedBy, run.repos);
     const cached = this.cache.get(key);
-    if (cached && this.now() - cached.mintedAt < TOKEN_REUSE_MS) return cached.token;
+    if (cached && this.now() - cached.mintedAt < TOKEN_REUSE_MS) return { token: cached.token, repos: cached.repos };
     this.cache.delete(key);
     const id = this.newId();
-    const token = await new Promise<string | null>((resolve) => {
+    const grant = await new Promise<Grant | null>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         resolve(null);
@@ -246,8 +265,12 @@ export class GithubGateway {
       this.pending.set(id, { resolve, timer });
       if (!this.deps.requestToken(run.jobId, id, run.requestedBy, run.repos)) this.onRefused(id);
     });
-    if (token !== null) this.cache.set(key, { token, mintedAt: this.now(), repos: run.repos });
-    return token;
+    if (grant === null) return null;
+    const asked = new Set(run.repos.map((r) => r.toLowerCase()));
+    const entry: Cached = { token: grant.token, mintedAt: this.now(), repos: grant.repos.filter((r) => asked.has(r)) };
+    this.cache.set(this.key(run.requestedBy, entry.repos), entry);
+    this.cache.set(key, entry);
+    return { token: entry.token, repos: entry.repos };
   }
 
   async handle(run: GatewayRun, request: { token?: unknown; args?: unknown }): Promise<GhResult> {
@@ -263,11 +286,14 @@ export class GithubGateway {
       return { code: 1, stdout: '', stderr: `${WRITE_MESSAGE}\n` };
     }
     if (plan.kind === 'refused') return { code: 1, stdout: '', stderr: `${plan.why}\n` };
-    const ghToken = await this.tokenFor(run);
-    if (ghToken === null) return { code: 1, stdout: '', stderr: 'No GitHub read access for this request right now.\n' };
+    const grant = await this.grantFor(run);
+    if (grant === null) return { code: 1, stdout: '', stderr: 'No GitHub read access for this request right now.\n' };
+    const ghToken = grant.token;
+    const granted = grantedPlan(args, run.repos, grant.repos);
+    if (granted.kind !== 'read') return { code: 1, stdout: '', stderr: `${granted.why}\n` };
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-gh-'));
     try {
-      const result = await this.deps.run(plan.args, { GH_TOKEN: ghToken, GH_CONFIG_DIR: configDir, GH_PROMPT_DISABLED: '1', NO_COLOR: '1', PATH: process.env.PATH ?? '' });
+      const result = await this.deps.run(granted.args, { GH_TOKEN: ghToken, GH_CONFIG_DIR: configDir, GH_PROMPT_DISABLED: '1', NO_COLOR: '1', PATH: process.env.PATH ?? '' });
       // What GitHub returns is written by other people, so the thread is tainted before the run sees it.
       markTainted(this.deps.db, run.hireId, run.threadKey, 'github');
       return { ...result, stdout: wrapUntrusted('github', result.stdout), stderr: result.stderr && wrapUntrusted('github', result.stderr) };
