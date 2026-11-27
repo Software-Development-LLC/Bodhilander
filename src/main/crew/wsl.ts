@@ -27,7 +27,7 @@ export interface WslResult {
 }
 
 /** Runs `wsl.exe <args>`; stdin is written then closed. */
-export type WslExec = (args: string[], opts?: { input?: string; timeoutMs?: number }) => Promise<WslResult>;
+export type WslExec = (args: string[], opts?: { input?: string | Buffer; timeoutMs?: number }) => Promise<WslResult>;
 
 /** `wsl.exe` writes UTF-16LE to a pipe; everything inside a distro writes UTF-8. */
 export function decodeWslOutput(buf: Buffer): string {
