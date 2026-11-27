@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { ClaudeAccount } from '../../../shared/types';
 import { isMoveRaisedHere, makeHomeHere, moveDecided, movePayload, unlinkHere, type HomeDeps } from '../home';
 import type { CardDecisionFrame, MovePayload } from '../protocol';
-import { crewDb, HIRE, MACHINE, type Db } from './crew-db';
+import { crewDb, HIRE, MACHINE, PERSON, uuid, type Db } from './crew-db';
 
 function putHire(db: Db, hireId: string, body: Record<string, unknown>): void {
   db.prepare(`INSERT OR REPLACE INTO crew_hire_cache (hire_id, rev, home_machine_id, epoch, data) VALUES (?, 1, ?, ?, ?)`).run(
@@ -45,6 +45,14 @@ describe('make this machine home', () => {
     expect(t.raised).toEqual([[HIRE, { account: 'signed-in', accountLabel: 'Work here' }]]);
     expect(isMoveRaisedHere(t.db, decision('approved'))).toBe(true);
     expect(isMoveRaisedHere(t.db, { ...decision('approved'), raiseId: 'r-other' })).toBe(false);
+  });
+
+  test("the machine leaves the owner check to the Hub: the move is raised whoever the body names as owner", () => {
+    for (const ownerId of [PERSON, uuid(77), undefined]) {
+      const t = setup({}, { ownerId });
+      expect(makeHomeHere(t.deps, HIRE)).toEqual({ ok: true });
+      expect(t.raised).toHaveLength(1);
+    }
   });
 
   test('the account is reported missing or signed out as found, and the card is still raised', () => {
