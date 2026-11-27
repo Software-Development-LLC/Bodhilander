@@ -57,6 +57,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 export class McpHost {
   private readonly runs = new Map<string, Registered>();
   private server: net.Server | null = null;
+  private listening: Promise<boolean> | null = null;
 
   constructor(private readonly db: Database.Database, readonly socketPath: string) {}
 
@@ -103,6 +104,23 @@ export class McpHost {
     }
   }
 
+  /** Listens once; a failure is not kept, so the next run tries again. */
+  ready(): Promise<boolean> {
+    this.listening ??= Promise.resolve()
+      .then(() => this.listen())
+      .then(
+        () => true,
+        (err) => {
+          log.error('[Crew] the MCP host could not listen', err);
+          this.server?.close();
+          this.server = null;
+          this.listening = null;
+          return false;
+        },
+      );
+    return this.listening;
+  }
+
   listen(): Promise<void> {
     fs.mkdirSync(path.dirname(this.socketPath), { recursive: true, mode: 0o700 });
     fs.rmSync(this.socketPath, { force: true });
@@ -143,6 +161,7 @@ export class McpHost {
   close(): void {
     this.server?.close();
     this.server = null;
+    this.listening = null;
     this.runs.clear();
     fs.rmSync(this.socketPath, { force: true });
   }

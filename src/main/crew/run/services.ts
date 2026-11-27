@@ -11,6 +11,9 @@ import { crewMcpServers } from './mcp-config';
 import type { CrewJob } from './loop';
 import { ensureSocketRoot, makeRunDir, newRunToken, removeRunDir, socketPath, socketRoot, type SocketFs } from './sockets';
 
+/** Setup that may come right later: the run is held, not failed. */
+export class ServicesNotReady extends Error {}
+
 export interface RunServices {
   mcpServers: Record<string, unknown>;
   sockets: string[];
@@ -42,7 +45,7 @@ export class RunServiceManager {
 
   async start(job: CrewJob, threadKey: string, runId: string): Promise<RunServices> {
     const broker = this.deps.broker();
-    if (!broker) throw new Error('the approve broker is not running');
+    if (!broker) throw new ServicesNotReady('the approve broker is not running');
     this.end(job.id);
     const root = socketRoot(this.deps.uid);
     ensureSocketRoot(root, this.deps.uid, this.deps.fsx);

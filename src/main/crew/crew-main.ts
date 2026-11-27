@@ -21,13 +21,12 @@ import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
 import { McpHost, hostSocketPath } from './mcp/host';
 import { prepareRun, type PrepareDeps } from './run/prepare';
-import { RunServiceManager } from './run/services';
+import { RunServiceManager, ServicesNotReady } from './run/services';
 import { crewTools } from './tools/server';
 
 let runtime: CrewRuntime | null = null;
 let runtimeHub: HubClient | null = null;
 let host: McpHost | null = null;
-let hostReady: Promise<boolean> | null = null;
 let gateway: GithubGateway | null = null;
 let services: RunServiceManager | null = null;
 let detachHub: (() => void) | null = null;
@@ -70,13 +69,6 @@ function ensureServices(): RunServiceManager {
   const db = getDatabase();
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   host ??= new McpHost(db, hostSocketPath(app.getPath('userData')));
-  hostReady ??= host.listen().then(
-    () => true,
-    (err) => {
-      log.error('[Crew] the MCP host could not listen', err);
-      return false;
-    },
-  );
   gateway ??= new GithubGateway({
     db,
     requestToken: (jobId, id, requestedBy, repos) => runtimeHub?.sendTokenRequest(jobId, id, requestedBy, repos) ?? false,
@@ -112,7 +104,7 @@ export function crewPrepareDeps(signIn: CrewSignIn): PrepareDeps {
     handbook: () => '',
     services: async (job, threadKey, runId) => {
       const manager = ensureServices();
-      if (!(await hostReady)) throw new Error('the Crew MCP host is not listening');
+      if (!(await host?.ready())) throw new ServicesNotReady('the Crew MCP host is not listening');
       return manager.start(job, threadKey, runId);
     },
     sandbox: () => ({
@@ -179,7 +171,6 @@ export function stopCrew(): void {
   services = null;
   gateway = null;
   host = null;
-  hostReady = null;
   runtime = null;
   runtimeHub = null;
   setCrewInterrupt(null);

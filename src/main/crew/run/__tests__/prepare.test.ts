@@ -12,6 +12,7 @@ mock.module('../../../account-identity', () => ({
 const { prepareRun, HOLD_MISSING, HOLD_SIGNED_OUT, HOLD_SETUP } = await import('../prepare');
 const { CrewSignIn } = await import('../../crew-token');
 const { SocketRootError } = await import('../sockets');
+const { ServicesNotReady } = await import('../services');
 const { markTainted, isTainted } = await import('../../taint');
 import type { ClaudeAccount } from '../../../../shared/types';
 import type { CrewJob, PreparedRun } from '../loop';
@@ -26,7 +27,7 @@ const job = (over: Partial<CrewJob> = {}): CrewJob => ({
   id: uuid(1), hireId: HIRE, kind: 'message', epoch: 1, scope: 'owner', requestedBy: PERSON, sender: 'B', text: 'do the thing', attempts: 1, ...over,
 });
 
-function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; services?: 'root' } = {}) {
+function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; services?: 'root' | 'not-ready' } = {}) {
   const { raw, db } = crewDb();
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-prep-'));
   dirs.push(userData);
@@ -42,6 +43,7 @@ function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; servi
     env: { PATH: '/usr/bin', GH_TOKEN: 'ghp_x', ANTHROPIC_API_KEY: 'k' }, timeZone: () => 'UTC', handbook: () => '# Role\n',
     services: async () => {
       if (opts.services === 'root') throw new SocketRootError({ type: 'symlink', uid: 0, mode: '777' });
+      if (opts.services === 'not-ready') throw new ServicesNotReady('the Crew MCP host is not listening');
       return { mcpServers: { crew_approve: { command: 'x' } }, sockets: ['/tmp/cr-501/abcdefgh/gh.sock'], pathFirst: '/shim', env: { CREW_GH_SOCKET: '/tmp/cr-501/abcdefgh/gh.sock' } };
     },
     sandbox: () => ({ accountDirs: ['/acct/a1'], userDataEntries: [], crewEntries: [], sockets: [], socketRoot: '/tmp/cr-501', allowedDomains: [] }),
@@ -139,6 +141,11 @@ describe('run services in preparation', () => {
 
   test('a socket root that fails its check holds the machine for setup', async () => {
     const t = setup({ services: 'root' });
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+  });
+
+  test('services that are not ready yet hold the run for setup rather than failing it', async () => {
+    const t = setup({ services: 'not-ready' });
     expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
   });
 });

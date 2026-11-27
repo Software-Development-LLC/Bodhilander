@@ -13,7 +13,7 @@ import { consumeTaint, isTainted } from '../taint';
 import { runArgs, runEnv } from './env';
 import type { CrewJob, Prepared } from './loop';
 import { runSettingsJson, type SandboxInput } from './sandbox-settings';
-import type { RunServices } from './services';
+import { ServicesNotReady, type RunServices } from './services';
 import { SocketRootError } from './sockets';
 import { cwdFor, hirePaths, settingsPathFor, underTempDir, type HirePaths } from './scope';
 import { freshReason, freshSessionInput, type Turn } from './sessions';
@@ -98,7 +98,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   try {
     services = await deps.services(job, threadKey, runId);
   } catch (err) {
-    if (err instanceof SocketRootError) return { hold: HOLD_SETUP };
+    if (err instanceof SocketRootError || err instanceof ServicesNotReady) return { hold: HOLD_SETUP };
     throw err;
   }
   const cwd = cwdFor(paths, job.scope);

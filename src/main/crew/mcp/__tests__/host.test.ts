@@ -95,4 +95,19 @@ describe('MCP host', () => {
     const { host } = await setup();
     expect(fs.statSync(host.socketPath).mode & 0o777).toBe(0o600);
   });
+
+  test('a failed listen is not kept: the next ready() listens again', async () => {
+    const { db } = crewDb();
+    const dir = fs.mkdtempSync(path.join('/tmp', 'crh-'));
+    dirs.push(dir);
+    const blocker = path.join(dir, 'sub');
+    fs.writeFileSync(blocker, 'not a directory');
+    const host = new McpHost(db, path.join(blocker, 'm.sock'));
+    hosts.push(host);
+    expect(await host.ready()).toBe(false);
+    fs.rmSync(blocker);
+    expect(await host.ready()).toBe(true);
+    expect(fs.statSync(host.socketPath).isSocket()).toBe(true);
+    expect(await host.ready()).toBe(true);
+  });
 });
