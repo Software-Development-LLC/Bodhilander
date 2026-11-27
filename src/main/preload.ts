@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount, CrewOfficeEmployees, CrewOfficeImportResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount, CrewOfficeEmployees, CrewOfficeImportResult, CrewSavedCopy, CrewWindowsSignInResult, CrewWindowsState, CrewWindowsProgress, CrewWindowsSetupResult, CrewWindowsRepairResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -410,6 +410,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Crew
   crewGetStatus: (): Promise<CrewStatus> => ipcRenderer.invoke('crew:getStatus'),
+  crewListSavedCopies: (): Promise<CrewSavedCopy[]> => ipcRenderer.invoke('crew:listSavedCopies'),
+  crewDeleteSavedCopy: (name: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:deleteSavedCopy', name),
+  crewWindowsSignIn: (accountId: string): Promise<CrewWindowsSignInResult> => ipcRenderer.invoke('crew:windowsSignIn', accountId),
+  crewWindowsSignInCode: (code: string): Promise<boolean> => ipcRenderer.invoke('crew:windowsSignInCode', code),
+  crewWindowsSignInCancel: (): Promise<void> => ipcRenderer.invoke('crew:windowsSignInCancel'),
+  crewWindowsCheckState: (): Promise<CrewWindowsState | null> => ipcRenderer.invoke('crew:windowsCheckState'),
+  crewWindowsSetup: (): Promise<CrewWindowsSetupResult> => ipcRenderer.invoke('crew:windowsSetup'),
+  crewWindowsRepair: (confirmed: boolean): Promise<CrewWindowsRepairResult> => ipcRenderer.invoke('crew:windowsRepair', confirmed),
+  onCrewWindowsSetupProgress: (callback: (data: CrewWindowsProgress) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: CrewWindowsProgress) => callback(data);
+    ipcRenderer.on('crew:windowsSetupProgress', listener);
+    return () => ipcRenderer.removeListener('crew:windowsSetupProgress', listener);
+  },
   crewListHires: (): Promise<CrewHireSummary[]> => ipcRenderer.invoke('crew:listHires'),
   crewGetHire: (hireId: string): Promise<CrewHireDetail | null> => ipcRenderer.invoke('crew:getHire', hireId),
   crewGetHireUsage: (hireId: string): Promise<CrewHireUsage> => ipcRenderer.invoke('crew:getHireUsage', hireId),

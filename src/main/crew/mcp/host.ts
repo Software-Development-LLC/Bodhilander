@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
+import type { Duplex } from 'stream';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
 import { writeAudit } from '../audit';
@@ -136,7 +137,12 @@ export class McpHost {
     });
   }
 
-  private serve(conn: net.Socket): void {
+  /** A connection crew-agent relays from inside BodhiCrew, served like one on the socket. */
+  accept(conn: Duplex): void {
+    this.serve(conn);
+  }
+
+  private serve(conn: Duplex): void {
     let buffered = '';
     conn.setEncoding('utf8');
     conn.on('error', () => conn.destroy());

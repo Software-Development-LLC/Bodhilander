@@ -82,3 +82,17 @@ export function runArgs(input: RunArgsInput): string[] {
 }
 
 export type { RunScope };
+
+const WSL_TOOL_DIRS = ['/home/crew/.bodhilander/crew/bin', '/home/crew/.bodhilander/crew/node/bin'];
+export const WSL_PATH = [...WSL_TOOL_DIRS, '/usr/local/bin', '/usr/bin', '/bin'].join(':');
+const WSL_DROPPED = ['WSL_INTEROP', 'WSLENV', 'WSL_DISTRO_NAME', 'DISPLAY', 'WAYLAND_DISPLAY', 'PULSE_SERVER', 'XDG_RUNTIME_DIR'];
+
+/** A run inside BodhiCrew: the same allowlist, a Linux PATH and shell, no interop variables, and its own private TMPDIR. */
+export function wslRunEnv(input: RunEnvInput & { tmpDir: string; home: string; user: string }): Record<string, string> {
+  const env = runEnv({ PATH: WSL_PATH, HOME: input.home, USER: input.user, LOGNAME: input.user, LANG: 'C.UTF-8' }, { ...input, reopened: [...WSL_TOOL_DIRS, ...(input.reopened ?? [])] });
+  for (const k of WSL_DROPPED) delete env[k];
+  env.SHELL = '/bin/bash';
+  env.TMPDIR = input.tmpDir;
+  env.CLAUDE_CODE_TMPDIR = input.tmpDir;
+  return env;
+}

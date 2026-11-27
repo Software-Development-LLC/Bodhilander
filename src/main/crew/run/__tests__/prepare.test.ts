@@ -65,6 +65,20 @@ describe('preparing a run', () => {
     expect(fs.existsSync(t.root)).toBe(false);
   });
 
+  test('on Windows the setup gate decides, and a passing gate still never prepares a native run', async () => {
+    const t = setup();
+    t.deps.platform = 'win32';
+    t.deps.windows = { gate: async () => 'held:setup' };
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    t.deps.windows = { gate: async () => null };
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    const calls: string[] = [];
+    t.deps.windows = { gate: async () => null, prepare: async (_j, _k, runId) => (calls.push(runId), { hold: 'from-wsl' }) };
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: 'from-wsl' });
+    expect(calls).toEqual(['run-1']);
+    expect(fs.existsSync(t.root)).toBe(false);
+  });
+
   test('resolves the account, writes settings, CLAUDE.md and mcp config, and keeps tokens out of the env', async () => {
     const t = setup();
     fs.mkdirSync(path.join(t.root, 'owner', '.claude'), { recursive: true });
@@ -160,6 +174,19 @@ const doneRun = (raw: ReturnType<typeof crewDb>['raw'], id: string, endedAt: str
   raw.query(`INSERT INTO crew_run (id, job_id, hire_id, ended_at, outcome, usage) VALUES (?, 'j', ?, ?, 'done', ?)`).run(id, HIRE, endedAt, JSON.stringify({ cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...tokens }));
 
 describe('usage holds before a run', () => {
+  test('on Windows the usage holds apply too, before anything is prepared inside WSL2', async () => {
+    const t = setup();
+    t.deps.platform = 'win32';
+    const calls: string[] = [];
+    t.deps.windows = { gate: async () => null, prepare: async (_j, _k, runId) => (calls.push(runId), { hold: 'from-wsl' }) };
+    t.deps.holds.recordRateLimit('a1', NOW + 60_000);
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: 'held:rate-limited' });
+    expect(calls).toEqual([]);
+    t.deps.now = () => NOW + 60_000;
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-2')).toEqual({ hold: 'from-wsl' });
+    expect(calls).toEqual(['run-2']);
+  });
+
   test('a recorded rate limit holds the hire rate-limited until its reset, and writes nothing', async () => {
     const t = setup();
     t.deps.holds.recordRateLimit('a1', NOW + 60_000);

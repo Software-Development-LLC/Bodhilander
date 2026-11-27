@@ -58,3 +58,18 @@ describe('runArgs', () => {
     expect(resumed.slice(1, 3)).toEqual(['--resume', 's1']);
   });
 });
+
+describe('a run inside BodhiCrew', () => {
+  const { wslRunEnv, WSL_PATH } = require('../env') as typeof import('../env');
+  const env = wslRunEnv({ configDir: '/home/crew/.bodhilander/crew/accounts/a1', ghConfigDir: '/g', shellDir: '/s', tokenOnFd: true, tmpDir: '/tmp/crt-1000/x', home: '/home/crew', user: 'crew', extra: { WSLENV: 'X', WSL_INTEROP: '/run/WSL/1_interop' } });
+
+  test('has its own TMPDIR, a Linux PATH and no interop variables', () => {
+    expect(env.TMPDIR).toBe('/tmp/crt-1000/x');
+    expect(env.CLAUDE_CODE_TMPDIR).toBe('/tmp/crt-1000/x');
+    expect(env.PATH).toBe(WSL_PATH);
+    expect(env.SHELL).toBe('/bin/bash');
+    expect(env).not.toHaveProperty('WSLENV');
+    expect(env).not.toHaveProperty('WSL_INTEROP');
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR).toBe('3');
+  });
+});

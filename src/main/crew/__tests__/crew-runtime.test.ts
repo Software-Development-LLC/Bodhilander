@@ -10,7 +10,7 @@ const { startCrewRuntime, REMINDER_CHECK_MS } = await import('../crew-runtime');
 const { CrewSignIn, LOGIN_LIFETIME_MS } = await import('../crew-token');
 const { Holds } = await import('../holds');
 import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
-import type { RunChild } from '../run/loop';
+import type { CrewJob, Prepared, RunChild } from '../run/loop';
 import { RunSlots } from '../run/slots';
 import { SCHEDULE_TICK_MS } from '../schedule/scheduler';
 import { HIRE, MACHINE, PERSON, crewDb, uuid } from './crew-db';
@@ -42,7 +42,7 @@ class Child implements RunChild {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-function setup() {
+function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
   const { raw, db } = crewDb();
   raw.query(`INSERT INTO claude_accounts (id, label, config_dir) VALUES ('a1', 'Work', '/acct/a1')`).run();
   const accounts = [{ id: 'a1', label: 'Work', configDir: '/acct/a1', email: null } as ClaudeAccount];
@@ -60,6 +60,8 @@ function setup() {
     sendEdit: (e: unknown) => (hub.edits.push(e), 'e1'),
     cards: [] as [string, Record<string, unknown>][],
     sendCard: (id: string, c: Record<string, unknown>) => (hub.cards.push([id, c]), true),
+    audits: [] as [string, Record<string, unknown>, string | undefined][],
+    sendAudit: (e: string, d: Record<string, unknown>, h?: string) => (hub.audits.push([e, d, h]), 'au1'),
   });
   const ended: string[] = [];
   const children: Child[] = [];
@@ -70,7 +72,7 @@ function setup() {
   let clock = Date.parse('2026-11-27T12:00:00Z');
   const deps: Parameters<typeof startCrewRuntime>[0] = {
     db, hub, signIn, holds, accounts: () => accounts,
-    prepare: async (job) => ({ command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a1', sessionId: null, token: null }),
+    prepare: over.prepare ?? (async (job) => ({ command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a1', sessionId: null, token: null })),
     usage: { get: (id) => records.get(id) ?? null, set: (u) => void records.set(u.accountId, u) },
     remind: (r, a) => reminders.push(`${a.label}:${r.key}`),
     loggedIn: (a) => (a.id === 'a1' ? loggedIn.a1 : undefined),
@@ -176,6 +178,16 @@ describe('crew runtime', () => {
     expect(t.hub.replies).toEqual([[uuid(1), 'ok']]);
     expect(t.hub.usage).toEqual([[uuid(1), expect.objectContaining({ accountUuid: 'u-a1', inputTokens: 2, windows: [expect.objectContaining({ name: 'five_hour', utilization: 0.5 })] })]]);
     expect(t.records.get('a1')?.fiveHour?.pct).toBe(50);
+  });
+
+  test('a held run is reported to the Hub as a hold audit, once', async () => {
+    const t = setup({ prepare: async () => ({ hold: 'held:setup' }) });
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.hub.audits).toEqual([['hold', { state: 'held:setup' }, HIRE]]);
   });
 
   test('a renewal starts a job that was waiting for its lease', async () => {

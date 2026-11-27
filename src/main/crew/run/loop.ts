@@ -81,6 +81,8 @@ export interface RunLoopDeps {
   onFinished?(run: FinishedRun): void;
   onUsageObserved?(accountId: string, observation: UsageObservation): void;
   onSettled?(jobId: string, outcome: RunOutcome): void;
+  /** Once per distinct hold of a hire, so the Hub can show it and route the hire's work elsewhere. */
+  onHeld?(hireId: string, hold: string): void;
   /** A run held on an undecided card parks on an interrupt instead of being re-queued. */
   waitingOnCard?(jobId: string): boolean;
   now?(): number;
@@ -214,7 +216,10 @@ export class RunLoop {
     }
     if ('hold' in prepared) {
       this.finishAs(run, 'held', { requeue: true });
-      if (this.holds.get(job.hireId) !== prepared.hold) writeAudit(db, job.hireId, 'run-held', { jobId: job.id, hold: prepared.hold });
+      if (this.holds.get(job.hireId) !== prepared.hold) {
+        writeAudit(db, job.hireId, 'run-held', { jobId: job.id, hold: prepared.hold });
+        this.deps.onHeld?.(job.hireId, prepared.hold);
+      }
       this.holds.set(job.hireId, prepared.hold);
       return 'held';
     }

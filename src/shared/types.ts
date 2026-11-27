@@ -1019,6 +1019,29 @@ export interface CrewStatus {
   owner: { name: string; upn: string } | null;
 }
 
+/** A Repair export of Crew's Windows setup, under Crew → Windows setup → Saved copies. */
+export interface CrewSavedCopy {
+  name: string;
+  sizeBytes: number;
+  savedAt: number;
+}
+
+/** Where Crew's Windows setup stands on this PC. */
+export type CrewWindowsState = { state: 'ready' } | { state: 'no-wsl' | 'missing' | 'wsl1' | 'needs-repair' | 'unbuilt'; message: string };
+
+export interface CrewWindowsProgress {
+  step: string;
+  message?: string;
+}
+
+export type CrewWindowsSetupResult = { ok: true; message?: string } | { ok: false; message: string; repair: boolean };
+
+/** `confirm` carries the prompt to show; Repair runs again with `confirmed` on Continue. */
+export type CrewWindowsRepairResult = CrewWindowsSetupResult | { confirm: string };
+
+/** How Sign in for Crew on Windows ended. */
+export type CrewWindowsSignInResult = { ok: true; accountUuid: string | null } | { ok: false; reason: string };
+
 /** What the sidebar says a hire is doing, from this machine's point of view. */
 export type CrewHireActivity = 'running' | 'idle' | 'held' | 'elsewhere' | 'provisioning' | 'paused' | 'let-go';
 

@@ -84,3 +84,18 @@ describe('the Hire form', () => {
     expect((screen.getByRole('option', { name: 'Work' }) as HTMLOptionElement).disabled).toBe(false);
   });
 });
+
+describe('the Hire form on Windows', () => {
+  test('an account that needs Crew sign-in gets Sign in for Crew under the account list', async () => {
+    const w = window as unknown as { electronAPI?: unknown };
+    const before = w.electronAPI;
+    w.electronAPI = { platform: 'win32' };
+    try {
+      render(<HireModal api={api()} onHired={() => {}} onClose={() => {}} />);
+      expect(await screen.findByText('Sign in for Crew')).toBeTruthy();
+      expect(screen.getByRole('list', { name: 'Accounts to sign in for Crew' }).textContent).toContain('Spare');
+    } finally {
+      w.electronAPI = before;
+    }
+  });
+});

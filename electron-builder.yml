@@ -38,6 +38,9 @@ extraResources:
   # A Crew run's gh shim, put first on the run's PATH.
   - from: resources/crew
     to: crew
+  # crew-agent and versions.json, copied into BodhiCrew by Set up Crew on Windows.
+  - from: resources/crew-agent
+    to: crew-agent
   - from: resources/sounds
     to: sounds
   # The Claude Desktop extension, opened by Settings → Claude Desktop.
@@ -68,6 +71,9 @@ mac:
   target:
     - target: dmg
     - target: zip
+
+# A Windows build stops while Crew's versions.json holds placeholders
+beforePack: scripts/check-crew-versions.js
 
 # Copy conpty.dll for Windows PTY support (runs after packing)
 afterPack: scripts/copy-conpty.js

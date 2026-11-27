@@ -316,3 +316,18 @@ describe('make this machine home', () => {
     expect(a.edits).toEqual([['home', 'h1']]);
   });
 });
+
+describe("the hire's account on Windows", () => {
+  test('an account that still needs Crew sign-in offers Sign in for Crew in the account section', async () => {
+    const w = window as unknown as { electronAPI?: unknown };
+    const before = w.electronAPI;
+    w.electronAPI = { platform: 'win32', crewHireAccounts: async () => [{ id: 'acc-1', label: 'Work', needs: 'crew-token' }] };
+    try {
+      render(<HireDetail hireId="h1" api={api()} now={() => NOW} />);
+      const button = await screen.findByText('Sign in for Crew');
+      expect(button.closest('section')?.querySelector('h3')?.textContent).toBe('Account');
+    } finally {
+      w.electronAPI = before;
+    }
+  });
+});

@@ -103,3 +103,71 @@ describe('run directories', () => {
     expect(tokenMatches(newRunToken(), token)).toBe(false);
   });
 });
+
+describe('the per-run TMPDIR inside BodhiCrew', () => {
+  const s = require('../sockets') as typeof import('../sockets');
+  const name = '0123456789abcdef0123456789abcdef';
+  const records = () => {
+    const set = new Set<string>();
+    const log: string[] = [];
+    return { set, log, add: (n: string) => (log.push(`add ${n}`), set.add(n)) && undefined, remove: (n: string) => void (log.push(`rm ${n}`), set.delete(n)), list: () => [...set] };
+  };
+  const sh = (stdout: string, scripts: string[] = []) => async (script: string) => (scripts.push(script), { code: 0, stdout, stderr: '' });
+
+  test('names are 128-bit random, never derived from the run id', () => {
+    expect(s.newTmpName()).toMatch(/^[0-9a-f]{32}$/);
+    expect(s.newTmpName()).not.toBe(s.newTmpName());
+  });
+
+  test('a good parent gets an exclusive mkdir, recorded before it is made', async () => {
+    const r = records();
+    const scripts: string[] = [];
+    const dir = await s.makeWslTmpDir(sh('PARENT directory|1000|300\nMADE\n', scripts), 1000, r, name);
+    expect(dir).toBe(`/tmp/crt-1000/${name}`);
+    expect(r.log).toEqual([`add ${name}`]);
+    expect(scripts[0]).toContain(`mkdir -m 0700 "$p/${name}"`);
+    expect(scripts[0]).not.toContain('mkdir -p');
+  });
+
+  test('a symlink, another owner or a mode but 0300 holds, naming what was seen', async () => {
+    for (const [line, observed] of [
+      ['PARENT symbolic link|1000|777', { type: 'symlink', uid: 1000, mode: '777' }],
+      ['PARENT directory|0|300', { type: 'directory', uid: 0, mode: '300' }],
+      ['PARENT directory|1000|700', { type: 'directory', uid: 1000, mode: '700' }],
+    ] as const) {
+      const r = records();
+      const err = await s.makeWslTmpDir(sh(`${line}\n`), 1000, r, name).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(s.TmpParentError);
+      expect(err).toBeInstanceOf(s.SocketRootError);
+      expect((err as InstanceType<typeof s.TmpParentError>).observed).toEqual(observed);
+      expect(r.list()).toEqual([]);
+    }
+  });
+
+  test('a good parent where the mkdir fails is a collision, not a repair', async () => {
+    const err = await s.makeWslTmpDir(sh('PARENT directory|1000|300\n'), 1000, records(), name).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(s.RunDirCollision);
+  });
+
+  test('the parent is made only when missing, and never via a followed link', () => {
+    const script = s.makeTmpDirScript(1000, name);
+    expect(script).toContain('if [ ! -e "$p" ] && [ ! -L "$p" ]; then mkdir "$p" && chmod 0300 "$p"; fi');
+    expect(() => s.makeTmpDirScript(1000, '../x')).toThrow();
+  });
+
+  test('Repair and the start sweep act on the parent only', () => {
+    expect(s.repairTmpParentScript(1000)).toBe('rm -rf /tmp/crt-1000 && mkdir /tmp/crt-1000 && chown 1000:1000 /tmp/crt-1000 && chmod 0300 /tmp/crt-1000');
+    expect(s.sweepTmpParentScript(1000)).toContain('find /tmp/crt-1000 -mindepth 1 -maxdepth 1 -exec rm -rf {} +');
+  });
+
+  test('recorded orphans are removed; live ones stay', async () => {
+    const r = records();
+    const other = 'f'.repeat(32);
+    r.add(name);
+    r.add(other);
+    const scripts: string[] = [];
+    await s.removeTmpOrphans(sh('', scripts), 1000, r, new Set([other]));
+    expect(r.list()).toEqual([other]);
+    expect(scripts).toEqual([`rm -rf /tmp/crt-1000/${name}`]);
+  });
+});
