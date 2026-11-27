@@ -42,7 +42,7 @@ function v6Bytes(a: string): number[] | null {
   }
   const [head, rest] = s.split('::');
   const left = head ? head.split(':') : [];
-  const right = rest === undefined ? [] : rest ? rest.split(':') : [];
+  const right = rest ? rest.split(':') : [];
   const fill = rest === undefined ? [] : Array<string>(8 - left.length - right.length).fill('0');
   const groups = [...left, ...fill, ...right].map((g) => parseInt(g, 16));
   const bytes = groups.flatMap((g) => [g >> 8, g & 0xff]);
@@ -77,7 +77,7 @@ export function addressAllowed(address: string): boolean {
   return true;
 }
 
-const hostOf = (u: URL): string => u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+const hostOf = (u: URL): string => u.hostname.replace(/(^\[)|(\]$)/g, '').toLowerCase();
 
 function urlProblem(u: URL): string | null {
   if (u.protocol !== 'https:') return 'web_fetch fetches https only.';
@@ -101,6 +101,23 @@ const TEXT_TYPE = /^(text\/[\w.+-]+|application\/xhtml\+xml)\s*(;|$)/i;
  * Fetch one page. `tainted` is the run's state when the call started; the
  * call's own redirect hops never change it.
  */
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
+function hostProblem(url: URL, tainted: boolean, fetchHosts: readonly string[]): string | null {
+  const problem = urlProblem(url);
+  if (problem) return problem;
+  if (!tainted || listed(hostOf(url), fetchHosts)) return null;
+  const list = fetchHosts.length ? fetchHosts.join(', ') : 'no host';
+  return `This run has read untrusted content, so it can only fetch from ${list}.`;
+}
+
+function pageResult(url: URL, res: FetchResponse): FetchResult {
+  if (res.status < 200 || res.status >= 300) return { ok: false, reason: `The page answered ${res.status}.` };
+  if (!TEXT_TYPE.test(res.contentType)) return { ok: false, reason: 'web_fetch reads text and HTML only.' };
+  if (res.body.length > FETCH_MAX_BYTES) return { ok: false, reason: 'The page is over 5 MB.' };
+  return { ok: true, url: url.href, text: res.body.toString('utf8') };
+}
+
 export async function fetchPage(raw: unknown, tainted: boolean, fetchHosts: readonly string[], transport: FetchTransport, timeoutMs = FETCH_TIMEOUT_MS): Promise<FetchResult> {
   let url: URL;
   try {
@@ -112,24 +129,14 @@ export async function fetchPage(raw: unknown, tainted: boolean, fetchHosts: read
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     for (let hop = 0; hop <= FETCH_MAX_REDIRECTS; hop++) {
-      const problem = urlProblem(url);
+      const problem = hostProblem(url, tainted, fetchHosts);
       if (problem) return { ok: false, reason: problem };
-      if (tainted && !listed(hostOf(url), fetchHosts)) {
-        const list = fetchHosts.length ? fetchHosts.join(', ') : 'no host';
-        return { ok: false, reason: `This run has read untrusted content, so it can only fetch from ${list}.` };
-      }
       const address = await checkedAddress(url, transport);
       if (!address) return { ok: false, reason: `${hostOf(url)} is not a public address.` };
       const res = await transport.get(url, address, FETCH_MAX_BYTES, controller.signal);
-      if ([301, 302, 303, 307, 308].includes(res.status)) {
-        if (!res.location) return { ok: false, reason: 'A redirect had no location.' };
-        url = new URL(res.location, url);
-        continue;
-      }
-      if (res.status < 200 || res.status >= 300) return { ok: false, reason: `The page answered ${res.status}.` };
-      if (!TEXT_TYPE.test(res.contentType)) return { ok: false, reason: 'web_fetch reads text and HTML only.' };
-      if (res.body.length > FETCH_MAX_BYTES) return { ok: false, reason: 'The page is over 5 MB.' };
-      return { ok: true, url: url.href, text: res.body.toString('utf8') };
+      if (!REDIRECTS.has(res.status)) return pageResult(url, res);
+      if (!res.location) return { ok: false, reason: 'A redirect had no location.' };
+      url = new URL(res.location, url);
     }
     return { ok: false, reason: `More than ${FETCH_MAX_REDIRECTS} redirects.` };
   } catch (err) {

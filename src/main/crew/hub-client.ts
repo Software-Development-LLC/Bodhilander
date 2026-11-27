@@ -26,7 +26,6 @@ import {
   type CardRaiseFrame,
   type SendFrame,
   type FileFrame,
-  type RefusedReason,
   type UsageFrame,
   type UsageReadFrame,
   type ChallengeFrame,
@@ -59,7 +58,7 @@ export type UsageInput = Omit<UsageRecordFrame, 'type' | 'id' | 'hireId' | 'epoc
 /** A send_file item, as the tool read it: the bytes travel, never the path. */
 export type FileInput = { id: string; name: string; size: number; sha256: string; tainted: boolean; bytes: Uint8Array; inboundId?: string; recipient?: string };
 /** The Hub's one answer per file, or `pending` while it is still being sent or re-sent. */
-export type FileAnswer = { state: 'ack' } | { state: 'refused'; reason: RefusedReason | string } | { state: 'pending' } | { state: 'not-queued' };
+export type FileAnswer = { state: 'ack' } | { state: 'refused'; reason: string } | { state: 'pending' } | { state: 'not-queued' };
 
 export const FILE_ANSWER_WAIT_MS = 120_000;
 /** How often a paced file send looks again while the socket still holds the last chunk. */

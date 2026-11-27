@@ -74,17 +74,17 @@ const RoutineForm: React.FC<{ initial: CrewRoutineInput; label: string; onSave(i
     setError(failed);
   };
   return (
-    <div className="crew-detail__routine-form" aria-label={label} role="group">
+    <fieldset className="crew-detail__routine-form" aria-label={label}>
       <label>
-        Prompt
+        {'Prompt '}
         <textarea value={draft.prompt} onChange={set('prompt')} rows={3} />
       </label>
       <label>
-        Schedule (cron)
+        {'Schedule (cron) '}
         <input value={draft.cron} onChange={set('cron')} placeholder="0 8 * * 1-5" />
       </label>
       <label>
-        Time zone
+        {'Time zone '}
         <input value={draft.timezone} onChange={set('timezone')} />
       </label>
       <div className="crew-detail__row">
@@ -100,13 +100,14 @@ const RoutineForm: React.FC<{ initial: CrewRoutineInput; label: string; onSave(i
           {error}
         </div>
       )}
-    </div>
+    </fieldset>
   );
 };
 
 /** The owner's routines: each can be edited or deleted, and a new one added; the Hub's answer shows inline. */
 const Routines: React.FC<{ hire: CrewHireDetail; api: HireDetailApi; reload(): Promise<void> }> = ({ hire, api, reload }) => {
-  const [editing, setEditing] = useState<string | 'new' | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const [rowError, setRowError] = useState<{ id: string; text: string } | null>(null);
   const answered = async (result: Promise<CrewEditResult>): Promise<string | null> => {
     try {
@@ -116,6 +117,7 @@ const Routines: React.FC<{ hire: CrewHireDetail; api: HireDetailApi; reload(): P
         return r.error;
       }
       setEditing(null);
+      setAdding(false);
       await reload();
       return null;
     } catch (err) {
@@ -130,7 +132,7 @@ const Routines: React.FC<{ hire: CrewHireDetail; api: HireDetailApi; reload(): P
   return (
     <section>
       <h3>Routines</h3>
-      {hire.routines.length === 0 && editing !== 'new' && <p className="crew-detail__hint">No routines.</p>}
+      {hire.routines.length === 0 && !adding && <p className="crew-detail__hint">No routines.</p>}
       <ul className="crew-detail__routines">
         {hire.routines.map((r) =>
           editing === r.routineId ? (
@@ -165,10 +167,10 @@ const Routines: React.FC<{ hire: CrewHireDetail; api: HireDetailApi; reload(): P
           ),
         )}
       </ul>
-      {editing === 'new' ? (
-        <RoutineForm label="New routine" initial={blank} onSave={(input) => answered(api.createRoutine(hire.hireId, input))} onCancel={() => setEditing(null)} />
+      {adding ? (
+        <RoutineForm label="New routine" initial={blank} onSave={(input) => answered(api.createRoutine(hire.hireId, input))} onCancel={() => setAdding(false)} />
       ) : (
-        <button type="button" onClick={() => setEditing('new')}>
+        <button type="button" onClick={() => setAdding(true)}>
           Add routine
         </button>
       )}
