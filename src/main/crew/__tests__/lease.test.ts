@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { LEASE_MS, LeaseClock } from '../lease';
+import { LeaseClock } from '../lease';
+import { LEASE_MS } from '../protocol';
 import { HIRE, HIRE_B } from './crew-db';
 
 function clocks() {

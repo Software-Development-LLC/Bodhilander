@@ -3,13 +3,13 @@
  * is a single re-sign each for clock-skew and replayed.
  */
 import { isUuidV4, trimTrailingSlashes } from './protocol-parse';
-import {
-  linkMessage,
-  type LinkCodeConflict,
-  type LinkCodeError,
-  type LinkCodeRequest,
-  type LinkCodeResponse,
-} from './protocol';
+import { linkMessage, type LinkError } from './protocol';
+
+// The POST /link/codes bodies, as bodhi-service-crew src/machines/link.ts declares them.
+export type LinkCodeRequest = { name: string; ed25519Pub: string; x25519Pub: string; issuedAt: number; sig: string };
+export type LinkCodeResponse = { code: string; confirmCode: string; machineId: string };
+export type LinkCodeConflict = { error: 'already-linked'; machineId: string; ownerName: string; ownerUpn: string };
+export type LinkCodeError = { error: Exclude<LinkError, 'already-linked'>; hubTime: number };
 
 export interface LinkKeys {
   ed25519Pub: string;
@@ -90,10 +90,10 @@ async function postOnce(deps: LinkDeps, hubUrl: string, issuedAt: number): Promi
     const after = Number(res.headers.get('retry-after'));
     return { done: { kind: 'rate-limited', retryAfterSeconds: Number.isFinite(after) && after > 0 ? after : null } };
   }
-  const body = (await readJson(res)) as Partial<LinkCodeError> | undefined;
+  const body = (await readJson(res)) as Partial<LinkCodeError> | Partial<LinkCodeConflict> | undefined;
   const error = body?.error;
   if (res.status === 409 && error === 'already-linked') return { done: readConflict(body) };
-  if (error === 'clock-skew') return { retry: error, hubTime: body?.hubTime };
+  if (error === 'clock-skew') return { retry: error, hubTime: (body as Partial<LinkCodeError>).hubTime };
   if (error === 'replayed') return { retry: error };
   if (typeof error === 'string') return { done: { kind: 'cannot-link', error } };
   return { done: { kind: 'failed', status: res.status } };

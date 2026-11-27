@@ -7,10 +7,11 @@ import type Database from 'better-sqlite3';
 import log from 'electron-log';
 import { writeAudit } from './audit';
 import { EpochFence } from './epoch';
-import { HEARTBEAT_MS, LeaseClock, systemClocks, type Clocks } from './lease';
+import { LeaseClock, systemClocks, type Clocks } from './lease';
 import { LocalOutbox } from './local-outbox';
 import { assertSendable, cutText, isErrorReason, parseHubFrame, trimTrailingSlashes } from './protocol-parse';
 import {
+  HEARTBEAT_MS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   authMessage,

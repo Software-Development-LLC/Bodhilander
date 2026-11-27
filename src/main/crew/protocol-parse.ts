@@ -12,7 +12,7 @@ import {
   type HubFrame,
   type HubFrameType,
   type MachineFrame,
-  type RenewLease,
+  type Lease,
 } from './protocol';
 
 export type ParseResult =
@@ -35,7 +35,7 @@ type Obj = Record<string, unknown>;
 /** Hub frame types whose fields the Hub has not published; this build does not read them. */
 const UNHANDLED: ReadonlySet<HubFrameType> = new Set(['change', 'sync_page', 'edit_result', 'card_decision', 'usage', 'token']);
 
-function checkLeases(v: unknown): v is RenewLease[] {
+function checkLeases(v: unknown): v is Lease[] {
   return Array.isArray(v) && v.every((l) => typeof l === 'object' && l !== null && isUuidV4((l as Obj).hireId) && isEpoch((l as Obj).epoch));
 }
 

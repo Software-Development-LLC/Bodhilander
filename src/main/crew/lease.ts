@@ -2,10 +2,7 @@
  * Each hire's 5-minute lease runs from the send of the heartbeat the Hub renewed,
  * on the monotonic and the wall clock both; either passing 5 minutes lapses it.
  */
-import type { RenewLease } from './protocol';
-
-export const LEASE_MS = 5 * 60 * 1000;
-export const HEARTBEAT_MS = 30 * 1000;
+import { LEASE_MS, type Lease } from './protocol';
 
 export interface Clocks {
   /** Milliseconds on a clock a wall-clock change cannot move. */
@@ -45,7 +42,7 @@ export class LeaseClock {
   }
 
   /** Apply a renew; returns the hires it renewed. An unknown or pre-wake seq renews nothing. */
-  onRenew(seq: number, leases: RenewLease[]): string[] {
+  onRenew(seq: number, leases: Lease[]): string[] {
     const hb = this.sent.get(seq);
     if (!hb) return [];
     this.sent.delete(seq);

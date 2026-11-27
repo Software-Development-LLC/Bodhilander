@@ -4,7 +4,7 @@ mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, 
 
 const { HubClient, resolveHubUrl, HUB_URL_DEVELOPMENT, HUB_URL_PRODUCTION } = await import('../hub-client');
 import type { HubSocket } from '../hub-client';
-import { HEARTBEAT_MS, LEASE_MS } from '../lease';
+import { HEARTBEAT_MS, LEASE_MS } from '../protocol';
 import { HIRE, MACHINE, PERSON, crewDb, uuid } from './crew-db';
 
 class FakeSocket {
