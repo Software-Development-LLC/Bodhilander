@@ -28,7 +28,7 @@ export async function letGoHire(deps: LetGoDeps, hireId: string): Promise<CrewEd
     return { ok: false, error: "The let go couldn't be queued." };
   }
   const answer = await deps.editResult(id);
-  if (!answer) return { ok: false, error: "Crew Hub hasn't answered yet. The let go is still queued and goes ahead once it does." };
+  if (!answer) return { ok: false, error: "Crew Hub hasn't answered yet. Check the hire in a minute, and let it go again if it is still here." };
   if (answer.result !== 'applied') return { ok: false, error: answer.why ?? 'Crew Hub refused the let go.' };
   deps.forget(hireId);
   deps.interrupt(hireId);

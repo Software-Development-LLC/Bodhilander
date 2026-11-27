@@ -154,7 +154,12 @@ export class McpHost {
       } catch {
         request = {};
       }
-      void this.answer(request).then((a) => conn.end(`${JSON.stringify(a)}\n`));
+      this.answer(request)
+        .then((a) => conn.end(`${JSON.stringify(a)}\n`))
+        .catch((err: unknown) => {
+          log.warn('[Crew] an MCP request failed', err);
+          conn.end(`${JSON.stringify({ ok: false, error: 'internal' })}\n`);
+        });
     });
   }
 

@@ -249,7 +249,12 @@ export class GithubGateway {
         buffered = '';
         answered = true;
         conn.pause();
-        void this.handle(run, request).then((r) => conn.end(`${JSON.stringify(r)}\n`));
+        this.handle(run, request)
+          .then((r) => conn.end(`${JSON.stringify(r)}\n`))
+          .catch((err: unknown) => {
+            log.warn('[Crew] a GitHub gateway request failed', err);
+            conn.end(`${JSON.stringify({ code: 1, stdout: '', stderr: 'The GitHub gateway failed.\n' })}\n`);
+          });
       });
     });
     this.servers.set(run.jobId, { server, conns });
