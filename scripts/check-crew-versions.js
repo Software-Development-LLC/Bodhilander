@@ -1,7 +1,7 @@
 /**
- * electron-builder beforePack hook: a Windows build stops while
- * resources/crew-agent/versions.json still holds a placeholder, since that
- * build could never set up Crew on Windows.
+ * electron-builder beforePack hook: a Windows build warns while
+ * resources/crew-agent/versions.json still holds a placeholder. The app holds
+ * Crew setup at runtime until the pins are real.
  */
 
 const fs = require('fs');
@@ -9,7 +9,6 @@ const path = require('path');
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const PLACEHOLDER = /^NOT-VERIFIED/;
-const ALLOW_ENV = 'BODHILANDER_ALLOW_CREW_PLACEHOLDERS';
 
 function placeholders(versions) {
   const found = [];
@@ -31,12 +30,13 @@ function placeholders(versions) {
 
 function checkCrewVersions(file) {
   const found = placeholders(JSON.parse(fs.readFileSync(file, 'utf8')));
-  if (found.length) throw new Error(`${file} still holds placeholders (${found.join(', ')}); this build can't set up Crew on Windows. Set ${ALLOW_ENV}=1 for a local build only.`);
+  return found.length ? `WARNING: ${file} still holds placeholders (${found.join(', ')}); this build can't set up Crew on Windows until they are pinned.` : null;
 }
 
 module.exports = async function beforePack(context) {
-  if (context.electronPlatformName !== 'win32' || process.env[ALLOW_ENV] === '1') return;
-  checkCrewVersions(path.join(context.packager.projectDir, 'resources', 'crew-agent', 'versions.json'));
+  if (context.electronPlatformName !== 'win32') return;
+  const warning = checkCrewVersions(path.join(context.packager.projectDir, 'resources', 'crew-agent', 'versions.json'));
+  if (warning) console.warn(warning);
 };
 module.exports.placeholders = placeholders;
 module.exports.checkCrewVersions = checkCrewVersions;

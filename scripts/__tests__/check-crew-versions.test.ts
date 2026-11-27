@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
 const hook = require('../check-crew-versions.js') as ((ctx: unknown) => Promise<void>) & {
   placeholders(v: unknown): string[];
-  checkCrewVersions(file: string): void;
+  checkCrewVersions(file: string): string | null;
 };
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -20,7 +20,6 @@ const pinned = () => {
 const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
-  delete process.env.BODHILANDER_ALLOW_CREW_PLACEHOLDERS;
 });
 function project(versions: unknown): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-versions-'));
@@ -39,17 +38,31 @@ describe("the release check on Crew's versions.json", () => {
     expect(hook.placeholders(pinned())).toEqual([]);
   });
 
-  test('a Windows build stops while placeholders remain, and goes on once they are pinned', async () => {
-    const shipped = JSON.parse(fs.readFileSync(SHIPPED, 'utf8'));
-    await expect(hook(ctx(project(shipped)))).rejects.toThrow(/placeholders/);
-    await expect(hook(ctx(project(pinned())))).resolves.toBeUndefined();
+  test('a Windows build with placeholders warns, naming each one, and still packs', async () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const shipped = JSON.parse(fs.readFileSync(SHIPPED, 'utf8'));
+      await expect(hook(ctx(project(shipped)))).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const said = String(warn.mock.calls[0][0]);
+      expect(said).toMatch(/^WARNING/);
+      expect(said).toContain('rootfs.sha256');
+      expect(said).toContain('node.sha256');
+      expect(said).toMatch(/can't set up Crew on Windows/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
-  test('a Mac or Linux build, or a local build that opts out, is not stopped', async () => {
-    const dir = project(JSON.parse(fs.readFileSync(SHIPPED, 'utf8')));
-    await expect(hook(ctx(dir, 'darwin'))).resolves.toBeUndefined();
-    process.env.BODHILANDER_ALLOW_CREW_PLACEHOLDERS = '1';
-    await expect(hook(ctx(dir))).resolves.toBeUndefined();
+  test('a pinned Windows build, or a Mac or Linux one, packs without a warning', async () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(hook(ctx(project(pinned())))).resolves.toBeUndefined();
+      await expect(hook(ctx(project(JSON.parse(fs.readFileSync(SHIPPED, 'utf8'))), 'darwin'))).resolves.toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('electron-builder runs it before packing', () => {
