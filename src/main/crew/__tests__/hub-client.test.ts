@@ -658,6 +658,15 @@ describe('HubClient sync edges', () => {
     expect(t.client.getStatus()).toBe('online');
   });
 
+  test('a resume before welcome sends no heartbeat ahead of auth', () => {
+    const t = setup();
+    t.client.start();
+    t.client.onResume();
+    t.sock().hub({ type: 'challenge', version: 2, nonce: 'n1', hubTime: t.c.w });
+    t.client.onResume();
+    expect(t.sock().types()).toEqual(['auth']);
+  });
+
   test('a conflict answered without the current object pulls', () => {
     const t = setup();
     t.online();
