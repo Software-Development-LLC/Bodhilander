@@ -325,6 +325,7 @@ export interface WindowsGateDeps {
  */
 export class WindowsGate {
   private interop: StepResult | null = null;
+  private last: StepResult | null = null;
   private lastHold: string | null = null;
 
   constructor(private readonly deps: WindowsGateDeps) {}
@@ -333,8 +334,14 @@ export class WindowsGate {
     await this.deps.sweep?.();
     const machine = await machineCheck(this.deps.exec, this.deps.versions);
     this.interop = machine.ok ? await checkInterop(this.deps.exec) : machine;
+    this.last = this.interop;
     if (!this.interop.ok) this.record(this.interop);
     return this.interop;
+  }
+
+  /** The last check, at start or before a run; null before the first. */
+  state(): StepResult | null {
+    return this.last;
   }
 
   afterRepair(): Promise<StepResult> {
@@ -345,6 +352,7 @@ export class WindowsGate {
     if (!this.interop) return HOLD_SETUP;
     if (!this.interop.ok) return this.interop.hold;
     const r = await machineCheck(this.deps.exec, this.deps.versions);
+    this.last = r;
     if (r.ok) {
       this.lastHold = null;
       return null;

@@ -6,13 +6,15 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createInterface } from 'readline';
-import { parseVersions, type CrewVersions } from './artifacts';
+import { Readable } from 'stream';
+import { ArtifactError, downloadArtifact, IMAGE_UNAVAILABLE, parseVersions, requestArtifactUrl, type ArtifactHub, type CrewVersions, type DownloadFs, type HttpAnswer } from './artifacts';
 import { HOLD_SETUP, type PrepareDeps } from './run/prepare';
 import { removeTmpOrphans, sweepTmpParentScript, type DistroSh, type TmpRecords } from './run/sockets';
-import { asCrew, asRoot, decodeWslOutput, type WslExec } from './wsl';
+import { asCrew, asRoot, checkWsl, decodeWslOutput, repairLock, repairWsl1, type WslExec } from './wsl';
 import { agentServeArgs, WSL_EXE, windowsEnv, type AgentChild } from './wsl-agent';
 import { WslRuns, WSL_GH_SHIM_DIR, WSL_MCP_RELAY, type WslRunDeps } from './wsl-run';
-import { installShipped, WindowsGate, type ShippedFiles } from './wsl-setup';
+import { installShipped, LINK_WAITING, repairUser, runSetup, WindowsGate, type ShippedFiles } from './wsl-setup';
+import { WindowsSetupService } from './wsl-setup-service';
 import { WslSignIn, type SignInChild, type WslSignInDeps } from './wsl-sign-in';
 
 const CREW_UID = 1000;
@@ -136,9 +138,38 @@ export function shippedFiles(res: CrewAgentResources, versions: CrewVersions): S
   };
 }
 
+const nodeDownloadFs: DownloadFs = {
+  size: (file) => (fs.existsSync(file) ? fs.statSync(file).size : null),
+  read: (file) => fs.createReadStream(file),
+  append: (file, chunk) => fs.appendFileSync(file, chunk),
+  truncate: (file) => fs.writeFileSync(file, ''),
+  remove: (file) => fs.rmSync(file, { force: true }),
+};
+
+async function httpGet(url: string, from: number): Promise<HttpAnswer> {
+  const res = await fetch(url, { headers: from > 0 ? { Range: `bytes=${from}-` } : {} });
+  return { status: res.status, body: res.body ? Readable.fromWeb(res.body as never) : Readable.from([]) };
+}
+
+const LINK_POLL_MS = 2000;
+const LINK_WAIT_MS = 15 * 60_000;
+
+/** The link card is raised from Crew's own Link this PC; setup waits for it to be approved. */
+async function waitForLink(linked: () => boolean, onStatus: (m: string) => void): Promise<boolean> {
+  onStatus(LINK_WAITING);
+  for (const end = Date.now() + LINK_WAIT_MS; Date.now() < end; await new Promise((r) => setTimeout(r, LINK_POLL_MS))) if (linked()) return true;
+  return linked();
+}
+
 export type WindowsCrewDeps = Omit<WslRunDeps, 'exec' | 'sh' | 'records' | 'agentVersion' | 'spawnAgent' | 'reinstallAgent'> & {
   resources: CrewAgentResources;
   recordsFile: string;
+  /** %LOCALAPPDATA%\Bodhilander\crew: the distro, its downloads and Repair's saved copies. */
+  crewDir: string;
+  linked(): boolean;
+  artifactHub(): ArtifactHub | null;
+  /** After setup or Repair, once the start check has run again. */
+  onRepaired(): Promise<void>;
   audit(event: string, detail: Record<string, unknown>): void;
   openExternal: WslSignInDeps['openExternal'];
   belongsTo: WslSignInDeps['belongsTo'];
@@ -151,6 +182,7 @@ export interface WindowsCrew {
   /** The sweep, then the full check with interop, once, on the first run this launch. Runs are held until it passes. */
   start(): Promise<void>;
   afterRepair(): Promise<void>;
+  setup: WindowsSetupService;
   signIn: WslSignIn;
   end(jobId: string): void;
   endAll(): void;
@@ -161,7 +193,9 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   const sh = distroSh(exec);
   const versions = parseVersions(fs.readFileSync(path.join(deps.resources.dir, 'versions.json'), 'utf8'));
   const records = new FileTmpRecords(deps.recordsFile);
-  const reinstallAgent = async () => (await installShipped(exec, shippedFiles(deps.resources, versions), { read: (f) => fs.readFileSync(f) })).ok;
+  const shipped = shippedFiles(deps.resources, versions);
+  const source = { read: (f: string) => fs.readFileSync(f) };
+  const reinstallAgent = async () => (await installShipped(exec, shipped, source)).ok;
   const runs = new WslRuns({
     ...deps,
     exec,
@@ -182,6 +216,15 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
       if (live.size === 0) await sh(sweepTmpParentScript(CREW_UID), true);
     },
   });
+  const installDir = path.join(deps.crewDir, 'wsl');
+  const fetchRootfs = async (): Promise<string> => {
+    const hub = deps.artifactHub();
+    if (!hub) throw new ArtifactError('unavailable', IMAGE_UNAVAILABLE);
+    const dir = path.join(deps.crewDir, 'download');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, path.basename(versions.rootfs.name));
+    return downloadArtifact({ request: (name) => requestArtifactUrl(hub, name), get: httpGet, fs: nodeDownloadFs, now: Date.now }, { name: versions.rootfs.name, sha256: versions.rootfs.sha256, file });
+  };
   let started: Promise<unknown> | null = null;
   const start = async () => {
     started ??= gate.atStart();
@@ -192,6 +235,43 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
       throw err;
     }
   };
+  const afterRepair = async () => {
+    started = gate.afterRepair();
+    await started;
+  };
+  const setup = new WindowsSetupService({
+    check: () => checkWsl(exec),
+    start,
+    gateState: () => gate.state(),
+    setup: (onStep) =>
+      runSetup({ exec, versions, linked: deps.linked, link: (onStatus) => waitForLink(deps.linked, onStatus), download: fetchRootfs, removeFile: (f) => fs.rmSync(f, { force: true }), installDir, shipped, source, onStep }),
+    repairWsl1: (confirm) =>
+      repairWsl1({
+        exec,
+        lock: repairLock,
+        fetchRootfs,
+        removeFile: (f) => fs.rmSync(f, { force: true }),
+        exists: (f) => fs.existsSync(f),
+        confirm,
+        loginFallback: deps.signIn.mode() === 'login',
+        freeBytes: async () => {
+          const st = fs.statfsSync(deps.crewDir);
+          return st.bavail * st.bsize;
+        },
+        distroUsedBytes: async () => {
+          const vhdx = path.join(installDir, 'ext4.vhdx');
+          return fs.existsSync(vhdx) ? fs.statSync(vhdx).size : 0;
+        },
+        installDir,
+        backupDir: path.join(deps.crewDir, 'backup'),
+        now: () => new Date(),
+      }),
+    repairUser: () => repairUser(exec),
+    repaired: async () => {
+      await afterRepair();
+      await deps.onRepaired();
+    },
+  });
   return {
     windows: {
       gate: async () => {
@@ -206,9 +286,8 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
       prepare: (job, threadKey, runId) => runs.prepare(job, threadKey, runId),
     },
     start,
-    afterRepair: async () => {
-      await gate.afterRepair();
-    },
+    afterRepair,
+    setup,
     signIn,
     end: (jobId) => runs.end(jobId),
     endAll: () => runs.endAll(),

@@ -33,6 +33,7 @@ import { RunSlots } from './run/slots';
 import { crewTools } from './tools/server';
 import { writeAudit } from './audit';
 import { createWindowsCrew, type WindowsCrew } from './wsl-runtime';
+import { windowsSetupDeps } from './wsl-main';
 
 let runtime: CrewRuntime | null = null;
 let runtimeHub: HubClient | null = null;
@@ -137,6 +138,7 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     },
     resources: { dir, relayScript: res.relayScript, shimDir: res.shimDir },
     recordsFile: path.join(app.getPath('userData'), 'crew', 'wsl-tmp.json'),
+    ...windowsSetupDeps(async () => void runtime?.loop.tick()),
   });
   return windowsCrew;
 }
@@ -259,6 +261,11 @@ export function startCrew(): CrewRuntime {
 /** Sign in for Crew on Windows; null off Windows or before Crew has started. */
 export function crewWindowsSignIn(): WindowsCrew['signIn'] | null {
   return windowsCrew?.signIn ?? null;
+}
+
+/** The Windows setup screen's service; null off Windows or before Crew has started. */
+export function crewWindowsSetup(): WindowsCrew['setup'] | null {
+  return windowsCrew?.setup ?? null;
 }
 
 /** After Repair: the full check again, interop included, then held runs try again. */

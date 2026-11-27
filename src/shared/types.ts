@@ -1026,6 +1026,19 @@ export interface CrewSavedCopy {
   savedAt: number;
 }
 
+/** Where Crew's Windows setup stands on this PC. */
+export type CrewWindowsState = { state: 'ready' } | { state: 'no-wsl' | 'missing' | 'wsl1' | 'needs-repair'; message: string };
+
+export interface CrewWindowsProgress {
+  step: string;
+  message?: string;
+}
+
+export type CrewWindowsSetupResult = { ok: true; message?: string } | { ok: false; message: string; repair: boolean };
+
+/** `confirm` carries the prompt to show; Repair runs again with `confirmed` on Continue. */
+export type CrewWindowsRepairResult = CrewWindowsSetupResult | { confirm: string };
+
 /** How Sign in for Crew on Windows ended. */
 export type CrewWindowsSignInResult = { ok: true; accountUuid: string | null } | { ok: false; reason: string };
 

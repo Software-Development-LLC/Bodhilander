@@ -1,0 +1,18 @@
+/** The Electron-side pieces Set up Crew on Windows and Repair need: where they keep files, the link state and the Hub. */
+import * as path from 'path';
+import { app } from 'electron';
+import { getPreference } from '../repositories/preferences';
+import { MACHINE_ID_PREF } from './hub-client';
+import { getCrewHub } from './hub-service';
+import type { ArtifactHub } from './artifacts';
+import type { WindowsCrewDeps } from './wsl-runtime';
+
+export function windowsSetupDeps(onRepaired: () => Promise<void>): Pick<WindowsCrewDeps, 'crewDir' | 'linked' | 'artifactHub' | 'onRepaired'> {
+  const base = process.env.LOCALAPPDATA ?? app.getPath('userData');
+  return {
+    crewDir: path.join(base, 'Bodhilander', 'crew'),
+    linked: () => !!getPreference(MACHINE_ID_PREF),
+    artifactHub: () => getCrewHub() as unknown as ArtifactHub | null,
+    onRepaired,
+  };
+}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ArtifactError, IMAGE_MISMATCH, type CrewVersions } from '../artifacts';
 import {
-  InstallLock, LINK_REFUSED, USER_CONFLICT, WSL_CONF, checkInterop, classifyUser, interopRefused, machineCheck, parsePasswd, repairUser, runSetup, setupUser,
+  InstallLock, LINK_REFUSED, NEEDS_REPAIR, USER_CONFLICT, WSL_CONF, checkInterop, classifyUser, interopRefused, machineCheck, parsePasswd, repairUser, runSetup, setupUser,
   type SetupDeps, type SetupStep,
 } from '../wsl-setup';
 import type { WslExec, WslResult } from '../wsl';
@@ -375,6 +375,20 @@ describe('the gate a Windows run waits on', () => {
     await g2.atStart();
     e.wslConf = WSL_CONF.replace('enabled=false', 'enabled=true');
     expect(await g2.gate()).toBe('held:setup');
+  });
+
+  test('its state is the last check: none before start, then the start check, then the latest run check', async () => {
+    const e = finished();
+    const g = new WindowsGate({ exec: e.exec, versions, audit: () => {} });
+    expect(g.state()).toBeNull();
+    await g.atStart();
+    expect(g.state()).toEqual({ ok: true });
+    e.wslConf = WSL_CONF.replace('enabled=false', 'enabled=true');
+    await g.gate();
+    expect(g.state()).toMatchObject({ ok: false, message: NEEDS_REPAIR });
+    e.wslConf = WSL_CONF;
+    await g.gate();
+    expect(g.state()).toEqual({ ok: true });
   });
 });
 

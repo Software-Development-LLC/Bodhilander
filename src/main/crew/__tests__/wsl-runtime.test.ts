@@ -5,6 +5,8 @@ import * as path from 'path';
 
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 const { FileTmpRecords, realWslExec, shippedFiles, createWindowsCrew } = await import('../wsl-runtime');
+const { WSL1_MESSAGE } = await import('../wsl');
+const { IMAGE_UNAVAILABLE } = await import('../artifacts');
 import { crewDb } from './crew-db';
 
 const dirs: string[] = [];
@@ -61,7 +63,7 @@ describe('Crew on Windows, as the main process runs it', () => {
     const crew = createWindowsCrew({
       db, signIn: {} as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
       onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: (e) => void audits.push(e), openExternal: () => {}, belongsTo: () => false,
-      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'),
+      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'), linked: () => true, artifactHub: () => null, crewDir: dir, onRepaired: async () => {},
       exec: async (args) => {
         if (args.join(' ').includes('find /tmp/crt-1000')) sweeps++;
         throw new Error('getent passwd failed');
@@ -73,6 +75,24 @@ describe('Crew on Windows, as the main process runs it', () => {
     expect(audits.filter((e) => e === 'windows-check-failed')).toHaveLength(2);
   });
 
+  test("Repair on WSL1 refuses before changing anything while the image's SHA-256 is a placeholder", async () => {
+    const dir = tmp();
+    fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
+    const calls: string[] = [];
+    const { db } = crewDb();
+    const crew = createWindowsCrew({
+      db, signIn: { mode: () => 'token' } as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
+      onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
+      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'), linked: () => true, artifactHub: () => null, crewDir: dir, onRepaired: async () => {},
+      exec: async (args) => (calls.push(args.join(' ')), { code: 0, stdout: '  NAME       STATE    VERSION\n* BodhiCrew  Stopped  1\n', stderr: '' }),
+    });
+    expect(await crew.setup.state()).toEqual({ state: 'wsl1', message: WSL1_MESSAGE });
+    expect(await crew.setup.repair(true)).toEqual({ ok: false, message: IMAGE_UNAVAILABLE, repair: true });
+    expect(calls.every((c) => c === '-l -v')).toBe(true);
+    expect(await crew.setup.setup(() => {})).toMatchObject({ ok: false });
+    expect(calls.some((c) => c.includes('--import') || c.includes('--unregister') || c.includes('--set-version'))).toBe(false);
+  });
+
   test('the first run sweeps and checks once, and runs are held until the check passes', async () => {
     const dir = tmp();
     fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
@@ -81,7 +101,7 @@ describe('Crew on Windows, as the main process runs it', () => {
     const crew = createWindowsCrew({
       db, signIn: {} as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
       onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
-      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'),
+      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'), linked: () => true, artifactHub: () => null, crewDir: dir, onRepaired: async () => {},
       exec: async (args) => (calls.push(args.join(' ')), { code: 1, stdout: '', stderr: '' }),
     });
     expect(calls).toEqual([]);
