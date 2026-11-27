@@ -28,6 +28,7 @@ export interface HireDetailApi {
   onSignInStarted(fn: (started: CrewSignInStarted) => void): () => void;
   closeSignIn(ptyId: string): Promise<void>;
   officeEmployees(): Promise<CrewOfficeEmployees>;
+  makeHome(hireId: string): Promise<CrewEditResult>;
   importFromOffice(hireId: string, handle: string): Promise<CrewOfficeImportResult>;
 }
 
@@ -44,6 +45,7 @@ const windowApi = (): HireDetailApi => ({
   onSignInStarted: (fn) => window.electronAPI.onCrewSignInStarted(fn),
   closeSignIn: (ptyId) => window.electronAPI.cancelAccountLogin(ptyId, false),
   officeEmployees: () => window.electronAPI.crewOfficeEmployees(),
+  makeHome: (id) => window.electronAPI.crewMakeHome(id),
   importFromOffice: (id, handle) => window.electronAPI.crewImportFromOffice(id, handle),
 });
 
@@ -228,6 +230,11 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
       <div className="crew-detail__state">
         {hire.roleId} · {activityText(hire)}
       </div>
+      {hire.state.startsWith('held:no-home') && (
+        <button type="button" onClick={() => void apply(api.makeHome(hire.hireId), 'Asked to move it here. Approve the move card to finish.')}>
+          Make this machine home
+        </button>
+      )}
       {signInAccount && (
         <button type="button" disabled={signingIn} onClick={() => void signIn(signInAccount)}>
           Sign in again

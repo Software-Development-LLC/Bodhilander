@@ -203,6 +203,8 @@ interface ElectronAPI {
   crewSetDailyCap: (hireId: string, cap: number | null) => Promise<CrewEditResult>;
   crewSetRepos: (hireId: string, repos: string[]) => Promise<CrewEditResult>;
   crewOfficeEmployees: () => Promise<CrewOfficeEmployees>;
+  crewMakeHome: (hireId: string) => Promise<CrewEditResult>;
+  crewUnlink: () => Promise<CrewEditResult>;
   crewImportFromOffice: (hireId: string, handle: string) => Promise<CrewOfficeImportResult>;
   crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
   crewLetGo: (hireId: string) => Promise<CrewEditResult>;

@@ -250,6 +250,8 @@ export interface CrewIpcDeps extends UsageReadPort {
   beginLink(): Promise<CrewLinkView>;
   confirmLinkOwner(isMe: boolean): boolean;
   officeEmployees(): CrewOfficeEmployees;
+  makeHome(hireId: string): CrewEditResult;
+  unlink(): CrewEditResult;
   importFromOffice(hireId: string, handle: string): CrewOfficeImportResult;
   now(): number;
 }
@@ -304,6 +306,8 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
   deps.handle('crew:beginLink', () => deps.beginLink());
   deps.handle('crew:confirmLinkOwner', (isMe) => deps.confirmLinkOwner(isMe === true));
   deps.handle('crew:officeEmployees', () => deps.officeEmployees());
+  deps.handle('crew:makeHome', (hireId) => (known(hireId) ? deps.makeHome(hireId) : refuse('This hire has not synced to this machine yet.')));
+  deps.handle('crew:unlink', () => deps.unlink());
   deps.handle('crew:importFromOffice', (hireId, handle): CrewOfficeImportResult => {
     if (!known(hireId)) return refuse('This hire has not synced to this machine yet.');
     if (typeof handle !== 'string' || !(deps.officeEmployees() ?? []).includes(handle)) return refuse('That Office employee is not on this machine.');

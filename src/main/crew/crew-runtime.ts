@@ -13,6 +13,7 @@ import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
 import type { Holds } from './holds';
 import type { UsageInput } from './hub-client';
+import { isMoveRaisedHere, moveDecided, type HomeDeps } from './home';
 import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame, Unstamped } from './protocol';
 import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
 import { RunSlots } from './run/slots';
@@ -55,6 +56,8 @@ export interface CrewRuntimeDeps {
   clearInterval?(handle: unknown): void;
   /** Routines fire only where this is given: the Hub client, this machine's id, and a way to tell the owner. */
   schedule?: { hub: SchedulerHub; machineId(): string | null; tellOwner(text: string): void };
+  /** Tells the owner how a move card raised here was decided. */
+  home?: HomeDeps;
 }
 
 export interface CrewRuntime {
@@ -145,6 +148,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const onEditResult = (frame: EditResultFrame): void => guard('carrying sessions', () => changer.onEditResult(frame));
   /** Not guarded: a decision that throws reaches the Hub client, which leaves it unacked to come again. */
   const onCardDecision = (frame: CardDecisionFrame): void => {
+    if (deps.home && isMoveRaisedHere(deps.db, frame)) return moveDecided(deps.home, frame);
     if (broker.decide(frame) === 'job') void tick();
   };
   const onCardRefused = (raiseId: string): void => guard('a refused card', () => broker.refused(raiseId));

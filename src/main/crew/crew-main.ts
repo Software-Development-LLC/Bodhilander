@@ -23,7 +23,9 @@ import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCre
 import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
 import { sweepLetGo } from './let-go';
+import type { HomeDeps } from './home';
 import { McpHost, hostSocketPath } from './mcp/host';
+import { resolveAccountRef } from './account-ref';
 import { HireDayUsage } from './run/hire-usage';
 import { prepareRun, type PrepareDeps } from './run/prepare';
 import { RunServiceManager, ServicesNotReady } from './run/services';
@@ -48,6 +50,27 @@ const listDir = (dir: string): string[] => {
     return [];
   }
 };
+
+function tellOwnerHere(text: string): void {
+  try {
+    new Notification({ title: 'Bodhi Crew', body: text }).show();
+  } catch (err) {
+    log.warn('[Crew] could not tell the owner', err);
+  }
+}
+
+export function crewHomeDeps(hub: HubClient, signIn: CrewSignIn): HomeDeps {
+  return {
+    db: getDatabase(),
+    machineId: () => getPreference(MACHINE_ID_PREF),
+    online: () => hub.getStatus() === 'online',
+    resolve: (ref) => resolveAccountRef(ref, getAllAccounts()),
+    signedIn: (account) => signIn.signedIn(account.id, resolveAccountIdentity(account.configDir).loggedIn, Date.now()),
+    raiseMove: (hireId, payload) => hub.sendMoveCard(hireId, payload),
+    sendUnlink: (machineId) => hub.sendUnlink(machineId),
+    tellOwner: tellOwnerHere,
+  };
+}
 
 function reminderText(reminder: Reminder, label: string): string {
   const when = new Date(reminder.endsAt).toLocaleString();
@@ -194,14 +217,9 @@ function attach(hub: HubClient): CrewRuntime {
     schedule: {
       hub,
       machineId: () => getPreference(MACHINE_ID_PREF),
-      tellOwner: (text) => {
-        try {
-          new Notification({ title: 'Bodhi Crew', body: text }).show();
-        } catch (err) {
-          log.warn('[Crew] could not tell the owner about routines', err);
-        }
-      },
+      tellOwner: tellOwnerHere,
     },
+    home: crewHomeDeps(hub, signIn),
   });
   const onToken = (frame: TokenFrame) => gateway?.onToken(frame);
   const onRefused = (frame: RefusedFrame) => gateway?.onRefused(frame.id);

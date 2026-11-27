@@ -138,3 +138,18 @@ describe('linking this machine', () => {
     expect(screen.queryByRole('button', { name: 'Hire' })).toBeNull();
   });
 });
+
+describe('unlinking this machine', () => {
+  test('offered while online, asks to confirm, and says what happens', async () => {
+    const calls: string[] = [];
+    panel({ status: { availability: 'offline', owner: null }, unlink: async () => (calls.push('unlink'), { ok: true }) });
+    expect(screen.queryByText('Unlink…')).toBeNull();
+    cleanup();
+    panel({ unlink: async () => (calls.push('unlink'), { ok: true }) });
+    fireEvent.click(screen.getByText('Unlink…'));
+    expect(calls).toEqual([]);
+    fireEvent.click(screen.getByText('Unlink this machine'));
+    await screen.findByText('Unlinking this machine. Its hires wait for a new home.');
+    expect(calls).toEqual(['unlink']);
+  });
+});

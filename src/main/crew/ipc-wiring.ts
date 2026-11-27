@@ -7,7 +7,8 @@ import { getAllAccounts } from '../repositories/accounts';
 import { getPreference } from '../repositories/preferences';
 import { accountRefFor, resolveAccountRef } from './account-ref';
 import { listCards } from './card-log';
-import { crewRuntime } from './crew-main';
+import { crewHomeDeps, crewRuntime } from './crew-main';
+import { makeHomeHere, unlinkHere } from './home';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import type { LinkFlow } from './hub-link';
 import { getCrewHub, newLinkFlow } from './hub-service';
@@ -232,6 +233,18 @@ export function wireCrewIpc(handle: (channel: string, handler: (...args: unknown
     officeEmployees: () => {
       const dataDir = findOfficeData(app.getPath('appData'));
       return dataDir ? officeEmployees(dataDir) : null;
+    },
+    makeHome: (hireId) => {
+      const client = hub();
+      if (!client) return { ok: false, error: "Crew isn't running on this machine." };
+      const result = makeHomeHere(crewHomeDeps(client, new CrewSignIn(getDatabase(), safeStorage)), hireId);
+      notify();
+      return result;
+    },
+    unlink: () => {
+      const client = hub();
+      if (!client) return { ok: false, error: "Crew isn't running on this machine." };
+      return unlinkHere(crewHomeDeps(client, new CrewSignIn(getDatabase(), safeStorage)));
     },
     importFromOffice: (hireId, handle) => {
       const result = importOfficeHere(hireId, handle);

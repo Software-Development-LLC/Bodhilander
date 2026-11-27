@@ -94,6 +94,23 @@ function setup() {
 }
 
 describe('crew runtime', () => {
+  test("a move card's decision goes to the owner, not the approval broker", () => {
+    const t = setup();
+    t.rt.stop();
+    const told: string[] = [];
+    t.db.prepare(`INSERT INTO crew_hire_cache (hire_id, rev, epoch, data) VALUES (?, 1, 1, ?)`).run(HIRE, JSON.stringify({ name: 'Fresh PO', state: 'held:no-home' }));
+    t.db.prepare(`INSERT INTO crew_audit (hire_id, event, detail) VALUES (?, 'move-raised', ?)`).run(HIRE, JSON.stringify({ raiseId: uuid(80) }));
+    const home = { db: t.db, machineId: () => MACHINE, online: () => true, resolve: () => null, signedIn: () => true, raiseMove: () => null, sendUnlink: () => false, tellOwner: (x: string) => void told.push(x) };
+    const rt = startCrewRuntime({ ...t.deps, home });
+    const frame = { type: 'card_decision', id: uuid(81), hireId: HIRE, epoch: 2, raiseId: uuid(80), decision: 'denied', decidedBy: PERSON };
+    t.hub.emit('card-decision', frame);
+    t.hub.emit('card-decision', { ...frame, raiseId: uuid(82) });
+    expect(told).toEqual(['Fresh PO stays without a home machine.']);
+    const ignored = t.db.prepare(`SELECT json_extract(detail, '$.raiseId') AS raise FROM crew_audit WHERE event = 'card-decision-ignored'`).all();
+    expect(ignored).toEqual([{ raise: uuid(82) }]);
+    rt.stop();
+  });
+
   test('a due routine fires on its timer and starts as a job; stop clears the timer', async () => {
     const t = setup();
     t.rt.stop();

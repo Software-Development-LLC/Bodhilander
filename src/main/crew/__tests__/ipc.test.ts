@@ -242,6 +242,8 @@ describe('the channels', () => {
       beginLink: async () => ({ step: 'stopped', message: 'x' }),
       confirmLinkOwner: () => false,
       officeEmployees: () => ['fresh-po'],
+      makeHome: (hireId) => (imported.push([hireId, 'home']), { ok: true }),
+      unlink: () => ({ ok: true }),
       importFromOffice: (hireId, handle) => (imported.push([hireId, handle]), { ok: true, skills: 2, notes: 0, work: 3, skipped: [], failed: [] }),
       now: () => NOW,
     });
@@ -264,10 +266,12 @@ describe('the channels', () => {
       'crew:listCards',
       'crew:listHires',
       'crew:listRoles',
+      'crew:makeHome',
       'crew:officeEmployees',
       'crew:openCard',
       'crew:setDailyCap',
       'crew:setRepos',
+      'crew:unlink',
     ]);
   });
 
@@ -299,6 +303,13 @@ describe('the channels', () => {
     expect((call('crew:importFromOffice', HIRE, '../core-po') as { ok: boolean }).ok).toBe(false);
     expect((call('crew:importFromOffice', 'unknown', 'fresh-po') as { ok: boolean }).ok).toBe(false);
     expect(imported).toEqual([[HIRE, 'fresh-po']]);
+  });
+
+  test('make this machine home names a synced hire', () => {
+    expect(call('crew:makeHome', HIRE)).toEqual({ ok: true });
+    expect((call('crew:makeHome', 'unknown') as { ok: boolean }).ok).toBe(false);
+    expect(imported).toEqual([[HIRE, 'home']]);
+    expect(call('crew:unlink')).toEqual({ ok: true });
   });
 
   test('an edit to a hire this machine has not synced is refused', () => {

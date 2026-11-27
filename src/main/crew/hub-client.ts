@@ -43,6 +43,7 @@ import {
   type SyncPageFrame,
   type SyncPullFrame,
   type TokenRequestFrame,
+  type MovePayload,
   type Unstamped,
   type UsageRecordFrame,
   type WelcomeFrame,
@@ -627,6 +628,18 @@ export class HubClient extends EventEmitter {
     if (!stamp) return false;
     const frame: NoteWriteFrame = { type: 'note_write', ...write, hireId: stamp.hireId, epoch: stamp.epoch };
     return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  /** A move card for a hire with no home, raised from this machine at the hire's newest epoch. */
+  sendMoveCard(hireId: string, payload: MovePayload): string | null {
+    const epoch = this.fence.known(hireId);
+    if (epoch === null) return null;
+    const frame: CardRaiseFrame = { type: 'card_raise', id: this.newId(), hireId, epoch, kind: 'move', tainted: false, payload };
+    return this.queue(frame, { hireId, epoch }) ? frame.id : null;
+  }
+
+  sendUnlink(machineId: string): boolean {
+    return this.queue({ type: 'unlink', id: this.newId(), machineId }, {});
   }
 
   /** An owner/ note written by the owner's own action on this machine, not by a run. */

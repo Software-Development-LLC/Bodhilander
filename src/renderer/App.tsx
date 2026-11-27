@@ -1810,6 +1810,7 @@ const App: React.FC = () => {
           onHire={() => setHiring(true)}
           beginLink={() => window.electronAPI.crewBeginLink()}
           confirmLinkOwner={(isMe) => window.electronAPI.crewConfirmLinkOwner(isMe)}
+          unlink={() => window.electronAPI.crewUnlink()}
         />
         {hiring && (
           <HireModal

@@ -603,6 +603,17 @@ describe('HubClient queued frames', () => {
     expect(t.client.sendNoteWrite(uuid(99), write)).toBe(false);
   });
 
+  test('a move card goes at the hire\'s newest epoch, untainted and with no inbound; an unlink names a machine and no hire', () => {
+    const t = setup();
+    t.online();
+    expect(t.client.sendMoveCard(HIRE, { account: 'signed-in', accountLabel: 'Work' })).toBeNull();
+    t.sock().hub(deliver(1, 4));
+    const id = t.client.sendMoveCard(HIRE, { account: 'missing', accountLabel: 'Work' });
+    expect(sentOf(t, 'card_raise')).toEqual([{ type: 'card_raise', id, hireId: HIRE, epoch: 4, kind: 'move', tainted: false, payload: { account: 'missing', accountLabel: 'Work' } }]);
+    expect(t.client.sendUnlink(MACHINE)).toBe(true);
+    expect(sentOf(t, 'unlink')).toEqual([{ type: 'unlink', id: expect.any(String), machineId: MACHINE }]);
+  });
+
   test('an owner note from this machine carries the newest epoch and owner scope; only owner/ paths, only a known hire', () => {
     const t = setup();
     t.online();
