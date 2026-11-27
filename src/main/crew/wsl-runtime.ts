@@ -13,7 +13,7 @@ import { removeTmpOrphans, sweepTmpParentScript, type DistroSh, type TmpRecords 
 import { asCrew, asRoot, checkWsl, decodeWslOutput, repairLock, repairWsl1, type WslExec } from './wsl';
 import { agentServeArgs, WSL_EXE, windowsEnv, type AgentChild } from './wsl-agent';
 import { WslRuns, WSL_GH_SHIM_DIR, WSL_MCP_RELAY, type WslRunDeps } from './wsl-run';
-import { installShipped, LINK_WAITING, repairUser, runSetup, WindowsGate, type ShippedFiles } from './wsl-setup';
+import { buildCanSetUp, installShipped, LINK_WAITING, repairUser, runSetup, WindowsGate, type ShippedFiles } from './wsl-setup';
 import { WindowsSetupService } from './wsl-setup-service';
 import { WslSignIn, type SignInChild, type WslSignInDeps } from './wsl-sign-in';
 
@@ -195,6 +195,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   const records = new FileTmpRecords(deps.recordsFile);
   const shipped = shippedFiles(deps.resources, versions);
   const source = { read: (f: string) => fs.readFileSync(f) };
+  const unbuilt = !buildCanSetUp(versions, shipped);
   const reinstallAgent = async () => (await installShipped(exec, shipped, source)).ok;
   const runs = new WslRuns({
     ...deps,
@@ -245,6 +246,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
     start,
     gateState: () => gate.state(),
     activeRuns: () => runs.activeCount(),
+    unbuilt: () => unbuilt,
     setup: (onStep) =>
       runSetup({ exec, versions, linked: deps.linked, link: (onStatus) => waitForLink(deps.linked, onStatus), download: fetchRootfs, removeFile: (f) => fs.rmSync(f, { force: true }), installDir, shipped, source, onStep }),
     repairWsl1: (confirm) =>
@@ -277,7 +279,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   return {
     windows: {
       gate: async () => {
-        if (setup.busy) return HOLD_SETUP;
+        if (unbuilt || setup.busy) return HOLD_SETUP;
         try {
           await start();
           return await gate.gate();

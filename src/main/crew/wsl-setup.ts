@@ -3,11 +3,12 @@
  * distro, then the checks that gate the PC as a hire's home. Each step has a
  * probe, so an interrupted setup restarts at the first unfinished one.
  */
-import type { CrewVersions } from './artifacts';
+import { isPinnedSha, type CrewVersions } from './artifacts';
 import { CREW_DIR, CREW_HOME, DISTRO, asCrew, asRoot, checkWsl, crewDataEmpty, type WslCheck, type WslExec, type WslResult } from './wsl';
 
 export const HOLD_SETUP = 'held:setup';
 export const NEEDS_REPAIR = 'Crew setup on this PC needs repair';
+export const BUILD_NOT_READY = "This build of Bodhilander can't set up Crew on Windows yet.";
 export const LINK_FIRST = 'Crew downloads its Linux image from Crew, so this PC links first';
 export const LINK_WAITING = 'Approve the link in Teams. Setup carries on by itself once you do';
 export const LINK_REFUSED = "The link wasn't approved, so setup can't download Crew's Linux image";
@@ -191,6 +192,11 @@ export async function writeIntoDistro(exec: WslExec, dest: string, body: string 
   const tmp = `${dest}.tmp-${process.pid}-${Date.now()}`;
   const script = `mkdir -p ${dir} && cat > ${tmp} && chmod ${mode} ${tmp} && mv -f ${tmp} ${dest}`;
   return exec(asCrew('sh', '-c', script), { input: body });
+}
+
+/** A build with a placeholder hash, or without the Node or claude bundle, can never finish setup. */
+export function buildCanSetUp(versions: CrewVersions, files: ShippedFiles): boolean {
+  return isPinnedSha(versions.rootfs.sha256) && isPinnedSha(versions.node.sha256) && !!files.nodeTarball && !!files.claudePackage;
 }
 
 export async function installShipped(exec: WslExec, files: ShippedFiles, source: FileSource): Promise<StepResult> {

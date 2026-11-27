@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { CrewWindowsProgress } from '../../../shared/types';
 import { NO_WSL_MESSAGE, REPAIR_BUSY, REPAIR_PROMPT, SETUP_NEEDED_MESSAGE, WSL1_MESSAGE, type RepairOutcome, type WslCheck } from '../wsl';
-import { NEEDS_REPAIR, USER_CONFLICT, type SetupOutcome, type StepResult } from '../wsl-setup';
+import { BUILD_NOT_READY, NEEDS_REPAIR, USER_CONFLICT, type SetupOutcome, type StepResult } from '../wsl-setup';
 import { repairWaits, WindowsSetupService, type SetupServiceDeps } from '../wsl-setup-service';
 
 const held = (message: string): StepResult => ({ ok: false, hold: 'held:setup', message, audit: {} });
@@ -13,6 +13,7 @@ function service(over: Partial<SetupServiceDeps> & { wsl?: WslCheck } = {}) {
     start: async () => void calls.push('start'),
     gateState: () => ({ ok: true }),
     activeRuns: () => 0,
+    unbuilt: () => false,
     setup: async (onStep) => (onStep('user'), calls.push('setup'), { ok: true }),
     repairWsl1: async () => (calls.push('repairWsl1'), { result: 'converted' }),
     repairUser: async () => (calls.push('repairUser'), { ok: true }),
@@ -39,6 +40,19 @@ describe('the Windows setup screen state', () => {
     expect(await u.svc.state()).toEqual({ state: 'needs-repair', message: USER_CONFLICT });
     const v = service({ gateState: () => null });
     expect(await v.svc.state()).toEqual({ state: 'needs-repair', message: NEEDS_REPAIR });
+  });
+});
+
+describe('a build carrying placeholder hashes or no bundles', () => {
+  test('says so, and neither setup nor Repair touches the PC', async () => {
+    let checked = false;
+    const t = service({ unbuilt: () => true, check: async () => ((checked = true), { state: 'wsl1', message: WSL1_MESSAGE }) });
+    expect(BUILD_NOT_READY).toBe("This build of Bodhilander can't set up Crew on Windows yet.");
+    expect(await t.svc.state()).toEqual({ state: 'unbuilt', message: BUILD_NOT_READY });
+    expect(await t.svc.setup(() => {})).toEqual({ ok: false, message: BUILD_NOT_READY, repair: false });
+    expect(await t.svc.repair(true)).toEqual({ ok: false, message: BUILD_NOT_READY, repair: false });
+    expect(checked).toBe(false);
+    expect(t.calls).toEqual([]);
   });
 });
 

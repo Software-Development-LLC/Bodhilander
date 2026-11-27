@@ -5,7 +5,7 @@
  */
 import type { CrewWindowsProgress, CrewWindowsRepairResult, CrewWindowsSetupResult, CrewWindowsState } from '../../shared/types';
 import { REPAIR_BUSY, SETUP_NEEDED_MESSAGE, type RepairOutcome, type WslCheck } from './wsl';
-import { NEEDS_REPAIR, USER_CONFLICT, type SetupOutcome, type SetupStep, type StepResult } from './wsl-setup';
+import { BUILD_NOT_READY, NEEDS_REPAIR, USER_CONFLICT, type SetupOutcome, type SetupStep, type StepResult } from './wsl-setup';
 
 export const REPAIR_CANCELLED = 'Repair was cancelled. Nothing was changed.';
 
@@ -20,6 +20,8 @@ export interface SetupServiceDeps {
   gateState(): StepResult | null;
   /** Crew runs open in BodhiCrew now; Repair never starts under one. */
   activeRuns(): number;
+  /** True when this build's hashes or bundles are placeholders. */
+  unbuilt(): boolean;
   setup(onStep: (step: SetupStep, message?: string) => void): Promise<SetupOutcome>;
   repairWsl1(confirm: (prompt: string) => Promise<boolean>): Promise<RepairOutcome>;
   repairUser(): Promise<StepResult>;
@@ -39,6 +41,7 @@ export class WindowsSetupService {
   }
 
   async state(): Promise<CrewWindowsState> {
+    if (this.deps.unbuilt()) return { state: 'unbuilt', message: BUILD_NOT_READY };
     const wsl = await this.deps.check();
     if (wsl.state !== 'ok') return wsl;
     await this.deps.start();
@@ -55,6 +58,7 @@ export class WindowsSetupService {
   }
 
   private async exclusive<T>(fn: () => Promise<T | CrewWindowsSetupResult>): Promise<T | CrewWindowsSetupResult> {
+    if (this.deps.unbuilt()) return fail(BUILD_NOT_READY, false);
     if (this.running) return fail(REPAIR_BUSY, false);
     this.running = true;
     try {

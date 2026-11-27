@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ArtifactError, IMAGE_MISMATCH, type CrewVersions } from '../artifacts';
 import {
-  InstallLock, LINK_REFUSED, NEEDS_REPAIR, USER_CONFLICT, WSL_CONF, checkInterop, classifyUser, writeWslConf, interopRefused, machineCheck, parsePasswd, repairUser, runSetup, setupUser,
+  InstallLock, LINK_REFUSED, NEEDS_REPAIR, USER_CONFLICT, WSL_CONF, checkInterop, classifyUser, writeWslConf, buildCanSetUp, interopRefused, machineCheck, parsePasswd, repairUser, runSetup, setupUser,
   type SetupDeps, type SetupStep,
 } from '../wsl-setup';
 import type { WslExec, WslResult } from '../wsl';
@@ -199,6 +199,17 @@ describe('the interop check', () => {
     const d = new FakeDistro();
     d.interop = { code: null, stdout: '', stderr: '', timedOut: true };
     expect(await checkInterop(d.exec)).toMatchObject({ ok: false, audit: { exitCode: 'timeout' } });
+  });
+});
+
+describe('whether this build can set up Crew on Windows', () => {
+  const shipped = { nodeTarball: 'C:\\r\\node.tar.xz', claudePackage: 'C:\\r\\claude.tgz', crewAgent: 'C:\\r\\crew-agent.mjs' };
+  test('only with both hashes pinned and both bundles shipped', () => {
+    expect(buildCanSetUp(versions, shipped)).toBe(true);
+    expect(buildCanSetUp({ ...versions, rootfs: { ...versions.rootfs, sha256: 'NOT-VERIFIED-rootfs' } }, shipped)).toBe(false);
+    expect(buildCanSetUp({ ...versions, node: { ...versions.node, sha256: 'NOT-VERIFIED-node' } }, shipped)).toBe(false);
+    expect(buildCanSetUp(versions, { ...shipped, nodeTarball: null })).toBe(false);
+    expect(buildCanSetUp(versions, { ...shipped, claudePackage: null })).toBe(false);
   });
 });
 

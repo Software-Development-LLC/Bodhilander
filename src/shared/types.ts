@@ -1027,7 +1027,7 @@ export interface CrewSavedCopy {
 }
 
 /** Where Crew's Windows setup stands on this PC. */
-export type CrewWindowsState = { state: 'ready' } | { state: 'no-wsl' | 'missing' | 'wsl1' | 'needs-repair'; message: string };
+export type CrewWindowsState = { state: 'ready' } | { state: 'no-wsl' | 'missing' | 'wsl1' | 'needs-repair' | 'unbuilt'; message: string };
 
 export interface CrewWindowsProgress {
   step: string;

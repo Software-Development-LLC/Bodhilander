@@ -5,8 +5,8 @@ import * as path from 'path';
 
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 const { FileTmpRecords, realWslExec, shippedFiles, createWindowsCrew } = await import('../wsl-runtime');
-const { REPAIR_PROMPT, WSL1_MESSAGE } = await import('../wsl');
-const { IMAGE_UNAVAILABLE } = await import('../artifacts');
+const { REPAIR_PROMPT } = await import('../wsl');
+const { BUILD_NOT_READY } = await import('../wsl-setup');
 import { createHash } from 'crypto';
 import { crewDb } from './crew-db';
 
@@ -19,6 +19,19 @@ const tmp = () => {
 afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
+const SHIPPED_VERSIONS = path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json');
+
+/** The shipped versions.json with its hashes pinned, and both bundles present: a build that can set up. */
+function builtResources(dir: string, rootfsSha = 'a'.repeat(64)): { rootfs: { name: string } } {
+  const v = JSON.parse(fs.readFileSync(SHIPPED_VERSIONS, 'utf8'));
+  v.rootfs.sha256 = rootfsSha;
+  v.node.sha256 = 'c'.repeat(64);
+  fs.writeFileSync(path.join(dir, 'versions.json'), JSON.stringify(v));
+  fs.writeFileSync(path.join(dir, v.node.file), 'node');
+  fs.writeFileSync(path.join(dir, 'claude.tgz'), 'claude');
+  return v;
+}
+
 const hasNode = Bun.which('node') !== null;
 
 describe('Crew on Windows, as the main process runs it', () => {
@@ -57,7 +70,7 @@ describe('Crew on Windows, as the main process runs it', () => {
 
   test('a check that throws holds the run for setup, and the next run checks again', async () => {
     const dir = tmp();
-    fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
+    builtResources(dir);
     const audits: string[] = [];
     let sweeps = 0;
     const { db } = crewDb();
@@ -76,9 +89,9 @@ describe('Crew on Windows, as the main process runs it', () => {
     expect(audits.filter((e) => e === 'windows-check-failed')).toHaveLength(2);
   });
 
-  test("Repair on WSL1 refuses before changing anything while the image's SHA-256 is a placeholder", async () => {
+  test("a build whose hashes are placeholders says it can't set up Crew, and changes nothing", async () => {
     const dir = tmp();
-    fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
+    fs.copyFileSync(SHIPPED_VERSIONS, path.join(dir, 'versions.json'));
     const calls: string[] = [];
     const { db } = crewDb();
     const crew = createWindowsCrew({
@@ -87,19 +100,18 @@ describe('Crew on Windows, as the main process runs it', () => {
       resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'), linked: () => true, artifactHub: () => null, crewDir: dir, onRepaired: async () => {},
       exec: async (args) => (calls.push(args.join(' ')), { code: 0, stdout: '  NAME       STATE    VERSION\n* BodhiCrew  Stopped  1\n', stderr: '' }),
     });
-    expect(await crew.setup.state()).toEqual({ state: 'wsl1', message: WSL1_MESSAGE });
-    expect(await crew.setup.repair(true)).toEqual({ ok: false, message: IMAGE_UNAVAILABLE, repair: true });
-    expect(calls.every((c) => c === '-l -v')).toBe(true);
-    expect(await crew.setup.setup(() => {})).toMatchObject({ ok: false });
+    expect(await crew.setup.state()).toEqual({ state: 'unbuilt', message: BUILD_NOT_READY });
+    expect(await crew.setup.repair(true)).toEqual({ ok: false, message: BUILD_NOT_READY, repair: false });
+    expect(await crew.setup.setup(() => {})).toEqual({ ok: false, message: BUILD_NOT_READY, repair: false });
+    expect(await crew.windows.gate()).toBe('held:setup');
+    expect(calls).toEqual([]);
     expect(calls.some((c) => c.includes('--import') || c.includes('--unregister') || c.includes('--set-version'))).toBe(false);
   });
 
   test("Repair's confirm keeps the checked image, and asking again reuses it without the Hub", async () => {
     const dir = tmp();
     const image = Buffer.from('a checked rootfs');
-    const versions = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), 'utf8'));
-    versions.rootfs.sha256 = createHash('sha256').update(image).digest('hex');
-    fs.writeFileSync(path.join(dir, 'versions.json'), JSON.stringify(versions));
+    const versions = builtResources(dir, createHash('sha256').update(image).digest('hex'));
     const kept = path.join(dir, 'download', path.basename(versions.rootfs.name));
     fs.mkdirSync(path.dirname(kept), { recursive: true });
     fs.writeFileSync(kept, image);
@@ -121,7 +133,7 @@ describe('Crew on Windows, as the main process runs it', () => {
 
   test('a run asking to start while setup or Repair runs is held without touching the distro', async () => {
     const dir = tmp();
-    fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
+    builtResources(dir);
     const calls: string[] = [];
     let release: () => void = () => {};
     const { db } = crewDb();
@@ -145,7 +157,7 @@ describe('Crew on Windows, as the main process runs it', () => {
 
   test('the first run sweeps and checks once, and runs are held until the check passes', async () => {
     const dir = tmp();
-    fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
+    builtResources(dir);
     const calls: string[] = [];
     const { db } = crewDb();
     const crew = createWindowsCrew({

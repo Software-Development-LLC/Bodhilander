@@ -23,6 +23,12 @@ function mount(state: CrewWindowsState | null, over: Partial<React.ComponentProp
 }
 
 describe('Crew on Windows setup', () => {
+  test("a build that can't set up Crew on Windows says so and offers nothing to press", async () => {
+    mount({ state: 'unbuilt', message: "This build of Bodhilander can't set up Crew on Windows yet." });
+    expect(await screen.findByText("This build of Bodhilander can't set up Crew on Windows yet.")).toBeTruthy();
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+  });
+
   test('off Windows it shows nothing', async () => {
     const { container } = render(<WindowsSetup checkState={async () => null} />);
     await act(async () => {});
