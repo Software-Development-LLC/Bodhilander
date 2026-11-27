@@ -33,6 +33,12 @@ describe('planGh', () => {
     expect(planGh(['api', '-q', '.[].title', '--paginate', 'repos/acme/app/issues'], REPOS).kind).toBe('read');
   });
 
+  test('a search qualifier naming another repo is refused in every group', () => {
+    expect(planGh(['issue', 'list', '--search', 'repo:other/x is:open'], REPOS).kind).toBe('refused');
+    expect(planGh(['pr', 'list', '-S', 'org:other'], REPOS).kind).toBe('refused');
+    expect(planGh(['issue', 'list', '--search', 'is:open label:bug'], REPOS).kind).toBe('read');
+  });
+
   test('gh repo view takes its repo as an argument, and only one of the hire\'s', () => {
     expect(planGh(['repo', 'view'], REPOS)).toEqual({ kind: 'read', args: ['repo', 'view', 'acme/app'] });
     expect(planGh(['repo', 'view', 'Acme/App', '--json', 'name'], REPOS)).toEqual({ kind: 'read', args: ['repo', 'view', 'Acme/App', '--json', 'name'] });

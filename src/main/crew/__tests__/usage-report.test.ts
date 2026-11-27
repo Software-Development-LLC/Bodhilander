@@ -36,6 +36,8 @@ describe('usage report', () => {
       windows: [{ name: 'five_hour', utilization: 0.4, resetsAt: 5_000, status: 'observed' }], windowsReadAt: 900,
     });
     expect(wireWindows(null)).toEqual([]);
+    const odd: AccountUsage = { ...account, fiveHour: { pct: 150, resetsAt: 5_000, observedAt: 900 }, sevenDay: { pct: Number.NaN, resetsAt: 5_000, observedAt: 900 } };
+    expect(usageRecordFor({ ...run, model: '' }, 'u', odd)).toMatchObject({ model: 'unknown', windows: [{ name: 'five_hour', utilization: 1, resetsAt: 5_000, status: 'observed' }] });
     expect(usageRecordFor(run, 'u', null).windowsReadAt).toBe(1_000);
   });
 });

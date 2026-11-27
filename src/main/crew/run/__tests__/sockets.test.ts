@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  RUN_DIR_TRIES, RunDirCollision, SocketRootError, ensureSocketRoot, makeRunDir, newRunToken, removeRunDir, runDirName, socketPath, socketRoot, tokenMatches,
+  RUN_DIR_TRIES, RunDirCollision, SocketRootError, ensureSocketRoot, makeRunDir, newRunToken, removeRunDir, runDirName, sweepRunDirs, socketPath, socketRoot, tokenMatches,
 } from '../sockets';
 
 const made: string[] = [];
@@ -16,6 +16,21 @@ const tmp = () => {
   return d;
 };
 const uid = process.getuid?.() ?? 0;
+
+describe('sweeping run dirs at start', () => {
+  test('every run dir left in an owned root is removed, and a root owned by someone else is left alone', () => {
+    const root = tmp();
+    fs.mkdirSync(path.join(root, 'ABCDEFGH'));
+    fs.writeFileSync(path.join(root, 'ABCDEFGH', 'g.sock'), '');
+    fs.mkdirSync(path.join(root, 'IJKLMNOP'));
+    expect(sweepRunDirs(root, uid)).toBe(2);
+    expect(fs.readdirSync(root)).toEqual([]);
+    fs.mkdirSync(path.join(root, 'QRSTUVWX'));
+    expect(sweepRunDirs(root, uid + 1)).toBe(0);
+    expect(fs.readdirSync(root)).toEqual(['QRSTUVWX']);
+    expect(sweepRunDirs(path.join(root, 'missing'), uid)).toBe(0);
+  });
+});
 
 describe('the socket root', () => {
   test('is made 0700 when missing, and passes when it is a 0700 directory of ours', () => {

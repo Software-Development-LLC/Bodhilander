@@ -27,6 +27,7 @@ import { HireDayUsage } from './run/hire-usage';
 import { prepareRun, type PrepareDeps } from './run/prepare';
 import { RunServiceManager, ServicesNotReady } from './run/services';
 import { reapLeftoverRuns, systemReap } from './run/reap';
+import { socketRoot, sweepRunDirs } from './run/sockets';
 import { RunSlots } from './run/slots';
 import { crewTools } from './tools/server';
 
@@ -200,6 +201,7 @@ export function startCrew(): CrewRuntime {
   if (process.platform !== 'win32') {
     try {
       reapLeftoverRuns(getDatabase(), systemReap);
+      sweepRunDirs(socketRoot(process.getuid?.() ?? 0), process.getuid?.() ?? 0);
     } catch (err) {
       log.error('[Crew] could not end leftover runs', err);
     }

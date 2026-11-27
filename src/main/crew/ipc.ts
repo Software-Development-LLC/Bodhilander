@@ -258,7 +258,8 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
     if (!Array.isArray(repos) || !repos.every((r) => typeof r === 'string' && r.trim() !== '')) return refuse('Each repo needs a name.');
     const synced = parse(hireRows(deps.db(), hireId)[0].data)?.repos;
     const current = new Set((Array.isArray(synced) ? synced : []).filter((r): r is string => typeof r === 'string').map((r) => r.toLowerCase()));
-    const wanted = [...new Set(repos.map((r: string) => r.trim()))];
+    const seen = new Set<string>();
+    const wanted = repos.map((r: string) => r.trim()).filter((r) => !seen.has(r.toLowerCase()) && seen.add(r.toLowerCase()));
     if (wanted.some((r) => !current.has(r.toLowerCase()))) return refuse('Adding a repo needs a grant card, which comes in a later phase. You can remove repos now.');
     return edit(hireId, { repos: wanted });
   });

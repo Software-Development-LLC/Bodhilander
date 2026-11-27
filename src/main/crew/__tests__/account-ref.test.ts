@@ -76,7 +76,7 @@ describe('changing a hire\'s account', () => {
   test('sends one hire update carrying accountRef, and carries sessions only once it is applied', async () => {
     const { changer, sent, thread } = await seed();
     expect(changer.change('h1', account('b'))).toEqual({ editId: 'e1' });
-    expect(sent).toEqual([{ op: 'update', kind: 'hire', objectId: 'h1', hireId: 'h1', fields: { accountRef: { accountUuid: 'u-b', email: 'b@x.com', label: 'L-b' } } }]);
+    expect(sent).toEqual([{ id: expect.any(String), op: 'update', kind: 'hire', objectId: 'h1', hireId: 'h1', fields: { accountRef: { accountUuid: 'u-b', email: 'b@x.com', label: 'L-b' } } }]);
     expect(JSON.stringify(sent)).not.toMatch(/claudeAccountRef|claude_account_ref|configDir/);
     expect(thread().account_id).toBe('a');
     expect(changer.onEditResult({ id: 'other', result: 'applied' })).toBeNull();
@@ -144,6 +144,15 @@ describe('changing a hire\'s account', () => {
     const changer = new AccountChanger({ ...deps, sendEdit: () => { throw new Error('database is locked'); } });
     expect(changer.change('h1', account('b'))).toEqual({ refused: 'send-failed' });
     expect(pendingRows(raw)).toBe(0);
+  });
+
+  test('the pending change is written before the edit is sent', async () => {
+    const { raw, deps, AccountChanger } = await seed();
+    const atSend: number[] = [];
+    const changer = new AccountChanger({ ...deps, sendEdit: (e: { id?: string }) => (atSend.push(pendingRows(raw)), e.id as string) });
+    const { editId } = changer.change('h1', account('b')) as { editId: string };
+    expect(atSend).toEqual([1]);
+    expect(raw.query(`SELECT key FROM crew_sync_state WHERE key LIKE ?`).all(`%${editId}`)).toHaveLength(1);
   });
 
   test('an account with no uuid is never sent', async () => {

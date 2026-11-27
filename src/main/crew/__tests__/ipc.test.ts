@@ -270,7 +270,7 @@ describe('the channels', () => {
 
   test('repos can only be removed: trimmed, deduplicated, and any addition is refused here', () => {
     expect(call('crew:setRepos', HIRE, [' ACME/bodhi-fresh ', 'acme/bodhi-fresh'])).toEqual({ ok: true });
-    expect(edits[0].fields).toEqual({ repos: ['ACME/bodhi-fresh', 'acme/bodhi-fresh'] });
+    expect(edits[0].fields).toEqual({ repos: ['ACME/bodhi-fresh'] });
     expect(call('crew:setRepos', HIRE, ['acme/bodhi-care'])).toEqual({ ok: true });
     const added = call('crew:setRepos', HIRE, ['acme/bodhi-care', 'acme/bodhi-pulse']) as { ok: boolean; error?: string };
     expect(added.ok).toBe(false);

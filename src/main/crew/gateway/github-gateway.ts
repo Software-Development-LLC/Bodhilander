@@ -37,13 +37,7 @@ const VALUE_FLAGS = new Set(['-R', '--repo', '-b', '--branch', '-q', '--jq', '-t
 
 /** The arguments that are not flags or flag values. */
 function positionals(args: string[]): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i];
-    if (!a.startsWith('-')) out.push(a);
-    else if (VALUE_FLAGS.has(a)) i += 1;
-  }
-  return out;
+  return args.filter((a, i) => !a.startsWith('-') && !(i > 0 && VALUE_FLAGS.has(args[i - 1])));
 }
 
 export type GhPlan = { kind: 'read'; args: string[] } | { kind: 'write' } | { kind: 'refused'; why: string };
@@ -127,7 +121,7 @@ export function planGh(argv: string[], repos: readonly string[]): GhPlan {
   if (repo.value !== null && !repos.includes(repo.value.toLowerCase())) return { kind: 'refused', why: `${repo.value} is not one of this hire's repos.` };
   if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
   if (group === 'repo') return repoViewPlan(argv, rest, repos, repo.value);
-  if (group === 'search' && rest.some((a) => SEARCH_SCOPE.test(a))) return { kind: 'refused', why: 'Search names repos with --repo, never a qualifier.' };
+  if (rest.some((a) => SEARCH_SCOPE.test(a))) return { kind: 'refused', why: 'Search names repos with --repo, never a qualifier.' };
   if (group === 'search') {
     if (rest.some((a) => a === '--owner' || a.startsWith('--owner='))) return { kind: 'refused', why: 'Search names repos with --repo, never --owner.' };
     return { kind: 'read', args: repo.value === null ? [...argv, ...repos.flatMap((r) => ['--repo', r])] : argv };

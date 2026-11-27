@@ -24,7 +24,7 @@ export function mergeRunObservation(
 export function wireWindows(usage: AccountUsage | null): UsageWindow[] {
   const out: UsageWindow[] = [];
   const add = (name: string, w: LocalWindow | null) => {
-    if (w) out.push({ name, utilization: w.pct / 100, resetsAt: w.resetsAt ?? 0, status: 'observed' });
+    if (w && Number.isFinite(w.pct)) out.push({ name, utilization: Math.min(Math.max(w.pct / 100, 0), 1), resetsAt: w.resetsAt ?? 0, status: 'observed' });
   };
   add('five_hour', usage?.fiveHour ?? null);
   add('seven_day', usage?.sevenDay ?? null);
@@ -38,7 +38,7 @@ export function usageRecordFor(run: FinishedRun, accountUuid: string, account: A
     accountUuid,
     startedAt: run.startedAt,
     durationMs: run.durationMs,
-    model: run.model,
+    model: run.model.trim() === '' ? 'unknown' : run.model,
     inputTokens: run.usage.input_tokens,
     outputTokens: run.usage.output_tokens,
     cacheCreationTokens: run.usage.cache_creation_input_tokens,
