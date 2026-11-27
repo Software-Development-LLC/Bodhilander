@@ -305,3 +305,57 @@ export async function machineCheck(exec: WslExec, versions: CrewVersions): Promi
   if (shipped.length || apt.length) return hold(NEEDS_REPAIR, { step: 'versions', shipped, apt });
   return { ok: true };
 }
+
+// ---- the gate a Windows run waits on --------------------------------------------------------
+
+export interface WindowsGateDeps {
+  exec: WslExec;
+  versions: CrewVersions;
+  /** A setup hold's audit row; written once per distinct hold, not per run. */
+  audit(event: string, detail: Record<string, unknown>): void;
+  /** The root-side sweep of /tmp/crt-<uid>/ at start, before any run. */
+  sweep?(): Promise<void>;
+}
+
+/**
+ * The interop launch takes about ten seconds, so it runs at start and after
+ * Repair; before each run only the file, the user and the versions are read.
+ * Until the start check has passed, every run is held.
+ */
+export class WindowsGate {
+  private interop: StepResult | null = null;
+  private lastHold: string | null = null;
+
+  constructor(private readonly deps: WindowsGateDeps) {}
+
+  async atStart(): Promise<StepResult> {
+    await this.deps.sweep?.();
+    const machine = await machineCheck(this.deps.exec, this.deps.versions);
+    this.interop = machine.ok ? await checkInterop(this.deps.exec) : machine;
+    if (!this.interop.ok) this.record(this.interop);
+    return this.interop;
+  }
+
+  afterRepair(): Promise<StepResult> {
+    return this.atStart();
+  }
+
+  async gate(): Promise<string | null> {
+    if (!this.interop) return HOLD_SETUP;
+    if (!this.interop.ok) return this.interop.hold;
+    const r = await machineCheck(this.deps.exec, this.deps.versions);
+    if (r.ok) {
+      this.lastHold = null;
+      return null;
+    }
+    this.record(r);
+    return r.hold;
+  }
+
+  private record(r: Extract<StepResult, { ok: false }>): void {
+    const key = JSON.stringify(r.audit);
+    if (key === this.lastHold) return;
+    this.lastHold = key;
+    this.deps.audit('held:setup', { message: r.message, ...r.audit });
+  }
+}

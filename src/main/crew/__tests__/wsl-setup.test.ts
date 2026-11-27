@@ -325,3 +325,55 @@ describe('the crew-agent install lock', () => {
     expect(installs).toBe(2);
   });
 });
+
+describe('the gate a Windows run waits on', () => {
+  const { WindowsGate } = require('../wsl-setup') as typeof import('../wsl-setup');
+  const finished = () => {
+    const d = new FakeDistro();
+    d.listed = '  NAME  STATE  VERSION\n  BodhiCrew  Stopped  2\n';
+    d.users = [{ name: 'root', uid: 0, gid: 0 }, { name: 'crew', uid: 1000, gid: 1000 }];
+    d.wslConf = WSL_CONF;
+    d.shipped = { node: versions.node.version, claude: versions.claude.version, agent: versions.crewAgent.version };
+    d.aptOk = true;
+    return d;
+  };
+
+  test('holds every run until the start check has run and passed', async () => {
+    const d = finished();
+    const g = new WindowsGate({ exec: d.exec, versions, audit: () => {} });
+    expect(await g.gate()).toBe('held:setup');
+    await g.atStart();
+    expect(await g.gate()).toBeNull();
+  });
+
+  test('sweeps before checking, and launches whoami.exe at start only', async () => {
+    const d = finished();
+    const order: string[] = [];
+    const g = new WindowsGate({ exec: d.exec, versions, audit: () => {}, sweep: async () => void order.push('sweep') });
+    await g.atStart();
+    const launches = () => d.calls.filter((c) => c.join(' ').includes('whoami')).length;
+    expect(order).toEqual(['sweep']);
+    expect(launches()).toBe(1);
+    await g.gate();
+    await g.gate();
+    expect(launches()).toBe(1);
+  });
+
+  test('interop coming back at start holds with one audit row; a wsl.conf edited later holds at the next run', async () => {
+    const d = finished();
+    d.interop = { code: 0, stdout: 'pc\\me', stderr: '' };
+    const rows: Array<Record<string, unknown>> = [];
+    const g = new WindowsGate({ exec: d.exec, versions, audit: (_e, detail) => void rows.push(detail) });
+    await g.atStart();
+    expect(await g.gate()).toBe('held:setup');
+    expect(await g.gate()).toBe('held:setup');
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toMatchObject({ step: 'interop', exitCode: 0 });
+
+    const e = finished();
+    const g2 = new WindowsGate({ exec: e.exec, versions, audit: () => {} });
+    await g2.atStart();
+    e.wslConf = WSL_CONF.replace('enabled=false', 'enabled=true');
+    expect(await g2.gate()).toBe('held:setup');
+  });
+});

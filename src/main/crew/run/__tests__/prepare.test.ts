@@ -60,6 +60,20 @@ describe('preparing a run', () => {
     expect(fs.existsSync(t.root)).toBe(false);
   });
 
+  test('on Windows the setup gate decides, and a passing gate still never prepares a native run', async () => {
+    const t = setup();
+    t.deps.platform = 'win32';
+    t.deps.windows = { gate: async () => 'held:setup' };
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    t.deps.windows = { gate: async () => null };
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    const calls: string[] = [];
+    t.deps.windows = { gate: async () => null, prepare: async (_j, _k, runId) => (calls.push(runId), { hold: 'from-wsl' }) };
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: 'from-wsl' });
+    expect(calls).toEqual(['run-1']);
+    expect(fs.existsSync(t.root)).toBe(false);
+  });
+
   test('resolves the account, writes settings, CLAUDE.md and mcp config, and keeps tokens out of the env', async () => {
     const t = setup();
     fs.mkdirSync(path.join(t.root, 'owner', '.claude'), { recursive: true });

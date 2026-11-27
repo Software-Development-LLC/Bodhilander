@@ -42,6 +42,14 @@ export interface PrepareDeps {
   now?(): number;
   underTemp?(dir: string): boolean;
   platform?: NodeJS.Platform;
+  /** Windows runs happen only inside BodhiCrew: the setup gate, then the WSL2 preparation. */
+  windows?: WindowsRuns;
+}
+
+export interface WindowsRuns {
+  /** The hold while BodhiCrew's check fails; null once it passes. */
+  gate(): Promise<string | null>;
+  prepare?(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
 }
 
 function hireAccountRef(db: Database.Database, hireId: string): ClaudeAccountRef | null {
@@ -82,8 +90,12 @@ function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: 
 }
 
 export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
-  // A Windows run belongs inside WSL2; until that setup exists, nothing runs natively.
-  if ((deps.platform ?? process.platform) === 'win32') return { hold: HOLD_SETUP };
+  // A Windows run never runs natively: it waits on BodhiCrew's check, then is prepared inside WSL2.
+  if ((deps.platform ?? process.platform) === 'win32') {
+    const hold = deps.windows ? await deps.windows.gate() : HOLD_SETUP;
+    if (hold) return { hold };
+    return deps.windows?.prepare ? deps.windows.prepare(job, threadKey, runId) : { hold: HOLD_SETUP };
+  }
   const now = deps.now?.() ?? Date.now();
   const ref = hireAccountRef(deps.db, job.hireId);
   const account = ref ? resolveAccountRef(ref, deps.accounts()) : null;
