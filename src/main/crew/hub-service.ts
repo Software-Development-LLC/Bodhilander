@@ -52,8 +52,8 @@ export function startCrewHub(): HubClient {
 /** One click of Link this machine. Throws when the system keychain is unavailable. */
 export function newLinkFlow(): LinkFlow {
   const keys = ensureIdentity();
-  const saved = getPreference(RELAY_NAME_PREF)?.trim();
-  const name = saved ? saved : os.hostname();
+  let name = getPreference(RELAY_NAME_PREF)?.trim();
+  if (!name) name = os.hostname();
   return new LinkFlow({
     hubUrl: crewHubUrl(),
     keys,

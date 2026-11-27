@@ -36,7 +36,8 @@ export const MACHINE_ID_PREF = 'crew.machineId';
 /** Packaged builds on either channel use production; `crew.hubUrl` overrides. */
 export function resolveHubUrl(isPackaged: boolean, override: string | null): string {
   const trimmed = override?.trim();
-  return trimTrailingSlashes(trimmed ? trimmed : isPackaged ? HUB_URL_PRODUCTION : HUB_URL_DEVELOPMENT);
+  if (trimmed) return trimTrailingSlashes(trimmed);
+  return isPackaged ? HUB_URL_PRODUCTION : HUB_URL_DEVELOPMENT;
 }
 
 export const CLOSE_CODES: Record<number, ErrorReason> = {
