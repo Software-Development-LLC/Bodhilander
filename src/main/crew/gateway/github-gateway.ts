@@ -269,7 +269,7 @@ export class GithubGateway {
       const result = await this.deps.run(plan.args, { GH_TOKEN: ghToken, GH_CONFIG_DIR: configDir, GH_PROMPT_DISABLED: '1', NO_COLOR: '1', PATH: process.env.PATH ?? '' });
       // What GitHub returns is written by other people, so the thread is tainted before the run sees it.
       markTainted(this.deps.db, run.hireId, run.threadKey, 'github');
-      return { ...result, stdout: wrapUntrusted('github', result.stdout) };
+      return { ...result, stdout: wrapUntrusted('github', result.stdout), stderr: result.stderr && wrapUntrusted('github', result.stderr) };
     } finally {
       fs.rmSync(configDir, { recursive: true, force: true });
     }
