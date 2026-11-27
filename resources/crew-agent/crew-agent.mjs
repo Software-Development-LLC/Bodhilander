@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { randomInt } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
+import { constants } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -140,7 +141,7 @@ export async function execRun(input = process.stdin) {
   input.resume();
   child.stdin.on('error', () => {});
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
-  return new Promise((resolve) => child.on('close', (code, signal) => resolve(code ?? (signal ? 128 + 15 : 1))));
+  return new Promise((resolve) => child.on('close', (code, signal) => resolve(code ?? (signal ? 128 + (constants.signals[signal] ?? 15) : 1))));
 }
 
 const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname);
