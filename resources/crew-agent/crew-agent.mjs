@@ -55,12 +55,14 @@ export async function serve(input = process.stdin, root = null) {
   const conns = new Map();
   const servers = [];
   let dir = null;
+  let privateDir = null;
   let next = 0;
   const cleanup = () => {
     for (const s of servers) s.close();
     for (const c of conns.values()) c.destroy();
-    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    for (const d of [dir, privateDir]) if (d) fs.rmSync(d, { recursive: true, force: true });
     dir = null;
+    privateDir = null;
   };
   const lines = createInterface({ input });
   lines.on('line', (line) => {
@@ -75,11 +77,15 @@ export async function serve(input = process.stdin, root = null) {
       const bad = checkRoot(base, f.uid);
       if (bad) return send({ t: 'error', code: 'socket-root', observed: bad });
       dir = makeRunDir(base, f.name);
-      if (!dir) return send({ t: 'error', code: 'run-dir-collision' });
+      // '-' is outside the run-dir alphabet, so this sibling never collides with a run's directory.
+      const hidden = f.private ?? [];
+      if (dir && hidden.length) privateDir = makeRunDir(base, `p-${f.name}`);
+      if (!dir || (hidden.length && !privateDir)) return send({ t: 'error', code: 'run-dir-collision' });
       const sockets = {};
-      let pending = f.sockets.length;
-      for (const sock of f.sockets) {
-        const p = path.join(dir, `${sock}.sock`);
+      const all = [...f.sockets, ...hidden];
+      let pending = all.length;
+      for (const sock of all) {
+        const p = path.join(hidden.includes(sock) ? privateDir : dir, `${sock}.sock`);
         const server = net.createServer((conn) => {
           const id = (next += 1);
           conns.set(id, conn);

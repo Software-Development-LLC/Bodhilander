@@ -80,6 +80,8 @@ export interface SessionOptions {
   uid: number;
   name: string;
   sockets: string[];
+  /** Served beside the run dir, outside anything the run's sandbox can read. */
+  privateSockets?: string[];
   now(): number;
   /** A connection to the main-process gateway for socket `sock`. */
   connect(sock: string): Duplex;
@@ -122,7 +124,7 @@ export class AgentSession {
         }
         if (f.t === 'hello') {
           if (f.version !== this.opts.version) return fail(new AgentVersionError(typeof f.version === 'string' ? f.version : null));
-          this.send({ t: 'serve', now: this.opts.now(), uid: this.opts.uid, name: this.opts.name, sockets: this.opts.sockets });
+          this.send({ t: 'serve', now: this.opts.now(), uid: this.opts.uid, name: this.opts.name, sockets: this.opts.sockets, private: this.opts.privateSockets ?? [] });
         } else if (f.t === 'ready') {
           clearTimeout(timer);
           settled = true;
@@ -140,7 +142,7 @@ export class AgentSession {
   }
 
   private open(id: number, sock: string): void {
-    if (!this.opts.sockets.includes(sock)) return this.send({ t: 'end', conn: id });
+    if (![...this.opts.sockets, ...(this.opts.privateSockets ?? [])].includes(sock)) return this.send({ t: 'end', conn: id });
     const conn = this.opts.connect(sock);
     this.conns.set(id, conn);
     conn.on('data', (b: Buffer) => this.send({ t: 'data', conn: id, b64: Buffer.from(b).toString('base64') }));

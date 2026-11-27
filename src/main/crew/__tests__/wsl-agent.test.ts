@@ -55,7 +55,7 @@ describe('the crew-agent handshake', () => {
     const a = fakeAgent('1.0.0', ready);
     const out = await startAgent({ ...base, spawn: () => a.child, reinstall: async () => true, onLost: () => {} });
     expect(out.served).toEqual({ dir: '/tmp/cr-1000/abcdefgh', sockets: { gh: '/tmp/cr-1000/abcdefgh/gh.sock' } });
-    expect(a.sent[0]).toEqual({ t: 'serve', now: 42, uid: 1000, name: 'abcdefgh', sockets: ['gh'] });
+    expect(a.sent[0]).toEqual({ t: 'serve', now: 42, uid: 1000, name: 'abcdefgh', sockets: ['gh'], private: [] });
   });
 
   test('a mismatch reinstalls once and retries; a second mismatch is an error for held:setup', async () => {
@@ -187,9 +187,13 @@ describe.skipIf(!hasNode)('crew-agent itself, under node', () => {
       }
     });
     expect((await waitFor('hello')).version).toBe('1.0.0');
-    child.stdin.write(`${JSON.stringify({ t: 'serve', now: 1, uid: process.getuid?.() ?? 0, name: 'abcdefgh', sockets: ['gh'] })}\n`);
+    child.stdin.write(`${JSON.stringify({ t: 'serve', now: 1, uid: process.getuid?.() ?? 0, name: 'abcdefgh', sockets: ['gh'], private: ['mcp'] })}\n`);
     const r = await waitFor('ready');
     const sock = (r.sockets as Record<string, string>).gh;
+    const mcp = (r.sockets as Record<string, string>).mcp;
+    expect(path.dirname(mcp)).toBe(path.join(root, 'p-abcdefgh'));
+    expect(path.dirname(mcp).startsWith(`${String(r.dir)}/`)).toBe(false);
+    expect(fs.lstatSync(path.dirname(mcp)).mode & 0o777).toBe(0o700);
     expect(fs.lstatSync(root).mode & 0o777).toBe(0o700);
     expect(fs.lstatSync(String(r.dir)).mode & 0o777).toBe(0o700);
     expect(fs.lstatSync(sock).mode & 0o777).toBe(0o600);
@@ -207,6 +211,7 @@ describe.skipIf(!hasNode)('crew-agent itself, under node', () => {
     child.stdin.end();
     await new Promise((res) => child.on('close', res));
     expect(fs.existsSync(String(r.dir))).toBe(false);
+    expect(fs.existsSync(path.dirname(mcp))).toBe(false);
   });
 
   test('serve refuses a socket root it does not own at 0700', async () => {

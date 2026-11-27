@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import type { Duplex } from 'stream';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
 import { writeAudit } from '../audit';
@@ -230,32 +231,7 @@ export class GithubGateway {
     const server = net.createServer((conn) => {
       conns.add(conn);
       conn.on('close', () => conns.delete(conn));
-      let buffered = '';
-      let answered = false;
-      conn.setEncoding('utf8');
-      conn.on('error', () => conn.destroy());
-      conn.on('data', (chunk: string) => {
-        if (answered) return;
-        buffered += chunk;
-        if (buffered.length > 1024 * 1024) return conn.destroy();
-        const cut = buffered.indexOf('\n');
-        if (cut < 0) return;
-        let request: { token?: unknown; args?: unknown } = {};
-        try {
-          request = JSON.parse(buffered.slice(0, cut)) as typeof request;
-        } catch {
-          request = {};
-        }
-        buffered = '';
-        answered = true;
-        conn.pause();
-        this.handle(run, request)
-          .then((r) => conn.end(`${JSON.stringify(r)}\n`))
-          .catch((err: unknown) => {
-            log.warn('[Crew] a GitHub gateway request failed', err);
-            conn.end(`${JSON.stringify({ code: 1, stdout: '', stderr: 'The GitHub gateway failed.\n' })}\n`);
-          });
-      });
+      this.accept(run, conn);
     });
     this.servers.set(run.jobId, { server, conns });
     return new Promise((resolve, reject) => {
@@ -266,6 +242,36 @@ export class GithubGateway {
         fs.chmodSync(socketPath, 0o600);
         resolve();
       });
+    });
+  }
+
+  /** One request and its answer, on a run's socket or a connection crew-agent relays. */
+  accept(run: GatewayRun, conn: Duplex): void {
+    let buffered = '';
+    let answered = false;
+    conn.setEncoding('utf8');
+    conn.on('error', () => conn.destroy());
+    conn.on('data', (chunk: string) => {
+      if (answered) return;
+      buffered += chunk;
+      if (buffered.length > 1024 * 1024) return conn.destroy();
+      const cut = buffered.indexOf('\n');
+      if (cut < 0) return;
+      let request: { token?: unknown; args?: unknown } = {};
+      try {
+        request = JSON.parse(buffered.slice(0, cut)) as typeof request;
+      } catch {
+        request = {};
+      }
+      buffered = '';
+      answered = true;
+      conn.pause();
+      this.handle(run, request)
+        .then((r) => conn.end(`${JSON.stringify(r)}\n`))
+        .catch((err: unknown) => {
+          log.warn('[Crew] a GitHub gateway request failed', err);
+          conn.end(`${JSON.stringify({ code: 1, stdout: '', stderr: 'The GitHub gateway failed.\n' })}\n`);
+        });
     });
   }
 

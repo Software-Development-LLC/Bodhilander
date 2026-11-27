@@ -52,7 +52,7 @@ export interface WindowsRuns {
   prepare?(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
 }
 
-function hireAccountRef(db: Database.Database, hireId: string): ClaudeAccountRef | null {
+export function hireAccountRef(db: Database.Database, hireId: string): ClaudeAccountRef | null {
   const row = db.prepare(`SELECT data FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as { data: string } | undefined;
   try {
     const ref = (JSON.parse(row?.data ?? '{}') as { accountRef?: Partial<ClaudeAccountRef> }).accountRef;
@@ -87,6 +87,28 @@ function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: 
     db.prepare(`UPDATE crew_thread SET session_id = NULL WHERE hire_id = ? AND thread_key = ?`).run(hireId, threadKey);
     consumeTaint(db, hireId, threadKey);
   })();
+}
+
+/** The thread's session resumed, or a fresh one carrying the last turns when it can't be. */
+export function chooseSession(db: Database.Database, job: CrewJob, threadKey: string, now: number, timeZone: string | null): { sessionId: string | null; input: string } {
+  const thread = db.prepare(`SELECT session_id, account_id, updated_at FROM crew_thread WHERE hire_id = ? AND thread_key = ?`).get(job.hireId, threadKey) as
+    | { session_id: string | null; account_id: string | null; updated_at: string | null }
+    | undefined;
+  const lastRunAt = thread?.updated_at ? Date.parse(`${thread.updated_at.replace(' ', 'T')}Z`) : null;
+  const reason = freshReason(
+    {
+      sessionId: thread?.session_id ?? null,
+      contextTokens: null,
+      lastRunAt: Number.isNaN(lastRunAt) ? null : lastRunAt,
+      tainted: isTainted(db, job.hireId, threadKey),
+      moved: false,
+    },
+    now,
+    timeZone,
+  );
+  if (!reason) return { sessionId: thread?.session_id ?? null, input: job.text };
+  if (reason === 'tainted') forgetTaintedSession(db, job.hireId, threadKey);
+  return { sessionId: null, input: freshSessionInput(reason, lastTurns(db, job.hireId, threadKey), job.text) };
 }
 
 /** A Windows run never runs natively: it waits on BodhiCrew's check, then is prepared inside WSL2. */
@@ -127,29 +149,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   const mcpConfigPath = path.join(paths.run, `mcp-${job.scope}.json`);
   fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: services.mcpServers }), { mode: 0o600 });
 
-  const thread = deps.db.prepare(`SELECT session_id, account_id, updated_at FROM crew_thread WHERE hire_id = ? AND thread_key = ?`).get(job.hireId, threadKey) as
-    | { session_id: string | null; account_id: string | null; updated_at: string | null }
-    | undefined;
-  const lastRunAt = thread?.updated_at ? Date.parse(`${thread.updated_at.replace(' ', 'T')}Z`) : null;
-  const reason = freshReason(
-    {
-      sessionId: thread?.session_id ?? null,
-      contextTokens: null,
-      lastRunAt: Number.isNaN(lastRunAt) ? null : lastRunAt,
-      tainted: isTainted(deps.db, job.hireId, threadKey),
-      moved: false,
-    },
-    now,
-    deps.timeZone(),
-  );
-  let sessionId = thread?.session_id ?? null;
-  let input = job.text;
-  if (reason) {
-    if (reason === 'tainted') forgetTaintedSession(deps.db, job.hireId, threadKey);
-    input = freshSessionInput(reason, lastTurns(deps.db, job.hireId, threadKey), job.text);
-    sessionId = null;
-  }
-
+  const { sessionId, input } = chooseSession(deps.db, job, threadKey, now, deps.timeZone());
   return {
     command: deps.claudePath,
     args: runArgs({ sessionId, settingsPath, mcpConfigPath, model: deps.model?.(job.hireId) }),
