@@ -112,14 +112,59 @@ describe('parseHubFrame', () => {
     expect(parseHubFrame('"x"'.padEnd(MAX_FRAME_BYTES + 1, ' '))).toEqual({ ok: false, problem: 'too-large' });
   });
 
-  test('a known type whose fields are unpublished is not read', () => {
-    expect(parseHubFrame(JSON.stringify({ type: 'sync_page' }))).toEqual({ ok: false, problem: 'unhandled-type', type: 'sync_page' });
+  test('a known type no part of this build reads yet is dropped', () => {
+    expect(parseHubFrame(JSON.stringify({ type: 'card_decision' }))).toEqual({ ok: false, problem: 'unhandled-type', type: 'card_decision' });
   });
 
   test('renew needs integer epoch-ms hubTime and well-formed leases', () => {
     expect(parseHubFrame(JSON.stringify({ type: 'renew', seq: 1, hubTime: 5, leases: [{ hireId: HIRE, epoch: 2 }] })).ok).toBe(true);
     expect(parseHubFrame(JSON.stringify({ type: 'renew', seq: 1, leases: [] })).ok).toBe(false);
     expect(parseHubFrame(JSON.stringify({ type: 'renew', seq: 1, hubTime: 5, leases: [{ hireId: 'x', epoch: 2 }] })).ok).toBe(false);
+  });
+
+  test('change needs an integer seq', () => {
+    expect(parseHubFrame(JSON.stringify({ type: 'change', seq: 7 })).ok).toBe(true);
+    expect(parseHubFrame(JSON.stringify({ type: 'change', seq: -1 })).ok).toBe(false);
+    expect(parseHubFrame(JSON.stringify({ type: 'change' })).ok).toBe(false);
+  });
+
+  const obj = (over: Record<string, unknown> = {}) => ({
+    kind: 'role', objectId: 'po', rev: 2, seq: 9, hash: 'h', deleted: false, body: { role: 'po' }, ...over,
+  });
+  const page = (over: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: 'sync_page', id: uuid(5), changes: [obj()], next: 9, more: false, ...over });
+
+  test('sync_page reads well-formed objects, a header without its body included', () => {
+    expect(parseHubFrame(page()).ok).toBe(true);
+    expect(parseHubFrame(page({ changes: [obj({ kind: 'note', body: undefined })] })).ok).toBe(true);
+  });
+
+  test('sync_page refuses a bad page or any bad object in it', () => {
+    for (const over of [
+      { id: 'x' },
+      { changes: {} },
+      { next: 1.5 },
+      { more: 'no' },
+      { changes: [obj({ kind: 'settings' })] },
+      { changes: [obj({ objectId: '' })] },
+      { changes: [obj({ rev: '2' })] },
+      { changes: [obj({ seq: undefined })] },
+      { changes: [obj({ hash: '' })] },
+      { changes: [obj({ deleted: 0 })] },
+      { changes: [obj({ body: [1] })] },
+      { changes: [obj(), 'x'] },
+    ]) {
+      expect(parseHubFrame(page(over))).toEqual({ ok: false, problem: 'bad-shape', type: 'sync_page' });
+    }
+  });
+
+  test('edit_result reads each result, and refuses a bad field', () => {
+    const result = (over: Record<string, unknown> = {}) => JSON.stringify({ type: 'edit_result', id: uuid(6), result: 'applied', ...over });
+    expect(parseHubFrame(result()).ok).toBe(true);
+    expect(parseHubFrame(result({ result: 'conflict', objectId: 'po', rev: 3, why: 'stale', current: obj() })).ok).toBe(true);
+    for (const over of [{ id: 'x' }, { result: 'ok' }, { objectId: '' }, { rev: -1 }, { why: 3 }, { current: obj({ rev: 'x' }) }]) {
+      expect(parseHubFrame(result(over))).toEqual({ ok: false, problem: 'bad-shape', type: 'edit_result' });
+    }
   });
 
   test('challenge needs a nonce and an integer hubTime', () => {

@@ -46,6 +46,7 @@ export const CREW_TABLES_SQL = `
       path TEXT NOT NULL,
       rev INTEGER NOT NULL DEFAULT 0,
       body TEXT NOT NULL DEFAULT '',
+      data TEXT NOT NULL DEFAULT '{}',
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 

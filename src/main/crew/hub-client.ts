@@ -2,6 +2,7 @@
  * The one WebSocket to the Crew Hub, signed with the relay's machine key. A
  * bad-auth after the key changed offers Link again; nothing here clears the key.
  */
+import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
@@ -10,14 +11,17 @@ import { EpochFence } from './epoch';
 import { LeaseClock, systemClocks, type Clocks } from './lease';
 import { LocalOutbox } from './local-outbox';
 import { assertSendable, cutText, isErrorReason, parseHubFrame, trimTrailingSlashes } from './protocol-parse';
+import { CrewSync, type EditInput } from './sync';
 import {
   HEARTBEAT_MS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   authMessage,
+  type AuditFrame,
   type AuthFrame,
   type ChallengeFrame,
   type DeliverFrame,
+  type EditResultFrame,
   type ErrorReason,
   type HubFrame,
   type LeaseRevokeFrame,
@@ -26,8 +30,13 @@ import {
   type RefusedFrame,
   type RenewFrame,
   type ReplyFrame,
+  type SyncPageFrame,
+  type SyncPullFrame,
+  type UsageRecordFrame,
   type WelcomeFrame,
 } from './protocol';
+
+export type UsageInput = Omit<UsageRecordFrame, 'type' | 'id' | 'hireId' | 'epoch'>;
 
 export const HUB_URL_PRODUCTION = 'https://crew.bodhi.software';
 export const HUB_URL_DEVELOPMENT = 'https://crew-dev.bodhi.software';
@@ -95,6 +104,7 @@ export interface HubClientDeps {
   clocks?: Clocks;
   timers?: Timers;
   random?: () => number;
+  newId?: () => string;
 }
 
 const realTimers: Timers = {
@@ -110,10 +120,12 @@ export class HubClient extends EventEmitter {
   readonly lease: LeaseClock;
   readonly fence: EpochFence;
   readonly outbox: LocalOutbox;
+  readonly sync: CrewSync;
   private readonly clocks: Clocks;
   private readonly timers: Timers;
   private readonly random: () => number;
   private readonly hubHost: string;
+  private readonly newId: () => string;
 
   private socket: HubSocket | null = null;
   private phase: Phase = 'challenge';
@@ -126,6 +138,7 @@ export class HubClient extends EventEmitter {
   private errorReason: string | null = null;
   private sendIndex = 0;
   private readonly heartbeatSentAt = new Map<number, number>();
+  private pullSentAt: number | null = null;
   private readonly auditedTypes = new Set<string>();
   private syncRequested = false;
   private skewMs = 0;
@@ -141,6 +154,8 @@ export class HubClient extends EventEmitter {
     this.lease = new LeaseClock(this.clocks);
     this.fence = new EpochFence(deps.db);
     this.outbox = new LocalOutbox(deps.db, this.fence, this.random);
+    this.newId = deps.newId ?? randomUUID;
+    this.sync = new CrewSync(deps.db, this.newId);
   }
 
   getStatus(): HubStatus {
@@ -177,9 +192,15 @@ export class HubClient extends EventEmitter {
     this.sweepTimer = null;
     this.socket?.close(1000);
     this.socket = null;
+    this.connectionClosed();
+  }
+
+  private connectionClosed(): void {
     this.lease.onConnectionClosed();
     this.outbox.onConnectionClosed();
+    this.sync.onClosed();
     this.heartbeatSentAt.clear();
+    this.pullSentAt = null;
   }
 
   /** powerMonitor `resume`: every lease lapses until a heartbeat sent after the wake is renewed. */
@@ -288,6 +309,12 @@ export class HubClient extends EventEmitter {
         return this.onRefused(frame);
       case 'lease_revoke':
         return this.onLeaseRevoke(frame);
+      case 'change':
+        return this.sendPull(this.sync.onChange(frame.seq, this.clocks.wall()));
+      case 'sync_page':
+        return this.onSyncPage(frame);
+      case 'edit_result':
+        return this.onEditResult(frame);
       case 'artifact':
         this.emit('artifact', frame);
         return;
@@ -333,6 +360,7 @@ export class HubClient extends EventEmitter {
     this.setStatus('online');
     this.emit('welcome', frame);
     this.outbox.drain(this.sender, this.clocks.wall());
+    this.sendPull(this.sync.onConnect(this.clocks.wall()));
     this.heartbeat();
     this.heartbeatTimer = this.timers.setInterval(() => this.heartbeat(), HEARTBEAT_MS);
   }
@@ -342,6 +370,28 @@ export class HubClient extends EventEmitter {
     const sentAt = this.send({ type: 'heartbeat', seq });
     this.heartbeatSentAt.set(seq, sentAt);
     this.outbox.tick(this.sender, this.clocks.wall());
+    this.sendPull(this.sync.resend(this.clocks.wall()));
+  }
+
+  private sendPull(frame: SyncPullFrame | null): void {
+    if (frame) this.pullSentAt = this.send(frame);
+  }
+
+  private onSyncPage(frame: SyncPageFrame): void {
+    if (frame.id !== this.sync.pendingId()) {
+      log.info(`[Crew] sync_page ${frame.id} matched no pull`);
+      return;
+    }
+    if (this.pullSentAt !== null) this.outbox.noteAnswered(this.pullSentAt);
+    this.pullSentAt = null;
+    this.sendPull(this.sync.onPage(frame, this.clocks.wall()));
+    this.emit('synced', frame.changes.length);
+  }
+
+  private onEditResult(frame: EditResultFrame): void {
+    if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
+    this.sendPull(this.sync.onEditResult(frame, this.clocks.wall()));
+    this.emit('edit-result', frame);
   }
 
   private onDeliver(frame: DeliverFrame): void {
@@ -383,6 +433,7 @@ export class HubClient extends EventEmitter {
     }
     if (result.action === 'sync' && !this.syncRequested) {
       this.syncRequested = true;
+      this.sendPull(this.sync.request(this.clocks.wall()));
       this.emit('sync-needed');
     }
   }
@@ -411,9 +462,40 @@ export class HubClient extends EventEmitter {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: ReplyFrame = { type: 'reply', id: jobId, hireId: stamp.hireId, epoch: stamp.epoch, text: cutText(text) };
-    this.outbox.enqueue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
-    if (this.phase === 'open') this.outbox.sendNow(jobId, this.sender, this.clocks.wall());
+    this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
     return true;
+  }
+
+  private queue(frame: MachineFrame & { id: string }, meta: { hireId?: string; epoch?: number; jobId?: string }): void {
+    this.outbox.enqueue(frame, meta);
+    if (this.phase === 'open') this.outbox.sendNow(frame.id, this.sender, this.clocks.wall());
+  }
+
+  /** Queue an edit against the cached rev; a hire's edit carries its newest known epoch. Returns the edit id. */
+  sendEdit(input: EditInput): string {
+    const epoch = input.epoch ?? (input.hireId === undefined ? undefined : (this.fence.known(input.hireId) ?? undefined));
+    const frame = this.sync.buildEdit({ ...input, epoch });
+    this.queue(frame, { hireId: frame.hireId, epoch: frame.epoch });
+    return frame.id;
+  }
+
+  /** Queue a run's usage under its job's epoch. False when the job is gone or fenced. */
+  sendUsage(jobId: string, usage: UsageInput): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: UsageRecordFrame = { type: 'usage_record', id: this.newId(), hireId: stamp.hireId, epoch: stamp.epoch, ...usage };
+    this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+    return true;
+  }
+
+  /** Ship a local audit entry; one about a hire carries its newest known epoch. */
+  sendAudit(event: string, detail: Record<string, unknown>, hireId?: string): string {
+    const frame: AuditFrame = { type: 'audit', id: this.newId(), event, at: this.clocks.wall(), detail };
+    const epoch = hireId === undefined ? null : this.fence.known(hireId);
+    if (hireId !== undefined) frame.hireId = hireId;
+    if (epoch !== null) frame.epoch = epoch;
+    this.queue(frame, { hireId, epoch: epoch ?? undefined });
+    return frame.id;
   }
 
   private sweep(): void {
@@ -427,9 +509,7 @@ export class HubClient extends EventEmitter {
   private onClose(code: number): void {
     this.socket = null;
     this.clearTimers();
-    this.lease.onConnectionClosed();
-    this.outbox.onConnectionClosed();
-    this.heartbeatSentAt.clear();
+    this.connectionClosed();
     if (this.stopped) return;
 
     const fromFrame = this.errorReason !== null && isErrorReason(this.errorReason) ? (this.errorReason as ErrorReason) : null;

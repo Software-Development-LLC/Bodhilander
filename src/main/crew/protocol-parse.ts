@@ -3,12 +3,14 @@
  * or mistyped field drops the whole frame rather than defaulting it.
  */
 import {
+  EDIT_RESULTS,
   ERROR_REASONS,
   HUB_FRAME_TYPES,
   MACHINE_FRAME_TYPES,
   MAX_FRAME_BYTES,
   MAX_TEXT,
   REFUSED_REASONS,
+  SYNC_KINDS,
   type HubFrame,
   type HubFrameType,
   type MachineFrame,
@@ -32,11 +34,26 @@ const isEpoch = (v: unknown): v is number => isInt(v) && v >= 0;
 
 type Obj = Record<string, unknown>;
 
-/** Hub frame types whose fields the Hub has not published; this build does not read them. */
-const UNHANDLED: ReadonlySet<HubFrameType> = new Set(['change', 'sync_page', 'edit_result', 'card_decision', 'usage', 'token']);
+/** Hub frame types no part of this build reads yet. */
+const UNHANDLED: ReadonlySet<HubFrameType> = new Set(['card_decision', 'usage', 'token']);
 
 function checkLeases(v: unknown): v is Lease[] {
   return Array.isArray(v) && v.every((l) => typeof l === 'object' && l !== null && isUuidV4((l as Obj).hireId) && isEpoch((l as Obj).epoch));
+}
+
+const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function isSyncObject(v: unknown): boolean {
+  return (
+    isObj(v) &&
+    (SYNC_KINDS as readonly string[]).includes(v.kind as string) &&
+    isNonEmpty(v.objectId) &&
+    isEpoch(v.rev) &&
+    isEpoch(v.seq) &&
+    isNonEmpty(v.hash) &&
+    typeof v.deleted === 'boolean' &&
+    (v.body === undefined || isObj(v.body))
+  );
 }
 
 const SHAPES: Partial<Record<HubFrameType, (f: Obj) => boolean>> = {
@@ -56,6 +73,16 @@ const SHAPES: Partial<Record<HubFrameType, (f: Obj) => boolean>> = {
   refused: (f) => isNonEmpty(f.id) && isNonEmpty(f.reason),
   lease_revoke: (f) => isUuidV4(f.hireId) && isNonEmpty(f.mode),
   error: (f) => isNonEmpty(f.reason),
+  change: (f) => isEpoch(f.seq),
+  sync_page: (f) =>
+    isUuidV4(f.id) && Array.isArray(f.changes) && f.changes.every(isSyncObject) && isEpoch(f.next) && typeof f.more === 'boolean',
+  edit_result: (f) =>
+    isUuidV4(f.id) &&
+    (EDIT_RESULTS as readonly string[]).includes(f.result as string) &&
+    (f.objectId === undefined || isNonEmpty(f.objectId)) &&
+    (f.rev === undefined || isEpoch(f.rev)) &&
+    (f.why === undefined || isStr(f.why)) &&
+    (f.current === undefined || isSyncObject(f.current)),
   artifact: (f) => isUuidV4(f.id) && isNonEmpty(f.name) && isNonEmpty(f.url) && isEpoch(f.expiresAt),
 };
 

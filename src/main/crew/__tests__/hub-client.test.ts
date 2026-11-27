@@ -124,7 +124,7 @@ describe('HubClient handshake', () => {
     t.sock().hub({ type: 'welcome', machineId: MACHINE, hubTime: t.c.w, ownerName: 'Ann', ownerUpn: 'ann@x' });
     expect(t.client.getStatus()).toBe('online');
     expect(t.client.owner()).toEqual({ name: 'Ann', upn: 'ann@x' });
-    expect(t.sock().types()).toEqual(['auth', 'heartbeat']);
+    expect(t.sock().types()).toEqual(['auth', 'sync_pull', 'heartbeat']);
   });
 
   test('a challenge at another version stops with update-required and never signs', () => {
@@ -323,7 +323,7 @@ describe('HubClient after welcome', () => {
     t.timeouts[0].fn();
     t.sock().hub({ type: 'challenge', version: 2, nonce: 'n2', hubTime: 1 });
     t.sock().hub({ type: 'welcome', machineId: MACHINE, hubTime: 1, ownerName: 'A', ownerUpn: 'a' });
-    expect(t.sock().types()).toEqual(['auth', 'reply', 'heartbeat']);
+    expect(t.sock().types()).toEqual(['auth', 'reply', 'sync_pull', 'heartbeat']);
   });
 
   test('stale-epoch and not-home pull sync once per connection', () => {
@@ -402,5 +402,148 @@ describe('HubClient after welcome', () => {
     t.sock().hub({ ...deliver(2), scope: 'everyone' });
     expect(t.sock().sent.filter((f) => f.type === 'ack')).toEqual([]);
     expect((t.raw.query(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'hub-frame-dropped'`).get() as { n: number }).n).toBe(1);
+  });
+});
+
+describe('HubClient sync', () => {
+  const pulls = (t: ReturnType<typeof setup>) => t.sock().sent.filter((f) => f.type === 'sync_pull') as { id: string; since: number }[];
+  const role = (seq: number) => ({ kind: 'role', objectId: 'po', rev: seq, seq, hash: 'h', deleted: false, body: { role: 'po' } });
+
+  test('welcome pulls since the stored sequence; a page applies; a change pulls again', () => {
+    const t = setup();
+    t.raw.exec(`INSERT INTO crew_sync_state (key, value) VALUES ('sync.seq', '12')`);
+    const synced: number[] = [];
+    t.client.on('synced', (n) => synced.push(n));
+    t.online();
+    const [first] = pulls(t);
+    expect(first.since).toBe(12);
+    t.sock().hub({ type: 'sync_page', id: first.id, changes: [role(13)], next: 13, more: false });
+    expect(synced).toEqual([1]);
+    expect(t.client.sync.since()).toBe(13);
+    expect((t.raw.query(`SELECT rev FROM crew_role_cache`).get() as { rev: number }).rev).toBe(13);
+    t.sock().hub({ type: 'change', seq: 14 });
+    expect(pulls(t).map((p) => p.since)).toEqual([12, 13]);
+  });
+
+  test('a page for no pull is ignored', () => {
+    const t = setup();
+    const synced: number[] = [];
+    t.client.on('synced', (n) => synced.push(n));
+    t.online();
+    t.sock().hub({ type: 'sync_page', id: uuid(77), changes: [role(1)], next: 1, more: false });
+    expect(synced).toEqual([]);
+    expect(t.client.sync.since()).toBe(0);
+  });
+
+  test('an unanswered pull goes again on the heartbeat after 30 s; a reconnect pulls afresh', () => {
+    const t = setup();
+    t.online();
+    const hb = t.intervals.find((i) => i.ms === HEARTBEAT_MS)!;
+    hb.fn();
+    expect(pulls(t)).toHaveLength(1);
+    t.advance(30_000);
+    hb.fn();
+    expect(pulls(t)).toHaveLength(2);
+    expect(pulls(t)[1].id).toBe(pulls(t)[0].id);
+    const before = pulls(t)[0].id;
+    t.sock().drop(1006);
+    t.timeouts[0].fn();
+    t.sock().hub({ type: 'challenge', version: 2, nonce: 'n2', hubTime: t.c.w });
+    t.sock().hub({ type: 'welcome', machineId: MACHINE, hubTime: t.c.w, ownerName: 'A', ownerUpn: 'a' });
+    expect(pulls(t)).toHaveLength(1);
+    expect(pulls(t)[0].id).not.toBe(before);
+  });
+
+  test('a page proves the Hub read past the replies sent before its pull', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1));
+    t.client.sendReply(uuid(1), 'r');
+    t.sock().drop(1006);
+    t.timeouts[0].fn();
+    t.sock().hub({ type: 'challenge', version: 2, nonce: 'n2', hubTime: t.c.w });
+    t.sock().hub({ type: 'welcome', machineId: MACHINE, hubTime: t.c.w, ownerName: 'A', ownerUpn: 'a' });
+    t.sock().hub({ type: 'sync_page', id: pulls(t)[0].id, changes: [], next: 0, more: false });
+    t.advance(30_000);
+    t.intervals.filter((i) => i.ms === HEARTBEAT_MS && i.live).at(-1)!.fn();
+    expect((t.raw.query(`SELECT unanswered FROM crew_outbox_local`).get() as { unanswered: number }).unanswered).toBe(1);
+  });
+
+  test('a stale-epoch refusal pulls once the pull already out is answered', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub({ type: 'sync_page', id: pulls(t)[0].id, changes: [], next: 0, more: false });
+    t.sock().hub(deliver(1));
+    t.client.sendReply(uuid(1), 'r');
+    t.sock().hub({ type: 'refused', id: uuid(1), reason: 'stale-epoch' });
+    expect(pulls(t)).toHaveLength(2);
+  });
+});
+
+describe('HubClient queued frames', () => {
+  const sentOf = (t: ReturnType<typeof setup>, type: string) => t.sock().sent.filter((f) => f.type === type) as Record<string, unknown>[];
+
+  test('an edit carries the cached rev and the hire epoch; its edit_result clears it', () => {
+    const t = setup();
+    const results: unknown[] = [];
+    t.client.on('edit-result', (r) => results.push(r));
+    t.online();
+    t.sock().hub(deliver(1, 5));
+    t.client.sync.apply({ kind: 'hire', objectId: HIRE, rev: 3, seq: 1, hash: 'h', deleted: false, body: {} });
+    const id = t.client.sendEdit({ op: 'update', kind: 'hire', objectId: HIRE, hireId: HIRE, fields: { name: 'PO' } });
+    expect(sentOf(t, 'edit')).toEqual([{ type: 'edit', id, op: 'update', kind: 'hire', objectId: HIRE, rev: 3, hireId: HIRE, epoch: 5, fields: { name: 'PO' } }]);
+    t.sock().hub({ type: 'edit_result', id, result: 'applied', objectId: HIRE, rev: 4 });
+    expect((t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local`).get() as { n: number }).n).toBe(0);
+    expect(results).toEqual([{ type: 'edit_result', id, result: 'applied', objectId: HIRE, rev: 4 }]);
+  });
+
+  test('a conflicting edit shows the Hub copy', () => {
+    const t = setup();
+    t.online();
+    t.client.sync.apply({ kind: 'routine', objectId: 'r1', rev: 1, seq: 1, hash: 'h', deleted: false, body: { cron: 'mine' } });
+    const id = t.client.sendEdit({ op: 'update', kind: 'routine', objectId: 'r1', fields: { cron: 'x' } });
+    expect(sentOf(t, 'edit')[0].hireId).toBeUndefined();
+    const current = { kind: 'routine', objectId: 'r1', rev: 2, seq: 2, hash: 'h2', deleted: false, body: { cron: 'theirs' } };
+    t.sock().hub({ type: 'edit_result', id, result: 'conflict', current });
+    expect((t.raw.query(`SELECT data FROM crew_routine_cache`).get() as { data: string }).data).toBe('{"cron":"theirs"}');
+  });
+
+  test('an edit made offline waits in the outbox for welcome', () => {
+    const t = setup();
+    t.client.sendEdit({ op: 'create', kind: 'routine', fields: { cron: 'x' } });
+    t.online();
+    expect(t.sock().types()).toEqual(['auth', 'edit', 'sync_pull', 'heartbeat']);
+  });
+
+  test('usage is stamped with its job epoch; a gone or fenced job sends nothing', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 2));
+    const usage = {
+      runId: uuid(40), requestedBy: PERSON, accountUuid: 'acct', startedAt: 1, durationMs: 2, model: 'm', inputTokens: 3,
+      outputTokens: 4, cacheCreationTokens: 5, cacheReadTokens: 6, costEquivalentMicroUsd: 7, windows: [], windowsReadAt: 8,
+    };
+    expect(t.client.sendUsage(uuid(1), usage)).toBe(true);
+    const [sent] = sentOf(t, 'usage_record');
+    expect(sent).toEqual({ type: 'usage_record', id: sent.id, hireId: HIRE, epoch: 2, ...usage });
+    expect(sent.id).not.toBe(uuid(1));
+    expect(t.client.sendUsage(uuid(99), usage)).toBe(false);
+    t.sock().hub(deliver(2, 3));
+    expect(t.client.sendUsage(uuid(1), usage)).toBe(false);
+    expect(sentOf(t, 'usage_record')).toHaveLength(1);
+  });
+
+  test('an audit about a hire carries its newest epoch; one about the machine carries neither', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 6));
+    const a = t.client.sendAudit('hold', { state: 'held:missing' }, HIRE);
+    const b = t.client.sendAudit('machine-note', {});
+    expect(sentOf(t, 'audit')).toEqual([
+      { type: 'audit', id: a, event: 'hold', at: t.c.w, detail: { state: 'held:missing' }, hireId: HIRE, epoch: 6 },
+      { type: 'audit', id: b, event: 'machine-note', at: t.c.w, detail: {} },
+    ]);
+    const rows = t.raw.query(`SELECT hire_id, epoch FROM crew_outbox_local ORDER BY seq`).all();
+    expect(rows).toEqual([{ hire_id: HIRE, epoch: 6 }, { hire_id: null, epoch: null }]);
   });
 });
