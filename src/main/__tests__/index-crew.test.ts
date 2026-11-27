@@ -43,6 +43,7 @@ mock.module('sodium-native', () => ({ default: stub }));
 mock.module('../crew/crew-main', () => ({
   startCrew: () => calls.push('start'),
   stopCrew: () => calls.push('stop'),
+  crewRuntime: () => null,
 }));
 
 describe('the main process', () => {

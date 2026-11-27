@@ -197,9 +197,9 @@
   font-size: var(--font-size-xs);
 }
 
-.crew-detail__danger {
-  border-color: var(--color-danger) !important;
-  color: var(--color-danger) !important;
+.crew-detail button.crew-detail__danger {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
 }
 
 .crew-cards__list {
