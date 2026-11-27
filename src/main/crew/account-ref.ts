@@ -92,11 +92,10 @@ export class AccountChanger {
     const key = PENDING_PREFIX + frame.id;
     const row = this.deps.db.prepare(`SELECT value FROM crew_sync_state WHERE key = ?`).get(key) as { value: string } | undefined;
     if (!row) return null;
+    const change = frame.result === 'applied' ? pendingChange(row.value) : null;
+    const carried = change && carryHireSessions(this.deps.db, change.hireId, { id: change.accountId, configDir: change.configDir }, this.deps.configDirOf, this.deps.carry);
     this.deps.db.prepare(`DELETE FROM crew_sync_state WHERE key = ?`).run(key);
-    if (frame.result !== 'applied') return null;
-    const change = pendingChange(row.value);
-    if (change === null) return null;
-    return carryHireSessions(this.deps.db, change.hireId, { id: change.accountId, configDir: change.configDir }, this.deps.configDirOf, this.deps.carry);
+    return carried;
   }
 }
 

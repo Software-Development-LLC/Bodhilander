@@ -88,6 +88,15 @@ describe('changing a hire\'s account', () => {
     expect(thread().account_id).toBe('b');
   });
 
+  test('a carry that throws keeps the change pending for the next result', async () => {
+    const { AccountChanger, deps, thread } = await seed();
+    const failing = new AccountChanger({ ...deps, carry: () => { throw new Error('disk'); } });
+    failing.change('h1', account('b'));
+    expect(() => failing.onEditResult({ id: 'e1', result: 'applied' })).toThrow('disk');
+    expect(new AccountChanger(deps).onEditResult({ id: 'e1', result: 'applied' })).toEqual({ carried: 1, fresh: 0 });
+    expect(thread().account_id).toBe('b');
+  });
+
   test('a hire the machine has not synced is refused, not thrown', async () => {
     const { AccountChanger, deps } = await seed();
     const changer = new AccountChanger({ ...deps, sendEdit: () => { throw new Error('needs an objectId and a rev'); } });
