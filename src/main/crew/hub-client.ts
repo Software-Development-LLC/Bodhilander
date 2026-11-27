@@ -180,7 +180,7 @@ export class HubClient extends EventEmitter {
     this.random = deps.random ?? Math.random;
     const url = new URL(deps.hubUrl);
     this.hubHost = url.host;
-    this.wsPath = `${url.pathname.replace(/\/+$/, '')}/ws`;
+    this.wsPath = `${trimTrailingSlashes(url.pathname)}/ws`;
     this.wsScheme = isLoopbackHttp(deps.hubUrl) ? 'ws' : 'wss';
     this.lease = new LeaseClock(this.clocks);
     this.fence = new EpochFence(deps.db);

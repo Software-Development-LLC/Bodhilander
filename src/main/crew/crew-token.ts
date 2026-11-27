@@ -15,7 +15,8 @@ export const LOGIN_LIFETIME_MS = 7 * 24 * 3_600_000;
 export const LOGIN_REMIND_BEFORE_MS = 24 * 3_600_000;
 
 const DAY_MS = 24 * 3_600_000;
-const TOKEN_LINE = /^\s*(sk-ant-oat01-[A-Za-z0-9_-]+)\s*$/;
+const TOKEN_PREFIX = 'sk-ant-oat01-';
+const TOKEN_BODY = /^[A-Za-z0-9_-]+$/;
 
 export type SignInMode = 'token' | 'login';
 
@@ -50,18 +51,18 @@ const AUTH_FAILURES = [
   /failed to authenticate/i,
   /oauth (session|token) (has )?(expired|been revoked|is invalid)/i,
   /invalid (api key|bearer token|oauth token)/i,
-  /\b401\b.*\b(unauthori[sz]ed|authentication)/i,
 ];
 
 export function isAuthFailure(line: string): boolean {
-  return AUTH_FAILURES.some((re) => re.test(line));
+  if (AUTH_FAILURES.some((re) => re.test(line))) return true;
+  return /\b401\b/.test(line) && /unauthori[sz]ed|authentication/i.test(line);
 }
 
 /** The one token line from setup-token's output; nothing else is kept. */
 export function extractToken(output: string): string | null {
-  for (const line of output.split(/\r?\n/)) {
-    const m = TOKEN_LINE.exec(line);
-    if (m) return m[1];
+  for (const raw of output.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith(TOKEN_PREFIX) && TOKEN_BODY.test(line.slice(TOKEN_PREFIX.length))) return line;
   }
   return null;
 }

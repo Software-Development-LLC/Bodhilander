@@ -1,4 +1,4 @@
-// Copied verbatim from bodhi-service-crew src/protocol.ts at 7535aca (branch head 7640546a5f6902fc6bcc019ff62f864e73b08a21).
+// Copied verbatim from bodhi-service-crew src/protocol.ts at 7535aca (branch head 7640546a5f6902fc6bcc019ff62f864e73b08a21), plus the hire, routine, note, role and skill-bundle body types of arch amendment 3, ahead of the Hub.
 // The machine protocol between the Crew Hub and Bodhilander, which keeps a verbatim copy at
 // src/main/crew/protocol.ts. Any frame change after phase 1 ships bumps PROTOCOL_VERSION.
 // Times (*At, hubTime) are epoch ms; every id on the wire is a lowercase UUIDv4; MAX_TEXT counts
@@ -227,6 +227,15 @@ export type UsageReadFrame = { type: 'usage_read'; id: string; hireId: string; e
 export type SyncRef = { kind: SyncKind; objectId: string };
 export type SyncPullFrame = { type: 'sync_pull'; id: string; since: number; fetch?: SyncRef[] };
 export type AccountRef = { accountUuid: string; email: string; label: string };
+export type HireBody = { name: string; roleId: string; skillBundleId: string; skillBundleHash: string; repos: string[]; sharedWith: string[]; accountRef: AccountRef; homeMachineId: string | null; epoch: number; state: HireState; dailyTokenCap: number | null };
+export type HireFields = { name?: string; roleId?: string; repos?: string[]; accountRef?: AccountRef; dailyTokenCap?: number | null };
+export type RoutineBody = { hireId: string; cron: string; timezone: string; prompt: string; lastFired: number | null; lastRun: number | null };
+export type RoutineFields = { cron?: string; timezone?: string; prompt?: string };
+export const NOTE_SCOPES = ['owner', 'shared'] as const;
+export type NoteScope = (typeof NOTE_SCOPES)[number];
+export type NoteBody = { hireId: string; scope: NoteScope; path: string; content: string };
+export type RoleBody = { role: string; roleMd: string; skillBundle: string };
+export type SkillBundleBody = { role: string; files: SkillFile[]; hash: string };
 export type EditFrame = {
   type: 'edit';
   id: string;

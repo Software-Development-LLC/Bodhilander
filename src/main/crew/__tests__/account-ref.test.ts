@@ -44,3 +44,31 @@ describe('account references', () => {
     expect(src).not.toMatch(/account-resolver|account-failover/);
   });
 });
+
+describe('changing a hire\'s account', () => {
+  test('sends one hire update carrying accountRef, and carries sessions', async () => {
+    const { changeHireAccount } = await import('../account-ref');
+    const { crewDb } = await import('./crew-db');
+    const { raw, db } = crewDb();
+    raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id) VALUES ('h1', 't1', 's1', 'a')`).run();
+    identities['/d/b'] = { accountUuid: 'u-b', email: 'b@x.com' };
+    const sent: unknown[] = [];
+    const out = changeHireAccount(
+      { db, sendEdit: (e) => (sent.push(e), 'e1'), configDirOf: (id) => `/d/${id}`, carry: () => true },
+      'h1',
+      account('b'),
+    );
+    expect(sent).toEqual([{ op: 'update', kind: 'hire', objectId: 'h1', fields: { accountRef: { accountUuid: 'u-b', email: 'b@x.com', label: 'L-b' } } }]);
+    expect(JSON.stringify(sent)).not.toMatch(/claudeAccountRef|claude_account_ref|configDir/);
+    expect(out).toEqual({ editId: 'e1', carried: { carried: 1, fresh: 0 } });
+  });
+
+  test('an account with no uuid is never sent', async () => {
+    const { changeHireAccount } = await import('../account-ref');
+    const { crewDb } = await import('./crew-db');
+    identities['/d/c'] = { accountUuid: null, email: 'c@x.com' };
+    const sent: unknown[] = [];
+    expect(changeHireAccount({ db: crewDb().db, sendEdit: (e) => (sent.push(e), 'x'), configDirOf: () => null }, 'h1', account('c'))).toBe('unknown-account');
+    expect(sent).toEqual([]);
+  });
+});

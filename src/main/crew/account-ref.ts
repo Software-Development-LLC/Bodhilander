@@ -4,7 +4,12 @@
  * uuid then email; Crew never goes through the session resolver or failover.
  */
 import { resolveAccountIdentity } from '../account-identity';
+import type Database from 'better-sqlite3';
 import type { ClaudeAccount } from '../../shared/types';
+import type { carryTranscript } from '../conversation-transcript';
+import type { AccountRef } from './protocol';
+import { carryHireSessions, type CarryResult } from './session-carry';
+import type { EditInput } from './sync';
 
 export interface ClaudeAccountRef {
   accountUuid: string | null;
@@ -37,4 +42,34 @@ export function resolveAccountRef(ref: ClaudeAccountRef, accounts: ClaudeAccount
     (l) => (!ref.accountUuid || !l.identity.accountUuid) && sameEmail(l.identity.email ?? l.account.email, ref.email),
   );
   return byEmail?.account ?? null;
+}
+
+/** The reference on the wire: every key a non-empty string, so a hire is never pointed at an unknown uuid. */
+export function wireAccountRef(ref: ClaudeAccountRef): AccountRef | null {
+  if (!ref.accountUuid || !ref.email || !ref.label) return null;
+  return { accountUuid: ref.accountUuid, email: ref.email, label: ref.label };
+}
+
+export function accountChangeEdit(hireId: string, ref: AccountRef): EditInput {
+  return { op: 'update', kind: 'hire', objectId: hireId, fields: { accountRef: ref } };
+}
+
+export interface AccountChangeDeps {
+  db: Database.Database;
+  sendEdit(input: EditInput): string;
+  configDirOf(accountId: string): string | null;
+  carry?: typeof carryTranscript;
+}
+
+/** Change account: tell the Hub, then carry each thread's session to the new config dir. Takes effect on the next run. */
+export function changeHireAccount(
+  deps: AccountChangeDeps,
+  hireId: string,
+  to: ClaudeAccount,
+): { editId: string; carried: CarryResult } | 'unknown-account' {
+  const ref = wireAccountRef(accountRefFor(to));
+  if (ref === null) return 'unknown-account';
+  const editId = deps.sendEdit(accountChangeEdit(hireId, ref));
+  const carried = carryHireSessions(deps.db, hireId, { id: to.id, configDir: to.configDir }, deps.configDirOf, deps.carry);
+  return { editId, carried };
 }
