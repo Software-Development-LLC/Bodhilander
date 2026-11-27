@@ -176,6 +176,9 @@ export class HubClient extends EventEmitter {
     this.sweepTimer = null;
     this.socket?.close(1000);
     this.socket = null;
+    this.lease.onConnectionClosed();
+    this.outbox.onConnectionClosed();
+    this.heartbeatSentAt.clear();
   }
 
   /** powerMonitor `resume`: every lease lapses until a heartbeat sent after the wake is renewed. */
@@ -341,9 +344,17 @@ export class HubClient extends EventEmitter {
   }
 
   private onDeliver(frame: DeliverFrame): void {
+    const before = this.fence.known(frame.hireId);
     const outcome = this.fence.recordDelivery(frame);
+    if (before !== null && frame.epoch > before) this.onNewerEpoch(frame.hireId, frame.epoch, before);
     this.send({ type: 'ack', id: frame.id });
     if (outcome !== 'duplicate') this.emit('job', { id: frame.id, hireId: frame.hireId, outcome });
+  }
+
+  /** The fence has already dropped the older jobs; a run for one of them must not finish. */
+  private onNewerEpoch(hireId: string, epoch: number, before: number | null): void {
+    if (before !== null) this.deps.interruptRun(hireId);
+    this.emit('epoch', { hireId, epoch });
   }
 
   private onAck(id: string): void {
@@ -356,7 +367,8 @@ export class HubClient extends EventEmitter {
     this.heartbeatSentAt.delete(frame.seq);
     if (sentAt !== undefined) this.outbox.noteAnswered(sentAt);
     for (const { hireId, epoch } of frame.leases) {
-      if (this.fence.observe(hireId, epoch)) this.emit('epoch', { hireId, epoch });
+      const before = this.fence.known(hireId);
+      if (this.fence.observe(hireId, epoch)) this.onNewerEpoch(hireId, epoch, before);
     }
     const renewed = this.lease.onRenew(frame.seq, frame.leases);
     if (renewed.length > 0) this.emit('renewed', renewed);

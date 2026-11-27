@@ -279,8 +279,26 @@ describe('HubClient after welcome', () => {
     t.sock().hub(deliver(1, 1));
     t.sock().hub(renewFor(1, 2));
     expect(epochs).toEqual([{ hireId: HIRE, epoch: 2 }]);
+    expect(t.interrupted).toEqual([HIRE]);
     expect((t.raw.query(`SELECT state FROM crew_job`).get() as { state: string }).state).toBe('dropped');
     expect(t.client.sendReply(uuid(1), 'late')).toBe(false);
+  });
+
+  test('a delivery at a newer epoch interrupts the older run; one at the same epoch does not', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    t.sock().hub(deliver(2, 1));
+    expect(t.interrupted).toEqual([]);
+    t.sock().hub(deliver(3, 2));
+    expect(t.interrupted).toEqual([HIRE]);
+  });
+
+  test('stop forgets the connection, so a later renew for its heartbeat renews nothing', () => {
+    const t = setup();
+    t.online();
+    t.client.stop();
+    expect(t.client.lease.onRenew(1, [{ hireId: HIRE, epoch: 1 }])).toEqual([]);
   });
 
   test('a reply is cut, stamped with its job epoch, sent and cleared by its ack', () => {
