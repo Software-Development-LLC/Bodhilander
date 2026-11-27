@@ -1,4 +1,4 @@
-// Copied verbatim from bodhi-service-crew src/protocol.ts at 987fcbedb6a73d8156a6bed2e7efb23a188ee80d.
+// Copied verbatim from bodhi-service-crew src/protocol.ts at 7535aca (branch head 7640546a5f6902fc6bcc019ff62f864e73b08a21).
 // The machine protocol between the Crew Hub and Bodhilander, which keeps a verbatim copy at
 // src/main/crew/protocol.ts. Any frame change after phase 1 ships bumps PROTOCOL_VERSION.
 // Times (*At, hubTime) are epoch ms; every id on the wire is a lowercase UUIDv4; MAX_TEXT counts
@@ -529,11 +529,22 @@ export function parseMachineFrame(raw: string): Parsed {
   }
   const id = uuid(o.id) ? (o.id as string) : undefined;
   const malformed = { ok: false as const, bad: 'malformed' as const, frameType: o.type, id };
+  if (hasNul(o)) return malformed;
   if (!fits(o, SPECS[o.type])) return malformed;
   if (o.type === 'card_raise' && !fits(o.payload as Record<string, unknown>, PAYLOADS[o.kind as MachineCardKind])) return malformed;
   if (o.type === 'file' && !fileChunkFits(o)) return malformed;
   if (o.type === 'edit' && o.op !== 'create' && (o.objectId === undefined || o.rev === undefined)) return malformed;
   return { ok: true, frame: o as unknown as MachineFrame };
+}
+
+// Postgres stores neither a NUL nor a lone UTF-16 surrogate in text or jsonb, so a frame carrying
+// one, in any key or string, could never be written: it is refused malformed, not failed on every resend.
+const unstorable = (s: string) => s.includes('\0') || !s.isWellFormed();
+function hasNul(v: unknown): boolean {
+  if (typeof v === 'string') return unstorable(v);
+  if (Array.isArray(v)) return v.some(hasNul);
+  if (v && typeof v === 'object') return Object.entries(v).some(([k, x]) => unstorable(k) || hasNul(x));
+  return false;
 }
 
 // index 0 carries name, size, sha256 and exactly one target; later chunks carry none of them.

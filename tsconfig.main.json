@@ -1,7 +1,8 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "lib": ["ES2022", "ES2024.String", "DOM"]
   },
   "include": ["src/main/**/*", "src/shared/**/*"],
   "exclude": ["src/**/__tests__/**", "src/**/*.test.ts"]

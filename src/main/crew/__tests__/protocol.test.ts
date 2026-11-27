@@ -61,6 +61,13 @@ describe('the copied protocol', () => {
     expect(() => assertSendable(frame)).toThrow(/MAX_FRAME_BYTES/);
   });
 
+  test('a frame the Hub could not store is never sent', () => {
+    const nul = { type: 'reply', id: uuid(1), hireId: HIRE, epoch: 1, text: 'a\0b' } as MachineFrame;
+    const lone = { type: 'reply', id: uuid(2), hireId: HIRE, epoch: 1, text: 'a\uD800b' } as MachineFrame;
+    expect(() => assertSendable(nul)).toThrow(/malformed/);
+    expect(() => assertSendable(lone)).toThrow(/malformed/);
+  });
+
   test('no crew code clears the relay identity it shares', () => {
     const dir = path.join(import.meta.dir, '..');
     const offenders: string[] = [];

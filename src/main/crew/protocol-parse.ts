@@ -11,6 +11,7 @@ import {
   MAX_TEXT,
   REFUSED_REASONS,
   SYNC_KINDS,
+  parseMachineFrame,
   type HubFrame,
   type HubFrameType,
   type MachineFrame,
@@ -130,6 +131,7 @@ export function assertSendable(frame: MachineFrame): string {
   if (Buffer.byteLength(text, 'utf8') > MAX_FRAME_BYTES) {
     throw new Error(`refusing to send a ${frame.type} frame over MAX_FRAME_BYTES`);
   }
+  if (!parseMachineFrame(text).ok) throw new Error(`refusing to send a ${frame.type} frame the Hub would refuse malformed`);
   return text;
 }
 
