@@ -72,16 +72,9 @@ export class EpochFence {
       .run(hireId);
   }
 
-  /** The epoch to stamp on a lease_revoked: the latest job's, else the synced one, else 0. */
+  /** The epoch to stamp on a lease_revoked: the newest known, never a late stale delivery's. */
   revokeEpoch(hireId: string): number {
-    const job = this.db
-      .prepare(`SELECT epoch FROM crew_job WHERE hire_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
-      .get(hireId) as { epoch: number } | undefined;
-    if (job) return job.epoch;
-    const hire = this.db.prepare(`SELECT epoch FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as
-      | { epoch: number }
-      | undefined;
-    return hire?.epoch ?? 0;
+    return this.known(hireId) ?? 0;
   }
 
   /** Store a delivery under its epoch. Older than known is kept as dropped; newer fences the rest. */

@@ -108,5 +108,7 @@ describe('EpochFence', () => {
     fence.recordDelivery(deliver(1, 2));
     fence.recordDelivery(deliver(2, 7));
     expect(fence.revokeEpoch(HIRE)).toBe(7);
+    fence.recordDelivery(deliver(3, 5));
+    expect(fence.revokeEpoch(HIRE)).toBe(7);
   });
 });
