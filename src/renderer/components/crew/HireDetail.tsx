@@ -154,9 +154,9 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
         {hire.roleId} · {activityText(hire)}
       </div>
       {message && (
-        <p className="crew-detail__hint" role="status">
+        <output className="crew-detail__hint">
           {message}
-        </p>
+        </output>
       )}
 
       <section>

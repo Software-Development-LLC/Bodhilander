@@ -89,7 +89,7 @@ export const CardsInbox: React.FC<CardsInboxProps> = ({ load, openCard, pollMs =
   return (
     <div className="crew-cards">
       <h2>Cards</h2>
-      {note && <p role="status">{note}</p>}
+      {note && <output className="crew-inbox__note">{note}</output>}
       {body}
     </div>
   );

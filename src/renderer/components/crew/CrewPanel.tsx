@@ -98,9 +98,9 @@ export const CrewPanel: React.FC<CrewPanelProps> = ({ status, hires, error, sele
         </p>
       )}
       {notice && (
-        <p className="crew-panel__notice" role="status">
+        <output className="crew-panel__notice">
           {notice}
-        </p>
+        </output>
       )}
       {status && LINKABLE.has(status.availability) && <CrewLink beginLink={beginLink} confirmLinkOwner={confirmLinkOwner} />}
       {hires && hires.length > 0 && (

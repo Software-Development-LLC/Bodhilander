@@ -239,3 +239,9 @@
   margin: 6px 0;
   white-space: pre-wrap;
 }
+
+.crew-panel__notice,
+.crew-detail__hint,
+.crew-inbox__note {
+  display: block;
+}
