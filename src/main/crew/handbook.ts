@@ -45,8 +45,8 @@ export function parseRoleMd(md: string): RoleText {
   const front = FRONT.exec(md);
   const field = (key: string): string | null => {
     const line = front?.[1].split(/\r?\n/).find((l) => l.startsWith(`${key}:`));
-    const value = line?.slice(key.length + 1).trim();
-    return value || null;
+    const value = line?.slice(key.length + 1).trim() ?? '';
+    return value === '' ? null : value;
   };
   return { name: field('name'), description: field('description'), body: (front ? md.slice(front[0].length) : md).trim() };
 }
