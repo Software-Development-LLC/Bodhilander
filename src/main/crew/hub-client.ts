@@ -46,6 +46,7 @@ import {
   type SyncPullFrame,
   type SyncRef,
   type TokenRequestFrame,
+  type TypingFrame,
   type ArtifactRequestFrame,
   type MovePayload,
   type Unstamped,
@@ -766,6 +767,15 @@ export class HubClient extends EventEmitter {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp || this.phase !== 'open') return false;
     const frame: TokenRequestFrame = { type: 'token_request', id, hireId: stamp.hireId, epoch: stamp.epoch, requestedBy, repos };
+    this.send(frame);
+    return true;
+  }
+
+  /** The typing indicator in a message job's conversation: live only, never queued, never answered. */
+  sendTyping(jobId: string): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp || this.phase !== 'open') return false;
+    const frame: TypingFrame = { type: 'typing', hireId: stamp.hireId, epoch: stamp.epoch, inboundId: jobId };
     this.send(frame);
     return true;
   }

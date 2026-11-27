@@ -1086,6 +1086,18 @@ describe('HubClient cards and tokens', () => {
     expect(t.client.sendTokenRequest(uuid(1), uuid(22), PERSON, ['o/r'])).toBe(false);
   });
 
+  test('typing is sent live under its job\'s epoch, never through the outbox, and not offline or for a fenced job', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 1));
+    expect(t.client.sendTyping(uuid(1))).toBe(true);
+    expect(t.sock().sent.filter((f) => f.type === 'typing')).toEqual([{ type: 'typing', hireId: HIRE, epoch: 1, inboundId: uuid(1) }]);
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local WHERE frame_type = 'typing'`).get()).toEqual({ n: 0 });
+    expect(t.client.sendTyping(uuid(99))).toBe(false);
+    t.sock().drop(1006);
+    expect(t.client.sendTyping(uuid(1))).toBe(false);
+  });
+
   test('a refused card raise is handed on as card-refused with its raise id', () => {
     const t = setup();
     const cards: unknown[] = [];
