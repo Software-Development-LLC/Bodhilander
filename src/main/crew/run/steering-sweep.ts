@@ -19,7 +19,8 @@ export function sweepSteering(root: string): void {
   if (fs.existsSync(root)) walk(root);
 }
 
-const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+const QUOTE_ESCAPE = "'\\''";
+const q = (s: string): string => `'${s.replace(/'/g, QUOTE_ESCAPE)}'`;
 
 export function wslSweepSteering(root: string): string {
   return `find ${q(root)} -mindepth 1 \\( -iname CLAUDE.md -o -iname CLAUDE.local.md -o -iname .claude \\) -prune -exec rm -rf {} +`;

@@ -72,7 +72,7 @@ mac:
     - target: dmg
     - target: zip
 
-# A Windows build stops while Crew's versions.json holds placeholders
+# A Windows build warns while Crew's versions.json holds placeholders
 beforePack: scripts/check-crew-versions.js
 
 # Copy conpty.dll for Windows PTY support (runs after packing)
