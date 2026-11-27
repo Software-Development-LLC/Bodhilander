@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { app, Notification, safeStorage } from 'electron';
+import { app, Notification, safeStorage, shell } from 'electron';
 import log from 'electron-log';
 import { resolveAccountIdentity } from '../account-identity';
 import { getDatabase } from '../database';
@@ -119,6 +119,12 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     handbook: () => '',
     timeZone: () => null,
     audit: (event, detail) => writeAudit(db, null, event, detail),
+    openExternal: (url) => void shell.openExternal(url),
+    belongsTo: (accountId, _token, accountUuid) => {
+      const known = getAllAccounts().find((a) => a.id === accountId);
+      const windowsUuid = known ? resolveAccountIdentity(known.configDir).accountUuid : null;
+      return known !== undefined && (accountUuid === null || windowsUuid === null || accountUuid === windowsUuid);
+    },
     resources: { dir, relayScript: res.relayScript, shimDir: res.shimDir },
     recordsFile: path.join(app.getPath('userData'), 'crew', 'wsl-tmp.json'),
   });
@@ -206,6 +212,11 @@ export function startCrew(): CrewRuntime {
     .then(() => void rt.loop.tick())
     .catch((err) => log.warn('[Crew] the Windows setup check failed', err));
   return rt;
+}
+
+/** Sign in for Crew on Windows; null off Windows or before Crew has started. */
+export function crewWindowsSignIn(): WindowsCrew['signIn'] | null {
+  return windowsCrew?.signIn ?? null;
 }
 
 /** After Repair: the full check again, interop included, then held runs try again. */

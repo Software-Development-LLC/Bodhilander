@@ -13,6 +13,7 @@ import { asCrew, asRoot, decodeWslOutput, type WslExec } from './wsl';
 import { agentServeArgs, WSL_EXE, windowsEnv, type AgentChild } from './wsl-agent';
 import { WslRuns, WSL_GH_SHIM_DIR, WSL_MCP_RELAY, type WslRunDeps } from './wsl-run';
 import { installShipped, WindowsGate, type ShippedFiles } from './wsl-setup';
+import { WslSignIn, type SignInChild, type WslSignInDeps } from './wsl-sign-in';
 
 const CREW_UID = 1000;
 
@@ -52,6 +53,20 @@ export function spawnAgentChild(exe = WSL_EXE): AgentChild {
       child.stdin.end();
       child.kill();
     },
+  };
+}
+
+export function spawnSignInChild(args: string[], exe = WSL_EXE): SignInChild {
+  const child = spawn(exe, args, { env: windowsEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  child.stdin.on('error', () => undefined);
+  return {
+    write: (text) => void child.stdin.write(text),
+    onOutput: (cb) => {
+      child.stdout.on('data', (b: Buffer) => cb(decodeWslOutput(b)));
+      child.stderr.on('data', (b: Buffer) => cb(decodeWslOutput(b)));
+    },
+    onClose: (cb) => void child.on('close', (code) => cb(code)),
+    kill: () => void child.kill(),
   };
 }
 
@@ -109,6 +124,8 @@ export type WindowsCrewDeps = Omit<WslRunDeps, 'exec' | 'sh' | 'records' | 'agen
   resources: CrewAgentResources;
   recordsFile: string;
   audit(event: string, detail: Record<string, unknown>): void;
+  openExternal: WslSignInDeps['openExternal'];
+  belongsTo: WslSignInDeps['belongsTo'];
   exec?: WslExec;
   spawnAgent?: () => AgentChild;
 };
@@ -118,6 +135,7 @@ export interface WindowsCrew {
   /** At Bodhilander start: the sweep, then the full check with interop. Runs are held until it passes. */
   start(): Promise<void>;
   afterRepair(): Promise<void>;
+  signIn: WslSignIn;
   end(jobId: string): void;
   endAll(): void;
 }
@@ -150,6 +168,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
     windows: { gate: () => gate.gate(), prepare: (job, threadKey, runId) => runs.prepare(job, threadKey, runId) },
     start: async () => void (await gate.atStart()),
     afterRepair: async () => void (await gate.afterRepair()),
+    signIn: new WslSignIn({ signIn: deps.signIn, sh, records, spawn: (args) => spawnSignInChild(args), openExternal: deps.openExternal, belongsTo: deps.belongsTo }),
     end: (jobId) => runs.end(jobId),
     endAll: () => runs.endAll(),
   };

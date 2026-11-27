@@ -59,7 +59,7 @@ describe('Crew on Windows, as the main process runs it', () => {
     const { db } = crewDb();
     const crew = createWindowsCrew({
       db, signIn: {} as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
-      onLost: () => {}, handbook: () => '', timeZone: () => null, audit: () => {},
+      onLost: () => {}, handbook: () => '', timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
       resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'),
       exec: async (args) => (calls.push(args.join(' ')), { code: 1, stdout: '', stderr: '' }),
     });

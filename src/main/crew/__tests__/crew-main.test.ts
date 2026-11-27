@@ -8,6 +8,7 @@ mock.module('electron', () => ({
     show() {}
   },
   safeStorage: { isEncryptionAvailable: () => false, encryptString: () => Buffer.alloc(0), decryptString: () => '' },
+  shell: { openExternal: async () => {} },
 }));
 const { crewDb, HIRE, PERSON, uuid } = await import('./crew-db');
 const { db, raw } = crewDb();

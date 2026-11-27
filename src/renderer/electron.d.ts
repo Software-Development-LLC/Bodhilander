@@ -1,5 +1,6 @@
 import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult } from '../shared/types';
 import type { CrewSavedCopy } from '../shared/types';
+import type { CrewWindowsSignInResult } from '../shared/types';
 
 interface ElectronAPI {
   platform: string;
@@ -200,6 +201,9 @@ interface ElectronAPI {
   crewGetStatus: () => Promise<CrewStatus>;
   crewListSavedCopies: () => Promise<CrewSavedCopy[]>;
   crewDeleteSavedCopy: (name: string) => Promise<CrewEditResult>;
+  crewWindowsSignIn: (accountId: string) => Promise<CrewWindowsSignInResult>;
+  crewWindowsSignInCode: (code: string) => Promise<boolean>;
+  crewWindowsSignInCancel: () => Promise<void>;
   crewListHires: () => Promise<CrewHireSummary[]>;
   crewGetHire: (hireId: string) => Promise<CrewHireDetail | null>;
   crewGetHireUsage: (hireId: string) => Promise<CrewHireUsage>;

@@ -1026,6 +1026,9 @@ export interface CrewSavedCopy {
   savedAt: number;
 }
 
+/** How Sign in for Crew on Windows ended. */
+export type CrewWindowsSignInResult = { ok: true; accountUuid: string | null } | { ok: false; reason: string };
+
 /** What the sidebar says a hire is doing, from this machine's point of view. */
 export type CrewHireActivity = 'running' | 'idle' | 'held' | 'elsewhere' | 'provisioning' | 'paused' | 'let-go';
 
