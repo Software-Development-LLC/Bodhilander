@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { wslSweepSteering } from '../run/steering-sweep';
 import type { Duplex } from 'stream';
 
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
@@ -213,6 +214,7 @@ describe('a run prepared inside BodhiCrew', () => {
     expect(t.writes.get(`${H}/skills/board/read.md`)).toBe('# Board\n');
     expect(t.scripts.some((s) => /rm -rf .*'[^']*\/skills' && mkdir -p '[^']*\/skills'/.test(s) && s.includes(`'${H}/skills'`))).toBe(true);
     expect(t.writes.get(`${H}/git/gitconfig`)).toContain('excludesFile = /dev/null');
+    expect(t.scripts.some((s) => s.includes(wslSweepSteering(`${H}/owner`)))).toBe(true);
   });
 
   test('a skill path that leaves the skills dir or needs shell quoting is refused', async () => {

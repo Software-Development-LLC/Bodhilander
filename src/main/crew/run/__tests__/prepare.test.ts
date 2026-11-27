@@ -168,6 +168,21 @@ describe('preparing a run', () => {
     expect(JSON.parse(rows[0].detail)).toEqual({ threadKey: 'chat:owner', sessionAccountId: 'a2', runAccountId: 'a1' });
   });
 
+  test('steering a past run left below the run root is gone before the next run, and the handbook is rewritten', async () => {
+    const t = setup();
+    const owner = path.join(t.root, 'owner');
+    fs.mkdirSync(path.join(owner, 'notes', '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(owner, 'CLAUDE.local.md'), 'planted');
+    fs.writeFileSync(path.join(owner, 'notes', 'CLAUDE.md'), 'planted');
+    fs.writeFileSync(path.join(owner, 'notes', 'keep.md'), 'mine');
+    await prepareRun(t.deps, job(), 'chat:owner', 'run-1');
+    expect(fs.existsSync(path.join(owner, 'CLAUDE.local.md'))).toBe(false);
+    expect(fs.existsSync(path.join(owner, 'notes', 'CLAUDE.md'))).toBe(false);
+    expect(fs.existsSync(path.join(owner, 'notes', '.claude'))).toBe(false);
+    expect(fs.readFileSync(path.join(owner, 'notes', 'keep.md'), 'utf8')).toBe('mine');
+    expect(fs.readFileSync(path.join(owner, 'CLAUDE.md'), 'utf8')).toBe('# Role\n');
+  });
+
   test('an untainted thread on the same day resumes its session', async () => {
     const t = setup();
     t.raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id, updated_at) VALUES (?, 'chat:owner', 'old', 'a1', '2026-11-27 11:00:00')`).run(HIRE);

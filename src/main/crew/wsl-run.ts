@@ -17,6 +17,7 @@ import type { SkillFile } from './protocol';
 import { runArgs, wslRunEnv } from './run/env';
 import type { CrewJob, Prepared } from './run/loop';
 import { crewMcpServers } from './run/mcp-config';
+import { wslSweepSteering } from './run/steering-sweep';
 import { chooseSession, HIRE_GITCONFIG, HOLD_MISSING, HOLD_SETUP, HOLD_SIGNED_OUT, hireAccountRef } from './run/prepare';
 import { buildWslRunSettings, WSL_BIN_DIR, WSL_CREW_DIR, WSL_HIRES_DIR, WSL_HOME_ROOT, WSL_NODE_DIR, wslHirePaths } from './run/sandbox-settings';
 import { cwdFor, type HirePaths } from './run/scope';
@@ -195,7 +196,7 @@ export class WslRuns {
     const configDir = wslAccountDir(accountId);
     const gitConfig = posix.join(paths.git, 'gitconfig');
     const mk = [paths.owner, paths.circle, paths.run, paths.ghConfig, paths.shell, paths.git, configDir].map(q).join(' ');
-    const regen = await d.sh(`umask 077 && mkdir -p ${mk} && rm -rf ${q(posix.join(cwd, '.claude'))} ${q(paths.skills)} && mkdir -p ${q(paths.skills)}`);
+    const regen = await d.sh(`umask 077 && mkdir -p ${mk} && ${wslSweepSteering(cwd)} && rm -rf ${q(paths.skills)} && mkdir -p ${q(paths.skills)}`);
     if (regen.code !== 0) throw new SocketRootError({ type: 'hire-folder', uid: null, mode: null });
     await this.write(posix.join(cwd, 'CLAUDE.md'), handbook, '0644');
     await this.write(gitConfig, HIRE_GITCONFIG, '0644');

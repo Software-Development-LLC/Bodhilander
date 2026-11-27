@@ -22,6 +22,7 @@ import { SocketRootError } from './sockets';
 import { cwdFor, hirePaths, settingsPathFor, underTempDir, type HirePaths } from './scope';
 import type { HireDayUsage } from './hire-usage';
 import { freshReason, freshSessionInput, type Turn } from './sessions';
+import { sweepSteering } from './steering-sweep';
 
 export const HOLD_MISSING = 'held:missing';
 export const HOLD_SIGNED_OUT = 'held:signed-out';
@@ -116,7 +117,7 @@ function regenerate(paths: HirePaths, cwd: string, readHandbook: () => string, r
   const handbook = readHandbook();
   for (const dir of [paths.owner, paths.circle, paths.run, paths.ghConfig, paths.shell, paths.git]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(gitConfigPath(paths), HIRE_GITCONFIG);
-  fs.rmSync(path.join(cwd, '.claude'), { recursive: true, force: true });
+  sweepSteering(cwd);
   fs.writeFileSync(path.join(cwd, 'CLAUDE.md'), handbook);
   restoreSkills?.(paths);
 }
