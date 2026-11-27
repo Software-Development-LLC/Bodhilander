@@ -795,3 +795,67 @@ describe('HubClient sync edges', () => {
     expect(t.sock().sent.filter((f) => f.type === 'sync_pull')).toHaveLength(2);
   });
 });
+
+describe('HubClient review fixes', () => {
+  const hireRow = (t: ReturnType<typeof setup>) => t.raw.query(`SELECT rev, data FROM crew_hire_cache WHERE hire_id = ?`).get(HIRE) as { rev: number; data: string };
+
+  test('an applied edit writes its new rev and fields to the cache, so the next edit is not a conflict', () => {
+    const t = setup();
+    t.online();
+    t.client.sync.apply({ kind: 'hire', objectId: HIRE, rev: 3, seq: 1, hash: 'h', deleted: false, body: { name: 'A', role: 'r' } });
+    const id = t.client.sendEdit({ op: 'update', kind: 'hire', objectId: HIRE, hireId: HIRE, fields: { name: 'PO' } });
+    t.sock().hub({ type: 'edit_result', id, result: 'applied', objectId: HIRE, rev: 4 });
+    expect(hireRow(t).rev).toBe(4);
+    expect(JSON.parse(hireRow(t).data)).toEqual({ name: 'PO', role: 'r' });
+    const next = t.client.sendEdit({ op: 'update', kind: 'hire', objectId: HIRE, hireId: HIRE, fields: { name: 'Q' } });
+    expect((t.sock().sent.find((f) => f.id === next) as { rev: number }).rev).toBe(4);
+  });
+
+  test('an applied edit never rolls back a newer copy that synced first', () => {
+    const t = setup();
+    t.online();
+    t.client.sync.apply({ kind: 'hire', objectId: HIRE, rev: 3, seq: 1, hash: 'h', deleted: false, body: { name: 'A' } });
+    const id = t.client.sendEdit({ op: 'update', kind: 'hire', objectId: HIRE, hireId: HIRE, fields: { name: 'PO' } });
+    t.client.sync.apply({ kind: 'hire', objectId: HIRE, rev: 5, seq: 2, hash: 'h', deleted: false, body: { name: 'Z' } });
+    t.sock().hub({ type: 'edit_result', id, result: 'applied', objectId: HIRE, rev: 4 });
+    expect(hireRow(t)).toEqual({ rev: 5, data: '{"name":"Z"}' });
+  });
+
+  test('a pull that throws on welcome still starts the heartbeats', () => {
+    const t = setup();
+    t.client.sync.onConnect = () => {
+      throw new Error('disk full');
+    };
+    t.online();
+    expect(t.sock().types()).toContain('heartbeat');
+    expect(t.intervals.filter((i) => i.live && i.ms === HEARTBEAT_MS)).toHaveLength(1);
+  });
+
+  test('a prune that throws does not leave start unable to connect', () => {
+    const t = setup();
+    t.client.outbox.prune = () => {
+      throw new Error('disk full');
+    };
+    t.client.start();
+    expect(t.sockets).toHaveLength(1);
+    expect(t.intervals.filter((i) => i.live)).toHaveLength(1);
+  });
+
+  test('usage for one job is queued once, under an id derived from the job', () => {
+    const t = setup();
+    t.online();
+    t.sock().hub(deliver(1, 2));
+    t.sock().hub(deliver(2, 2));
+    const usage = {
+      runId: uuid(40), requestedBy: PERSON, accountUuid: 'acct', startedAt: 1, durationMs: 2, model: 'm', inputTokens: 3,
+      outputTokens: 4, cacheCreationTokens: 5, cacheReadTokens: 6, costEquivalentMicroUsd: 7, windows: [], windowsReadAt: 8,
+    };
+    expect(t.client.sendUsage(uuid(1), usage)).toBe(true);
+    expect(t.client.sendUsage(uuid(1), usage)).toBe(false);
+    expect(t.client.sendUsage(uuid(2), usage)).toBe(true);
+    const ids = t.sock().sent.filter((f) => f.type === 'usage_record').map((f) => f.id as string);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});

@@ -1,5 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 
+mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
+
 const identities: Record<string, { accountUuid: string | null; email: string | null }> = {};
 mock.module('../../account-identity', () => ({
   resolveAccountIdentity: (dir: string) => ({ loggedIn: true, ...(identities[dir] ?? { accountUuid: null, email: null }) }),
@@ -29,7 +31,15 @@ describe('account references', () => {
     identities['/d/c'] = { accountUuid: null, email: null };
     const accounts = [account('a'), account('c', 'Me@X.com ')];
     expect(resolveAccountRef({ accountUuid: 'u-gone', email: 'me@x.com', label: 'x' }, accounts)?.id).toBe('c');
-    expect(resolveAccountRef({ accountUuid: null, email: 'ME@x.com', label: 'x' }, accounts)?.id).toBe('a');
+    expect(resolveAccountRef({ accountUuid: null, email: 'ME@x.com', label: 'x' }, [account('a')])?.id).toBe('a');
+    expect(resolveAccountRef({ accountUuid: null, email: 'ME@x.com', label: 'x' }, accounts)).toBeNull();
+  });
+
+  test('two rows with no uuid sharing the address are ambiguous, so neither is picked', () => {
+    identities['/d/p'] = { accountUuid: null, email: 'twin@x.com' };
+    identities['/d/q'] = { accountUuid: null, email: 'TWIN@x.com' };
+    expect(resolveAccountRef({ accountUuid: null, email: 'twin@x.com', label: 'x' }, [account('p'), account('q')])).toBeNull();
+    expect(resolveAccountRef({ accountUuid: 'u-gone', email: 'twin@x.com', label: 'x' }, [account('p'), account('q')])).toBeNull();
   });
 
   test('nothing matching is held:missing', () => {
@@ -51,13 +61,16 @@ describe('changing a hire\'s account', () => {
     const { crewDb } = await import('./crew-db');
     const { raw, db } = crewDb();
     raw.query(`INSERT INTO crew_thread (hire_id, thread_key, session_id, account_id) VALUES ('h1', 't1', 's1', 'a')`).run();
+    raw.query(`INSERT INTO crew_hire_cache (hire_id, rev) VALUES ('h1', 2)`).run();
+    const queued = (id: string, state = 'pending') =>
+      raw.query(`INSERT INTO crew_outbox_local (id, hire_id, frame_type, protocol_version, body, state) VALUES (?, 'h1', 'edit', 2, '{}', ?)`).run(id, state);
     identities['/d/b'] = { accountUuid: 'u-b', email: 'b@x.com' };
     const sent: unknown[] = [];
     let n = 0;
     const deps = { db, sendEdit: (e: unknown) => (sent.push(e), `e${++n}`), configDirOf: (id: string) => `/d/${id}`, carry: () => true };
     const changer = new AccountChanger(deps);
     const thread = () => raw.query(`SELECT account_id FROM crew_thread`).get() as { account_id: string };
-    return { changer, sent, thread, restart: () => new AccountChanger(deps), AccountChanger, deps };
+    return { raw, changer, sent, thread, queued, restart: () => new AccountChanger(deps), AccountChanger, deps };
   };
 
   test('sends one hire update carrying accountRef, and carries sessions only once it is applied', async () => {
@@ -88,19 +101,49 @@ describe('changing a hire\'s account', () => {
     expect(thread().account_id).toBe('b');
   });
 
-  test('a carry that throws keeps the change pending for the next result', async () => {
-    const { AccountChanger, deps, thread } = await seed();
+  const pendingRows = (raw: { query(sql: string): { all(): unknown[] } }) =>
+    raw.query(`SELECT key FROM crew_sync_state WHERE key LIKE 'account-change:%'`).all().length;
+
+  test('a carry that throws after the edit applied is retried by settle, not lost with the outbox item', async () => {
+    const { AccountChanger, deps, thread, raw } = await seed();
     const failing = new AccountChanger({ ...deps, carry: () => { throw new Error('disk'); } });
     failing.change('h1', account('b'));
     expect(() => failing.onEditResult({ id: 'e1', result: 'applied' })).toThrow('disk');
-    expect(new AccountChanger(deps).onEditResult({ id: 'e1', result: 'applied' })).toEqual({ carried: 1, fresh: 0 });
+    expect(thread().account_id).toBe('a');
+    const later = new AccountChanger(deps);
+    expect(later.onEditResult({ id: 'e1', result: 'applied' })).toBeNull();
+    expect(later.settle()).toEqual([{ carried: 1, fresh: 0 }]);
     expect(thread().account_id).toBe('b');
+    expect(pendingRows(raw)).toBe(0);
+    expect(later.settle()).toEqual([]);
   });
 
-  test('a hire the machine has not synced is refused, not thrown', async () => {
-    const { AccountChanger, deps } = await seed();
-    const changer = new AccountChanger({ ...deps, sendEdit: () => { throw new Error('needs an objectId and a rev'); } });
-    expect(changer.change('h1', account('b'))).toEqual({ refused: 'hire-not-synced' });
+  test('settle forgets a change whose edit the fence, a purge or a refusal removed, and keeps one still queued', async () => {
+    const { changer, raw, queued, thread } = await seed();
+    changer.change('h1', account('b'));
+    changer.change('h1', account('b'));
+    changer.change('h1', account('b'));
+    queued('e1');
+    queued('e2', 'unsendable');
+    expect(changer.settle()).toEqual([]);
+    expect(raw.query(`SELECT key FROM crew_sync_state WHERE key LIKE 'account-change:%'`).all()).toEqual([{ key: 'account-change:e1' }]);
+    expect(thread().account_id).toBe('a');
+  });
+
+  test('a hire the machine has not synced is refused before anything is sent', async () => {
+    const { AccountChanger, deps, raw, sent } = await seed();
+    raw.query(`UPDATE crew_hire_cache SET rev = 0`).run();
+    expect(new AccountChanger(deps).change('h1', account('b'))).toEqual({ refused: 'hire-not-synced' });
+    raw.query(`DELETE FROM crew_hire_cache`).run();
+    expect(new AccountChanger(deps).change('h1', account('b'))).toEqual({ refused: 'hire-not-synced' });
+    expect(sent).toEqual([]);
+  });
+
+  test('any other send failure is reported as such, not as an unsynced hire', async () => {
+    const { AccountChanger, deps, raw } = await seed();
+    const changer = new AccountChanger({ ...deps, sendEdit: () => { throw new Error('database is locked'); } });
+    expect(changer.change('h1', account('b'))).toEqual({ refused: 'send-failed' });
+    expect(pendingRows(raw)).toBe(0);
   });
 
   test('an account with no uuid is never sent', async () => {

@@ -187,6 +187,17 @@ export class LocalOutbox {
     return this.inFlight.get(id)?.sentAt ?? null;
   }
 
+  /** The frame queued under this id, while it is still in the outbox. */
+  frameOf(id: string): MachineFrame | null {
+    const row = this.db.prepare('SELECT body FROM crew_outbox_local WHERE id = ?').get(id) as { body: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.body) as MachineFrame;
+    } catch {
+      return null;
+    }
+  }
+
   onAck(id: string): boolean {
     const sentAt = this.sentIndex(id);
     if (sentAt !== null) this.noteAnswered(sentAt);

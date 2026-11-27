@@ -236,8 +236,24 @@ export class CrewSync {
     return frame;
   }
 
+  /** Our applied update lands in the cache at the Hub's new rev, unless a newer copy already synced. */
+  private applyOwnEdit(sent: EditFrame, newRev: number | undefined): void {
+    if (sent.op !== 'update' || sent.objectId === undefined || sent.rev === undefined || newRev === undefined) return;
+    const { table, id } = TABLES[sent.kind];
+    const row = this.db.prepare(`SELECT rev, data FROM ${table} WHERE ${id} = ?`).get(sent.objectId) as { rev: number; data: string } | undefined;
+    if (!row || row.rev !== sent.rev || newRev <= row.rev) return;
+    let body: Body;
+    try {
+      body = JSON.parse(row.data) as Body;
+    } catch {
+      body = {};
+    }
+    this.write(sent.kind, sent.objectId, newRev, { ...body, ...sent.fields });
+  }
+
   /** A conflict applies the Hub's current object, so the UI shows the newer value. */
-  onEditResult(frame: EditResultFrame, now: number): SyncPullFrame | null {
+  onEditResult(frame: EditResultFrame, now: number, sent: EditFrame | null = null): SyncPullFrame | null {
+    if (frame.result === 'applied' && sent) this.applyOwnEdit(sent, frame.rev);
     if (frame.result === 'conflict') {
       if (frame.current) this.apply(frame.current);
       writeAudit(this.db, null, 'edit-conflict', { id: frame.id, objectId: frame.objectId ?? frame.current?.objectId ?? null });

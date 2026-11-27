@@ -2,7 +2,7 @@
  * The one WebSocket to the Crew Hub, signed with the relay's machine key. A
  * bad-auth after the key changed offers Link again; nothing here clears the key.
  */
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
@@ -43,6 +43,15 @@ export const HUB_URL_PRODUCTION = 'https://crew.bodhi.software';
 export const HUB_URL_DEVELOPMENT = 'https://crew-dev.bodhi.software';
 export const HUB_URL_PREF = 'crew.hubUrl';
 export const MACHINE_ID_PREF = 'crew.machineId';
+
+/** A v4-shaped uuid fixed by its seed, so a re-send keeps the id the Hub dedups on. */
+export function derivedUuid(seed: string): string {
+  const b = createHash('sha256').update(seed).digest();
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = b.subarray(0, 16).toString('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -215,7 +224,7 @@ export class HubClient extends EventEmitter {
     if (!this.stopped) return;
     if (!this.deps.getMachineId()) return;
     this.stopped = false;
-    this.outbox.prune();
+    this.guarded('prune', () => this.outbox.prune());
     this.sweepTimer = this.timers.setInterval(() => this.guarded('sweep', () => this.sweep()), 1000);
     this.open();
   }
@@ -418,9 +427,9 @@ export class HubClient extends EventEmitter {
     this.ownerUpn = frame.ownerUpn;
     this.setStatus('online');
     this.emit('welcome', frame);
-    this.outbox.drain(this.sender, this.clocks.wall());
-    this.sendPull(this.sync.onConnect(this.clocks.wall()));
-    this.heartbeat();
+    this.guarded('drain', () => this.outbox.drain(this.sender, this.clocks.wall()));
+    this.guarded('pull', () => this.sendPull(this.sync.onConnect(this.clocks.wall())));
+    this.guarded('heartbeat', () => this.heartbeat());
     this.heartbeatTimer = this.timers.setInterval(() => this.guarded('heartbeat', () => this.heartbeat()), HEARTBEAT_MS);
   }
 
@@ -452,8 +461,9 @@ export class HubClient extends EventEmitter {
   }
 
   private onEditResult(frame: EditResultFrame): void {
+    const sent = this.outbox.frameOf(frame.id);
     if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
-    this.sendPull(this.sync.onEditResult(frame, this.clocks.wall()));
+    this.sendPull(this.sync.onEditResult(frame, this.clocks.wall(), sent?.type === 'edit' ? sent : null));
     this.emit('edit-result', frame);
   }
 
@@ -542,13 +552,12 @@ export class HubClient extends EventEmitter {
     return frame.id;
   }
 
-  /** Queue a run's usage under its job's epoch. False when the job is gone or fenced. */
+  /** Queue a job's one usage record under its epoch. False when the job is gone, fenced, or its usage is already queued. */
   sendUsage(jobId: string, usage: UsageInput): boolean {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
-    const frame: UsageRecordFrame = { type: 'usage_record', id: this.newId(), hireId: stamp.hireId, epoch: stamp.epoch, ...usage };
-    this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
-    return true;
+    const frame: UsageRecordFrame = { type: 'usage_record', id: derivedUuid(`usage:${jobId}`), hireId: stamp.hireId, epoch: stamp.epoch, ...usage };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
   }
 
   /** Ship a local audit entry; one about a hire carries its newest known epoch. */
