@@ -82,6 +82,17 @@ describe('approve broker', () => {
     expect(t.broker.decide(t.decision(uuid(101), 'approved', uuid(202)))).toBeNull();
   });
 
+  test('a decision that arrives before the parked run exits still closes its job, so nothing is left parked', async () => {
+    const t = setup();
+    const answer = t.broker.ask(RUN, ASK);
+    t.timers[0]();
+    await answer;
+    expect(t.broker.decide(t.decision(uuid(101), 'approved'))).toBe('job');
+    expect((t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(RUN.jobId) as { state: string }).state).toBe('done');
+    t.raw.query(`UPDATE crew_job SET state = 'parked' WHERE id = ? AND state IN ('running', 'queued')`).run(RUN.jobId);
+    expect((t.raw.query(`SELECT state FROM crew_job WHERE id = ?`).get(RUN.jobId) as { state: string }).state).toBe('done');
+  });
+
   test('a restart while a run waits on a card parks the job, so the decision resumes it once and nothing re-runs it', () => {
     const t = setup();
     void t.broker.ask(RUN, ASK);

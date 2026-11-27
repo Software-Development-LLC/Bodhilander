@@ -171,6 +171,7 @@ export class ApproveBroker {
   /**
    * A decision on a held run answers it; on a parked one (or one raised before a restart)
    * it becomes a `card` job on the parked job's thread and scope. Null when nothing matches.
+   * A parked run that has not exited yet is still `running`; it is closed here too.
    */
   decide(frame: CardDecisionFrame): 'answered' | 'job' | null {
     const db = this.deps.db;
@@ -195,7 +196,7 @@ export class ApproveBroker {
       db.prepare(
         `INSERT OR IGNORE INTO crew_job (id, hire_id, kind, epoch, scope, requested_by, sender, text) VALUES (?, ?, 'card', ?, ?, ?, ?, ?)`,
       ).run(frame.id, card.hire_id, frame.epoch, card.scope, card.requested_by, frame.decidedBy, decisionText(card.tool, frame.decision));
-      db.prepare(`UPDATE crew_job SET state = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state = 'parked'`).run(card.job_id);
+      db.prepare(`UPDATE crew_job SET state = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND state IN ('parked', 'running')`).run(card.job_id);
     })();
     return 'job';
   }
