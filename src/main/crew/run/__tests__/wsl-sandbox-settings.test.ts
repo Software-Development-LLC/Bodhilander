@@ -29,6 +29,12 @@ describe('WSL2 run settings', () => {
     expect(fs.denyRead).toContain('/tmp/crt-1000/0123456789abcdef0123456789abcdef/cc-socks');
   });
 
+  test("Bash can read no process's environ, while the rest of /proc stays readable", () => {
+    const fs = buildWslRunSettings(input()).sandbox.filesystem;
+    expect(fs.denyRead).toContain('/proc/*/environ');
+    expect(fs.denyRead).not.toContain('/proc');
+  });
+
   test('only the run own paths are opened again, the install dirs read-only', () => {
     const s = buildWslRunSettings(input()).sandbox;
     expect(s.filesystem.allowRead).toEqual([`${H}/owner`, `${H}/circle`, `${H}/projects/repo`, `${H}/skills`, `${H}/empty-shell`, `${H}/gh-config`, `${H}/git`, WSL_NODE_DIR, WSL_BIN_DIR, '/tmp/cr-1000/abcdefgh']);

@@ -179,6 +179,8 @@ export const WSL_NODE_DIR = `${WSL_CREW_DIR}/node`;
 export const WSL_BIN_DIR = `${WSL_CREW_DIR}/bin`;
 /** WSL's interop sockets and init, and WSLg's X11, Wayland and PulseAudio sockets. */
 export const WSL_HIDDEN = ['/run/WSL', '/init', '/mnt/wslg', '/tmp/.X11-unix'];
+/** Every process's environment; the rest of /proc stays readable, as ps, nproc and `<(...)` need it. */
+export const WSL_PROC_ENVIRON = '/proc/*/environ';
 
 export function wslHirePaths(hireId: string): HirePaths {
   const root = posix.join(WSL_HIRES_DIR, hireId);
@@ -248,7 +250,7 @@ export function buildWslRunSettings(input: WslSandboxInput): WslRunSettings {
   const scoped = input.scope === 'circle' ? [paths.circle] : [paths.owner, paths.circle, ...input.clones];
   const accounts = [...new Set([input.configDir, ...input.accountDirs])];
   const denyRead = [
-    WSL_HOME_ROOT, '/mnt', ...WSL_HIDDEN, sockRoot,
+    WSL_HOME_ROOT, '/mnt', ...WSL_HIDDEN, WSL_PROC_ENVIRON, sockRoot,
     '/tmp/cc-socks', `/tmp/cc-socks-${input.uid}`, posix.join(input.tmpDir, 'cc-socks'),
     ...accounts, ...(input.scope === 'circle' ? [paths.owner, ...input.clones] : []),
   ];
