@@ -80,22 +80,26 @@ describe('import from Office', () => {
     expect(tree(o.data)).toEqual(before);
   });
 
-  test('a second copy keeps what the hire already has', () => {
+  test('a second copy lands beside the hire\'s work, and a third is refused', () => {
     const o = office();
     expect(copyOfficeWork(o.data, 'fresh-po', o.owner)).toBe(2);
     fs.writeFileSync(path.join(o.owner, 'work', 'triage.md'), 'edited by the hire');
-    expect(copyOfficeWork(o.data, 'fresh-po', o.owner)).toBe(0);
+    expect(copyOfficeWork(o.data, 'fresh-po', o.owner)).toBe(2);
     expect(fs.readFileSync(path.join(o.owner, 'work', 'triage.md'), 'utf8')).toBe('edited by the hire');
+    expect(fs.readFileSync(path.join(o.owner, 'work-from-office', 'triage.md'), 'utf8')).toBe('today');
+    expect(copyOfficeWork(o.data, 'fresh-po', o.owner)).toBeNull();
+    expect(fs.readdirSync(path.dirname(o.owner))).toEqual(['owner']);
   });
 
-  test('a link the hire planted under work/ is never followed', () => {
+  test('links the hire planted are never followed: the copy is built where the hire cannot write', () => {
     const o = office();
     const outside = path.join(o.appData, 'outside');
     fs.mkdirSync(outside);
     fs.mkdirSync(path.join(o.owner, 'work'), { recursive: true });
     fs.symlinkSync(outside, path.join(o.owner, 'work', 'deep'));
     fs.symlinkSync(path.join(outside, 'planted.md'), path.join(o.owner, 'work', 'triage.md'));
-    expect(copyOfficeWork(o.data, 'fresh-po', o.owner)).toBe(0);
+    fs.symlinkSync(outside, path.join(o.owner, 'work-from-office'));
+    expect(copyOfficeWork(o.data, 'fresh-po', o.owner)).toBeNull();
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
@@ -106,5 +110,9 @@ describe('import from Office', () => {
       { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner },
     );
     expect(summary).toMatchObject({ skills: 0, notes: 0, failed: ['skills', 'notes/plan.md'] });
+    fs.mkdirSync(path.join(o.owner, 'work-from-office', 'x'), { recursive: true });
+    fs.mkdirSync(path.join(o.owner, 'work', 'x'), { recursive: true });
+    const again = importFromOffice({ sendBundle: () => true, writeOwnerNote: () => true }, { dataDir: o.data, handle: 'fresh-po', hireId: HIRE, role: 'product-owner', ownerDir: o.owner });
+    expect(again).toMatchObject({ work: 0, failed: ['work/'] });
   });
 });

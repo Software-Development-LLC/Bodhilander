@@ -9,7 +9,7 @@ import { MAX_SKILL_BYTES, type SkillFile } from './protocol';
 import { NOTE_MAX_CHARS } from './notes';
 
 export const OFFICE_DATA_DIRS = (appData: string): string[] => [path.join(appData, '@bodhi-office', 'desktop')];
-export const IMPORTED_WORK_DIR = 'work';
+const WORK_DIRS = ['work', 'work-from-office'];
 const MAX_FILES = 500;
 
 export function findOfficeData(appData: string): string | null {
@@ -77,41 +77,35 @@ export function readOfficeEmployee(dataDir: string, handle: string): OfficeRead 
   return { skills: read('skills', MAX_SKILL_BYTES, 'skills/'), notes: read('notes', NOTE_MAX_CHARS, 'notes/'), skipped };
 }
 
-/** Copy work/ under ownerDir/work, leaving anything already there in place. Returns the files copied. */
-export function copyOfficeWork(dataDir: string, handle: string, ownerDir: string): number {
+/**
+ * Copy work/ into ownerDir/work, or work-from-office when the hire already has a work/.
+ * The copy is built beside ownerDir, where a run cannot write, then renamed in whole,
+ * so nothing the hire plants under ownerDir is followed. Null when neither name is free.
+ */
+export function copyOfficeWork(dataDir: string, handle: string, ownerDir: string): number | null {
   const from = path.join(dataDir, 'employees', handle, 'work');
-  let copied = 0;
+  const files = walk(from);
+  if (files.length === 0) return 0;
   fs.mkdirSync(ownerDir, { recursive: true });
-  for (const rel of walk(from)) {
-    const parts = rel.split('/');
-    const dir = realDirs(ownerDir, [IMPORTED_WORK_DIR, ...parts.slice(0, -1)]);
-    if (!dir) continue;
-    const target = path.join(dir, parts[parts.length - 1]);
-    try {
-      fs.copyFileSync(path.join(from, ...parts), target, fs.constants.COPYFILE_EXCL);
-      copied += 1;
-    } catch {
-      // Already there, or a link the hire left in its place: keep what the hire has.
+  const staging = fs.mkdtempSync(path.join(path.dirname(ownerDir), '.office-'));
+  try {
+    for (const rel of files) {
+      const parts = rel.split('/');
+      fs.mkdirSync(path.join(staging, ...parts.slice(0, -1)), { recursive: true });
+      fs.copyFileSync(path.join(from, ...parts), path.join(staging, ...parts));
     }
-  }
-  return copied;
-}
-
-/** base/<parts...>, making each missing directory, or null if any part is a link or not a directory. */
-function realDirs(base: string, parts: string[]): string | null {
-  let at = base;
-  for (const part of parts) {
-    at = path.join(at, part);
-    let stat: fs.Stats | null = null;
-    try {
-      stat = fs.lstatSync(at);
-    } catch {
-      fs.mkdirSync(at);
-      continue;
+    for (const name of WORK_DIRS) {
+      try {
+        fs.renameSync(staging, path.join(ownerDir, name));
+        return files.length;
+      } catch {
+        // Taken by the hire: try the next name.
+      }
     }
-    if (!stat.isDirectory()) return null;
+    return null;
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
   }
-  return at;
 }
 
 export interface ImportPort {
@@ -139,5 +133,6 @@ export function importFromOffice(port: ImportPort, input: { dataDir: string; han
     else failed.push(`notes/${note.path}`);
   }
   const work = copyOfficeWork(input.dataDir, input.handle, input.ownerDir);
-  return { skills: failed.includes('skills') ? 0 : read.skills.length, notes, work, skipped: read.skipped, failed };
+  if (work === null) failed.push('work/');
+  return { skills: failed.includes('skills') ? 0 : read.skills.length, notes, work: work ?? 0, skipped: read.skipped, failed };
 }
