@@ -92,6 +92,27 @@ describe('Sign in for Crew on Windows', () => {
     expect(none.calls).toEqual([]);
   });
 
+  test('existing credentials do not make a cancelled or failed login a sign-in', async () => {
+    for (const exit of [null, 1]) {
+      const u = setup('login', { creds: true });
+      const done = u.s.start('a1');
+      await tick();
+      u.close(exit);
+      expect(await done).toEqual({ ok: false, reason: exit === null ? 'cancelled' : 'not-signed-in' });
+      expect(u.calls).toEqual([]);
+    }
+  });
+
+  test('a sign-in in progress names its TMPDIR, and none once it ends', async () => {
+    const u = setup('token');
+    const done = u.s.start('a1');
+    await tick();
+    expect(u.s.liveTmpNames()).toEqual([...u.records]);
+    u.close(0);
+    await done;
+    expect(u.s.liveTmpNames()).toEqual([]);
+  });
+
   test('a second sign-in waits for the first, and cancel ends it', async () => {
     const u = setup('token');
     const done = u.s.start('a1');

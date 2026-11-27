@@ -8,7 +8,7 @@ import { makeWslTmpDir, removeWslTmpDir, type DistroSh, type TmpRecords } from '
 import type { CrewSignIn } from './crew-token';
 import { asCrew } from './wsl';
 import { CLAUDE_BIN } from './wsl-setup';
-import { wslAccountDir } from './wsl-run';
+import { shQuote, wslAccountDir } from './wsl-run';
 
 const CREW_UID = 1000;
 const URL_RE = /https:\/\/\S+/;
@@ -38,19 +38,27 @@ export function registerWindowsSignIn(handle: (channel: string, fn: (...args: un
     return s.start(accountId);
   });
   handle('crew:windowsSignInCode', (code: unknown) => typeof code === 'string' && (current()?.submitCode(code) ?? false));
-  handle('crew:windowsSignInCancel', () => void current()?.cancel());
+  handle('crew:windowsSignInCancel', () => {
+    current()?.cancel();
+  });
 }
 
 export type SignInOutcome =
   | { ok: true; accountUuid: string | null }
   | { ok: false; reason: 'no-token' | 'wrong-account' | 'no-encryption' | 'not-signed-in' | 'cancelled' | 'busy' | 'unavailable' };
 
-const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+const q = shQuote;
 
 export class WslSignIn {
   private child: SignInChild | null = null;
+  private tmpName: string | null = null;
 
   constructor(private readonly deps: WslSignInDeps) {}
+
+  /** The TMPDIR a sign-in in progress uses, kept from the start sweep. */
+  liveTmpNames(): string[] {
+    return this.tmpName ? [this.tmpName] : [];
+  }
 
   get active(): boolean {
     return this.child !== null;
@@ -65,7 +73,11 @@ export class WslSignIn {
     await d.sh(`umask 077 && mkdir -p ${q(configDir)}`);
     let tmpName = '';
     const tmpDir = await makeWslTmpDir(d.sh, CREW_UID, {
-      add: (n) => ((tmpName = n), d.records.add(n)),
+      add: (n) => {
+        tmpName = n;
+        this.tmpName = n;
+        d.records.add(n);
+      },
       remove: (n) => d.records.remove(n),
       list: () => d.records.list(),
     });
@@ -87,6 +99,7 @@ export class WslSignIn {
       child.onClose(resolve);
     }).finally(() => {
       this.child = null;
+      this.tmpName = null;
       void removeWslTmpDir(d.sh, CREW_UID, d.records, tmpName).catch(() => undefined);
     });
     const now = d.now?.() ?? Date.now();
@@ -96,8 +109,9 @@ export class WslSignIn {
       const refused = d.signIn.storeToken(accountId, output, (t) => d.belongsTo(accountId, t, accountUuid), now);
       return refused ? { ok: false, reason: refused } : { ok: true, accountUuid };
     }
+    if (code === null) return { ok: false, reason: 'cancelled' };
     const creds = await d.sh(`test -s ${q(posix.join(configDir, '.credentials.json'))}`);
-    if (creds.code !== 0) return { ok: false, reason: code === null ? 'cancelled' : 'not-signed-in' };
+    if (code !== 0 || creds.code !== 0) return { ok: false, reason: 'not-signed-in' };
     d.signIn.recordSignIn(accountId, now);
     return { ok: true, accountUuid: await this.accountUuid(configDir) };
   }

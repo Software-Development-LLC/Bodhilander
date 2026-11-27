@@ -24,7 +24,11 @@ export function realWslExec(exe = WSL_EXE): WslExec {
       const out: Buffer[] = [];
       const err: Buffer[] = [];
       let timedOut = false;
-      const timer = opts?.timeoutMs ? setTimeout(() => ((timedOut = true), child.kill()), opts.timeoutMs) : null;
+      const onTimeout = () => {
+        timedOut = true;
+        child.kill();
+      };
+      const timer = opts?.timeoutMs ? setTimeout(onTimeout, opts.timeoutMs) : null;
       child.stdout.on('data', (b: Buffer) => out.push(b));
       child.stderr.on('data', (b: Buffer) => err.push(b));
       child.stdin.on('error', () => undefined);
@@ -46,9 +50,15 @@ export function spawnAgentChild(exe = WSL_EXE): AgentChild {
   child.stdin.on('error', () => undefined);
   const lines = createInterface({ input: child.stdout });
   return {
-    write: (line) => void child.stdin.write(line),
-    onLine: (cb) => void lines.on('line', cb),
-    onClose: (cb) => void child.on('close', () => cb()),
+    write: (line) => {
+      child.stdin.write(line);
+    },
+    onLine: (cb) => {
+      lines.on('line', cb);
+    },
+    onClose: (cb) => {
+      child.on('close', () => cb());
+    },
     kill: () => {
       child.stdin.end();
       child.kill();
@@ -60,13 +70,19 @@ export function spawnSignInChild(args: string[], exe = WSL_EXE): SignInChild {
   const child = spawn(exe, args, { env: windowsEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => undefined);
   return {
-    write: (text) => void child.stdin.write(text),
+    write: (text) => {
+      child.stdin.write(text);
+    },
     onOutput: (cb) => {
       child.stdout.on('data', (b: Buffer) => cb(decodeWslOutput(b)));
       child.stderr.on('data', (b: Buffer) => cb(decodeWslOutput(b)));
     },
-    onClose: (cb) => void child.on('close', (code) => cb(code)),
-    kill: () => void child.kill(),
+    onClose: (cb) => {
+      child.on('close', (code) => cb(code));
+    },
+    kill: () => {
+      child.kill();
+    },
   };
 }
 
@@ -155,20 +171,26 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
     spawnAgent: deps.spawnAgent ?? (() => spawnAgentChild()),
     reinstallAgent,
   });
+  const signIn = new WslSignIn({ signIn: deps.signIn, sh, records, spawn: (args) => spawnSignInChild(args), openExternal: deps.openExternal, belongsTo: deps.belongsTo });
   const gate = new WindowsGate({
     exec,
     versions,
     audit: deps.audit,
     sweep: async () => {
-      await removeTmpOrphans(sh, CREW_UID, records, runs.liveTmpNames());
-      if (runs.liveTmpNames().size === 0) await sh(sweepTmpParentScript(CREW_UID), true);
+      const live = new Set([...runs.liveTmpNames(), ...signIn.liveTmpNames()]);
+      await removeTmpOrphans(sh, CREW_UID, records, live);
+      if (live.size === 0) await sh(sweepTmpParentScript(CREW_UID), true);
     },
   });
   return {
     windows: { gate: () => gate.gate(), prepare: (job, threadKey, runId) => runs.prepare(job, threadKey, runId) },
-    start: async () => void (await gate.atStart()),
-    afterRepair: async () => void (await gate.afterRepair()),
-    signIn: new WslSignIn({ signIn: deps.signIn, sh, records, spawn: (args) => spawnSignInChild(args), openExternal: deps.openExternal, belongsTo: deps.belongsTo }),
+    start: async () => {
+      await gate.atStart();
+    },
+    afterRepair: async () => {
+      await gate.afterRepair();
+    },
+    signIn,
     end: (jobId) => runs.end(jobId),
     endAll: () => runs.endAll(),
   };

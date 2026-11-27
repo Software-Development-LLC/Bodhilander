@@ -65,7 +65,8 @@ interface Open {
   conns: Set<Duplex>;
 }
 
-const q = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+export const shQuote = (s: string): string => "'" + s.replaceAll("'", String.raw`'\''`) + "'";
+const q = shQuote;
 
 /** Each directory from /home down to the hires dir, with its entries, for the file-tool denies. */
 async function listLevels(sh: DistroSh): Promise<Record<string, string[]>> {
@@ -77,6 +78,17 @@ async function listLevels(sh: DistroSh): Promise<Record<string, string[]>> {
     if (levels[dir]) levels[dir].push(posix.basename(line));
   }
   return levels;
+}
+
+interface Build {
+  job: CrewJob;
+  threadKey: string;
+  runId: string;
+  accountId: string;
+  token: string | null;
+  broker: ApproveBroker;
+  open: Open;
+  now: number;
 }
 
 export class WslRuns {
@@ -101,7 +113,7 @@ export class WslRuns {
     const open: Open = { session: null, tmpName: null, conns: new Set() };
     this.open.set(job.id, open);
     try {
-      return await this.build(job, threadKey, runId, account.id, token, broker, open, now);
+      return await this.build({ job, threadKey, runId, accountId: account.id, token, broker, open, now });
     } catch (err) {
       this.end(job.id);
       if (err instanceof SocketRootError || err instanceof AgentVersionError) return { hold: HOLD_SETUP };
@@ -109,10 +121,14 @@ export class WslRuns {
     }
   }
 
-  private async build(job: CrewJob, threadKey: string, runId: string, accountId: string, token: string | null, broker: ApproveBroker, open: Open, now: number): Promise<Prepared> {
+  private async build(b: Build): Promise<Prepared> {
+    const { job, threadKey, runId, accountId, token, broker, open, now } = b;
     const d = this.deps;
     const records: TmpRecords = {
-      add: (name) => ((open.tmpName = name), d.records.add(name)),
+      add: (name) => {
+        open.tmpName = name;
+        d.records.add(name);
+      },
       remove: (name) => d.records.remove(name),
       list: () => d.records.list(),
     };

@@ -123,7 +123,7 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     belongsTo: (accountId, _token, accountUuid) => {
       const known = getAllAccounts().find((a) => a.id === accountId);
       const windowsUuid = known ? resolveAccountIdentity(known.configDir).accountUuid : null;
-      return known !== undefined && (accountUuid === null || windowsUuid === null || accountUuid === windowsUuid);
+      return known !== undefined && accountUuid !== null && accountUuid === windowsUuid;
     },
     resources: { dir, relayScript: res.relayScript, shimDir: res.shimDir },
     recordsFile: path.join(app.getPath('userData'), 'crew', 'wsl-tmp.json'),
