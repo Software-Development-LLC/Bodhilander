@@ -72,6 +72,7 @@ export const CREW_TABLES_SQL = `
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL,
       hire_id TEXT NOT NULL,
+      thread_key TEXT DEFAULT NULL,
       account_id TEXT DEFAULT NULL,
       session_id TEXT DEFAULT NULL,
       started_at TEXT DEFAULT CURRENT_TIMESTAMP,
