@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import type { ClaudeAccount, CrewHireInput, CrewHireResult, CrewRole } from '../../../shared/types';
+import type { CrewHireAccount, CrewHireInput, CrewHireResult, CrewRole } from '../../../shared/types';
 import './Crew.css';
 
 export interface HireModalApi {
   listRoles(): Promise<CrewRole[]>;
-  listAccounts(): Promise<ClaudeAccount[]>;
+  hireAccounts(): Promise<CrewHireAccount[]>;
   createHire(input: CrewHireInput): Promise<CrewHireResult>;
 }
 
 const windowApi = (): HireModalApi => ({
   listRoles: () => window.electronAPI.crewListRoles(),
-  listAccounts: () => window.electronAPI.listAccounts(),
+  hireAccounts: () => window.electronAPI.crewHireAccounts(),
   createHire: (input) => window.electronAPI.crewCreateHire(input),
 });
 
@@ -19,6 +19,11 @@ export const parseRepos = (text: string): string[] =>
     .split(/[\n,]/)
     .map((r) => r.trim())
     .filter((r) => r !== '');
+
+const NEEDS: Record<NonNullable<CrewHireAccount['needs']>, string> = {
+  'sign-in': 'sign in first',
+  'crew-token': 'Set up Crew sign-in',
+};
 
 export interface HireModalProps {
   api?: HireModalApi;
@@ -30,7 +35,7 @@ export interface HireModalProps {
 export const HireModal: React.FC<HireModalProps> = ({ api: injected, onHired, onClose }) => {
   const [api] = useState(() => injected ?? windowApi());
   const [roles, setRoles] = useState<CrewRole[] | null>(null);
-  const [accounts, setAccounts] = useState<ClaudeAccount[]>([]);
+  const [accounts, setAccounts] = useState<CrewHireAccount[]>([]);
   const [roleId, setRoleId] = useState('');
   const [name, setName] = useState('');
   const [repos, setRepos] = useState('');
@@ -40,7 +45,7 @@ export const HireModal: React.FC<HireModalProps> = ({ api: injected, onHired, on
 
   useEffect(() => {
     api.listRoles().then(setRoles, () => setRoles([]));
-    api.listAccounts().then(setAccounts, () => setAccounts([]));
+    api.hireAccounts().then(setAccounts, () => setAccounts([]));
   }, [api]);
 
   const ready = roleId !== '' && name.trim() !== '' && accountId !== '' && !busy;
@@ -84,8 +89,8 @@ export const HireModal: React.FC<HireModalProps> = ({ api: injected, onHired, on
           <select id="crew-hire-account" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
             <option value="">Pick an account</option>
             {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.label}
+              <option key={a.id} value={a.id} disabled={a.needs !== null}>
+                {a.needs ? `${a.label} (${NEEDS[a.needs]})` : a.label}
               </option>
             ))}
           </select>

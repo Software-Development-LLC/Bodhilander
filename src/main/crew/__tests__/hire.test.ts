@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'bun:test';
 
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 
-const { createHire } = await import('../hire');
+const { createHire, hireAccounts } = await import('../hire');
 import type { HireDeps } from '../hire';
 import type { ClaudeAccount } from '../../../shared/types';
 import type { EditResultFrame } from '../protocol';
@@ -21,6 +21,8 @@ function setup(answer: EditResultFrame['result'] | null = 'applied', over: Parti
     online: () => true,
     accounts: () => [ACCOUNT],
     refFor: (a) => ({ accountUuid: 'u-a1', email: 'b@x.com', label: a.label }),
+    signedIn: () => true,
+    mode: () => 'login',
     sendEdit: (input) => (sent.push(input), 'e1'),
     editResult: async (id) => (answer === null ? null : { type: 'edit_result', id, result: answer, why: 'roleId is not a known role' }),
     newId: () => uuid(9),
@@ -63,5 +65,29 @@ describe('hiring', () => {
     const offline = setup('applied', { online: () => false });
     expect((await createHire(offline.deps, INPUT)).ok).toBe(false);
     expect(offline.sent).toEqual([]);
+  });
+
+  test('an account Crew cannot start a run on is refused, naming what it needs', async () => {
+    const token = setup('applied', { signedIn: () => false, mode: () => 'token' });
+    const refused = await createHire(token.deps, INPUT);
+    expect(refused).toEqual({ ok: false, error: 'Set up Crew sign-in for Work Max first.' });
+    expect(token.sent).toEqual([]);
+    const login = setup('applied', { signedIn: () => false });
+    expect(((await createHire(login.deps, INPUT)) as { error: string }).error).toContain('Sign in');
+  });
+
+  test('the form is offered every account, each marked with what it still needs', () => {
+    const other = { id: 'a2', label: 'Personal', configDir: '/acct/a2', email: 'p@x.com' } as ClaudeAccount;
+    const named = setup('applied', {
+      accounts: () => [ACCOUNT, other],
+      refFor: (a) => (a.id === 'a1' ? { accountUuid: 'u-a1', email: 'b@x.com', label: a.label } : { accountUuid: null, email: null, label: a.label }),
+      mode: () => 'token',
+    });
+    expect(hireAccounts(named.deps)).toEqual([
+      { id: 'a1', label: 'Work Max', needs: null },
+      { id: 'a2', label: 'Personal', needs: 'sign-in' },
+    ]);
+    const noToken = setup('applied', { signedIn: () => false, mode: () => 'token' });
+    expect(hireAccounts(noToken.deps)).toEqual([{ id: 'a1', label: 'Work Max', needs: 'crew-token' }]);
   });
 });

@@ -1097,6 +1097,13 @@ export interface CrewHireInput {
   accountId: string;
 }
 
+/** An account the Hire form offers, and what it needs before a hire can run on it. */
+export interface CrewHireAccount {
+  id: string;
+  label: string;
+  needs: 'sign-in' | 'crew-token' | null;
+}
+
 /** hireId is set once the create was sent, even when the Hub has not answered yet. */
 export type CrewHireResult = CrewEditResult & { hireId?: string };
 

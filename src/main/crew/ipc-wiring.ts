@@ -1,7 +1,7 @@
 /** The Crew IPC channels joined to the running Hub client and runtime. */
-import { app, shell } from 'electron';
+import { app, safeStorage, shell } from 'electron';
 import log from 'electron-log';
-import type { CrewCardList, CrewEditResult, CrewHireInput, CrewHireResult, CrewLinkView } from '../../shared/types';
+import type { CrewCardList, CrewEditResult, CrewHireAccount, CrewHireInput, CrewHireResult, CrewLinkView } from '../../shared/types';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
 import { getPreference } from '../repositories/preferences';
@@ -11,7 +11,9 @@ import { crewRuntime } from './crew-main';
 import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import type { LinkFlow } from './hub-link';
 import { getCrewHub, newLinkFlow } from './hub-service';
-import { createHire, HIRE_ANSWER_MS } from './hire';
+import { resolveAccountIdentity } from '../account-identity';
+import { CrewSignIn } from './crew-token';
+import { createHire, HIRE_ANSWER_MS, hireAccounts, type HireDeps } from './hire';
 import { crewStatusFrom, KEYCHAIN_NEEDED, linkViewFrom, registerCrewIpc } from './ipc';
 import { LET_GO_ANSWER_MS, letGoHire as letGo, moveHireAside } from './let-go';
 import type { EditResultFrame, UsageFrame } from './protocol';
@@ -66,15 +68,28 @@ function onLateEditResult(hub: HubClient, id: string, handle: (frame: EditResult
   hub.on('edit-result', onResult);
 }
 
+function accountChecks(): Pick<HireDeps, 'accounts' | 'refFor' | 'signedIn' | 'mode'> {
+  const signIn = new CrewSignIn(getDatabase(), safeStorage);
+  return {
+    accounts: getAllAccounts,
+    refFor: accountRefFor,
+    signedIn: (account) => signIn.signedIn(account.id, resolveAccountIdentity(account.configDir).loggedIn, Date.now()),
+    mode: () => signIn.mode(),
+  };
+}
+
+export function hireAccountsHere(): CrewHireAccount[] {
+  return hireAccounts(accountChecks());
+}
+
 export async function hireFromHere(input: CrewHireInput): Promise<CrewHireResult> {
   const hub = getCrewHub();
   if (!hub) return { ok: false, error: "Crew isn't running on this machine." };
   return createHire(
     {
+      ...accountChecks(),
       db: getDatabase(),
       online: () => hub.getStatus() === 'online',
-      accounts: getAllAccounts,
-      refFor: accountRefFor,
       sendEdit: (edit) => hub.sendEdit(edit),
       editResult: (id) => editResultFrom(hub, id, HIRE_ANSWER_MS),
     },
@@ -161,6 +176,7 @@ export function wireCrewIpc(handle: (channel: string, handler: (...args: unknown
     cards: hubCards,
     openCard: openHubCard,
     letGo: letGoHire,
+    hireAccounts: hireAccountsHere,
     createHire: async (input) => {
       const result = await hireFromHere(input);
       notify();

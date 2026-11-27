@@ -6,7 +6,7 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
 import log from 'electron-log';
-import type { ClaudeAccount, CrewHireResult } from '../../shared/types';
+import type { ClaudeAccount, CrewHireAccount, CrewHireResult } from '../../shared/types';
 import type { ClaudeAccountRef } from './account-ref';
 import type { EditResultFrame } from './protocol';
 import type { EditInput } from './sync';
@@ -28,6 +28,9 @@ export interface HireDeps {
   online(): boolean;
   accounts(): ClaudeAccount[];
   refFor(account: ClaudeAccount): ClaudeAccountRef;
+  /** Whether Crew could start a run on the account now. */
+  signedIn(account: ClaudeAccount): boolean;
+  mode(): 'token' | 'login';
   sendEdit(input: EditInput): string;
   editResult(id: string): Promise<EditResultFrame | null>;
   newId?(): string;
@@ -49,8 +52,22 @@ function knownRole(db: Database.Database, roleId: string): boolean {
   }
 }
 
+type AccountDeps = Pick<HireDeps, 'refFor' | 'signedIn' | 'mode'>;
+
+/** An account Crew can't name has never signed in here; one it can name may still lack a Crew token. */
+function needsOf(deps: AccountDeps, account: ClaudeAccount): CrewHireAccount['needs'] {
+  const ref = deps.refFor(account);
+  if (!ref.accountUuid || !ref.email) return 'sign-in';
+  if (deps.signedIn(account)) return null;
+  return deps.mode() === 'token' ? 'crew-token' : 'sign-in';
+}
+
+export function hireAccounts(deps: AccountDeps & Pick<HireDeps, 'accounts'>): CrewHireAccount[] {
+  return deps.accounts().map((a) => ({ id: a.id, label: a.label, needs: needsOf(deps, a) }));
+}
+
 /** The fields the Hub's hire create takes, or why this input cannot be one. */
-export function hireFields(deps: Pick<HireDeps, 'db' | 'accounts' | 'refFor'>, input: HireInput): { fields: Record<string, unknown> } | { error: string } {
+export function hireFields(deps: Pick<HireDeps, 'db' | 'accounts'> & AccountDeps, input: HireInput): { fields: Record<string, unknown> } | { error: string } {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name || name.length > MAX_HIRE_NAME || !PRINTABLE.test(name)) return { error: `A name is 1 to ${MAX_HIRE_NAME} printable characters.` };
   if (typeof input.roleId !== 'string' || !knownRole(deps.db, input.roleId)) return { error: 'Pick a role.' };
@@ -58,8 +75,10 @@ export function hireFields(deps: Pick<HireDeps, 'db' | 'accounts' | 'refFor'>, i
   if (!repos || repos.length > MAX_HIRE_REPOS || !repos.every((r) => REPO.test(r))) return { error: `Repos are up to ${MAX_HIRE_REPOS} owner/name repositories.` };
   const account = deps.accounts().find((a) => a.id === input.accountId);
   if (!account) return { error: 'Pick the Claude account this hire runs on.' };
+  const needs = needsOf(deps, account);
+  if (needs === 'crew-token') return { error: `Set up Crew sign-in for ${account.label} first.` };
+  if (needs === 'sign-in') return { error: `${account.label} hasn't signed in on this machine, so Crew can't use it. Sign in first.` };
   const ref = deps.refFor(account);
-  if (!ref.accountUuid || !ref.email) return { error: `${account.label} hasn't signed in on this machine, so Crew can't name it. Sign in first.` };
   return { fields: { name, roleId: input.roleId, repos, accountRef: { accountUuid: ref.accountUuid, email: ref.email, label: ref.label } } };
 }
 

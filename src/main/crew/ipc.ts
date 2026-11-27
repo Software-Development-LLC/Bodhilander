@@ -10,6 +10,7 @@ import type {
   CrewCardList,
   CrewEditResult,
   CrewHireActivity,
+  CrewHireAccount,
   CrewHireDetail,
   CrewHireInput,
   CrewHireResult,
@@ -243,6 +244,7 @@ export interface CrewIpcDeps extends UsageReadPort {
   openCard(raiseId: string): boolean;
   letGo(hireId: string): Promise<CrewEditResult>;
   createHire(input: CrewHireInput): Promise<CrewHireResult>;
+  hireAccounts(): CrewHireAccount[];
   beginLink(): Promise<CrewLinkView>;
   confirmLinkOwner(isMe: boolean): boolean;
   now(): number;
@@ -287,6 +289,7 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
 
   deps.handle('crew:letGo', (hireId) => (known(hireId) ? deps.letGo(hireId) : Promise.resolve(refuse('This hire has not synced to this machine yet.'))));
   deps.handle('crew:listRoles', () => readRoles(deps.db()));
+  deps.handle('crew:hireAccounts', () => deps.hireAccounts());
   deps.handle('crew:createHire', (input) => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) return Promise.resolve(refuse('The hire form sent nothing.'));
     const { name, roleId, repos, accountId } = input as CrewHireInput;

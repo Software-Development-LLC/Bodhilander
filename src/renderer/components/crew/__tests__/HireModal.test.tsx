@@ -2,14 +2,15 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { HireModal, type HireModalApi } from '../HireModal';
-import type { ClaudeAccount, CrewHireInput, CrewHireResult } from '../../../../shared/types';
+import type { CrewHireAccount, CrewHireInput, CrewHireResult } from '../../../../shared/types';
 
 afterEach(cleanup);
 
-const accounts = [
-  { id: 'acc-1', label: 'Work', configDir: '/d/1', email: 'w@x.com', color: '#000' },
-  { id: 'acc-2', label: 'Personal', configDir: '/d/2', email: 'p@x.com', color: '#000' },
-] as ClaudeAccount[];
+const accounts: CrewHireAccount[] = [
+  { id: 'acc-1', label: 'Work', needs: null },
+  { id: 'acc-2', label: 'Personal', needs: null },
+  { id: 'acc-3', label: 'Spare', needs: 'crew-token' },
+];
 
 function api(answer: CrewHireResult = { ok: true, hireId: 'h-new' }): HireModalApi & { sent: CrewHireInput[] } {
   const sent: CrewHireInput[] = [];
@@ -19,7 +20,7 @@ function api(answer: CrewHireResult = { ok: true, hireId: 'h-new' }): HireModalA
       { roleId: 'care-po', name: 'care-po' },
       { roleId: 'fresh-po', name: 'fresh-po' },
     ],
-    listAccounts: async () => accounts,
+    hireAccounts: async () => accounts,
     createHire: async (input) => (sent.push(input), answer),
   };
 }
@@ -74,5 +75,12 @@ describe('the Hire form', () => {
     const a = { ...api(), listRoles: async () => [] };
     render(<HireModal api={a} onHired={() => {}} onClose={() => {}} />);
     expect((await screen.findByText(/No roles have synced/)).textContent).toBeTruthy();
+  });
+
+  test('an account Crew cannot run on is shown with what it needs, and cannot be picked', async () => {
+    render(<HireModal api={api()} onHired={() => {}} onClose={() => {}} />);
+    const spare = (await screen.findByRole('option', { name: 'Spare (Set up Crew sign-in)' })) as HTMLOptionElement;
+    expect(spare.disabled).toBe(true);
+    expect((screen.getByRole('option', { name: 'Work' }) as HTMLOptionElement).disabled).toBe(false);
   });
 });

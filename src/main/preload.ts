@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -419,6 +419,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   crewLetGo: (hireId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:letGo', hireId),
   crewListRoles: (): Promise<CrewRole[]> => ipcRenderer.invoke('crew:listRoles'),
   crewCreateHire: (input: CrewHireInput): Promise<CrewHireResult> => ipcRenderer.invoke('crew:createHire', input),
+  crewHireAccounts: (): Promise<CrewHireAccount[]> => ipcRenderer.invoke('crew:hireAccounts'),
   crewSignInAgain: (accountId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:signInAgain', accountId),
   onCrewSignInStarted: (callback: (data: CrewSignInStarted) => void) => {
     const listener = (_: Electron.IpcRendererEvent, data: CrewSignInStarted) => callback(data);
