@@ -26,6 +26,8 @@ import { McpHost, hostSocketPath } from './mcp/host';
 import { HireDayUsage } from './run/hire-usage';
 import { prepareRun, type PrepareDeps } from './run/prepare';
 import { RunServiceManager, ServicesNotReady } from './run/services';
+import { reapLeftoverRuns, systemReap } from './run/reap';
+import { RunSlots } from './run/slots';
 import { crewTools } from './tools/server';
 
 let runtime: CrewRuntime | null = null;
@@ -35,6 +37,7 @@ let gateway: GithubGateway | null = null;
 let services: RunServiceManager | null = null;
 let detachHub: (() => void) | null = null;
 const holds = new Holds();
+const slots = new RunSlots();
 
 const listDir = (dir: string): string[] => {
   try {
@@ -147,6 +150,8 @@ function attach(hub: HubClient): CrewRuntime {
     hub,
     signIn,
     holds,
+    slots,
+    settled: () => void runtime?.loop.tick(),
     accounts: getAllAccounts,
     prepare: (job: CrewJob, threadKey: string, runId: string): Promise<Prepared> =>
       prepareRun(prepareDeps, job, threadKey, runId),
@@ -174,6 +179,13 @@ function attach(hub: HubClient): CrewRuntime {
 
 export function startCrew(): CrewRuntime {
   sweepLetGo(app.getPath('userData'), Date.now());
+  if (process.platform !== 'win32') {
+    try {
+      reapLeftoverRuns(getDatabase(), systemReap);
+    } catch (err) {
+      log.error('[Crew] could not end leftover runs', err);
+    }
+  }
   setCrewHubReplaced((hub) => attach(hub));
   setCrewInterrupt((hireId) => runtime?.interrupt(hireId));
   const hub = startCrewHub();

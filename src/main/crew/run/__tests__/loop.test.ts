@@ -8,6 +8,7 @@ import { RunSlots } from '../slots';
 import { HIRE, HIRE_B, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 
 class FakeChild implements RunChild {
+  readonly pid = 4242;
   input: string | null = null;
   signals: string[] = [];
   private readonly lines: Record<string, ((l: string) => void)[]> = {};
@@ -219,6 +220,15 @@ describe('run loop', () => {
     t.children[0].exit();
     expect(t.state(1)).toEqual({ state: 'queued', attempts: 0 });
     expect((t.raw.query(`SELECT session_id FROM crew_thread`).get() as { session_id: unknown }).session_id).toBeNull();
+  });
+
+  test("the run's pid is recorded while it runs and cleared when it ends, so a crash leaves only live runs to reap", async () => {
+    const t = setup();
+    t.job(1);
+    await t.loop.tick();
+    expect(t.raw.query(`SELECT pid FROM crew_run`).get()).toEqual({ pid: 4242 });
+    t.children[0].finish();
+    expect(t.raw.query(`SELECT pid FROM crew_run`).get()).toEqual({ pid: null });
   });
 
   test('a hold leaves the job queued and starts nothing', async () => {

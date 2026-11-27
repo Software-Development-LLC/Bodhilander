@@ -11,6 +11,7 @@ const { CrewSignIn, LOGIN_LIFETIME_MS } = await import('../crew-token');
 const { Holds } = await import('../holds');
 import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
 import type { RunChild } from '../run/loop';
+import { RunSlots } from '../run/slots';
 import { HIRE, PERSON, crewDb, uuid } from './crew-db';
 
 class Child implements RunChild {
@@ -66,7 +67,7 @@ function setup() {
   const loggedIn: { a1: boolean | undefined } = { a1: undefined };
   const timers: { fn: () => void; ms: number; live: boolean }[] = [];
   let clock = Date.parse('2026-11-27T12:00:00Z');
-  const rt = startCrewRuntime({
+  const deps: Parameters<typeof startCrewRuntime>[0] = {
     db, hub, signIn, holds, accounts: () => accounts,
     prepare: async (job) => ({ command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a1', sessionId: null, token: null }),
     usage: { get: (id) => records.get(id) ?? null, set: (u) => void records.set(u.accountId, u) },
@@ -85,12 +86,39 @@ function setup() {
       return t;
     },
     clearInterval: (h) => void ((h as { live: boolean }).live = false),
-  });
+  };
+  const rt = startCrewRuntime(deps);
   const job = (n: number) => raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(n), HIRE, PERSON);
-  return { raw, db, hub, rt, children, records, reminders, timers, signIn, holds, job, ended, loggedIn, advance: (ms: number) => (clock += ms) };
+  return { deps, raw, db, hub, rt, children, records, reminders, timers, signIn, holds, job, ended, loggedIn, advance: (ms: number) => (clock += ms) };
 }
 
 describe('crew runtime', () => {
+  test("a replaced runtime's run still holds its hire and slot, and its end lets the new runtime start the next job", async () => {
+    const t = setup();
+    const slots = new RunSlots(() => 2);
+    let current: ReturnType<typeof startCrewRuntime> | null = null;
+    t.rt.stop();
+    const first = startCrewRuntime({ ...t.deps, slots, settled: () => void current?.loop.tick() });
+    current = first;
+    t.job(1);
+    t.hub.emit('job');
+    await flush();
+    expect(t.children).toHaveLength(1);
+    first.stop();
+    const second = startCrewRuntime({ ...t.deps, slots, settled: () => void current?.loop.tick() });
+    current = second;
+    t.job(2);
+    await second.loop.tick();
+    expect(t.children).toHaveLength(1);
+    t.children[0].finish();
+    await flush();
+    await flush();
+    expect(t.children).toHaveLength(2);
+    expect(second.loop.running()).toEqual([HIRE]);
+    expect(first.loop.running()).toEqual([]);
+    second.stop();
+  });
+
   test("a run the account's usage limit rejects holds that account until the reported reset", async () => {
     const t = setup();
     t.job(1);

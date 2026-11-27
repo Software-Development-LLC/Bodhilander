@@ -46,6 +46,7 @@ export interface PreparedRun {
 export type Prepared = PreparedRun | { hold: string };
 
 export interface RunChild {
+  readonly pid?: number;
   write(input: string): void;
   onLine(stream: 'stdout' | 'stderr', cb: (line: string) => void): void;
   onClose(cb: () => void): void;
@@ -119,6 +120,7 @@ export class RunLoop {
   private readonly holds = new Map<string, string>();
   private ticking: Promise<number> | null = null;
   private again = false;
+  private stopped = false;
   private readonly now: () => number;
   private readonly newId: () => string;
 
@@ -133,6 +135,7 @@ export class RunLoop {
 
   /** Start what can start now. A call made while a tick runs makes it run once more when it ends. */
   tick(): Promise<number> {
+    if (this.stopped) return Promise.resolve(0);
     if (this.ticking) {
       this.again = true;
       return this.ticking;
@@ -225,6 +228,7 @@ export class RunLoop {
     try {
       const child = this.deps.spawn(prepared);
       run.child = child;
+      if (child.pid !== undefined) db.prepare(`UPDATE crew_run SET pid = ? WHERE id = ?`).run(child.pid, run.runId);
       child.onLine('stdout', (line) => this.onStdout(run, line));
       child.onLine('stderr', (line) => this.onStderr(run, line));
       child.onClose(() => this.settle(run));
@@ -256,6 +260,11 @@ export class RunLoop {
     if (!run || run.settled) return false;
     run.parked = true;
     return true;
+  }
+
+  /** Starts nothing more; runs already going still settle. */
+  stop(): void {
+    this.stopped = true;
   }
 
   interruptAll(): void {
@@ -371,7 +380,7 @@ export class RunLoop {
       if (how.retry) state = 'queued';
       db.prepare(`UPDATE crew_job SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(state, run.job.id);
     }
-    db.prepare(`UPDATE crew_run SET ended_at = CURRENT_TIMESTAMP, outcome = ? WHERE id = ?`).run(outcome, run.runId);
+    db.prepare(`UPDATE crew_run SET ended_at = CURRENT_TIMESTAMP, outcome = ?, pid = NULL WHERE id = ?`).run(outcome, run.runId);
     this.active.delete(run.job.hireId);
     run.release();
     this.deps.onSettled?.(run.job.id, outcome);
@@ -393,6 +402,7 @@ export function spawnRun(run: PreparedRun): RunChild {
     if (stream) createInterface({ input: stream }).on('line', cb);
   };
   return {
+    pid: child.pid,
     write: (input) => child.stdin?.end(input),
     onLine: (stream, cb) => lines(stream === 'stdout' ? child.stdout : child.stderr, cb),
     onClose: (cb) => {
