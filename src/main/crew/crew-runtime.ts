@@ -105,7 +105,13 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const listeners: [string, Parameters<EventEmitter['on']>[1]][] = [
     ['job', tick],
     ['renewed', tick],
-    ['welcome', () => (settle(), void tick())],
+    [
+      'welcome',
+      () => {
+        settle();
+        tick();
+      },
+    ],
     ['epoch', settle],
     ['revoked', settle],
     ['sync-needed', settle],
@@ -115,13 +121,17 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   settle();
   const setInt = deps.setInterval ?? ((fn: () => void, ms: number) => setInterval(fn, ms));
   const clearInt = deps.clearInterval ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
-  const reminderTimer = setInt(() => void checkReminders(), REMINDER_CHECK_MS);
+  const reminderTimer = setInt(() => {
+    checkReminders();
+  }, REMINDER_CHECK_MS);
   checkReminders();
 
   return {
     loop,
     changer,
-    interrupt: (hireId) => void loop.interrupt(hireId),
+    interrupt: (hireId) => {
+      loop.interrupt(hireId);
+    },
     checkReminders,
     stop: () => {
       clearInt(reminderTimer);

@@ -29,8 +29,8 @@ export function consumeTaint(db: Database.Database, hireId: string, threadKey: s
 export type GatedAction = 'send' | 'shared-note-write';
 
 /** What a tainted run may still do directly; everything gated goes to a card. */
-export function gateFor(tainted: boolean, _action: GatedAction): 'direct' | 'card' {
-  return tainted ? 'card' : 'direct';
+export function gateFor(db: Database.Database, hireId: string, threadKey: string, _action: GatedAction): 'direct' | 'card' {
+  return isTainted(db, hireId, threadKey) ? 'card' : 'direct';
 }
 
 /** Untrusted text in its wrapper. A closing marker inside it is defanged so the text cannot end its own wrapper. */

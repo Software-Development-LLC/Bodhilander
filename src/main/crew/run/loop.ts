@@ -287,7 +287,8 @@ export class RunLoop {
     if (how.requeue) {
       db.prepare(`UPDATE crew_job SET state = 'queued', attempts = MAX(attempts - 1, 0), updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(run.job.id);
     } else {
-      const state = how.retry ? 'queued' : outcome === 'done' ? 'done' : 'dead';
+      let state = outcome === 'done' ? 'done' : 'dead';
+      if (how.retry) state = 'queued';
       db.prepare(`UPDATE crew_job SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE ${live}`).run(state, run.job.id);
     }
     db.prepare(`UPDATE crew_run SET ended_at = CURRENT_TIMESTAMP, outcome = ? WHERE id = ?`).run(outcome, run.runId);

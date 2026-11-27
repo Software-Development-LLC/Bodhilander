@@ -20,9 +20,11 @@ describe('taint', () => {
   });
 
   test('a tainted send or shared note write becomes a card', () => {
-    expect(gateFor(true, 'send')).toBe('card');
-    expect(gateFor(true, 'shared-note-write')).toBe('card');
-    expect(gateFor(false, 'send')).toBe('direct');
+    const { db } = crewDb();
+    markTainted(db, HIRE, 'chat:owner', 'issue-body');
+    expect(gateFor(db, HIRE, 'chat:owner', 'send')).toBe('card');
+    expect(gateFor(db, HIRE, 'chat:owner', 'shared-note-write')).toBe('card');
+    expect(gateFor(db, HIRE, 'chat:circle', 'send')).toBe('direct');
   });
 
   test('untrusted text cannot close its own wrapper', () => {
