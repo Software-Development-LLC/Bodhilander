@@ -135,7 +135,7 @@ export const CREW_TABLES_SQL = `
       kind TEXT NOT NULL,
       tool TEXT DEFAULT NULL,
       input_hash TEXT DEFAULT NULL,
-      state TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'parked', 'decided', 'used')),
+      state TEXT NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting', 'parked', 'decided', 'used', 'closed')),
       decision TEXT DEFAULT NULL,
       decision_job_id TEXT DEFAULT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP

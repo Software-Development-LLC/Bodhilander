@@ -217,11 +217,12 @@ export class ApproveBroker {
     return row?.thread_key ?? null;
   }
 
-  /** A run that ended stops waiting; its open card stays open as parked. */
-  release(jobId: string): void {
+  /** A run that ended stops waiting: a parked run keeps its card open for the decision, any other end closes it. */
+  release(jobId: string, outcome: string): void {
+    const state = outcome === 'parked' ? 'parked' : 'closed';
     const rows = this.deps.db.prepare(`SELECT raise_id FROM crew_card WHERE job_id = ? AND state = 'waiting'`).all(jobId) as { raise_id: string }[];
     for (const { raise_id: raiseId } of rows) {
-      this.deps.db.prepare(`UPDATE crew_card SET state = 'parked' WHERE raise_id = ?`).run(raiseId);
+      this.deps.db.prepare(`UPDATE crew_card SET state = ? WHERE raise_id = ?`).run(state, raiseId);
       this.waiting.get(raiseId)?.settle({ behavior: 'deny', message: PARKED_MESSAGE });
     }
   }

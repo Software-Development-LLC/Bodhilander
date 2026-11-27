@@ -157,4 +157,21 @@ describe('approve broker', () => {
     expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_job WHERE kind = 'card'`).get()).toEqual({ n: 0 });
     expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'card-decision-fenced'`).get()).toEqual({ n: 1 });
   });
+
+  test('a run that ends some other way while its card waits closes the card, so a late decision makes no second reply', async () => {
+    const t = setup();
+    const call = t.broker.ask(RUN, ASK);
+    t.broker.release(RUN.jobId, 'done');
+    expect(await call).toEqual({ behavior: 'deny', message: PARKED_MESSAGE });
+    expect(t.raw.query(`SELECT state FROM crew_card WHERE raise_id = ?`).get(uuid(101))).toEqual({ state: 'closed' });
+    expect(t.broker.decide(t.decision(uuid(101), 'approved'))).toBe(null);
+    expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_job WHERE kind = 'card'`).get()).toEqual({ n: 0 });
+  });
+
+  test('a run parked on its card keeps the card open for the decision', async () => {
+    const t = setup();
+    void t.broker.ask(RUN, ASK);
+    t.broker.release(RUN.jobId, 'parked');
+    expect(t.raw.query(`SELECT state FROM crew_card WHERE raise_id = ?`).get(uuid(101))).toEqual({ state: 'parked' });
+  });
 });

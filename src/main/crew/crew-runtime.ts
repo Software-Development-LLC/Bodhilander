@@ -90,7 +90,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       deps.hub.sendUsage(run.job.id, usageRecordFor(run, uuid, deps.usage.get(run.accountId)));
     },
     onSettled: (jobId, outcome) => {
-      broker.release(jobId);
+      broker.release(jobId, outcome);
       guard('ending a run', () => deps.runEnded?.(jobId));
       if (outcome !== 'held') void tick();
     },
