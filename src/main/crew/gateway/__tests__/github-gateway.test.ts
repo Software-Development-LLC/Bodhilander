@@ -39,6 +39,26 @@ describe('planGh', () => {
     expect(planGh(['issue', 'list', '--search', 'is:open label:bug'], REPOS).kind).toBe('read');
   });
 
+  test('a repo given as an argument must be one of the hire\'s, whatever -R says', () => {
+    expect(planGh(['issue', 'view', 'other/x#12', '-R', 'acme/app'], REPOS)).toEqual({ kind: 'refused', why: "other/x is not one of this hire's repos." });
+    expect(planGh(['pr', 'diff', 'other/x#3'], REPOS).kind).toBe('refused');
+    expect(planGh(['issue', 'list', 'other/x'], REPOS).kind).toBe('refused');
+    expect(planGh(['run', 'view', 'other/x'], REPOS).kind).toBe('refused');
+    expect(planGh(['issue', 'view', 'Acme/App#12'], REPOS)).toEqual({ kind: 'read', args: ['issue', 'view', 'Acme/App#12', '-R', 'acme/app'] });
+    expect(planGh(['pr', 'view', 'feat/login', '-R', 'acme/app'], REPOS).kind).toBe('read');
+    expect(planGh(['issue', 'list', '-l', 'needs/triage'], REPOS).kind).toBe('read');
+  });
+
+  test('a jq or template filter cannot read the environment', () => {
+    for (const filter of ['$ENV.GH_TOKEN', 'env.GH_TOKEN', '.x | env', '$__loc__ | $ENV', '{{ getenv "GH_TOKEN" }}']) {
+      expect(planGh(['api', 'repos/acme/app', '--jq', filter], REPOS).kind).toBe('refused');
+      expect(planGh(['issue', 'list', '--json', 'title', '-q', filter], REPOS).kind).toBe('refused');
+      expect(planGh(['pr', 'list', '--json', 'title', `--template=${filter}`], REPOS).kind).toBe('refused');
+    }
+    expect(planGh(['issue', 'list', '--json', 'title', '--jq', '.[].title | ascii_downcase'], REPOS).kind).toBe('read');
+    expect(planGh(['api', 'repos/acme/app', '-q', '.environment_url'], REPOS).kind).toBe('read');
+  });
+
   test('gh repo view takes its repo as an argument, and only one of the hire\'s', () => {
     expect(planGh(['repo', 'view'], REPOS)).toEqual({ kind: 'read', args: ['repo', 'view', 'acme/app'] });
     expect(planGh(['repo', 'view', 'Acme/App', '--json', 'name'], REPOS)).toEqual({ kind: 'read', args: ['repo', 'view', 'Acme/App', '--json', 'name'] });
@@ -104,6 +124,7 @@ describe('GithubGateway', () => {
   test('a read runs gh with the minted read token and nothing of the run\'s', async () => {
     const t = setup();
     expect(await t.gw.handle(t.run(), { token: 'a'.repeat(64), args: ['issue', 'list'] })).toEqual({ code: 0, stdout: wrapUntrusted('github', 'out\n'), stderr: '' });
+    expect((await t.gw.handle(t.run(), { token: 'a'.repeat(64), args: ['issue', 'list', '--json', 'title'] })).stdout).toBe(wrapUntrusted('github', 'out\n'));
     expect(isTainted(t.db, HIRE, 'chat:owner')).toBe(true);
     const [args, env] = t.ran[0];
     expect(args).toEqual(['issue', 'list', '-R', 'acme/app']);
