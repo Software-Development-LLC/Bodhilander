@@ -25,6 +25,7 @@ function deps(result: EditResultFrame['result'] | null, over: Partial<LetGoDeps>
     forget: (hireId) => void calls.push(`forget:${hireId}`),
     interrupt: (hireId) => void calls.push(`interrupt:${hireId}`),
     moveAside: (hireId) => void calls.push(`move:${hireId}`),
+    onLateResult: (id) => void calls.push(`late:${id}`),
     ...over,
   };
   return { d, calls };
@@ -35,6 +36,17 @@ describe('letting a hire go', () => {
     const { d, calls } = deps('applied');
     expect(await letGoHire(d, HIRE)).toEqual({ ok: true });
     expect(calls).toEqual([`delete:${HIRE}`, 'wait:e1', `forget:${HIRE}`, `interrupt:${HIRE}`, `move:${HIRE}`]);
+  });
+
+  test('an answer that arrives after the wait still stops the hire and moves its folder aside; a late refusal does not', async () => {
+    for (const result of ['applied', 'refused'] as const) {
+      let late: ((f: EditResultFrame) => void) | null = null;
+      const { d, calls } = deps(null, { onLateResult: (_id, handle) => void (late = handle) });
+      expect((await letGoHire(d, HIRE)).ok).toBe(false);
+      expect(calls).toEqual([`delete:${HIRE}`, 'wait:e1']);
+      (late as unknown as (f: EditResultFrame) => void)({ type: 'edit_result', id: 'e1', result });
+      expect(calls.slice(2)).toEqual(result === 'applied' ? [`forget:${HIRE}`, `interrupt:${HIRE}`, `move:${HIRE}`] : []);
+    }
   });
 
   test('a refusal, no answer or no connection leaves the hire and its folder alone', async () => {

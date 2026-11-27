@@ -13,6 +13,8 @@ export interface LetGoDeps {
   online(): boolean;
   sendDelete(hireId: string): string;
   editResult(id: string): Promise<EditResultFrame | null>;
+  /** The answer that arrives after the wait gave up; called once with it. */
+  onLateResult(id: string, handle: (frame: EditResultFrame) => void): void;
   forget(hireId: string): void;
   interrupt(hireId: string): void;
   moveAside(hireId: string): void;
@@ -28,8 +30,18 @@ export async function letGoHire(deps: LetGoDeps, hireId: string): Promise<CrewEd
     return { ok: false, error: "The let go couldn't be queued." };
   }
   const answer = await deps.editResult(id);
-  if (!answer) return { ok: false, error: "Crew Hub hasn't answered yet. Check the hire in a minute, and let it go again if it is still here." };
+  if (!answer) {
+    deps.onLateResult(id, (late) => {
+      if (late.result === 'applied') cleanUp(deps, hireId);
+    });
+    return { ok: false, error: "Crew Hub hasn't answered yet. If it lets the hire go, this machine stops it then; check the hire in a minute." };
+  }
   if (answer.result !== 'applied') return { ok: false, error: answer.why ?? 'Crew Hub refused the let go.' };
+  cleanUp(deps, hireId);
+  return { ok: true };
+}
+
+function cleanUp(deps: LetGoDeps, hireId: string): void {
   deps.forget(hireId);
   deps.interrupt(hireId);
   try {
@@ -37,7 +49,6 @@ export async function letGoHire(deps: LetGoDeps, hireId: string): Promise<CrewEd
   } catch (err) {
     log.warn('[Crew] could not move a let-go hire folder aside', err);
   }
-  return { ok: true };
 }
 
 const letGoRoot = (userData: string) => path.join(userData, 'crew', '.let-go');

@@ -51,6 +51,20 @@ function editResultFrom(hub: HubClient, id: string, timeoutMs: number): Promise<
   });
 }
 
+/** Waits with no timeout for one edit's answer, for as long as this Hub client lives. */
+function onLateEditResult(hub: HubClient, id: string, handle: (frame: EditResultFrame) => void): void {
+  const onResult = (frame: EditResultFrame) => {
+    if (frame.id !== id) return;
+    hub.off('edit-result', onResult);
+    try {
+      handle(frame);
+    } catch (err) {
+      log.warn('[Crew] could not finish a late let go', err);
+    }
+  };
+  hub.on('edit-result', onResult);
+}
+
 export async function letGoHire(hireId: string): Promise<CrewEditResult> {
   const hub = getCrewHub();
   if (!hub) return { ok: false, error: "Crew isn't running on this machine." };
@@ -59,6 +73,7 @@ export async function letGoHire(hireId: string): Promise<CrewEditResult> {
       online: () => hub.getStatus() === 'online',
       sendDelete: (id) => hub.sendEdit({ op: 'delete', kind: 'hire', objectId: id, hireId: id, fields: {} }),
       editResult: (id) => editResultFrom(hub, id, LET_GO_ANSWER_MS),
+      onLateResult: (id, handle) => onLateEditResult(hub, id, handle),
       forget: (id) => hub.forgetHire(id),
       interrupt: (id) => crewRuntime()?.interrupt(id),
       moveAside: (id) => moveHireAside(app.getPath('userData'), id, Date.now()),
