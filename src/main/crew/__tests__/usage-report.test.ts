@@ -27,12 +27,12 @@ describe('usage report', () => {
     expect(records.get('acct')?.fiveHour?.pct).toBe(30);
   });
 
-  test('a record carries the run tokens, its cost-equivalent and only the windows read', () => {
+  test('a record carries the run tokens and only the windows read, with no cost', () => {
     const account: AccountUsage = { accountId: 'acct', fiveHour: { pct: 40, resetsAt: 5_000, observedAt: 900 }, sevenDay: null, source: 'run', observedAt: 900, unavailable: null };
     const record = usageRecordFor(run, 'u-acct', account);
     expect(record).toEqual({
       runId: uuid(1), requestedBy: PERSON, accountUuid: 'u-acct', startedAt: 1_000, durationMs: 50, model: 'claude-opus', inputTokens: 1000,
-      outputTokens: 100, cacheCreationTokens: 0, cacheReadTokens: 2000, costEquivalentMicroUsd: 1000 * 5 + 2000 * 0.5 + 100 * 25,
+      outputTokens: 100, cacheCreationTokens: 0, cacheReadTokens: 2000,
       windows: [{ name: 'five_hour', utilization: 0.4, resetsAt: 5_000, status: 'observed' }], windowsReadAt: 900,
     });
     expect(wireWindows(null)).toEqual([]);

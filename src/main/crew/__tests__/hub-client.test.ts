@@ -541,7 +541,7 @@ describe('HubClient queued frames', () => {
     t.sock().hub(deliver(1, 2));
     const usage = {
       runId: uuid(40), requestedBy: PERSON, accountUuid: 'acct', startedAt: 1, durationMs: 2, model: 'm', inputTokens: 3,
-      outputTokens: 4, cacheCreationTokens: 5, cacheReadTokens: 6, costEquivalentMicroUsd: 7, windows: [], windowsReadAt: 8,
+      outputTokens: 4, cacheCreationTokens: 5, cacheReadTokens: 6, windows: [], windowsReadAt: 8,
     };
     expect(t.client.sendUsage(uuid(1), usage)).toBe(true);
     const [sent] = sentOf(t, 'usage_record');
@@ -848,7 +848,7 @@ describe('HubClient review fixes', () => {
     t.sock().hub(deliver(2, 2));
     const usage = {
       runId: uuid(40), requestedBy: PERSON, accountUuid: 'acct', startedAt: 1, durationMs: 2, model: 'm', inputTokens: 3,
-      outputTokens: 4, cacheCreationTokens: 5, cacheReadTokens: 6, costEquivalentMicroUsd: 7, windows: [], windowsReadAt: 8,
+      outputTokens: 4, cacheCreationTokens: 5, cacheReadTokens: 6, windows: [], windowsReadAt: 8,
     };
     expect(t.client.sendUsage(uuid(1), usage)).toBe(true);
     expect(t.client.sendUsage(uuid(1), usage)).toBe(false);

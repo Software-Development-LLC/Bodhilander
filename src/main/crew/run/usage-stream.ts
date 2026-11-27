@@ -76,24 +76,3 @@ export function runUsage(result: unknown): RunUsage {
     output_tokens: n('output_tokens'),
   };
 }
-
-/** USD per million tokens, which is also micro-USD per token. */
-export interface Price {
-  input: number;
-  cacheWrite: number;
-  cacheRead: number;
-  output: number;
-}
-
-/** List prices for the Opus tier Crew runs on; a cost-equivalent, not a bill. */
-export const DEFAULT_PRICE: Price = { input: 5, cacheWrite: 6.25, cacheRead: 0.5, output: 25 };
-
-/** The run's cost-equivalent in whole micro-USD, from its own tokens only. */
-export function costMicroUsd(usage: RunUsage, price: Price = DEFAULT_PRICE): number {
-  return Math.round(
-    usage.input_tokens * price.input +
-      usage.cache_creation_input_tokens * price.cacheWrite +
-      usage.cache_read_input_tokens * price.cacheRead +
-      usage.output_tokens * price.output,
-  );
-}

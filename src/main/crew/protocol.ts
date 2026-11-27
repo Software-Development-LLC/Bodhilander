@@ -217,7 +217,6 @@ export type UsageRecordFrame = {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  costEquivalentMicroUsd: number;
   windows: UsageWindow[];
   windowsReadAt: number;
 };
@@ -369,7 +368,6 @@ export type UsageFrame = {
   inputTokens: number;
   outputTokens: number;
   cacheCreationTokens: number;
-  costEquivalentMicroUsd: number;
   records: number;
 };
 export type TokenFrame = { type: 'token'; id: string; token: string; expiresAt: number; repos: string[] };
@@ -477,7 +475,6 @@ const SPECS: Record<MachineFrameType, Spec> = {
     outputTokens: [int],
     cacheCreationTokens: [int],
     cacheReadTokens: [int],
-    costEquivalentMicroUsd: [int],
     windows: [list(shape({ name: [nonEmpty(40)], utilization: [v => typeof v === 'number' && v >= 0 && v <= 1], resetsAt: [int], status: [nonEmpty(40)] }), 10)],
     windowsReadAt: [int],
   },

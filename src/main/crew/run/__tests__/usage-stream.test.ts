@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { costMicroUsd, parseRateLimitEvent, runUsage } from '../usage-stream';
+import { parseRateLimitEvent, runUsage } from '../usage-stream';
 import { emptyUsage, mergeUsage } from '../../../usage-meter';
 
 describe('the start-of-run window reading', () => {
@@ -29,16 +29,10 @@ describe('the start-of-run window reading', () => {
   });
 });
 
-describe('the run\'s own cost', () => {
-  test('priced from result.usage, never the session total', () => {
-    const turns = [
-      { total_cost_usd: 3.14, usage: { input_tokens: 10, cache_creation_input_tokens: 400_000, cache_read_input_tokens: 0, output_tokens: 18_000 } },
-      { total_cost_usd: 3.25, usage: { input_tokens: 10, cache_creation_input_tokens: 2_000, cache_read_input_tokens: 150_000, output_tokens: 500 } },
-      { total_cost_usd: 3.33, usage: { input_tokens: 10, cache_creation_input_tokens: 1_000, cache_read_input_tokens: 120_000, output_tokens: 500 } },
-    ];
-    const costs = turns.map((t) => costMicroUsd(runUsage(t)));
-    expect(costs).toEqual([2_950_050, 100_050, 78_800]);
-    for (const [i, c] of costs.entries()) expect(c).toBeLessThan(turns[i].total_cost_usd * 1_000_000);
+describe('the run\'s own tokens', () => {
+  test('come from result.usage, never the session totals', () => {
+    const turn = { total_cost_usd: 3.14, usage: { input_tokens: 10, cache_creation_input_tokens: 400, cache_read_input_tokens: 0, output_tokens: 18 } };
+    expect(runUsage(turn)).toEqual({ input_tokens: 10, cache_creation_input_tokens: 400, cache_read_input_tokens: 0, output_tokens: 18 });
   });
 
   test('a missing or bad count is 0', () => {
