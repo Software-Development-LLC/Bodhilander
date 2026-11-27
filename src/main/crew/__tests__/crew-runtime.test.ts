@@ -8,6 +8,7 @@ mock.module('../../account-identity', () => ({
 
 const { startCrewRuntime, REMINDER_CHECK_MS } = await import('../crew-runtime');
 const { CrewSignIn, LOGIN_LIFETIME_MS } = await import('../crew-token');
+const { Holds } = await import('../holds');
 import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
 import type { RunChild } from '../run/loop';
 import { HIRE, PERSON, crewDb, uuid } from './crew-db';
@@ -26,6 +27,10 @@ class Child implements RunChild {
   kill(s: string) {
     this.signals.push(s);
   }
+  limited() {
+    for (const cb of this.out) cb(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1_900_000_000 } }));
+    for (const cb of this.close) cb();
+  }
   finish() {
     for (const cb of this.out) cb(JSON.stringify({ type: 'rate_limit_event', unifiedWindows: { five_hour: { utilization: 0.5, resetsAt: 9e12 } } }));
     for (const cb of this.out) cb(JSON.stringify({ type: 'result', is_error: false, result: 'ok', session_id: 's', usage: { input_tokens: 2 } }));
@@ -41,6 +46,7 @@ function setup() {
   const accounts = [{ id: 'a1', label: 'Work', configDir: '/acct/a1', email: null } as ClaudeAccount];
   const cipher = { isEncryptionAvailable: () => true, encryptString: (p: string) => Buffer.from(p), decryptString: (b: Buffer) => b.toString() };
   const signIn = new CrewSignIn(db, cipher, false);
+  const holds = new Holds();
   const hub = Object.assign(new EventEmitter(), {
     leased: true,
     replies: [] as [string, string][],
@@ -61,7 +67,7 @@ function setup() {
   const timers: { fn: () => void; ms: number; live: boolean }[] = [];
   let clock = Date.parse('2026-11-27T12:00:00Z');
   const rt = startCrewRuntime({
-    db, hub, signIn, accounts: () => accounts,
+    db, hub, signIn, holds, accounts: () => accounts,
     prepare: async (job) => ({ command: 'claude', args: [], cwd: '/', env: {}, input: job.text, accountId: 'a1', sessionId: null, token: null }),
     usage: { get: (id) => records.get(id) ?? null, set: (u) => void records.set(u.accountId, u) },
     remind: (r, a) => reminders.push(`${a.label}:${r.key}`),
@@ -81,10 +87,21 @@ function setup() {
     clearInterval: (h) => void ((h as { live: boolean }).live = false),
   });
   const job = (n: number) => raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(n), HIRE, PERSON);
-  return { raw, db, hub, rt, children, records, reminders, timers, signIn, job, ended, loggedIn, advance: (ms: number) => (clock += ms) };
+  return { raw, db, hub, rt, children, records, reminders, timers, signIn, holds, job, ended, loggedIn, advance: (ms: number) => (clock += ms) };
 }
 
 describe('crew runtime', () => {
+  test("a run the account's usage limit rejects holds that account until the reported reset", async () => {
+    const t = setup();
+    t.job(1);
+    t.hub.emit('job');
+    await flush();
+    t.children[0].limited();
+    await flush();
+    expect(t.holds.rateLimitedUntil('a1', Date.parse('2026-11-27T12:00:00Z'))).toBe(1_900_000_000_000);
+    expect(t.hub.replies).toEqual([]);
+  });
+
   test('a delivered job runs; its reply and one usage record go to the Hub, and the window reading reaches the account', async () => {
     const t = setup();
     t.job(1);

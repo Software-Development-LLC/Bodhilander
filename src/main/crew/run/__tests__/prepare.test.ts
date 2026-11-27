@@ -14,7 +14,9 @@ const { CrewSignIn } = await import('../../crew-token');
 const { SocketRootError } = await import('../sockets');
 const { ServicesNotReady } = await import('../services');
 const { markTainted, isTainted } = await import('../../taint');
-import type { ClaudeAccount } from '../../../../shared/types';
+const { Holds } = await import('../../holds');
+const { HireDayUsage } = await import('../hire-usage');
+import type { AccountUsage, ClaudeAccount } from '../../../../shared/types';
 import type { CrewJob, PreparedRun } from '../loop';
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 
@@ -27,14 +29,14 @@ const job = (over: Partial<CrewJob> = {}): CrewJob => ({
   id: uuid(1), hireId: HIRE, kind: 'message', epoch: 1, scope: 'owner', requestedBy: PERSON, sender: 'B', text: 'do the thing', attempts: 1, ...over,
 });
 
-function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; services?: 'root' | 'not-ready' } = {}) {
+function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; services?: 'root' | 'not-ready'; dailyTokenCap?: number; hub?: (hireId: string, epoch: number, since: number) => Promise<number | null> } = {}) {
   const { raw, db } = crewDb();
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'crew-prep-'));
   dirs.push(userData);
   raw.query(`INSERT INTO claude_accounts (id, label, config_dir, email) VALUES ('a1', 'Work Max', '/acct/a1', 'b@x.com')`).run();
   identities['/acct/a1'] = { accountUuid: 'u-a1', email: 'b@x.com' };
   const ref = opts.ref === undefined ? { accountUuid: 'u-a1', email: 'b@x.com', label: 'Work Max' } : opts.ref;
-  raw.query(`INSERT INTO crew_hire_cache (hire_id, rev, data) VALUES (?, 1, ?)`).run(HIRE, JSON.stringify({ accountRef: ref }));
+  raw.query(`INSERT INTO crew_hire_cache (hire_id, rev, data) VALUES (?, 1, ?)`).run(HIRE, JSON.stringify({ accountRef: ref, dailyTokenCap: opts.dailyTokenCap ?? null }));
   const cipher = { isEncryptionAvailable: () => true, encryptString: (p: string) => Buffer.from(p), decryptString: (b: Buffer) => b.toString() };
   const signIn = new CrewSignIn(db, cipher, opts.ships ?? false);
   const accounts = [{ id: 'a1', label: 'Work Max', configDir: '/acct/a1', email: 'b@x.com' } as ClaudeAccount];
@@ -48,6 +50,8 @@ function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; servi
     },
     sandbox: () => ({ accountDirs: ['/acct/a1'], userDataEntries: [], crewEntries: [], sockets: [], socketRoot: '/tmp/cr-501', allowedDomains: [] }),
     now: () => Date.parse('2026-11-27T12:00:00Z'), underTemp: () => false,
+    holds: new Holds(), usage: (_id: string): AccountUsage | null => null, accountCap: () => ({ fiveHourPct: 90, sevenDayPct: 90 }),
+    hireUsage: new HireDayUsage(db, opts.hub ?? null),
   };
   return { raw, db, deps, userData, root: path.join(userData, 'crew', HIRE) };
 }
@@ -133,6 +137,70 @@ describe('preparing a run', () => {
     const p = (await prepareRun(t.deps, job(), 'chat:owner', 'run-1')) as PreparedRun;
     expect(p.sessionId).toBe('old');
     expect(p.args.slice(0, 3)).toEqual(['-p', '--resume', 'old']);
+  });
+});
+
+const NOW = Date.parse('2026-11-27T12:00:00Z');
+const usageAt = (fivePct: number | null, sevenPct: number | null): AccountUsage => ({
+  accountId: 'a1', source: 'run', observedAt: NOW, unavailable: null,
+  fiveHour: fivePct === null ? null : { pct: fivePct, resetsAt: NOW + 3_600_000, observedAt: NOW },
+  sevenDay: sevenPct === null ? null : { pct: sevenPct, resetsAt: NOW + 86_400_000, observedAt: NOW },
+});
+const doneRun = (raw: ReturnType<typeof crewDb>['raw'], id: string, endedAt: string, tokens: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number }) =>
+  raw.query(`INSERT INTO crew_run (id, job_id, hire_id, ended_at, outcome, usage) VALUES (?, 'j', ?, ?, 'done', ?)`).run(id, HIRE, endedAt, JSON.stringify({ cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...tokens }));
+
+describe('usage holds before a run', () => {
+  test('a recorded rate limit holds the hire rate-limited until its reset, and writes nothing', async () => {
+    const t = setup();
+    t.deps.holds.recordRateLimit('a1', NOW + 60_000);
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: 'held:rate-limited' });
+    expect(fs.existsSync(t.root)).toBe(false);
+    t.deps.now = () => NOW + 60_000;
+    expect('hold' in (await prepareRun(t.deps, job(), 'chat:owner', 'run-1'))).toBe(false);
+  });
+
+  test("an account at its crew.accountCap holds the hire crew-cap, read against the account's own cap", async () => {
+    const t = setup();
+    t.deps.usage = () => usageAt(null, 80);
+    t.deps.accountCap = () => ({ fiveHourPct: 90, sevenDayPct: 80 });
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: 'held:crew-cap' });
+    t.deps.accountCap = () => ({ fiveHourPct: 90, sevenDayPct: 81 });
+    expect('hold' in (await prepareRun(t.deps, job(), 'chat:owner', 'run-1'))).toBe(false);
+  });
+
+  test('with no window reported, runs start', async () => {
+    const t = setup();
+    t.deps.usage = () => usageAt(null, null);
+    expect('hold' in (await prepareRun(t.deps, job(), 'chat:owner', 'run-1'))).toBe(false);
+  });
+
+  test("a hire over its dailyTokenCap today is held hire-cap; cache reads and yesterday's runs don't count", async () => {
+    const t = setup({ dailyTokenCap: 1000 });
+    doneRun(t.raw, 'r-old', '2026-11-26 23:59:59', { input_tokens: 5000, output_tokens: 0 });
+    doneRun(t.raw, 'r-1', '2026-11-27 09:00:00', { input_tokens: 400, output_tokens: 100, cache_read_input_tokens: 10_000 });
+    expect('hold' in (await prepareRun(t.deps, job(), 'chat:owner', 'run-1'))).toBe(false);
+    doneRun(t.raw, 'r-2', '2026-11-27 10:00:00', { input_tokens: 300, output_tokens: 200 });
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: 'held:hire-cap' });
+  });
+
+  test("the hire cap counts the Hub's total for the owner's day, read once, plus local runs since", async () => {
+    const calls: { since: number; epoch: number }[] = [];
+    const t = setup({ dailyTokenCap: 1000, hub: async (_h, epoch, since) => (calls.push({ since, epoch }), 900) });
+    t.deps.timeZone = () => 'America/New_York';
+    expect('hold' in (await prepareRun(t.deps, job(), 'chat:owner', 'run-1'))).toBe(false);
+    expect(calls).toEqual([{ since: Date.parse('2026-11-27T05:00:00Z'), epoch: 1 }]);
+    doneRun(t.raw, 'r-1', '2026-11-27 12:00:00', { input_tokens: 100, output_tokens: 0 });
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: 'held:hire-cap' });
+    expect(calls.length).toBe(1);
+    await prepareRun(t.deps, job({ epoch: 2 }), 'chat:owner', 'run-1');
+    expect(calls.length).toBe(2);
+  });
+
+  test('with the cap off the Hub is never asked', async () => {
+    let asked = false;
+    const t = setup({ hub: async () => ((asked = true), 10 ** 9) });
+    expect('hold' in (await prepareRun(t.deps, job(), 'chat:owner', 'run-1'))).toBe(false);
+    expect(asked).toBe(false);
   });
 });
 

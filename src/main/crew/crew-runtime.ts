@@ -11,6 +11,7 @@ import type { UsageObservation } from '../usage-meter';
 import { AccountChanger, accountRefFor } from './account-ref';
 import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
+import type { Holds } from './holds';
 import type { UsageInput } from './hub-client';
 import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame } from './protocol';
 import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
@@ -32,6 +33,7 @@ export interface CrewRuntimeDeps {
   db: Database.Database;
   hub: CrewHubPort;
   signIn: CrewSignIn;
+  holds: Holds;
   accounts(): ClaudeAccount[];
   prepare(job: CrewJob, threadKey: string, runId: string): Promise<Prepared>;
   usage: { get(id: string): AccountUsage | null; set(u: AccountUsage): void };
@@ -82,6 +84,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     spawn: deps.spawn ?? spawnRun,
     reply: (jobId, text) => deps.hub.sendReply(jobId, text),
     onSignedOut: (_hireId, accountId) => deps.signIn.recordAuthFailure(accountId, now()),
+    onRateLimited: (accountId, until) => deps.holds.recordRateLimit(accountId, until),
     onUsageObserved: (accountId: string, observation: UsageObservation) => {
       mergeRunObservation(accountId, observation, deps.usage);
     },

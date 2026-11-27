@@ -53,6 +53,29 @@ export function capDay(now: number, timeZone: string | null): string {
   }
 }
 
+/** The instant the owner's day began, so the Hub is asked for that day's totals. */
+export function dayStart(now: number, timeZone: string | null): number {
+  const day = capDay(now, timeZone);
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  let t = midnight;
+  for (let i = 0; i < 2; i += 1) t = midnight - offsetAt(t, timeZone);
+  return t;
+}
+
+function offsetAt(t: number, timeZone: string | null): number {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', { timeZone: timeZone ?? 'UTC', hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(t);
+  } catch {
+    return 0;
+  }
+  const n = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'), n('second')) - Math.floor(t / 1000) * 1000;
+}
+
+/** The hire state a cause is reported as. */
+export const holdState = (cause: HoldCause): string => `held:${cause}`;
+
 export class Holds {
   private readonly limitedUntil = new Map<string, number>();
   private readonly told = new Map<string, HoldCause>();

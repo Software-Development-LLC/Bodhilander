@@ -6,9 +6,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type Database from 'better-sqlite3';
-import type { ClaudeAccount } from '../../../shared/types';
+import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
+import type { CrewAccountCap } from '../../repositories/preferences';
 import { resolveAccountRef, type ClaudeAccountRef } from '../account-ref';
 import type { CrewSignIn } from '../crew-token';
+import { holdState, type Holds } from '../holds';
 import { consumeTaint, isTainted } from '../taint';
 import { runArgs, runEnv } from './env';
 import type { CrewJob, Prepared } from './loop';
@@ -16,6 +18,7 @@ import { runSettingsJson, type SandboxInput } from './sandbox-settings';
 import { ServicesNotReady, type RunServices } from './services';
 import { SocketRootError } from './sockets';
 import { cwdFor, hirePaths, settingsPathFor, underTempDir, type HirePaths } from './scope';
+import type { HireDayUsage } from './hire-usage';
 import { freshReason, freshSessionInput, type Turn } from './sessions';
 
 export const HOLD_MISSING = 'held:missing';
@@ -34,6 +37,10 @@ export interface PrepareDeps {
   timeZone(): string | null;
   /** The role's handbook for CLAUDE.md; skills are restored by the caller's bundle step. */
   handbook(hireId: string): string;
+  holds: Holds;
+  usage(accountId: string): AccountUsage | null;
+  accountCap(accountId: string): CrewAccountCap;
+  hireUsage: HireDayUsage;
   restoreSkills?(paths: HirePaths): void;
   /** The run's MCP servers, gateway sockets and shim env; throws when they cannot be set up. */
   services(job: CrewJob, threadKey: string, runId: string): Promise<RunServices>;
@@ -53,6 +60,31 @@ function hireAccountRef(db: Database.Database, hireId: string): ClaudeAccountRef
   } catch {
     return null;
   }
+}
+
+function hireDailyCap(db: Database.Database, hireId: string): number | null {
+  const row = db.prepare(`SELECT data FROM crew_hire_cache WHERE hire_id = ?`).get(hireId) as { data: string } | undefined;
+  try {
+    const cap = (JSON.parse(row?.data ?? '{}') as { dailyTokenCap?: unknown }).dailyTokenCap;
+    return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0 ? cap : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Rate limit, the account's Crew cap, then the hire's own daily cap; the hire cap needs today's total only when it is set. */
+async function usageHold(deps: PrepareDeps, job: CrewJob, accountId: string, now: number): Promise<string | null> {
+  const dailyTokens = hireDailyCap(deps.db, job.hireId);
+  const usedToday = dailyTokens === null ? 0 : await deps.hireUsage.usedToday(job.hireId, job.epoch, now, deps.timeZone());
+  const cause = deps.holds.evaluate({
+    accountId,
+    signedIn: true,
+    usage: deps.usage(accountId),
+    cap: deps.accountCap(accountId),
+    hireCap: { dailyTokens, usedToday },
+    now,
+  });
+  return cause === null ? null : holdState(cause);
 }
 
 function lastTurns(db: Database.Database, hireId: string, threadKey: string): Turn[] {
@@ -92,6 +124,8 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
 
   const token = deps.signIn.mode() === 'token' ? deps.signIn.tokenFor(account.id, now) : null;
   if (deps.signIn.mode() === 'token' && token === null) return { hold: HOLD_SIGNED_OUT };
+  const held = await usageHold(deps, job, account.id, now);
+  if (held) return { hold: held };
 
   const paths = hirePaths(deps.userData, job.hireId);
   const underTemp = deps.underTemp ?? ((dir: string) => underTempDir(dir, deps.env.TMPDIR));
