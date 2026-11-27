@@ -49,7 +49,8 @@ const psOut = (args: string[]): string | null => {
 export const systemReap: ReapDeps = {
   commandOf: (pid) => {
     const command = psOut(['-o', 'command=', '-p', String(pid)])?.trim();
-    return command ? command : null;
+    if (!command) return null;
+    return command;
   },
   childrenOf: (pid) =>
     (psOut(['-A', '-o', 'pid=,ppid=']) ?? '')
