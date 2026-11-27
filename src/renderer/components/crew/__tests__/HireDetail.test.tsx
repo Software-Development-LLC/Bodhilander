@@ -59,7 +59,6 @@ function api(over: Partial<HireDetailApi> = {}): HireDetailApi & { edits: unknow
     signInAgain: async (...args) => (edits.push(['signIn', ...args]), ok()),
     onSignInStarted: () => () => {},
     closeSignIn: async (...args) => void edits.push(['closeSignIn', ...args]),
-    confirmSignInMac: async (...args) => void edits.push(['confirmMac', ...args]),
     ...over,
   };
 }
@@ -234,6 +233,7 @@ describe('sign in again shows the login terminal', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('/login');
     expect(screen.getByTestId('login-terminal').textContent).toBe('pty-acc-1');
+    expect(screen.queryByRole('button', { name: "I'm logged in" })).toBeNull();
     await s.finish({ ok: true });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     await screen.findByText('Signed in.');

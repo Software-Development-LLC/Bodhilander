@@ -18,7 +18,6 @@ export interface HireDetailApi {
   signInAgain(accountId: string): Promise<CrewEditResult>;
   onSignInStarted(fn: (started: CrewSignInStarted) => void): () => void;
   closeSignIn(ptyId: string): Promise<void>;
-  confirmSignInMac(ptyId: string): Promise<void>;
 }
 
 const windowApi = (): HireDetailApi => ({
@@ -33,7 +32,6 @@ const windowApi = (): HireDetailApi => ({
   signInAgain: (accountId) => window.electronAPI.crewSignInAgain(accountId),
   onSignInStarted: (fn) => window.electronAPI.onCrewSignInStarted(fn),
   closeSignIn: (ptyId) => window.electronAPI.cancelAccountLogin(ptyId, false),
-  confirmSignInMac: (ptyId) => window.electronAPI.confirmAccountLoginMacOS(ptyId),
 });
 
 const NOT_AVAILABLE: Record<'offline' | 'unreachable' | 'failed', string> = {
@@ -204,10 +202,8 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
         <SignInTerminal
           accountLabel={hire.accountLabel ?? 'this account'}
           ptyId={loginPty}
-          isMac={window.electronAPI?.platform === 'darwin'}
           LoginTerminal={LoginTerminal}
           onCancel={() => void api.closeSignIn(loginPty).catch(() => {})}
-          onConfirmMac={() => void api.confirmSignInMac(loginPty).catch(() => {})}
         />
       )}
       {message && (
