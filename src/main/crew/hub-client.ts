@@ -777,7 +777,7 @@ export class HubClient extends EventEmitter {
     db.transaction(() => {
       db.prepare(`UPDATE crew_job SET state = 'dropped', updated_at = CURRENT_TIMESTAMP WHERE state IN ('queued', 'running', 'parked')`).run();
       this.outbox.dropAll();
-      for (const table of ['crew_hire_cache', 'crew_role_cache', 'crew_skill_cache', 'crew_routine_cache', 'crew_note', 'crew_sync_state']) {
+      for (const table of ['crew_hire_cache', 'crew_role_cache', 'crew_skill_cache', 'crew_routine_cache', 'crew_note', 'crew_sync_state', 'crew_thread', 'crew_taint', 'crew_card', 'crew_card_log']) {
         db.prepare(`DELETE FROM ${table}`).run();
       }
       writeAudit(db, null, 'unlinked', {});

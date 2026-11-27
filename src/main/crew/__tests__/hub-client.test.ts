@@ -250,6 +250,10 @@ describe('HubClient close handling', () => {
     t.online();
     t.sock().hub(deliver(1));
     t.raw.exec(`INSERT INTO crew_role_cache (role_id, rev, data) VALUES ('r', 1, '{}')`);
+    t.raw.exec(`INSERT INTO crew_thread (hire_id, thread_key, session_id) VALUES ('${HIRE}', 'chat:owner', 's-1')`);
+    t.raw.exec(`INSERT INTO crew_taint (hire_id, thread_key, source) VALUES ('${HIRE}', 'chat:owner', 'github')`);
+    t.raw.exec(`INSERT INTO crew_card (raise_id, job_id, hire_id, thread_key, scope, requested_by, kind) VALUES ('c', 'j', '${HIRE}', 'chat:owner', 'owner', 'p', 'tool')`);
+    t.raw.exec(`INSERT INTO crew_card_log (raise_id, hire_id, kind, summary, raised_at) VALUES ('c', '${HIRE}', 'tool', 's', 1)`);
     t.client.sendReply(uuid(1), 'pending reply');
     t.sock().drop(4410);
     expect(t.client.getStatus()).toBe('unlinked');
@@ -258,6 +262,9 @@ describe('HubClient close handling', () => {
     expect((t.raw.query(`SELECT state FROM crew_outbox_local`).get() as { state: string }).state).toBe('unsendable');
     expect((t.raw.query(`SELECT COUNT(*) AS n FROM crew_role_cache`).get() as { n: number }).n).toBe(0);
     expect((t.raw.query(`SELECT COUNT(*) AS n FROM crew_hire_cache`).get() as { n: number }).n).toBe(0);
+    for (const table of ['crew_thread', 'crew_taint', 'crew_card', 'crew_card_log']) {
+      expect((t.raw.query(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n).toBe(0);
+    }
     t.client.start();
     expect(t.sockets.length).toBe(1);
     expect(t.timeouts).toEqual([]);
