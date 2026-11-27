@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { registerCrewSignIn } from '../crew-sign-in';
 
-function setup(opts: { settles?: boolean | null; throws?: boolean } = {}) {
+function setup(opts: { settles?: boolean | null; throws?: boolean; onSettle?: () => void } = {}) {
   const handlers: Record<string, (...args: unknown[]) => unknown> = {};
   const resumed: string[] = [];
   const cancelled: string[] = [];
@@ -14,7 +14,11 @@ function setup(opts: { settles?: boolean | null; throws?: boolean } = {}) {
       resumed.push(id);
       return { ptyId: `__login-${id}` };
     },
-    loginSettled: () => (opts.settles === null ? new Promise(() => {}) : Promise.resolve(opts.settles ?? true)),
+    loginSettled: () => {
+      if (opts.settles === null) return new Promise(() => {});
+      opts.onSettle?.();
+      return Promise.resolve(opts.settles ?? true);
+    },
     cancelLogin: (ptyId) => cancelled.push(ptyId),
     recordSignIn: (id) => signedIn.push(id),
     setLoginCompletedHook: (fn) => (hook = fn),
@@ -42,9 +46,26 @@ describe('Crew sign in again', () => {
     expect(t.resumed).toEqual([]);
   });
 
-  test('a completed login records the Crew sign-in, which lifts an auth-failure hold', () => {
+  test('a login started from Crew records the Crew sign-in when it lands, which lifts an auth-failure hold', async () => {
+    let t: ReturnType<typeof setup> | null = null;
+    t = setup({ onSettle: () => t?.hook()?.('a1') });
+    expect(await t.call('a1')).toEqual({ ok: true });
+    expect(t.signedIn).toEqual(['a1']);
+  });
+
+  test('a login started anywhere else leaves Crew sign-in state alone', async () => {
     const t = setup();
     t.hook()?.('a1');
-    expect(t.signedIn).toEqual(['a1']);
+    expect(t.signedIn).toEqual([]);
+    await t.call('a1');
+    t.hook()?.('a1');
+    expect(t.signedIn).toEqual([]);
+  });
+
+  test('a Crew sign-in for one account does not record another account logging in meanwhile', async () => {
+    let t: ReturnType<typeof setup> | null = null;
+    t = setup({ onSettle: () => t?.hook()?.('a2') });
+    await t.call('a1');
+    expect(t.signedIn).toEqual([]);
   });
 });

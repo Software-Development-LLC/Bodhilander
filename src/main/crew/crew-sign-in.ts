@@ -13,11 +13,24 @@ export interface CrewSignInDeps {
   timeoutMs?: number;
 }
 
+/** Only a login Crew started counts as a Crew sign-in; any other login of the account leaves Crew's state alone. */
 export function registerCrewSignIn(deps: CrewSignInDeps): void {
-  deps.setLoginCompletedHook((accountId) => deps.recordSignIn(accountId));
+  const fromCrew = new Set<string>();
+  deps.setLoginCompletedHook((accountId) => {
+    if (fromCrew.has(accountId)) deps.recordSignIn(accountId);
+  });
   deps.handle('crew:signInAgain', async (accountId: unknown): Promise<CrewEditResult> => {
     const id = typeof accountId === 'string' ? accountId.trim() : '';
     if (!id) return { ok: false, error: 'Account id is required.' };
+    fromCrew.add(id);
+    try {
+      return await signInFor(id);
+    } finally {
+      fromCrew.delete(id);
+    }
+  });
+
+  async function signInFor(id: string): Promise<CrewEditResult> {
     let ptyId: string;
     try {
       ptyId = deps.resumeLogin(id).ptyId;
@@ -35,5 +48,5 @@ export function registerCrewSignIn(deps: CrewSignInDeps): void {
       return { ok: false, error: 'Sign-in timed out.' };
     }
     return outcome ? { ok: true } : { ok: false, error: 'Sign-in was cancelled.' };
-  });
+  }
 }
