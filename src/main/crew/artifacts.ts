@@ -181,6 +181,7 @@ async function fetchOnce(deps: DownloadDeps, file: string, url: string, expiresA
 export async function downloadArtifact(deps: DownloadDeps, spec: DownloadSpec): Promise<string> {
   if (!validArtifactName(spec.name) || !isPinnedSha(spec.sha256)) throw new ArtifactError('unavailable', IMAGE_UNAVAILABLE);
   const progress = await rehashPartial(deps, spec.file);
+  if (progress.received > 0 && progress.hash.copy().digest('hex') === spec.sha256) return spec.file;
   let urls = 0;
   let current = await nextUrl(deps, spec.name, urls++);
   for (;;) {

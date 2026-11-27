@@ -5,8 +5,9 @@ import * as path from 'path';
 
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 const { FileTmpRecords, realWslExec, shippedFiles, createWindowsCrew } = await import('../wsl-runtime');
-const { WSL1_MESSAGE } = await import('../wsl');
+const { REPAIR_PROMPT, WSL1_MESSAGE } = await import('../wsl');
 const { IMAGE_UNAVAILABLE } = await import('../artifacts');
+import { createHash } from 'crypto';
 import { crewDb } from './crew-db';
 
 const dirs: string[] = [];
@@ -91,6 +92,31 @@ describe('Crew on Windows, as the main process runs it', () => {
     expect(calls.every((c) => c === '-l -v')).toBe(true);
     expect(await crew.setup.setup(() => {})).toMatchObject({ ok: false });
     expect(calls.some((c) => c.includes('--import') || c.includes('--unregister') || c.includes('--set-version'))).toBe(false);
+  });
+
+  test("Repair's confirm keeps the checked image, and asking again reuses it without the Hub", async () => {
+    const dir = tmp();
+    const image = Buffer.from('a checked rootfs');
+    const versions = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), 'utf8'));
+    versions.rootfs.sha256 = createHash('sha256').update(image).digest('hex');
+    fs.writeFileSync(path.join(dir, 'versions.json'), JSON.stringify(versions));
+    const kept = path.join(dir, 'download', path.basename(versions.rootfs.name));
+    fs.mkdirSync(path.dirname(kept), { recursive: true });
+    fs.writeFileSync(kept, image);
+    const { db } = crewDb();
+    const crew = createWindowsCrew({
+      db, signIn: { mode: () => 'token' } as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
+      onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
+      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'), linked: () => true, artifactHub: () => null, crewDir: dir, onRepaired: async () => {},
+      exec: async (args) => {
+        if (args[0] === '-l') return { code: 0, stdout: '  NAME       STATE    VERSION\n* BodhiCrew  Stopped  1\n', stderr: '' };
+        if (args.includes('find')) return { code: 0, stdout: '/home/crew/.bodhilander/crew/hires/h1\n', stderr: '' };
+        return { code: 1, stdout: '', stderr: 'no' };
+      },
+    });
+    expect(await crew.setup.repair(false)).toEqual({ confirm: REPAIR_PROMPT });
+    expect(await crew.setup.repair(false)).toEqual({ confirm: REPAIR_PROMPT });
+    expect(fs.readFileSync(kept)).toEqual(image);
   });
 
   test('a run asking to start while setup or Repair runs is held without touching the distro', async () => {

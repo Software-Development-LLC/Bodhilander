@@ -147,6 +147,13 @@ describe('Repair of a WSL1 setup', () => {
     expect(t.lock.held).toBe(false);
   });
 
+  test('a cancelled confirm keeps the checked image, so Continue does not download it again', async () => {
+    const wsl = fakeWsl({ '--set-version': fail(), ...CONTENT });
+    const t = repairDeps(wsl, { confirm: async () => false });
+    expect(await repairWsl1(t.deps)).toEqual({ result: 'cancelled' });
+    expect(t.removed).toEqual([]);
+  });
+
   test('a read of the data that fails counts as content, so the person is asked', async () => {
     const wsl = fakeWsl({ '--set-version': fail(), find: { code: 2, stdout: '', stderr: 'I/O error' } });
     const t = repairDeps(wsl, { confirm: async () => false });

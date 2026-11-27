@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createInterface } from 'readline';
 import { Readable } from 'stream';
-import { ArtifactError, downloadArtifact, IMAGE_UNAVAILABLE, parseVersions, requestArtifactUrl, type ArtifactHub, type CrewVersions, type DownloadFs, type HttpAnswer } from './artifacts';
+import { downloadArtifact, parseVersions, requestArtifactUrl, type ArtifactHub, type CrewVersions, type DownloadFs, type HttpAnswer } from './artifacts';
 import { HOLD_SETUP, type PrepareDeps } from './run/prepare';
 import { removeTmpOrphans, sweepTmpParentScript, type DistroSh, type TmpRecords } from './run/sockets';
 import { asCrew, asRoot, checkWsl, decodeWslOutput, repairLock, repairWsl1, type WslExec } from './wsl';
@@ -218,12 +218,13 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   });
   const installDir = path.join(deps.crewDir, 'wsl');
   const fetchRootfs = async (): Promise<string> => {
-    const hub = deps.artifactHub();
-    if (!hub) throw new ArtifactError('unavailable', IMAGE_UNAVAILABLE);
     const dir = path.join(deps.crewDir, 'download');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, path.basename(versions.rootfs.name));
-    return downloadArtifact({ request: (name) => requestArtifactUrl(hub, name), get: httpGet, fs: nodeDownloadFs, now: Date.now }, { name: versions.rootfs.name, sha256: versions.rootfs.sha256, file });
+    return downloadArtifact({ request: async (name) => {
+          const hub = deps.artifactHub();
+          return hub ? requestArtifactUrl(hub, name) : null;
+        }, get: httpGet, fs: nodeDownloadFs, now: Date.now }, { name: versions.rootfs.name, sha256: versions.rootfs.sha256, file });
   };
   let started: Promise<unknown> | null = null;
   const start = async () => {

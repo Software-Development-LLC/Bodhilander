@@ -191,7 +191,11 @@ function firstLine(r: WslResult): string {
   return (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim() !== '') ?? `exit ${r.code}`;
 }
 
-/** Repair for a `BodhiCrew` on WSL1. The image comes first; the lock only once something is about to change. */
+/**
+ * Repair for a `BodhiCrew` on WSL1. The image comes first; the lock only once
+ * something is about to change. On an unanswered confirm the checked image
+ * stays, so Continue reuses it.
+ */
 export async function repairWsl1(deps: RepairDeps): Promise<RepairOutcome> {
   let rootfs: string;
   try {
@@ -200,6 +204,7 @@ export async function repairWsl1(deps: RepairDeps): Promise<RepairOutcome> {
     return { result: 'no-image', message: IMAGE_UNAVAILABLE };
   }
   let release: (() => void) | null = null;
+  let keep = false;
   try {
     if ((await deps.exec(['--set-version', DISTRO, '2'])).code === 0) return { result: 'converted' };
     if (await crewDataEmpty(deps.exec)) {
@@ -207,7 +212,10 @@ export async function repairWsl1(deps: RepairDeps): Promise<RepairOutcome> {
       if (!release) return { result: 'busy' };
       return await freshImport(deps, rootfs);
     }
-    if (!(await deps.confirm(deps.loginFallback ? REPAIR_PROMPT_LOGIN : REPAIR_PROMPT))) return { result: 'cancelled' };
+    if (!(await deps.confirm(deps.loginFallback ? REPAIR_PROMPT_LOGIN : REPAIR_PROMPT))) {
+      keep = true;
+      return { result: 'cancelled' };
+    }
     release = deps.lock.tryAcquire();
     if (!release) return { result: 'busy' };
     return await exportAndRestore(deps, rootfs);
@@ -215,6 +223,6 @@ export async function repairWsl1(deps: RepairDeps): Promise<RepairOutcome> {
     return { result: 'failed', message: (err as Error).message };
   } finally {
     release?.();
-    deps.removeFile(rootfs);
+    if (!keep) deps.removeFile(rootfs);
   }
 }

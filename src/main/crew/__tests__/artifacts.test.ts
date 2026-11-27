@@ -193,6 +193,13 @@ describe('downloadArtifact', () => {
     expect((d.fs as ReturnType<typeof memFs>).files.get('/dl/img')).toEqual(IMAGE);
   });
 
+  test('a whole file already on disk that still matches is used as it is, without asking the Hub', async () => {
+    const d = deps({ fs: memFs(IMAGE) });
+    expect(await downloadArtifact(d, spec)).toBe('/dl/img');
+    expect(d.requests).toEqual([]);
+    expect(d.gets).toEqual([]);
+  });
+
   test('a server ignoring Range restarts the file from zero', async () => {
     const d = deps({ fs: memFs(Buffer.from('garbage-bytes')), replies: [() => ({ status: 200, body: chunks(IMAGE) })] });
     await downloadArtifact(d, spec);
