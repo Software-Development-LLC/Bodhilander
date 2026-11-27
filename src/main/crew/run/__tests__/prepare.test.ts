@@ -53,6 +53,13 @@ function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; servi
 }
 
 describe('preparing a run', () => {
+  test('on Windows a run is held for setup and writes nothing, since it may only run inside WSL2', async () => {
+    const t = setup();
+    t.deps.platform = 'win32';
+    expect(await prepareRun(t.deps, job(), 'chat:owner', 'run-1')).toEqual({ hold: HOLD_SETUP });
+    expect(fs.existsSync(t.root)).toBe(false);
+  });
+
   test('resolves the account, writes settings, CLAUDE.md and mcp config, and keeps tokens out of the env', async () => {
     const t = setup();
     fs.mkdirSync(path.join(t.root, 'owner', '.claude'), { recursive: true });

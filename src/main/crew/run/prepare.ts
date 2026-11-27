@@ -41,6 +41,7 @@ export interface PrepareDeps {
   model?(hireId: string): string | undefined;
   now?(): number;
   underTemp?(dir: string): boolean;
+  platform?: NodeJS.Platform;
 }
 
 function hireAccountRef(db: Database.Database, hireId: string): ClaudeAccountRef | null {
@@ -81,6 +82,8 @@ function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: 
 }
 
 export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
+  // A Windows run belongs inside WSL2; until that setup exists, nothing runs natively.
+  if ((deps.platform ?? process.platform) === 'win32') return { hold: HOLD_SETUP };
   const now = deps.now?.() ?? Date.now();
   const ref = hireAccountRef(deps.db, job.hireId);
   const account = ref ? resolveAccountRef(ref, deps.accounts()) : null;
