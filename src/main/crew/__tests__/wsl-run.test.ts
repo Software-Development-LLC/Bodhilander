@@ -177,12 +177,14 @@ describe('a run prepared inside BodhiCrew', () => {
     const p = (await t.runs.prepare(job(), 'chat:owner', 'run-1')) as PreparedRun;
     const name = ((JSON.parse(p.input.split('\n')[1]) as { env: Record<string, string> }).env.TMPDIR).split('/').pop() as string;
     expect(t.runs.liveTmpNames()).toEqual(new Set([name]));
+    expect(t.runs.activeCount()).toBe(1);
     t.runs.end(uuid(1));
     await new Promise((r) => setTimeout(r, 0));
     expect(t.agents[0].killed).toBe(true);
     expect(t.unregistered).toContain(uuid(1));
     expect(t.recorded.has(name)).toBe(false);
     expect(t.runs.liveTmpNames().size).toBe(0);
+    expect(t.runs.activeCount()).toBe(0);
   });
 
   test('a signed-out account or a missing broker holds before anything is made in the distro', async () => {

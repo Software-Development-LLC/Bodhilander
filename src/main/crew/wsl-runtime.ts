@@ -243,6 +243,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
     check: () => checkWsl(exec),
     start,
     gateState: () => gate.state(),
+    activeRuns: () => runs.activeCount(),
     setup: (onStep) =>
       runSetup({ exec, versions, linked: deps.linked, link: (onStatus) => waitForLink(deps.linked, onStatus), download: fetchRootfs, removeFile: (f) => fs.rmSync(f, { force: true }), installDir, shipped, source, onStep }),
     repairWsl1: (confirm) =>
@@ -275,6 +276,7 @@ export function createWindowsCrew(deps: WindowsCrewDeps): WindowsCrew {
   return {
     windows: {
       gate: async () => {
+        if (setup.busy) return HOLD_SETUP;
         try {
           await start();
           return await gate.gate();

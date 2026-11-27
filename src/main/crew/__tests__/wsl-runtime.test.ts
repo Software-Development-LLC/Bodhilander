@@ -93,6 +93,30 @@ describe('Crew on Windows, as the main process runs it', () => {
     expect(calls.some((c) => c.includes('--import') || c.includes('--unregister') || c.includes('--set-version'))).toBe(false);
   });
 
+  test('a run asking to start while setup or Repair runs is held without touching the distro', async () => {
+    const dir = tmp();
+    fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));
+    const calls: string[] = [];
+    let release: () => void = () => {};
+    const { db } = crewDb();
+    const crew = createWindowsCrew({
+      db, signIn: {} as never, accounts: () => [], host: {} as never, gateway: {} as never, broker: () => null, tools: () => ({}) as never, repos: () => [],
+      onLost: () => {}, handbook: () => '', skills: () => [], timeZone: () => null, audit: () => {}, openExternal: () => {}, belongsTo: () => false,
+      resources: { dir, relayScript: 'r', shimDir: 's' }, recordsFile: path.join(dir, 'rec.json'), linked: () => true, artifactHub: () => null, crewDir: dir, onRepaired: async () => {},
+      exec: async (args) => {
+        calls.push(args.join(' '));
+        if (calls.length === 1) await new Promise<void>((r) => (release = r));
+        return { code: null, stdout: '', stderr: 'no wsl' };
+      },
+    });
+    const repair = crew.setup.repair(false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await crew.windows.gate()).toBe('held:setup');
+    expect(calls).toEqual(['-l -v']);
+    release();
+    await repair;
+  });
+
   test('the first run sweeps and checks once, and runs are held until the check passes', async () => {
     const dir = tmp();
     fs.copyFileSync(path.join(__dirname, '..', '..', '..', '..', 'resources', 'crew-agent', 'versions.json'), path.join(dir, 'versions.json'));

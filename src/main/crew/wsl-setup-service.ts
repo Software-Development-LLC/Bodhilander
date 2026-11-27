@@ -9,11 +9,17 @@ import { NEEDS_REPAIR, USER_CONFLICT, type SetupOutcome, type SetupStep, type St
 
 export const REPAIR_CANCELLED = 'Repair was cancelled. Nothing was changed.';
 
+export function repairWaits(active: number): string {
+  return `Repair waits until Crew's runs on this PC finish. ${active} ${active === 1 ? 'run is' : 'runs are'} still going.`;
+}
+
 export interface SetupServiceDeps {
   check(): Promise<WslCheck>;
   start(): Promise<void>;
   /** The last start or per-run check, or null before the first. */
   gateState(): StepResult | null;
+  /** Crew runs open in BodhiCrew now; Repair never starts under one. */
+  activeRuns(): number;
   setup(onStep: (step: SetupStep, message?: string) => void): Promise<SetupOutcome>;
   repairWsl1(confirm: (prompt: string) => Promise<boolean>): Promise<RepairOutcome>;
   repairUser(): Promise<StepResult>;
@@ -23,9 +29,14 @@ export interface SetupServiceDeps {
 const fail = (message: string, repair: boolean): CrewWindowsSetupResult => ({ ok: false, message, repair });
 
 export class WindowsSetupService {
-  private busy = false;
+  private running = false;
 
   constructor(private readonly deps: SetupServiceDeps) {}
+
+  /** True while setup or Repair runs, so the run gate holds new runs. */
+  get busy(): boolean {
+    return this.running;
+  }
 
   async state(): Promise<CrewWindowsState> {
     const wsl = await this.deps.check();
@@ -44,12 +55,12 @@ export class WindowsSetupService {
   }
 
   private async exclusive<T>(fn: () => Promise<T | CrewWindowsSetupResult>): Promise<T | CrewWindowsSetupResult> {
-    if (this.busy) return fail(REPAIR_BUSY, false);
-    this.busy = true;
+    if (this.running) return fail(REPAIR_BUSY, false);
+    this.running = true;
     try {
       return await fn();
     } finally {
-      this.busy = false;
+      this.running = false;
     }
   }
 
@@ -61,6 +72,8 @@ export class WindowsSetupService {
   }
 
   private async runRepair(confirmed: boolean): Promise<CrewWindowsRepairResult> {
+    const active = this.deps.activeRuns();
+    if (active > 0) return fail(repairWaits(active), true);
     const wsl = await this.deps.check();
     if (wsl.state === 'no-wsl') return fail(wsl.message, false);
     if (wsl.state === 'missing') return fail(SETUP_NEEDED_MESSAGE, false);

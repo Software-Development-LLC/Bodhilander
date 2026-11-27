@@ -259,6 +259,10 @@ export class WslRuns {
     for (const id of [...this.open.keys()]) this.end(id);
   }
 
+  activeCount(): number {
+    return this.open.size;
+  }
+
   /** The names of TMPDIRs a live run still owns, for the start sweep. */
   liveTmpNames(): Set<string> {
     return new Set([...this.open.values()].flatMap((o) => (o.tmpName ? [o.tmpName] : [])));

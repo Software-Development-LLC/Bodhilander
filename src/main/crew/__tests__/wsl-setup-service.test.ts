@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { CrewWindowsProgress } from '../../../shared/types';
 import { NO_WSL_MESSAGE, REPAIR_BUSY, REPAIR_PROMPT, SETUP_NEEDED_MESSAGE, WSL1_MESSAGE, type RepairOutcome, type WslCheck } from '../wsl';
 import { NEEDS_REPAIR, USER_CONFLICT, type SetupOutcome, type StepResult } from '../wsl-setup';
-import { WindowsSetupService, type SetupServiceDeps } from '../wsl-setup-service';
+import { repairWaits, WindowsSetupService, type SetupServiceDeps } from '../wsl-setup-service';
 
 const held = (message: string): StepResult => ({ ok: false, hold: 'held:setup', message, audit: {} });
 
@@ -12,6 +12,7 @@ function service(over: Partial<SetupServiceDeps> & { wsl?: WslCheck } = {}) {
     check: async () => over.wsl ?? { state: 'ok' },
     start: async () => void calls.push('start'),
     gateState: () => ({ ok: true }),
+    activeRuns: () => 0,
     setup: async (onStep) => (onStep('user'), calls.push('setup'), { ok: true }),
     repairWsl1: async () => (calls.push('repairWsl1'), { result: 'converted' }),
     repairUser: async () => (calls.push('repairUser'), { ok: true }),
@@ -97,6 +98,28 @@ describe('Repair', () => {
     const t = service({ gateState: () => held(USER_CONFLICT) });
     expect(await t.svc.repair(false)).toEqual({ ok: true });
     expect(t.calls).toEqual(['repairUser', 'setup', 'repaired']);
+  });
+
+  test('Repair waits while Crew runs on this PC, saying how many, and changes nothing', async () => {
+    let checked = false;
+    const t = service({ activeRuns: () => 2, check: async () => ((checked = true), { state: 'wsl1', message: WSL1_MESSAGE }) });
+    for (const confirmed of [false, true]) expect(await t.svc.repair(confirmed)).toEqual({ ok: false, message: repairWaits(2), repair: true });
+    expect(repairWaits(2)).toContain("Repair waits until Crew's runs on this PC finish");
+    expect(repairWaits(2)).toContain('2');
+    expect(checked).toBe(false);
+    expect(t.calls).toEqual([]);
+  });
+
+  test('while setup or Repair runs, the service says it is busy so runs are held', async () => {
+    let finish: (o: SetupOutcome) => void = () => {};
+    const t = service({ setup: () => new Promise((r) => (finish = r)) });
+    expect(t.svc.busy).toBe(false);
+    const first = t.svc.repair(false);
+    expect(t.svc.busy).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    finish({ ok: true });
+    await first;
+    expect(t.svc.busy).toBe(false);
   });
 
   test('no WSL or no BodhiCrew is not something Repair fixes', async () => {

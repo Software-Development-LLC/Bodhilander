@@ -120,8 +120,9 @@ export async function wslConfMatches(exec: WslExec): Promise<boolean> {
   return r.code === 0 && normalise(r.stdout) === normalise(WSL_CONF);
 }
 
-/** Written whole, then the distro is terminated so it takes effect; that stops only Crew's own runs. */
+/** Written whole, then the distro is terminated so it takes effect; a file already right is left alone. */
 export async function writeWslConf(exec: WslExec): Promise<StepResult> {
+  if (await wslConfMatches(exec)) return { ok: true };
   const w = await exec(asRoot('sh', '-c', 'cat > /etc/wsl.conf.crew && mv -f /etc/wsl.conf.crew /etc/wsl.conf'), { input: WSL_CONF });
   if (w.code !== 0) return hold(NEEDS_REPAIR, { step: 'wsl-conf', error: firstLine(w.stderr) });
   await exec(['--terminate', DISTRO]);

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ArtifactError, IMAGE_MISMATCH, type CrewVersions } from '../artifacts';
 import {
-  InstallLock, LINK_REFUSED, NEEDS_REPAIR, USER_CONFLICT, WSL_CONF, checkInterop, classifyUser, interopRefused, machineCheck, parsePasswd, repairUser, runSetup, setupUser,
+  InstallLock, LINK_REFUSED, NEEDS_REPAIR, USER_CONFLICT, WSL_CONF, checkInterop, classifyUser, writeWslConf, interopRefused, machineCheck, parsePasswd, repairUser, runSetup, setupUser,
   type SetupDeps, type SetupStep,
 } from '../wsl-setup';
 import type { WslExec, WslResult } from '../wsl';
@@ -217,6 +217,22 @@ describe('the setup order', () => {
     expect(useradd).toBeGreaterThanOrEqual(0);
     expect(useradd).toBeLessThan(conf);
     expect(lines[conf + 1]).toBe('--terminate BodhiCrew');
+  });
+
+  test('a wsl.conf that is already right is neither rewritten nor followed by a terminate', async () => {
+    const d = new FakeDistro();
+    d.wslConf = WSL_CONF;
+    expect(await writeWslConf(d.exec)).toEqual({ ok: true });
+    expect(d.calls.some((c) => c.join(' ').includes('/etc/wsl.conf.crew'))).toBe(false);
+    expect(d.calls.some((c) => c[0] === '--terminate')).toBe(false);
+  });
+
+  test('a wrong wsl.conf is rewritten and the distro terminated once', async () => {
+    const d = new FakeDistro();
+    d.wslConf = '[user]\ndefault=root\n';
+    expect(await writeWslConf(d.exec)).toEqual({ ok: true });
+    expect(d.wslConf).toBe(WSL_CONF);
+    expect(d.calls.filter((c) => c[0] === '--terminate')).toEqual([['--terminate', 'BodhiCrew']]);
   });
 
   test('wsl.conf turns interop off and makes crew the default user', () => {
