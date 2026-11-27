@@ -1,8 +1,6 @@
 /**
- * The main-process side of `crew-agent`: one per run inside BodhiCrew, over
- * its stdio. It serves the run's gateway sockets in the run-private directory
- * and relays each connection here; `exec-run` starts the run's claude with the
- * Crew token on descriptor 3, so the token never crosses wsl.exe's argv or WSLENV.
+ * The main-process side of `crew-agent`, one per run inside BodhiCrew: it relays the run's
+ * gateway sockets here, and `exec-run` puts the Crew token on descriptor 3, never in argv or WSLENV.
  */
 import type { Duplex } from 'stream';
 import type { PreparedRun } from './run/loop';
@@ -16,7 +14,7 @@ const WINDOWS_KEPT = ['SystemRoot', 'SYSTEMROOT', 'windir', 'SystemDrive', 'PATH
 
 export function windowsEnv(parent: Record<string, string | undefined> = process.env): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const k of WINDOWS_KEPT) if (parent[k] !== undefined) env[k] = parent[k] as string;
+  for (const k of WINDOWS_KEPT) if (parent[k] !== undefined) env[k] = parent[k];
   return env;
 }
 

@@ -89,13 +89,15 @@ function forgetTaintedSession(db: Database.Database, hireId: string, threadKey: 
   })();
 }
 
+/** A Windows run never runs natively: it waits on BodhiCrew's check, then is prepared inside WSL2. */
+async function prepareWindowsRun(windows: WindowsRuns | undefined, job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
+  const hold = windows ? await windows.gate() : HOLD_SETUP;
+  if (hold) return { hold };
+  return windows?.prepare ? windows.prepare(job, threadKey, runId) : { hold: HOLD_SETUP };
+}
+
 export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: string, runId: string): Promise<Prepared> {
-  // A Windows run never runs natively: it waits on BodhiCrew's check, then is prepared inside WSL2.
-  if ((deps.platform ?? process.platform) === 'win32') {
-    const hold = deps.windows ? await deps.windows.gate() : HOLD_SETUP;
-    if (hold) return { hold };
-    return deps.windows?.prepare ? deps.windows.prepare(job, threadKey, runId) : { hold: HOLD_SETUP };
-  }
+  if ((deps.platform ?? process.platform) === 'win32') return prepareWindowsRun(deps.windows, job, threadKey, runId);
   const now = deps.now?.() ?? Date.now();
   const ref = hireAccountRef(deps.db, job.hireId);
   const account = ref ? resolveAccountRef(ref, deps.accounts()) : null;

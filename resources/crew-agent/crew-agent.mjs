@@ -4,6 +4,7 @@
 //   serve     the run's gateway sockets, relayed over stdio as JSON lines
 //   exec-run  starts claude with the Crew token on descriptor 3
 import { spawn } from 'node:child_process';
+import { randomInt } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
@@ -42,7 +43,7 @@ function makeRunDir(root, name) {
       return dir;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
-      name += BASE32[Math.floor(Math.random() * 32)];
+      name += BASE32[randomInt(32)];
     }
   }
   return null;

@@ -221,11 +221,9 @@ export class InstallLock {
   private running: Promise<boolean> | null = null;
 
   run(install: () => Promise<boolean>): Promise<boolean> {
-    if (!this.running) {
-      this.running = install().finally(() => {
-        this.running = null;
-      });
-    }
+    this.running ??= install().finally(() => {
+      this.running = null;
+    });
     return this.running;
   }
 }

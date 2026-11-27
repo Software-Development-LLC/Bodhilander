@@ -133,54 +133,62 @@ async function nextUrl(deps: DownloadDeps, name: string, used: number): Promise<
  * earlier attempt at the same blob is resumed with `Range` and re-hashed.
  * A mismatch deletes the file.
  */
+interface Progress {
+  hash: ReturnType<typeof createHash>;
+  received: number;
+}
+
+async function rehashPartial(deps: DownloadDeps, file: string): Promise<Progress> {
+  const p: Progress = { hash: createHash('sha256'), received: 0 };
+  if ((deps.fs.size(file) ?? 0) === 0) return p;
+  for await (const chunk of deps.fs.read(file)) {
+    p.hash.update(chunk);
+    p.received += chunk.length;
+  }
+  return p;
+}
+
+/** 'done' when the blob is whole, 'renew' when the URL must be replaced; throws on any other failure. */
+async function fetchOnce(deps: DownloadDeps, file: string, url: string, expiresAt: number, p: Progress): Promise<'done' | 'renew'> {
+  let answer: HttpAnswer;
+  try {
+    answer = await deps.get(url, p.received);
+  } catch {
+    throw new ArtifactError('download', IMAGE_DOWNLOAD_FAILED);
+  }
+  if (answer.status === 403) return 'renew';
+  if (answer.status === 416 && p.received > 0) return 'done';
+  if (answer.status === 200 && p.received > 0) {
+    deps.fs.truncate(file);
+    p.hash = createHash('sha256');
+    p.received = 0;
+  }
+  if (answer.status !== 200 && answer.status !== 206) throw new ArtifactError('download', IMAGE_DOWNLOAD_FAILED);
+  try {
+    for await (const chunk of answer.body) {
+      p.hash.update(chunk);
+      deps.fs.append(file, chunk);
+      p.received += chunk.length;
+      deps.onProgress?.(p.received);
+    }
+    return 'done';
+  } catch {
+    if (deps.now() < expiresAt) throw new ArtifactError('download', IMAGE_DOWNLOAD_FAILED);
+    return 'renew';
+  }
+}
+
 export async function downloadArtifact(deps: DownloadDeps, spec: DownloadSpec): Promise<string> {
   if (!validArtifactName(spec.name) || !isPinnedSha(spec.sha256)) throw new ArtifactError('unavailable', IMAGE_UNAVAILABLE);
-  let hash = createHash('sha256');
-  let received = 0;
-  if ((deps.fs.size(spec.file) ?? 0) > 0) {
-    for await (const chunk of deps.fs.read(spec.file)) {
-      hash.update(chunk);
-      received += chunk.length;
-    }
-  }
+  const progress = await rehashPartial(deps, spec.file);
   let urls = 0;
   let current = await nextUrl(deps, spec.name, urls++);
   for (;;) {
-    if (deps.now() >= current.expiresAt) {
-      current = await nextUrl(deps, spec.name, urls++);
-      continue;
-    }
-    let answer: HttpAnswer;
-    try {
-      answer = await deps.get(current.url, received);
-    } catch {
-      throw new ArtifactError('download', IMAGE_DOWNLOAD_FAILED);
-    }
-    if (answer.status === 403) {
-      current = await nextUrl(deps, spec.name, urls++);
-      continue;
-    }
-    if (answer.status === 416 && received > 0) break;
-    if (answer.status === 200 && received > 0) {
-      deps.fs.truncate(spec.file);
-      hash = createHash('sha256');
-      received = 0;
-    }
-    if (answer.status !== 200 && answer.status !== 206) throw new ArtifactError('download', IMAGE_DOWNLOAD_FAILED);
-    try {
-      for await (const chunk of answer.body) {
-        hash.update(chunk);
-        deps.fs.append(spec.file, chunk);
-        received += chunk.length;
-        deps.onProgress?.(received);
-      }
-      break;
-    } catch {
-      if (deps.now() < current.expiresAt) throw new ArtifactError('download', IMAGE_DOWNLOAD_FAILED);
-      current = await nextUrl(deps, spec.name, urls++);
-    }
+    const step = deps.now() >= current.expiresAt ? 'renew' : await fetchOnce(deps, spec.file, current.url, current.expiresAt, progress);
+    if (step === 'done') break;
+    current = await nextUrl(deps, spec.name, urls++);
   }
-  if (hash.digest('hex') !== spec.sha256) {
+  if (progress.hash.digest('hex') !== spec.sha256) {
     deps.fs.remove(spec.file);
     throw new ArtifactError('mismatch', IMAGE_MISMATCH);
   }

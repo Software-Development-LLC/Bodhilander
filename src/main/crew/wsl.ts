@@ -150,7 +150,11 @@ function importArgs(installDir: string, tar: string): string[] {
 function nextBackupPath(deps: RepairDeps): string {
   const base = backupName(deps.now()).replace(/\.tar$/, '');
   let candidate = path.win32.join(deps.backupDir, `${base}.tar`);
-  for (let i = 2; deps.exists(candidate); i += 1) candidate = path.win32.join(deps.backupDir, `${base}-${i}.tar`);
+  let i = 2;
+  while (deps.exists(candidate)) {
+    candidate = path.win32.join(deps.backupDir, `${base}-${i}.tar`);
+    i += 1;
+  }
   return candidate;
 }
 
