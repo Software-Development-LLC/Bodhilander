@@ -88,6 +88,12 @@ describe('reads denied by default on macOS', () => {
     expect(s.sandbox.filesystem.denyWrite).toContain(paths.git);
   });
 
+  test('Bash cannot read run/ even where userData is outside every default deny', () => {
+    const linux = hirePaths('/home/b/.config/Bodhilander', 'h1');
+    const s = buildRunSettings({ ...input('owner'), paths: linux, userData: '/home/b/.config/Bodhilander', home: '/home/b' });
+    expect(s.sandbox.filesystem.denyRead).toContain(linux.run);
+  });
+
   test('a circle run re-opens circle and clones, never owner, and writes circle only', () => {
     const s = buildRunSettings({ ...input('circle'), clones: ['/ud/crew/h1/clones/app'] });
     expect(s.sandbox.filesystem.allowRead).toEqual([paths.circle, '/ud/crew/h1/clones/app', paths.skills, paths.shell, paths.ghConfig, paths.git]);

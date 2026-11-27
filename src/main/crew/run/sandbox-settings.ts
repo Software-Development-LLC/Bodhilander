@@ -132,7 +132,7 @@ export function buildRunSettings(input: SandboxInput): RunSettings {
   const allowRead = macAllowRead(input);
   const clash = named.find((d) => allowRead.some((a) => isUnder(d, a)));
   if (clash) throw new Error(`a named deny sits under a re-opened path: ${clash}`);
-  const denyRead = [...new Set([...MAC_DEFAULT_DENY, ...named])];
+  const denyRead = [...new Set([...MAC_DEFAULT_DENY, ...named, paths.run])];
   const crewDir = path.join(input.userData, 'crew');
   const otherHires = input.crewEntries.map((n) => path.join(crewDir, n)).filter((p) => p !== paths.root);
   const accounts = [...new Set([input.configDir, ...input.accountDirs])];
