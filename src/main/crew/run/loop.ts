@@ -84,6 +84,8 @@ export interface RunLoopDeps {
   onSettled?(jobId: string, outcome: RunOutcome): void;
   /** Once per distinct hold of a hire, so the Hub can show it and route the hire's work elsewhere. */
   onHeld?(hireId: string, hold: string): void;
+  /** A run of the hire got past every hold and is about to start. */
+  onUnheld?(hireId: string): void;
   /** A run held on an undecided card parks on an interrupt instead of being re-queued. */
   waitingOnCard?(jobId: string): boolean;
   now?(): number;
@@ -225,6 +227,7 @@ export class RunLoop {
       return 'held';
     }
     this.holds.delete(job.hireId);
+    this.deps.onUnheld?.(job.hireId);
     record();
     run.prepared = prepared;
     db.prepare(`UPDATE crew_run SET account_id = ?, session_id = ? WHERE id = ?`).run(prepared.accountId, prepared.sessionId, run.runId);

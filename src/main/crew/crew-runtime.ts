@@ -13,7 +13,7 @@ import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
 import type { Holds } from './holds';
 import type { UsageInput } from './hub-client';
-import { isMoveRaisedHere, moveDecided, type HomeDeps } from './home';
+import { hireBody, isMoveRaisedHere, moveDecided, type HomeDeps } from './home';
 import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame, Unstamped } from './protocol';
 import { HOLD_STATES } from './protocol';
 import { ERROR_REPLY, RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
@@ -86,6 +86,8 @@ function within(done: Promise<void>, ms: number): Promise<boolean> {
   });
 }
 
+const isAutomaticHold = (state: unknown): boolean => (HOLD_STATES as readonly unknown[]).includes(state);
+
 /** The crash cap runs before the Hub client exists, so its error replies are owed and sent here. */
 export function replyForCrashCapped(db: Database.Database, reply: (jobId: string, text: string) => boolean): void {
   const owed = db.prepare(`SELECT id FROM crew_job WHERE state = 'dead' AND reply_owed = 1`).all() as { id: string }[];
@@ -103,6 +105,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     return row?.kind === 'message' ? { inboundId: jobId } : {};
   };
   let loop: RunLoop | null = null;
+  const reportedHold = new Map<string, string>();
   const broker = new ApproveBroker({
     db: deps.db,
     raiseCard: (jobId, raiseId, raise) => deps.hub.sendCard(jobId, { id: raiseId, ...raise, ...inboundOf(jobId) }),
@@ -131,7 +134,14 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       deps.hub.sendUsage(run.job.id, usageRecordFor(run, uuid, deps.usage.get(run.accountId)));
     },
     onHeld: (hireId, hold) => {
-      if ((HOLD_STATES as readonly string[]).includes(hold)) deps.hub.sendAudit('hold', { state: hold }, hireId);
+      if (!isAutomaticHold(hold)) return;
+      deps.hub.sendAudit('hold', { state: hold }, hireId);
+      reportedHold.set(hireId, hold);
+    },
+    onUnheld: (hireId) => {
+      if (!isAutomaticHold(reportedHold.get(hireId) ?? hireBody(deps.db, hireId)?.state)) return;
+      guard('reporting a hold release', () => deps.hub.sendAudit('hold', { state: 'active' }, hireId));
+      reportedHold.set(hireId, 'active');
     },
     onSettled: (jobId, outcome) => {
       broker.release(jobId, outcome);

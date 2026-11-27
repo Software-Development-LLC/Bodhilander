@@ -203,6 +203,68 @@ describe('crew runtime', () => {
     expect(t.hub.audits).toEqual([['hold', { state: 'held:setup' }, HIRE]]);
   });
 
+  test('a signed-out hire that recovers tells the Hub it is active once; a repeat check sends nothing', async () => {
+    let hold: string | null = 'held:signed-out';
+    const run: Prepared = { command: 'claude', args: [], cwd: '/', env: {}, input: 'hi', accountId: 'a1', sessionId: null, token: null };
+    const t = setup({ prepare: async () => (hold ? { hold } : run) });
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    hold = null;
+    t.hub.emit('job', {});
+    await flush();
+    t.children[0].finish();
+    await flush();
+    t.job(2);
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.children).toHaveLength(2);
+    expect(t.hub.audits).toEqual([
+      ['hold', { state: 'held:signed-out' }, HIRE],
+      ['hold', { state: 'active' }, HIRE],
+    ]);
+  });
+
+  test('one automatic hold giving way to another reports only the new one', async () => {
+    let hold = 'held:signed-out';
+    const t = setup({ prepare: async () => ({ hold }) });
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    hold = 'held:rate-limited';
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.hub.audits).toEqual([
+      ['hold', { state: 'held:signed-out' }, HIRE],
+      ['hold', { state: 'held:rate-limited' }, HIRE],
+    ]);
+  });
+
+  test('a run for a hire the Hub does not hold automatically sends no hold audit', async () => {
+    const t = setup();
+    t.db.prepare(`INSERT INTO crew_hire_cache (hire_id, rev, epoch, data) VALUES (?, 1, 1, ?)`).run(HIRE, JSON.stringify({ state: 'held:no-home' }));
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.children).toHaveLength(1);
+    expect(t.hub.audits).toEqual([]);
+  });
+
+  test('a hire the Hub last showed automatically held is reported active by its first run after a restart', async () => {
+    const t = setup();
+    t.db.prepare(`INSERT INTO crew_hire_cache (hire_id, rev, epoch, data) VALUES (?, 1, 1, ?)`).run(HIRE, JSON.stringify({ state: 'held:signed-out' }));
+    t.job(1);
+    t.hub.emit('job', {});
+    await flush();
+    t.children[0].finish();
+    await flush();
+    t.job(2);
+    t.hub.emit('job', {});
+    await flush();
+    expect(t.children).toHaveLength(2);
+    expect(t.hub.audits).toEqual([['hold', { state: 'active' }, HIRE]]);
+  });
+
   test('a renewal starts a job that was waiting for its lease', async () => {
     const t = setup();
     t.hub.leased = false;
