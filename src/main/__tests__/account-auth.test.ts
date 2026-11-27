@@ -274,6 +274,27 @@ describe('resumeLoginFlow — signing in to an account that already exists', () 
 
     expect(storedEmail(id)).toBe('will@example.com');
   });
+
+  test('a verified login tells the sign-in hook; an unverified one does not', () => {
+    const signedIn: string[] = [];
+    accountAuth.setLoginCompletedHook((accountId) => signedIn.push(accountId));
+    try {
+      const pty = fakePtyManager();
+      const { id, configDir } = restoredAccount();
+      const first = accountAuth.resumeLoginFlow(pty, null, id);
+      accountAuth.confirmLoginMacOS(null, first.ptyId);
+      expect(signedIn).toEqual([]);
+      accountAuth.cancelLoginFlow(pty, first.ptyId, false);
+
+      const again = accountAuth.resumeLoginFlow(pty, null, id);
+      writeConfigFile(configDir, '.claude.json', { oauthAccount: { accountUuid: 'u-1', emailAddress: 'will@example.com' } });
+      accountAuth.confirmLoginMacOS(null, again.ptyId);
+      expect(signedIn).toEqual([id]);
+      accountAuth.cancelLoginFlow(pty, again.ptyId, false);
+    } finally {
+      accountAuth.setLoginCompletedHook(null);
+    }
+  });
 });
 
 function storedEmail(id: string): string | null {

@@ -42,6 +42,7 @@ mock.module('better-sqlite3', () => ({ default: MemoryDb }));
 mock.module('sodium-native', () => ({ default: stub }));
 mock.module('../crew/crew-main', () => ({
   startCrew: () => calls.push('start'),
+  crewRecordSignIn: () => calls.push('signed-in'),
   stopCrew: () => calls.push('stop'),
 }));
 

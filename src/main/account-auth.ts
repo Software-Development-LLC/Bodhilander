@@ -34,6 +34,13 @@ interface LoginFlow {
 
 const activeFlows = new Map<string, LoginFlow>();
 
+let loginCompletedHook: ((accountId: string) => void) | null = null;
+
+/** Told of every login main found on disk, so Crew can lift a sign-in hold. */
+export function setLoginCompletedHook(fn: ((accountId: string) => void) | null): void {
+  loginCompletedHook = fn;
+}
+
 /**
  * Swatch colours handed to new accounts, in order (#165). The same family the
  * sidebar offers for groups, so the two kinds of dot look like one system.
@@ -247,6 +254,12 @@ function handleLoginCompleted(
     verified: loggedIn === true,
   });
   log.info(`[Accounts] Login completed for ${flow.accountId}${email ? ` (${email})` : ''}`);
+  if (loggedIn !== true) return;
+  try {
+    loginCompletedHook?.(flow.accountId);
+  } catch (err) {
+    log.warn(`[Accounts] The login-completed hook failed for ${flow.accountId}:`, err);
+  }
 }
 
 /**

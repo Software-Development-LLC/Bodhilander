@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
-import { startCrew, stopCrew } from './crew/crew-main';
+import { crewRecordSignIn, startCrew, stopCrew } from './crew/crew-main';
+import { registerCrewIpc } from './crew/crew-ipc';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1075,6 +1076,13 @@ safeHandle('accounts:resumeLogin', (accountId: string) => {
   const id = (accountId ?? '').toString().trim();
   if (!id) throw new Error('Account id is required');
   return accountAuth.resumeLoginFlow(ptyManager, mainWindow, id);
+});
+
+registerCrewIpc({
+  handle: safeHandle,
+  resumeLogin: (accountId) => accountAuth.resumeLoginFlow(ptyManager, mainWindow, accountId),
+  recordSignIn: (accountId) => crewRecordSignIn(accountId),
+  setLoginCompletedHook: accountAuth.setLoginCompletedHook,
 });
 
 safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {

@@ -177,6 +177,12 @@ export function stopCrew(): void {
   stopCrewHub();
 }
 
+/** A fresh login for the account: its auth-failure hold lifts and held runs try again. */
+export function crewRecordSignIn(accountId: string, now = Date.now()): void {
+  new CrewSignIn(getDatabase(), safeStorage).recordSignIn(accountId, now);
+  if (runtime) void runtime.loop.tick();
+}
+
 export function crewRuntime(): CrewRuntime | null {
   return getCrewHub() ? runtime : null;
 }
