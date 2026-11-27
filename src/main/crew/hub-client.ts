@@ -40,6 +40,7 @@ import {
   type SyncPageFrame,
   type SyncPullFrame,
   type TokenRequestFrame,
+  type ArtifactRequestFrame,
   type UsageRecordFrame,
   type WelcomeFrame,
 } from './protocol';
@@ -632,6 +633,14 @@ export class HubClient extends EventEmitter {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp || this.phase !== 'open') return false;
     const frame: TokenRequestFrame = { type: 'token_request', id, hireId: stamp.hireId, epoch: stamp.epoch, requestedBy, repos };
+    this.send(frame);
+    return true;
+  }
+
+  /** A download URL for a crew-artifacts blob; live only, answered as an `artifact` or `refused` event with this id. */
+  sendArtifactRequest(id: string, name: string): boolean {
+    if (this.phase !== 'open') return false;
+    const frame: ArtifactRequestFrame = { type: 'artifact_request', id, name };
     this.send(frame);
     return true;
   }

@@ -1,0 +1,15 @@
+{
+  "_placeholders": "Every value starting NOT-VERIFIED is a placeholder that no check can pass; setup and Repair refuse until a real SHA-256 replaces it.",
+  "rootfs": {
+    "name": "rootfs/ubuntu-24.04-wsl-amd64.tar.gz",
+    "sha256": "NOT-VERIFIED-rootfs-sha256-placeholder"
+  },
+  "node": {
+    "version": "24.22.3",
+    "file": "node-v24.22.3-linux-x64.tar.xz",
+    "sha256": "NOT-VERIFIED-node-sha256-placeholder"
+  },
+  "claude": { "version": "2.1.332" },
+  "crewAgent": { "version": "1.0.0" },
+  "apt": { "bubblewrap": "0.9.0", "socat": "1.8.0.0" }
+}
