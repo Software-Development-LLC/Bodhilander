@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { CrewHireSummary, CrewLinkView, CrewStatus } from '../../../shared/types';
+import type { CrewEditResult, CrewHireSummary, CrewLinkView, CrewStatus } from '../../../shared/types';
 import { activityText, availabilityText } from '../../store/crew';
 import './Crew.css';
 
@@ -76,12 +76,46 @@ export interface CrewPanelProps extends CrewLinkProps {
   onSelectHire: (hireId: string) => void;
   onOpenCards: () => void;
   onHire?: () => void;
+  unlink?: () => Promise<CrewEditResult>;
 }
 
 const LINKABLE = new Set(['unlinked', 'link-again']);
 
+const CrewUnlink: React.FC<{ unlink: () => Promise<CrewEditResult> }> = ({ unlink }) => {
+  const [confirming, setConfirming] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const go = async () => {
+    setConfirming(false);
+    try {
+      const r = await unlink();
+      setMessage(r.ok ? 'Unlinking this machine. Its hires wait for a new home.' : r.error);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+  return (
+    <div className="crew-link">
+      {confirming ? (
+        <>
+          <button type="button" className="crew-detail__danger" onClick={() => void go()}>
+            Unlink this machine
+          </button>
+          <button type="button" onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button type="button" onClick={() => setConfirming(true)}>
+          Unlink…
+        </button>
+      )}
+      {message && <p className="crew-link__stopped">{message}</p>}
+    </div>
+  );
+};
+
 /** The sidebar's Crew section: whether Crew can be reached, and each hire with its state. */
-export const CrewPanel: React.FC<CrewPanelProps> = ({ status, hires, error, selectedHireId, onSelectHire, onOpenCards, onHire, beginLink, confirmLinkOwner }) => {
+export const CrewPanel: React.FC<CrewPanelProps> = ({ status, hires, error, selectedHireId, onSelectHire, onOpenCards, onHire, beginLink, confirmLinkOwner, unlink }) => {
   const notice = status ? availabilityText(status.availability) : null;
   const online = status?.availability === 'online';
 
@@ -109,6 +143,7 @@ export const CrewPanel: React.FC<CrewPanelProps> = ({ status, hires, error, sele
         </output>
       )}
       {status && LINKABLE.has(status.availability) && <CrewLink beginLink={beginLink} confirmLinkOwner={confirmLinkOwner} />}
+      {online && unlink && <CrewUnlink unlink={unlink} />}
       {hires && hires.length > 0 && (
         <ul className="crew-panel__hires">
           {hires.map((h) => (

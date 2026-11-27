@@ -20,6 +20,8 @@ import type {
   CrewRole,
   CrewRoutine,
   CrewStatus,
+  CrewOfficeEmployees,
+  CrewOfficeImportResult,
 } from '../../shared/types';
 import type { ClaudeAccountRef } from './account-ref';
 import type { HubStatus } from './hub-client';
@@ -247,10 +249,14 @@ export interface CrewIpcDeps extends UsageReadPort {
   hireAccounts(): CrewHireAccount[];
   beginLink(): Promise<CrewLinkView>;
   confirmLinkOwner(isMe: boolean): boolean;
+  officeEmployees(): CrewOfficeEmployees;
+  makeHome(hireId: string): CrewEditResult;
+  unlink(): CrewEditResult;
+  importFromOffice(hireId: string, handle: string): CrewOfficeImportResult;
   now(): number;
 }
 
-const refuse = (error: string): CrewEditResult => ({ ok: false, error });
+const refuse = (error: string): { ok: false; error: string } => ({ ok: false, error });
 
 export function registerCrewIpc(deps: CrewIpcDeps): void {
   const known = (hireId: unknown): hireId is string => typeof hireId === 'string' && hireRows(deps.db(), hireId).length > 0;
@@ -299,4 +305,12 @@ export function registerCrewIpc(deps: CrewIpcDeps): void {
   deps.handle('crew:openCard', (raiseId) => typeof raiseId === 'string' && deps.openCard(raiseId));
   deps.handle('crew:beginLink', () => deps.beginLink());
   deps.handle('crew:confirmLinkOwner', (isMe) => deps.confirmLinkOwner(isMe === true));
+  deps.handle('crew:officeEmployees', () => deps.officeEmployees());
+  deps.handle('crew:makeHome', (hireId) => (known(hireId) ? deps.makeHome(hireId) : refuse('This hire has not synced to this machine yet.')));
+  deps.handle('crew:unlink', () => deps.unlink());
+  deps.handle('crew:importFromOffice', (hireId, handle): CrewOfficeImportResult => {
+    if (!known(hireId)) return refuse('This hire has not synced to this machine yet.');
+    if (typeof handle !== 'string' || !(deps.officeEmployees() ?? []).includes(handle)) return refuse('That Office employee is not on this machine.');
+    return deps.importFromOffice(hireId, handle);
+  });
 }

@@ -11,6 +11,7 @@ import { dropRefusedCard, markCardAcked, recordCardDecision, recordCardRaise } f
 import { EpochFence } from './epoch';
 import { LeaseClock, systemClocks, type Clocks } from './lease';
 import { LocalOutbox } from './local-outbox';
+import { applyNoteResult } from './notes';
 import { assertSendable, cutText, isErrorReason, parseHubFrame, trimTrailingSlashes } from './protocol-parse';
 import { CrewSync, type EditInput } from './sync';
 import {
@@ -35,12 +36,16 @@ import {
   type LeaseRevokedFrame,
   type MachineFrame,
   type RefusedFrame,
+  type NoteWriteFrame,
   type RenewFrame,
+  type RoutineFiredFrame,
   type ReplyFrame,
   type SyncPageFrame,
   type SyncPullFrame,
   type TokenRequestFrame,
   type ArtifactRequestFrame,
+  type MovePayload,
+  type Unstamped,
   type UsageRecordFrame,
   type WelcomeFrame,
 } from './protocol';
@@ -481,9 +486,17 @@ export class HubClient extends EventEmitter {
 
   private onEditResult(frame: EditResultFrame): void {
     const sent = this.outbox.frameOf(frame.id);
-    if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
-    this.sendPull(this.sync.onEditResult(frame, this.clocks.wall(), sent?.type === 'edit' ? sent : null));
-    this.emit('edit-result', frame);
+    try {
+      if (sent?.type === 'note_write') applyNoteResult(this.deps.db, sent, frame);
+      this.sendPull(this.sync.onEditResult(frame, this.clocks.wall(), sent?.type === 'edit' ? sent : null));
+    } catch (err) {
+      log.warn(`[Crew] could not apply edit_result ${frame.id}; the next sync catches up`, err);
+    }
+    try {
+      this.emit('edit-result', frame);
+    } finally {
+      if (!this.outbox.onAck(frame.id)) log.info(`[Crew] edit_result for ${frame.id} matched no edit`);
+    }
   }
 
   private onDeliver(frame: DeliverFrame): void {
@@ -608,7 +621,7 @@ export class HubClient extends EventEmitter {
   }
 
   /** Queue a card raised by a job's run, stamped with the job's epoch. False when fenced or gone. */
-  sendCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+  sendCard(jobId: string, raise: Unstamped<CardRaiseFrame>): boolean {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: CardRaiseFrame = { type: 'card_raise', ...raise, hireId: stamp.hireId, epoch: stamp.epoch };
@@ -617,8 +630,50 @@ export class HubClient extends EventEmitter {
     return queued;
   }
 
+  /** Queue a run's note write, stamped with its job's epoch. False when fenced or gone. */
+  sendNoteWrite(jobId: string, write: Unstamped<NoteWriteFrame>): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: NoteWriteFrame = { type: 'note_write', ...write, hireId: stamp.hireId, epoch: stamp.epoch };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  /** A move card for a hire with no home, raised from this machine at the hire's newest epoch. */
+  sendMoveCard(hireId: string, payload: MovePayload): string | null {
+    const epoch = this.fence.known(hireId);
+    if (epoch === null) return null;
+    const frame: CardRaiseFrame = { type: 'card_raise', id: this.newId(), hireId, epoch, kind: 'move', tainted: false, payload };
+    if (!this.queue(frame, { hireId, epoch })) return null;
+    recordCardRaise(this.deps.db, frame, this.clocks.wall());
+    return frame.id;
+  }
+
+  sendUnlink(machineId: string): boolean {
+    return this.queue({ type: 'unlink', id: this.newId(), machineId }, {});
+  }
+
+  /** An owner/ note written by the owner's own action on this machine, not by a run. */
+  sendOwnerNote(hireId: string, notePath: string, rev: number, content: string): boolean {
+    const epoch = this.fence.known(hireId);
+    if (epoch === null || !notePath.startsWith('owner/')) return false;
+    const frame: NoteWriteFrame = { type: 'note_write', id: this.newId(), hireId, epoch, scope: 'owner', path: notePath, rev, content, deleted: false };
+    return this.queue(frame, { hireId, epoch });
+  }
+
+  /** A routine's job was queued: the Hub moves the routine's lastFired to dueAt and lastRun to startedAt. */
+  sendRoutineFired(jobId: string, routineId: string, dueAt: number, startedAt: number): boolean {
+    const stamp = this.fence.stampFor(jobId);
+    if (!stamp) return false;
+    const frame: RoutineFiredFrame = { type: 'routine_fired', id: derivedUuid(`routine-fired:${jobId}`), hireId: stamp.hireId, epoch: stamp.epoch, routineId, dueAt, startedAt };
+    return this.queue(frame, { hireId: stamp.hireId, epoch: stamp.epoch, jobId });
+  }
+
+  knownEpoch(hireId: string): number | null {
+    return this.fence.known(hireId);
+  }
+
   /** Queue a run's send through the outbox, stamped with its job's epoch. False when fenced or gone. */
-  sendMessage(jobId: string, send: Omit<SendFrame, 'type' | 'hireId' | 'epoch'>): boolean {
+  sendMessage(jobId: string, send: Unstamped<SendFrame>): boolean {
     const stamp = this.fence.stampFor(jobId);
     if (!stamp) return false;
     const frame: SendFrame = { type: 'send', ...send, text: cutText(send.text), hireId: stamp.hireId, epoch: stamp.epoch };

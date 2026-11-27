@@ -1,4 +1,4 @@
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount, CrewOfficeEmployees, CrewOfficeImportResult } from '../shared/types';
 import type { CrewSavedCopy, CrewWindowsProgress, CrewWindowsRepairResult, CrewWindowsSetupResult, CrewWindowsSignInResult, CrewWindowsState } from '../shared/types';
 
 interface ElectronAPI {
@@ -212,6 +212,10 @@ interface ElectronAPI {
   crewGetHireUsage: (hireId: string) => Promise<CrewHireUsage>;
   crewSetDailyCap: (hireId: string, cap: number | null) => Promise<CrewEditResult>;
   crewSetRepos: (hireId: string, repos: string[]) => Promise<CrewEditResult>;
+  crewOfficeEmployees: () => Promise<CrewOfficeEmployees>;
+  crewMakeHome: (hireId: string) => Promise<CrewEditResult>;
+  crewUnlink: () => Promise<CrewEditResult>;
+  crewImportFromOffice: (hireId: string, handle: string) => Promise<CrewOfficeImportResult>;
   crewChangeAccount: (hireId: string, accountId: string) => Promise<CrewEditResult>;
   crewLetGo: (hireId: string) => Promise<CrewEditResult>;
   crewListRoles: () => Promise<CrewRole[]>;

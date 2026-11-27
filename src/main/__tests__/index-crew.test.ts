@@ -47,6 +47,7 @@ mock.module('../crew/crew-main', () => ({
   crewWindowsSetup: () => null,
   stopCrew: () => calls.push('stop'),
   crewRuntime: () => null,
+  crewHomeDeps: () => null,
 }));
 
 describe('the main process', () => {

@@ -12,7 +12,8 @@ const { Holds } = await import('../holds');
 import type { AccountUsage, ClaudeAccount } from '../../../shared/types';
 import type { CrewJob, Prepared, RunChild } from '../run/loop';
 import { RunSlots } from '../run/slots';
-import { HIRE, PERSON, crewDb, uuid } from './crew-db';
+import { SCHEDULE_TICK_MS } from '../schedule/scheduler';
+import { HIRE, MACHINE, PERSON, crewDb, uuid } from './crew-db';
 
 class Child implements RunChild {
   private out: ((l: string) => void)[] = [];
@@ -95,6 +96,41 @@ function setup(over: { prepare?: (job: CrewJob) => Promise<Prepared> } = {}) {
 }
 
 describe('crew runtime', () => {
+  test("a move card's decision goes to the owner, not the approval broker", () => {
+    const t = setup();
+    t.rt.stop();
+    const told: string[] = [];
+    t.db.prepare(`INSERT INTO crew_hire_cache (hire_id, rev, epoch, data) VALUES (?, 1, 1, ?)`).run(HIRE, JSON.stringify({ name: 'Fresh PO', state: 'held:no-home' }));
+    t.db.prepare(`INSERT INTO crew_audit (hire_id, event, detail) VALUES (?, 'move-raised', ?)`).run(HIRE, JSON.stringify({ raiseId: uuid(80) }));
+    const home = { db: t.db, machineId: () => MACHINE, online: () => true, resolve: () => null, signedIn: () => true, raiseMove: () => null, sendUnlink: () => false, tellOwner: (x: string) => void told.push(x) };
+    const rt = startCrewRuntime({ ...t.deps, home });
+    const frame = { type: 'card_decision', id: uuid(81), hireId: HIRE, epoch: 2, raiseId: uuid(80), decision: 'denied', decidedBy: PERSON };
+    t.hub.emit('card-decision', frame);
+    t.hub.emit('card-decision', { ...frame, raiseId: uuid(82) });
+    expect(told).toEqual(['Fresh PO stays without a home machine.']);
+    const ignored = t.db.prepare(`SELECT json_extract(detail, '$.raiseId') AS raise FROM crew_audit WHERE event = 'card-decision-ignored'`).all();
+    expect(ignored).toEqual([{ raise: uuid(82) }]);
+    rt.stop();
+  });
+
+  test('a due routine fires on its timer and starts as a job; stop clears the timer', async () => {
+    const t = setup();
+    t.rt.stop();
+    const fired: string[] = [];
+    t.db.prepare(`INSERT INTO crew_hire_cache (hire_id, rev, epoch, data) VALUES (?, 1, 1, ?)`).run(HIRE, JSON.stringify({ homeMachineId: MACHINE, state: 'active', ownerId: PERSON }));
+    t.db.prepare(`INSERT INTO crew_routine_cache (routine_id, hire_id, rev, data) VALUES (?, ?, 1, ?)`).run(uuid(70), HIRE, JSON.stringify({ hireId: HIRE, cron: '0 12 * * *', timezone: 'UTC', prompt: 'noon', lastFired: null, lastRun: null }));
+    const hub = { routinesHeldForSkew: () => false, clockSkewMs: () => 0, canStart: () => true, knownEpoch: () => 1, sendRoutineFired: (id: string) => (fired.push(id), true) };
+    const rt = startCrewRuntime({ ...t.deps, schedule: { hub, machineId: () => MACHINE, tellOwner: () => {} } });
+    const timer = t.timers.find((x) => x.ms === SCHEDULE_TICK_MS && x.live);
+    expect(timer).toBeDefined();
+    timer?.fn();
+    await flush();
+    expect(fired).toHaveLength(1);
+    expect(t.children).toHaveLength(1);
+    rt.stop();
+    expect(timer?.live).toBe(false);
+  });
+
   test("a replaced runtime's run still holds its hire and slot, and its end lets the new runtime start the next job", async () => {
     const t = setup();
     const slots = new RunSlots(() => 2);

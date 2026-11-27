@@ -94,6 +94,19 @@ function setup(opts: {
 }
 
 describe('run loop', () => {
+  test('messages queued while offline run in delivery order, all before a routine queued ahead of them', async () => {
+    const t = setup();
+    t.job(1, HIRE, 'routine');
+    for (const n of [2, 3, 4]) t.job(n);
+    const order: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      await t.loop.tick();
+      order.push(t.children[i].input ?? '');
+      t.children[i].finish();
+    }
+    expect(order).toEqual(['text 2', 'text 3', 'text 4', 'text 1']);
+  });
+
   test('a queued job runs, and its final result is the reply; the session is kept for the thread', async () => {
     const t = setup();
     t.job(1);

@@ -129,8 +129,13 @@ export class AccountChanger {
     const carried: CarryResult[] = [];
     for (const row of rows) {
       const change = pendingChange(row.value);
-      if (change?.applied) carried.push(this.carry(row.key, change));
-      else if (!change || !queued.get(row.key.slice(PENDING_PREFIX.length))) this.forget(row.key);
+      if (change?.applied) {
+        try {
+          carried.push(this.carry(row.key, change));
+        } catch (err) {
+          log.warn(`[Crew] could not carry sessions for ${change.hireId}; trying again on the next settle`, err);
+        }
+      } else if (!change || !queued.get(row.key.slice(PENDING_PREFIX.length))) this.forget(row.key);
     }
     return carried;
   }

@@ -566,3 +566,6 @@ function fileChunkFits(o: Record<string, unknown>): boolean {
   if (o.index === 0) return head.every(Boolean) && targets === 1 && (o.size as number) <= FILE_MAX_BYTES;
   return !head.some(Boolean) && targets === 0;
 }
+
+/** A machine frame before the outbox stamps it with its hire and epoch. */
+export type Unstamped<F> = Omit<F, 'type' | 'hireId' | 'epoch'>;

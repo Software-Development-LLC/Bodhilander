@@ -109,19 +109,51 @@ function repoViewPlan(argv: string[], rest: string[], repos: readonly string[], 
   return { kind: 'read', args: argv };
 }
 
-export function planGh(argv: string[], repos: readonly string[]): GhPlan {
+const FILTER_FLAGS = new Set(['-q', '--jq', '-t', '--template']);
+const READS_ENV = /\$ENV\b|(^|[^.\w$])env\b|\bgetenv\b/;
+const REPO_ISSUE = /^([\w.-]+\/[\w.-]+)#\d+$/;
+const REPO_NAME = /^[\w.-]+\/[\w.-]+$/;
+const NO_SLASHED_ARGS = new Set(['issue', 'run', 'label']);
+
+/** A repo named in an argument rather than with -R, which gh would read instead. */
+function argumentRepo(group: string, rest: string[]): string | null {
+  if (group === 'search') return null;
+  for (const a of rest) {
+    const m = a.startsWith('-') ? null : REPO_ISSUE.exec(a);
+    if (m) return m[1];
+  }
+  if (!NO_SLASHED_ARGS.has(group)) return null;
+  return positionals(rest).find((a) => REPO_NAME.test(a)) ?? null;
+}
+
+function argvRefusal(argv: string[]): GhPlan | null {
   if (argv.some((a) => GROUPED_SHORT.test(a))) return { kind: 'refused', why: 'Give each short flag on its own, with its value as the next argument.' };
+  if (flagValues(argv, FILTER_FLAGS).some((f) => READS_ENV.test(f))) return { kind: 'refused', why: 'A --jq or --template filter cannot read the environment.' };
+  return null;
+}
+
+function readShapeRefusal(group: string, rest: string[]): GhPlan | null {
+  if (rest.some((a) => a === '--web' || (a === '-w' && group !== 'run'))) return { kind: 'refused', why: 'A run cannot open a browser.' };
+  if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
+  return null;
+}
+
+export function planGh(argv: string[], repos: readonly string[]): GhPlan {
+  const refusal = argvRefusal(argv);
+  if (refusal) return refusal;
   const [group, sub, ...rest] = argv;
   if (group === 'api') return planApi(argv.slice(1), repos);
   if (!group || !(group in READS)) return { kind: 'write' };
   if (!sub || !READS[group].includes(sub)) return { kind: 'write' };
-  if (rest.some((a) => a === '-w' || a === '--web')) return { kind: 'refused', why: 'A run cannot open a browser.' };
+  const shape = readShapeRefusal(group, rest);
+  if (shape) return shape;
   const named = flagValues(rest, REPO_FLAGS);
   if (named.length > 1) return { kind: 'refused', why: 'Name one repo with -R.' };
   const repo = { value: named[0] ?? null };
   if (repo.value !== null && !repos.includes(repo.value.toLowerCase())) return { kind: 'refused', why: `${repo.value} is not one of this hire's repos.` };
-  if (group !== 'search' && rest.some((a) => /:\/\/|github\.com/i.test(a))) return { kind: 'refused', why: 'Name the issue or PR by number, not by URL.' };
   if (group === 'repo') return repoViewPlan(argv, rest, repos, repo.value);
+  const inArgs = argumentRepo(group, rest);
+  if (inArgs !== null && !repos.includes(inArgs.toLowerCase())) return { kind: 'refused', why: `${inArgs} is not one of this hire's repos.` };
   if (rest.some((a) => SEARCH_SCOPE.test(a))) return { kind: 'refused', why: 'Search names repos with --repo, never a qualifier.' };
   if (group === 'search') {
     if (rest.some((a) => a === '--owner' || a.startsWith('--owner='))) return { kind: 'refused', why: 'Search names repos with --repo, never --owner.' };

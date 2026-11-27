@@ -13,10 +13,12 @@ import { ApproveBroker } from './approve/broker';
 import type { CrewSignIn, Reminder } from './crew-token';
 import type { Holds } from './holds';
 import type { UsageInput } from './hub-client';
-import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame } from './protocol';
+import { isMoveRaisedHere, moveDecided, type HomeDeps } from './home';
+import type { CardDecisionFrame, CardRaiseFrame, EditResultFrame, Unstamped } from './protocol';
 import { HOLD_STATES } from './protocol';
 import { RunLoop, spawnRun, type CrewJob, type Prepared, type RunChild, type PreparedRun } from './run/loop';
 import { RunSlots } from './run/slots';
+import { RoutineScheduler, SCHEDULE_TICK_MS, type SchedulerHub } from './schedule/scheduler';
 import type { EditInput } from './sync';
 import { mergeRunObservation, usageRecordFor } from './usage-report';
 
@@ -28,7 +30,7 @@ export interface CrewHubPort extends Pick<EventEmitter, 'on' | 'off'> {
   sendUsage(jobId: string, usage: UsageInput): boolean;
   sendAudit(event: string, detail: Record<string, unknown>, hireId?: string): string;
   sendEdit(input: EditInput): string;
-  sendCard(jobId: string, raise: Omit<CardRaiseFrame, 'type' | 'hireId' | 'epoch'>): boolean;
+  sendCard(jobId: string, raise: Unstamped<CardRaiseFrame>): boolean;
 }
 
 export interface CrewRuntimeDeps {
@@ -54,6 +56,10 @@ export interface CrewRuntimeDeps {
   now?(): number;
   setInterval?(fn: () => void, ms: number): unknown;
   clearInterval?(handle: unknown): void;
+  /** Routines fire only where this is given: the Hub client, this machine's id, and a way to tell the owner. */
+  schedule?: { hub: SchedulerHub; machineId(): string | null; tellOwner(text: string): void };
+  /** Tells the owner how a move card raised here was decided. */
+  home?: HomeDeps;
 }
 
 export interface CrewRuntime {
@@ -64,6 +70,7 @@ export interface CrewRuntime {
   /** Interrupts the hire's run and resolves once it has exited, killing it after the grace period. */
   stopHire(hireId: string, graceMs?: number): Promise<void>;
   checkReminders(): number;
+  scheduler: RoutineScheduler | null;
   stop(): void;
 }
 
@@ -146,6 +153,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
   const onEditResult = (frame: EditResultFrame): void => guard('carrying sessions', () => changer.onEditResult(frame));
   /** Not guarded: a decision that throws reaches the Hub client, which leaves it unacked to come again. */
   const onCardDecision = (frame: CardDecisionFrame): void => {
+    if (deps.home && isMoveRaisedHere(deps.db, frame)) return moveDecided(deps.home, frame);
     if (broker.decide(frame) === 'job') void tick();
   };
   const onCardRefused = (raiseId: string): void => guard('a refused card', () => broker.refused(raiseId));
@@ -181,10 +189,17 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     ['card-decision', onCardDecision],
     ['card-refused', onCardRefused],
   ];
-  for (const [event, fn] of listeners) deps.hub.on(event, fn);
-  settle();
   const setInt = deps.setInterval ?? ((fn: () => void, ms: number) => setInterval(fn, ms));
   const clearInt = deps.clearInterval ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
+  const schedule = deps.schedule;
+  const scheduler = schedule
+    ? new RoutineScheduler({ db: deps.db, hub: schedule.hub, machineId: schedule.machineId, tellOwner: schedule.tellOwner, queued: () => void tick(), now })
+    : null;
+  const fireRoutines = () => guard('firing routines', () => scheduler?.tick());
+  if (scheduler) listeners.push(['renewed', fireRoutines]);
+  const scheduleTimer = scheduler ? setInt(fireRoutines, SCHEDULE_TICK_MS) : null;
+  for (const [event, fn] of listeners) deps.hub.on(event, fn);
+  settle();
   const reminderTimer = setInt(() => {
     checkReminders();
   }, REMINDER_CHECK_MS);
@@ -204,8 +219,10 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
       await within(runLoop.whenIdle(hireId), graceMs);
     },
     checkReminders,
+    scheduler,
     stop: () => {
       clearInt(reminderTimer);
+      if (scheduleTimer !== null) clearInt(scheduleTimer);
       for (const [event, fn] of listeners) deps.hub.off(event, fn);
       runLoop.stop();
       broker.stop();

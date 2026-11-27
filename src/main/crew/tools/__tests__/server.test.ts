@@ -15,22 +15,70 @@ function setup(scope: 'owner' | 'circle' = 'owner') {
   raw.query(`INSERT INTO crew_note (note_id, hire_id, scope, path, body) VALUES ('n1', ?, 'owner', 'plan.md', 'owner text'), ('n2', ?, 'shared', 'team.md', 'shared text')`).run(HIRE, HIRE);
   const cards: [string, Record<string, unknown>][] = [];
   const sends: [string, Record<string, unknown>][] = [];
+  const notes: [string, Record<string, unknown>][] = [];
   let ids = 0;
   const tools = crewTools(
     {
       db,
       raiseCard: (jobId, raise) => (cards.push([jobId, raise as unknown as Record<string, unknown>]), true),
       sendMessage: (jobId, send) => (sends.push([jobId, send as unknown as Record<string, unknown>]), true),
+      writeNote: (jobId, write) => (notes.push([jobId, write as unknown as Record<string, unknown>]), true),
       newId: () => uuid(50 + ++ids),
     },
     { id: uuid(1), hireId: HIRE, scope },
     `chat:${scope}`,
   );
   const text = async (name: string, args: Record<string, unknown>) => (await tools.call(name, args)).content[0].text;
-  return { raw, db, tools, cards, sends, text };
+  return { raw, db, tools, cards, sends, notes, text };
 }
 
 describe('Crew tools', () => {
+  test('note_write sends the prefixed path at the cached rev, 0 for a new note, under the run scope', async () => {
+    const t = setup();
+    t.raw.query(`UPDATE crew_note SET rev = 4 WHERE note_id = 'n1'`).run();
+    expect(await t.text('note_write', { path: 'owner/plan.md', content: 'new plan' })).toContain('Saved');
+    await t.tools.call('note_write', { path: 'shared/fresh.md', content: 'hello' });
+    await t.tools.call('note_write', { path: 'shared/team.md', deleted: true });
+    expect(t.notes).toEqual([
+      [uuid(1), { id: uuid(51), scope: 'owner', path: 'owner/plan.md', rev: 4, content: 'new plan', deleted: false, inboundId: uuid(1) }],
+      [uuid(1), { id: uuid(52), scope: 'owner', path: 'shared/fresh.md', rev: 0, content: 'hello', deleted: false, inboundId: uuid(1) }],
+      [uuid(1), { id: uuid(53), scope: 'owner', path: 'shared/team.md', rev: 0, content: '', deleted: true, inboundId: uuid(1) }],
+    ]);
+    expect(t.cards).toEqual([]);
+  });
+
+  test('note_write refuses a bad path, a missing body, and an owner note from a circle run', async () => {
+    const t = setup('circle');
+    for (const path of ['plan.md', 'owner/', 'shared/../x', 'shared/./x', 'shared/a\\b', 'shared//x', 'other/x']) {
+      expect((await t.tools.call('note_write', { path, content: 'x' })).isError).toBe(true);
+    }
+    expect((await t.tools.call('note_write', { path: 'shared/x' })).isError).toBe(true);
+    expect((await t.tools.call('note_write', { path: 'owner/plan.md', content: 'x' })).isError).toBe(true);
+    const audits = t.raw.query(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'note-scope-refused'`).get() as { n: number };
+    expect(audits.n).toBe(1);
+    expect(t.notes).toEqual([]);
+    await t.tools.call('note_write', { path: 'shared/team.md', content: 'circle may' });
+    expect(t.notes[0][1]).toMatchObject({ scope: 'circle', path: 'shared/team.md' });
+  });
+
+  test('a shared note change from a tainted run is a note_patch card carrying the note as the run started', async () => {
+    const t = setup();
+    const ownerFirst = setup();
+    t.raw.query(`UPDATE crew_note SET body = 'changed by sync', rev = 3 WHERE note_id = 'n2'`).run();
+    markTainted(t.db, HIRE, 'chat:owner', 'web_fetch');
+    expect(await t.text('note_write', { path: 'shared/team.md', content: 'patched' })).toContain('owner decides');
+    await t.tools.call('note_write', { path: 'shared/new.md', content: 'fresh' });
+    expect(t.cards.map(([, c]) => c)).toEqual([
+      { id: uuid(51), kind: 'note_patch', tainted: true, payload: { path: 'shared/team.md', rev: 0, baseContent: 'shared text', newContent: 'patched' }, inboundId: uuid(1) },
+      { id: uuid(52), kind: 'note_patch', tainted: true, payload: { path: 'shared/new.md', rev: 0, baseContent: '', newContent: 'fresh' }, inboundId: uuid(1) },
+    ]);
+    expect(t.notes).toEqual([]);
+    markTainted(ownerFirst.db, HIRE, 'chat:owner', 'web_fetch');
+    await ownerFirst.tools.call('note_write', { path: 'owner/plan.md', content: 'mine' });
+    expect(ownerFirst.notes).toHaveLength(1);
+    expect(ownerFirst.cards).toEqual([]);
+  });
+
   test('send queues a send frame, never a card: to the recipient, or the asking conversation, tainted as the thread is', async () => {
     const t = setup();
     markTainted(t.db, HIRE, 'chat:owner', 'web_fetch');

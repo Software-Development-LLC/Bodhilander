@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { AccountUsageMap, ClaudeAccount, CrewEditResult, CrewHireDetail, CrewHireUsage, CrewSignInStarted } from '../../../shared/types';
+import type {
+  AccountUsageMap,
+  ClaudeAccount,
+  CrewEditResult,
+  CrewHireDetail,
+  CrewHireUsage,
+  CrewOfficeEmployees,
+  CrewOfficeImportResult,
+  CrewSignInStarted,
+} from '../../../shared/types';
 import { DEFAULT_USAGE_WARN_THRESHOLD } from '../../../shared/usage';
 import { activityText, formatTokens, hireTokenTotal, parseDailyCap } from '../../store/crew';
 import { UsageMeters } from '../UsageMeters';
@@ -19,6 +28,9 @@ export interface HireDetailApi {
   signInAgain(accountId: string): Promise<CrewEditResult>;
   onSignInStarted(fn: (started: CrewSignInStarted) => void): () => void;
   closeSignIn(ptyId: string): Promise<void>;
+  officeEmployees(): Promise<CrewOfficeEmployees>;
+  makeHome(hireId: string): Promise<CrewEditResult>;
+  importFromOffice(hireId: string, handle: string): Promise<CrewOfficeImportResult>;
 }
 
 const windowApi = (): HireDetailApi => ({
@@ -33,7 +45,18 @@ const windowApi = (): HireDetailApi => ({
   signInAgain: (accountId) => window.electronAPI.crewSignInAgain(accountId),
   onSignInStarted: (fn) => window.electronAPI.onCrewSignInStarted(fn),
   closeSignIn: (ptyId) => window.electronAPI.cancelAccountLogin(ptyId, false),
+  officeEmployees: () => window.electronAPI.crewOfficeEmployees(),
+  makeHome: (id) => window.electronAPI.crewMakeHome(id),
+  importFromOffice: (id, handle) => window.electronAPI.crewImportFromOffice(id, handle),
 });
+
+function importedText(r: CrewOfficeImportResult): string {
+  if (!r.ok) return r.error;
+  const parts = [`Imported ${r.skills} skill files, ${r.notes} notes and ${r.work} work files.`];
+  if (r.skipped.length > 0) parts.push(`Skipped ${r.skipped.join(', ')}.`);
+  if (r.failed.length > 0) parts.push(`Not sent: ${r.failed.join(', ')}.`);
+  return parts.join(' ');
+}
 
 const NOT_AVAILABLE: Record<'offline' | 'unreachable' | 'failed', string> = {
   offline: 'not available (Crew is offline)',
@@ -90,6 +113,8 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
   const [confirmingLetGo, setConfirmingLetGo] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [loginPty, setLoginPty] = useState<string | null>(null);
+  const [office, setOffice] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
   const loginPtyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -129,6 +154,7 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
     );
     api.listAccounts().then((a) => live && setAccounts(a), () => {});
     api.getAccountUsage().then((u) => live && setAccountUsage(u), () => {});
+    api.officeEmployees().then((e) => live && setOffice(e ?? []), () => {});
     return () => {
       live = false;
     };
@@ -177,6 +203,17 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
       setSigningIn(false);
     }
   };
+  const importFrom = async (handle: string) => {
+    if (importing) return;
+    setImporting(true);
+    try {
+      setMessage(importedText(await api.importFromOffice(hire.hireId, handle)));
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImporting(false);
+    }
+  };
   const letGo = async () => {
     setConfirmingLetGo(false);
     try {
@@ -194,6 +231,11 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
       <div className="crew-detail__state">
         {hire.roleId} · {activityText(hire)}
       </div>
+      {hire.state.startsWith('held:no-home') && (
+        <button type="button" onClick={() => void apply(api.makeHome(hire.hireId), 'Asked to move it here. Approve the move card to finish.')}>
+          Make this machine home
+        </button>
+      )}
       {signInAccount && (
         <button type="button" disabled={signingIn} onClick={() => void signIn(signInAccount)}>
           Sign in again
@@ -298,6 +340,19 @@ export const HireDetail: React.FC<HireDetailProps> = ({ hireId, api: injected, n
           {hire.skillBundleId} pinned at {hire.skillBundleHash.slice(0, 12)}
         </div>
       </section>
+
+      {office.length > 0 && (
+        <section>
+          <h3>Import from Office</h3>
+          <div className="crew-detail__row">
+            {office.map((handle) => (
+              <button key={handle} type="button" disabled={importing} onClick={() => void importFrom(handle)}>
+                Import {handle}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section>
         {confirmingLetGo ? (

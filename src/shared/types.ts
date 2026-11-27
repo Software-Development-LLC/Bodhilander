@@ -1107,6 +1107,12 @@ export type CrewLinkView =
 
 export type CrewEditResult = { ok: true } | { ok: false; error: string };
 
+/** The Office employees this machine could import, or null when no Office data folder is here. */
+export type CrewOfficeEmployees = string[] | null;
+export type CrewOfficeImportResult =
+  | { ok: true; skills: number; notes: number; work: number; skipped: string[]; failed: string[] }
+  | { ok: false; error: string };
+
 export interface CrewRole {
   roleId: string;
   name: string;

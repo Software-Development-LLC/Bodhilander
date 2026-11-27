@@ -10,7 +10,7 @@ import log from 'electron-log';
 import { resolveAccountIdentity } from '../account-identity';
 import { getDatabase } from '../database';
 import { getAllAccounts } from '../repositories/accounts';
-import { getCrewAccountCap } from '../repositories/preferences';
+import { getCrewAccountCap, getPreference } from '../repositories/preferences';
 import { claudePath, ghPath } from '../run-engine/machine-config';
 import { getUsage, setUsage } from '../usage-store';
 import { CrewSignIn, type Reminder } from './crew-token';
@@ -18,12 +18,14 @@ import { startCrewRuntime, type CrewRuntime } from './crew-runtime';
 import { GithubGateway, runGh } from './gateway/github-gateway';
 import { handbookFor, pinnedSkills, restoreSkills } from './handbook';
 import { Holds, machineTimeZone } from './holds';
-import type { HubClient } from './hub-client';
+import { MACHINE_ID_PREF, type HubClient } from './hub-client';
 import { getCrewHub, setCrewHubReplaced, setCrewInterrupt, startCrewHub, stopCrewHub } from './hub-service';
 import type { RefusedFrame, TokenFrame } from './protocol';
 import type { CrewJob, Prepared } from './run/loop';
 import { sweepLetGo } from './let-go';
+import type { HomeDeps } from './home';
 import { McpHost, hostSocketPath } from './mcp/host';
+import { resolveAccountRef } from './account-ref';
 import { HireDayUsage } from './run/hire-usage';
 import { prepareRun, type PrepareDeps } from './run/prepare';
 import { RunServiceManager, ServicesNotReady } from './run/services';
@@ -52,6 +54,27 @@ const listDir = (dir: string): string[] => {
     return [];
   }
 };
+
+function tellOwnerHere(text: string): void {
+  try {
+    new Notification({ title: 'Bodhi Crew', body: text }).show();
+  } catch (err) {
+    log.warn('[Crew] could not tell the owner', err);
+  }
+}
+
+export function crewHomeDeps(hub: HubClient, signIn: CrewSignIn): HomeDeps {
+  return {
+    db: getDatabase(),
+    machineId: () => getPreference(MACHINE_ID_PREF),
+    online: () => hub.getStatus() === 'online',
+    resolve: (ref) => resolveAccountRef(ref, getAllAccounts()),
+    signedIn: (account) => signIn.signedIn(account.id, resolveAccountIdentity(account.configDir).loggedIn, Date.now()),
+    raiseMove: (hireId, payload) => hub.sendMoveCard(hireId, payload),
+    sendUnlink: (machineId) => hub.sendUnlink(machineId),
+    tellOwner: tellOwnerHere,
+  };
+}
 
 function reminderText(reminder: Reminder, label: string): string {
   const when = new Date(reminder.endsAt).toLocaleString();
@@ -92,12 +115,7 @@ function ensureServices(): RunServiceManager {
   services ??= new RunServiceManager({
     host,
     broker: () => runtime?.broker ?? null,
-    tools: (job, threadKey) =>
-      crewTools(
-        { db, raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false, sendMessage: (jobId, send) => runtimeHub?.sendMessage(jobId, send) ?? false },
-        job,
-        threadKey,
-      ),
+    tools: (job, threadKey) => crewTools(crewToolDeps(db), job, threadKey),
     gateway: gw,
     repos: hireRepos,
     uid,
@@ -105,6 +123,15 @@ function ensureServices(): RunServiceManager {
     ...crewResourcePaths(),
   });
   return services;
+}
+
+function crewToolDeps(db: ReturnType<typeof getDatabase>): Parameters<typeof crewTools>[0] {
+  return {
+    db,
+    raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false,
+    sendMessage: (jobId, send) => runtimeHub?.sendMessage(jobId, send) ?? false,
+    writeNote: (jobId, write) => runtimeHub?.sendNoteWrite(jobId, write) ?? false,
+  };
 }
 
 /** On Windows every run is prepared inside BodhiCrew; nothing is built off Windows. */
@@ -122,8 +149,7 @@ function ensureWindowsCrew(signIn: CrewSignIn): WindowsCrew | null {
     host: host as McpHost,
     gateway: gateway as GithubGateway,
     broker: () => runtime?.broker ?? null,
-    tools: (job, threadKey) =>
-      crewTools({ db, raiseCard: (jobId, raise) => runtimeHub?.sendCard(jobId, raise) ?? false, sendMessage: (jobId, send) => runtimeHub?.sendMessage(jobId, send) ?? false }, job, threadKey),
+    tools: (job, threadKey) => crewTools(crewToolDeps(db), job, threadKey),
     repos: hireRepos,
     onLost: (hireId) => runtime?.interrupt(hireId),
     handbook: (hireId) => handbookFor(db, hireId),
@@ -232,6 +258,12 @@ function attach(hub: HubClient): CrewRuntime {
         log.warn('[Crew] could not show a sign-in reminder', err);
       }
     },
+    schedule: {
+      hub,
+      machineId: () => getPreference(MACHINE_ID_PREF),
+      tellOwner: tellOwnerHere,
+    },
+    home: crewHomeDeps(hub, signIn),
   });
   const onToken = (frame: TokenFrame) => gateway?.onToken(frame);
   const onRefused = (frame: RefusedFrame) => gateway?.onRefused(frame.id);
