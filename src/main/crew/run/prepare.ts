@@ -16,7 +16,7 @@ import { writeAudit } from '../audit';
 import { consumeTaint, isTainted } from '../taint';
 import { runArgs, runEnv } from './env';
 import type { CrewJob, Prepared } from './loop';
-import { buildRunSettings, type SandboxInput } from './sandbox-settings';
+import { buildRunSettings, settingsForRun, type SandboxInput } from './sandbox-settings';
 import { ServicesNotReady, type RunServices } from './services';
 import { SocketRootError } from './sockets';
 import { cwdFor, hirePaths, settingsPathFor, underTempDir, type HirePaths } from './scope';
@@ -207,7 +207,7 @@ export async function prepareRun(deps: PrepareDeps, job: CrewJob, threadKey: str
   const settingsPath = settingsPathFor(paths, job.scope);
   const base = deps.sandbox(paths, job, account.configDir);
   const sandbox: SandboxInput = { ...base, sockets: [...base.sockets, ...services.sockets], paths, scope: job.scope, configDir: account.configDir, userData: deps.userData, home: deps.home };
-  const settings = buildRunSettings(sandbox);
+  const settings = settingsForRun({ hireId: job.hireId, runId }, () => buildRunSettings(sandbox));
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
   const mcpConfigPath = path.join(paths.run, `mcp-${job.scope}.json`);
   const mcpTokenPath = path.join(paths.run, `mcp-${job.scope}.token`);

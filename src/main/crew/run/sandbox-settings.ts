@@ -164,6 +164,16 @@ export function buildRunSettings(input: SandboxInput): RunSettings {
   };
 }
 
+/** Builds a run's settings; a failure names the hire and run it was for. */
+export function settingsForRun<T>(ids: { hireId: string; runId: string }, build: () => T): T {
+  try {
+    return build();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`run settings for hire ${ids.hireId}, run ${ids.runId}: ${message}`, { cause: err });
+  }
+}
+
 export function runSettingsJson(input: SandboxInput): string {
   return JSON.stringify(buildRunSettings(input), null, 2);
 }

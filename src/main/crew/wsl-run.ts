@@ -19,7 +19,7 @@ import type { CrewJob, Prepared } from './run/loop';
 import { crewMcpServers } from './run/mcp-config';
 import { wslSweepSteering } from './run/steering-sweep';
 import { chooseSession, HIRE_GITCONFIG, HOLD_MISSING, HOLD_SETUP, HOLD_SIGNED_OUT, hireAccountRef } from './run/prepare';
-import { buildWslRunSettings, WSL_BIN_DIR, WSL_CREW_DIR, WSL_HIRES_DIR, WSL_HOME_ROOT, WSL_NODE_DIR, wslHirePaths } from './run/sandbox-settings';
+import { buildWslRunSettings, settingsForRun, WSL_BIN_DIR, WSL_CREW_DIR, WSL_HIRES_DIR, WSL_HOME_ROOT, WSL_NODE_DIR, wslHirePaths } from './run/sandbox-settings';
 import { cwdFor, type HirePaths } from './run/scope';
 import { bundlePath } from './tools/server';
 import { makeWslTmpDir, newRunToken, removeWslTmpDir, runDirName, SocketRootError, type DistroSh, type TmpRecords } from './run/sockets';
@@ -202,7 +202,8 @@ export class WslRuns {
     await this.write(gitConfig, HIRE_GITCONFIG, '0644');
     for (const s of skills) await this.write(s.target, s.content, '0644');
 
-    const settings = buildWslRunSettings({
+    const levels = await listLevels(d.sh);
+    const settings = settingsForRun({ hireId: job.hireId, runId }, () => buildWslRunSettings({
       hireId: job.hireId,
       scope: job.scope,
       uid: CREW_UID,
@@ -211,9 +212,9 @@ export class WslRuns {
       clones: [],
       runDir: started.served.dir,
       tmpDir,
-      levels: await listLevels(d.sh),
+      levels,
       allowedDomains: d.allowedDomains?.() ?? [],
-    });
+    }));
     const settingsPath = posix.join(paths.run, `settings-${job.scope}.json`);
     const mcpConfigPath = posix.join(paths.run, `mcp-${job.scope}.json`);
     await this.write(settingsPath, JSON.stringify(settings, null, 2), '0600');

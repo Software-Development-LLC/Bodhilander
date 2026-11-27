@@ -114,6 +114,15 @@ describe('preparing a run', () => {
     expect(s.sandbox.filesystem.denyWrite).toContain(path.join(t.root, 'git'));
   });
 
+  test('settings that cannot be built fail naming the hire and the run', async () => {
+    const t = setup();
+    const base = t.deps.sandbox();
+    t.deps.sandbox = () => ({ ...base, reopen: ['/Users/me'] });
+    const failed = prepareRun(t.deps, job(), 'chat:owner', 'run-1');
+    await expect(failed).rejects.toThrow(`hire ${HIRE}, run run-1`);
+    await expect(prepareRun(t.deps, job(), 'chat:owner', 'run-2')).rejects.toThrow('a named deny sits under a re-opened path');
+  });
+
   test('a circle run works in circle/', async () => {
     const t = setup();
     const p = (await prepareRun(t.deps, job({ scope: 'circle' }), 'chat:circle', 'run-1')) as PreparedRun;
