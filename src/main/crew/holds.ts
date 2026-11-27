@@ -47,7 +47,7 @@ export function capTokens(usage: { input_tokens?: number; cache_creation_input_t
 /** The calendar day in the owner's timezone, so the hire cap resets at their midnight. */
 export function capDay(now: number, timeZone: string | null): string {
   try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timeZone ?? 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   } catch {
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   }

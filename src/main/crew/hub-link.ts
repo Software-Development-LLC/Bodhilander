@@ -1,10 +1,8 @@
 /**
- * Linking this machine to Crew: a signed request for a link code, then the
- * person signs in on the Hub's link page and approves the link card in Teams.
- * Only a person's click requests a code; nothing here retries on its own
- * except one re-sign for clock-skew or replayed.
+ * A signed request for a link code, made only on a person's click. The one retry
+ * is a single re-sign each for clock-skew and replayed.
  */
-import { isUuidV4 } from './protocol-parse';
+import { isUuidV4, trimTrailingSlashes } from './protocol-parse';
 import {
   linkMessage,
   type LinkCodeConflict,
@@ -74,48 +72,50 @@ async function readJson(res: { json(): Promise<unknown> }): Promise<unknown> {
   }
 }
 
+type Attempt = { done: LinkResult } | { retry: 'clock-skew'; hubTime: unknown } | { retry: 'replayed' };
+
+async function postOnce(deps: LinkDeps, hubUrl: string, issuedAt: number): Promise<Attempt> {
+  let res: Awaited<ReturnType<LinkDeps['fetch']>>;
+  try {
+    res = await deps.fetch(`${hubUrl}/link/codes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(buildLinkRequest({ ...deps, hubUrl }, issuedAt)),
+    });
+  } catch {
+    return { done: { kind: 'unreachable' } };
+  }
+  if (res.status === 200 || res.status === 201) return { done: readCode(await readJson(res), hubUrl) };
+  if (res.status === 429) {
+    const after = Number(res.headers.get('retry-after'));
+    return { done: { kind: 'rate-limited', retryAfterSeconds: Number.isFinite(after) && after > 0 ? after : null } };
+  }
+  const body = (await readJson(res)) as Partial<LinkCodeError> | undefined;
+  const error = body?.error;
+  if (res.status === 409 && error === 'already-linked') return { done: readConflict(body) };
+  if (error === 'clock-skew') return { retry: error, hubTime: body?.hubTime };
+  if (error === 'replayed') return { retry: error };
+  if (typeof error === 'string') return { done: { kind: 'cannot-link', error } };
+  return { done: { kind: 'failed', status: res.status } };
+}
+
 /** POST /link/codes. Validates the answer before the caller stores or opens anything. */
 export async function requestLinkCode(deps: LinkDeps): Promise<LinkResult> {
-  const hubUrl = deps.hubUrl.replace(/\/+$/, '');
+  const hubUrl = trimTrailingSlashes(deps.hubUrl);
   let issuedAt = deps.now();
-  let skewRetried = false;
-  let replayRetried = false;
+  const retried = new Set<string>();
   for (;;) {
-    let res: Awaited<ReturnType<LinkDeps['fetch']>>;
-    try {
-      res = await deps.fetch(`${hubUrl}/link/codes`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(buildLinkRequest({ ...deps, hubUrl }, issuedAt)),
-      });
-    } catch {
-      return { kind: 'unreachable' };
-    }
-
-    if (res.status === 200 || res.status === 201) return readCode(await readJson(res), hubUrl);
-    if (res.status === 429) {
-      const after = Number(res.headers.get('retry-after'));
-      return { kind: 'rate-limited', retryAfterSeconds: Number.isFinite(after) && after > 0 ? after : null };
-    }
-
-    const body = await readJson(res);
-    const error = (body as Partial<LinkCodeError> | undefined)?.error;
-    if (res.status === 409 && error === 'already-linked') return readConflict(body);
-
-    if (!skewRetried && error === 'clock-skew') {
-      const hubTime = (body as Partial<LinkCodeError>).hubTime;
-      if (typeof hubTime !== 'number' || !Number.isSafeInteger(hubTime)) return { kind: 'unreadable' };
-      skewRetried = true;
-      issuedAt = hubTime;
-      continue;
-    }
-    if (!replayRetried && error === 'replayed') {
-      replayRetried = true;
+    const attempt = await postOnce(deps, hubUrl, issuedAt);
+    if ('done' in attempt) return attempt.done;
+    if (retried.has(attempt.retry)) return { kind: 'cannot-link', error: attempt.retry };
+    retried.add(attempt.retry);
+    if (attempt.retry === 'replayed') {
       issuedAt = Math.max(deps.now(), issuedAt + 1);
-      continue;
+    } else if (typeof attempt.hubTime === 'number' && Number.isSafeInteger(attempt.hubTime)) {
+      issuedAt = attempt.hubTime;
+    } else {
+      return { kind: 'unreadable' };
     }
-    if (typeof error === 'string') return { kind: 'cannot-link', error };
-    return { kind: 'failed', status: res.status };
   }
 }
 

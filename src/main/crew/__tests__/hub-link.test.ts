@@ -84,6 +84,24 @@ describe('requestLinkCode', () => {
     expect(calls.length).toBe(2);
   });
 
+  test('clock-skew without a usable hubTime is unreadable', async () => {
+    const { d, calls } = deps([{ status: 400, body: { error: 'clock-skew', hubTime: 1.5 } }]);
+    expect(await requestLinkCode(d)).toEqual({ kind: 'unreadable' });
+    expect(calls.length).toBe(1);
+  });
+
+  test('a skew retry still allows one replayed retry', async () => {
+    const { d, calls } = deps([
+      { status: 400, body: { error: 'clock-skew', hubTime: 5 } },
+      { status: 400, body: { error: 'replayed' } },
+      { status: 200, body: code },
+    ]);
+    expect((await requestLinkCode(d)).kind).toBe('code');
+    expect(calls.length).toBe(3);
+    expect(calls[1].body.issuedAt).toBe(5);
+    expect(Number(calls[2].body.issuedAt)).toBeGreaterThan(5);
+  });
+
   test('replayed re-signs once with a fresh issuedAt', async () => {
     const { d, calls } = deps([
       { status: 400, body: { error: 'replayed' } },

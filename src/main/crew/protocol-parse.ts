@@ -81,8 +81,14 @@ export function parseHubFrame(raw: string): ParseResult {
   const known = type as HubFrameType;
   if (UNHANDLED.has(known)) return { ok: false, problem: 'unhandled-type', type };
   const shape = SHAPES[known];
-  if (!shape || !shape(f)) return { ok: false, problem: 'bad-shape', type };
+  if (!shape?.(f)) return { ok: false, problem: 'bad-shape', type };
   return { ok: true, frame: f as unknown as HubFrame };
+}
+
+export function trimTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end -= 1;
+  return url.slice(0, end);
 }
 
 export const isRefusedReason = (r: string): boolean => (REFUSED_REASONS as readonly string[]).includes(r);

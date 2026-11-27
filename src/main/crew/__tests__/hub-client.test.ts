@@ -99,7 +99,7 @@ describe('resolveHubUrl', () => {
   test('packaged builds use production, unpackaged development, and the preference wins', () => {
     expect(resolveHubUrl(true, null)).toBe(HUB_URL_PRODUCTION);
     expect(resolveHubUrl(false, null)).toBe(HUB_URL_DEVELOPMENT);
-    expect(resolveHubUrl(true, ' https://h.example/ ')).toBe('https://h.example');
+    expect(resolveHubUrl(true, ' https://h.example// ')).toBe('https://h.example');
     expect(resolveHubUrl(false, '')).toBe(HUB_URL_DEVELOPMENT);
   });
 });

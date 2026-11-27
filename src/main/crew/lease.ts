@@ -1,8 +1,6 @@
 /**
- * Each hire's 5-minute lease, counted from the SEND of the heartbeat the Hub
- * renewed, on both the monotonic and the wall clock; either passing 5 minutes
- * lapses it. A wake from sleep lapses every lease until a heartbeat sent after
- * the wake is renewed.
+ * Each hire's 5-minute lease runs from the send of the heartbeat the Hub renewed,
+ * on the monotonic and the wall clock both; either passing 5 minutes lapses it.
  */
 import type { RenewLease } from './protocol';
 

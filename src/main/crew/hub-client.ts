@@ -1,8 +1,6 @@
 /**
- * The one WebSocket to the Crew Hub. It authenticates with the relay's machine
- * key, keeps each hire's lease with a 30 s heartbeat, applies the epoch fence
- * and drains the local outbox. A bad-auth after the key changed offers Link
- * again; nothing here ever clears the relay identity.
+ * The one WebSocket to the Crew Hub, signed with the relay's machine key. A
+ * bad-auth after the key changed offers Link again; nothing here clears the key.
  */
 import { EventEmitter } from 'events';
 import type Database from 'better-sqlite3';
@@ -11,7 +9,7 @@ import { writeAudit } from './audit';
 import { EpochFence } from './epoch';
 import { HEARTBEAT_MS, LeaseClock, systemClocks, type Clocks } from './lease';
 import { LocalOutbox } from './local-outbox';
-import { assertSendable, cutText, isErrorReason, parseHubFrame } from './protocol-parse';
+import { assertSendable, cutText, isErrorReason, parseHubFrame, trimTrailingSlashes } from './protocol-parse';
 import {
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
@@ -37,8 +35,8 @@ export const MACHINE_ID_PREF = 'crew.machineId';
 
 /** Packaged builds on either channel use production; `crew.hubUrl` overrides. */
 export function resolveHubUrl(isPackaged: boolean, override: string | null): string {
-  const chosen = override?.trim() || (isPackaged ? HUB_URL_PRODUCTION : HUB_URL_DEVELOPMENT);
-  return chosen.replace(/\/+$/, '');
+  const trimmed = override?.trim();
+  return trimTrailingSlashes(trimmed ? trimmed : isPackaged ? HUB_URL_PRODUCTION : HUB_URL_DEVELOPMENT);
 }
 
 export const CLOSE_CODES: Record<number, ErrorReason> = {
@@ -243,7 +241,7 @@ export class HubClient extends EventEmitter {
     const parsed = parseHubFrame(raw);
     if (!parsed.ok) {
       const key = parsed.type ?? parsed.problem;
-      log.warn(`[Crew] dropped a Hub frame: ${parsed.problem}${parsed.type ? ` (${parsed.type})` : ''}`);
+      log.warn(`[Crew] dropped a Hub frame: ${parsed.problem}`, parsed.type ?? '');
       if (!this.auditedTypes.has(key)) {
         this.auditedTypes.add(key);
         writeAudit(this.deps.db, null, 'hub-frame-dropped', { problem: parsed.problem, type: parsed.type ?? null });
