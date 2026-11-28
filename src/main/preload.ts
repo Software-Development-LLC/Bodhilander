@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult } from '../shared/types';
+import { Group, Session, SessionEvent, SessionStats, GlobalStats, ClaudeAccount, AccountSwitchResult, AccountFailoverEvent, AccountUsageMap, LiveAccountBinding, LiveAccountBindings, ProviderStatus, ProviderInstallHint, ArenaRun, ArenaUpdate, KeyVaultStatus, RelayStatus, RelayShare, RelayResizeRequest, PortableExportResult, PortableImportResult, HandoffOfferState, HandoffPrepareResult, ArrivalReport, AccountRemovalCost, RunInboxRow, RunActiveRow, BoardResult, ConfigResult, RunPermissionRequest, RunArmResult, RunPrepareResult, RunCrossRepoPrepareResult, SeamManifest, ClaudeDesktopStatus, ClaudeDesktopActionResult, CrewStatus, CrewHireSummary, CrewHireDetail, CrewHireUsage, CrewCardList, CrewLinkView, CrewEditResult, CrewRoutineInput, CrewSignInStarted, CrewRole, CrewHireInput, CrewHireResult, CrewHireAccount, CrewOfficeEmployees, CrewOfficeImportResult, CrewSavedCopy, CrewWindowsSignInResult, CrewWindowsState, CrewWindowsProgress, CrewWindowsSetupResult, CrewWindowsRepairResult } from '../shared/types';
 
 // Get homedir from environment since os module isn't available in sandbox
 const homedir = process.env.HOME || process.env.USERPROFILE || '/';
@@ -407,6 +407,55 @@ contextBridge.exposeInMainWorld('electronAPI', {
   claudeDesktopDisable: (): Promise<ClaudeDesktopActionResult> => ipcRenderer.invoke('claudeDesktop:disable'),
   claudeDesktopInstall: (): Promise<ClaudeDesktopActionResult> => ipcRenderer.invoke('claudeDesktop:install'),
   claudeDesktopSaveExtension: (): Promise<ClaudeDesktopActionResult> => ipcRenderer.invoke('claudeDesktop:saveExtension'),
+
+  // Crew
+  crewGetStatus: (): Promise<CrewStatus> => ipcRenderer.invoke('crew:getStatus'),
+  crewListSavedCopies: (): Promise<CrewSavedCopy[]> => ipcRenderer.invoke('crew:listSavedCopies'),
+  crewDeleteSavedCopy: (name: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:deleteSavedCopy', name),
+  crewWindowsSignIn: (accountId: string): Promise<CrewWindowsSignInResult> => ipcRenderer.invoke('crew:windowsSignIn', accountId),
+  crewWindowsSignInCode: (code: string): Promise<boolean> => ipcRenderer.invoke('crew:windowsSignInCode', code),
+  crewWindowsSignInCancel: (): Promise<void> => ipcRenderer.invoke('crew:windowsSignInCancel'),
+  crewWindowsCheckState: (): Promise<CrewWindowsState | null> => ipcRenderer.invoke('crew:windowsCheckState'),
+  crewWindowsSetup: (): Promise<CrewWindowsSetupResult> => ipcRenderer.invoke('crew:windowsSetup'),
+  crewWindowsRepair: (confirmed: boolean): Promise<CrewWindowsRepairResult> => ipcRenderer.invoke('crew:windowsRepair', confirmed),
+  onCrewWindowsSetupProgress: (callback: (data: CrewWindowsProgress) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: CrewWindowsProgress) => callback(data);
+    ipcRenderer.on('crew:windowsSetupProgress', listener);
+    return () => ipcRenderer.removeListener('crew:windowsSetupProgress', listener);
+  },
+  crewListHires: (): Promise<CrewHireSummary[]> => ipcRenderer.invoke('crew:listHires'),
+  crewGetHire: (hireId: string): Promise<CrewHireDetail | null> => ipcRenderer.invoke('crew:getHire', hireId),
+  crewGetHireUsage: (hireId: string): Promise<CrewHireUsage> => ipcRenderer.invoke('crew:getHireUsage', hireId),
+  crewSetDailyCap: (hireId: string, cap: number | null): Promise<CrewEditResult> => ipcRenderer.invoke('crew:setDailyCap', hireId, cap),
+  crewSetRepos: (hireId: string, repos: string[]): Promise<CrewEditResult> => ipcRenderer.invoke('crew:setRepos', hireId, repos),
+  crewChangeAccount: (hireId: string, accountId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:changeAccount', hireId, accountId),
+  crewLetGo: (hireId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:letGo', hireId),
+  crewOfficeEmployees: (): Promise<CrewOfficeEmployees> => ipcRenderer.invoke('crew:officeEmployees'),
+  crewMakeHome: (hireId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:makeHome', hireId),
+  crewUnlink: (): Promise<CrewEditResult> => ipcRenderer.invoke('crew:unlink'),
+  crewImportFromOffice: (hireId: string, handle: string): Promise<CrewOfficeImportResult> => ipcRenderer.invoke('crew:importFromOffice', hireId, handle),
+  crewPinSkillBundle: (hireId: string, bundleId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:pinSkillBundle', hireId, bundleId),
+  crewCreateRoutine: (hireId: string, input: CrewRoutineInput): Promise<CrewEditResult> => ipcRenderer.invoke('crew:createRoutine', hireId, input),
+  crewUpdateRoutine: (hireId: string, routineId: string, input: CrewRoutineInput): Promise<CrewEditResult> => ipcRenderer.invoke('crew:updateRoutine', hireId, routineId, input),
+  crewDeleteRoutine: (hireId: string, routineId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:deleteRoutine', hireId, routineId),
+  crewListRoles: (): Promise<CrewRole[]> => ipcRenderer.invoke('crew:listRoles'),
+  crewCreateHire: (input: CrewHireInput): Promise<CrewHireResult> => ipcRenderer.invoke('crew:createHire', input),
+  crewHireAccounts: (): Promise<CrewHireAccount[]> => ipcRenderer.invoke('crew:hireAccounts'),
+  crewSignInAgain: (accountId: string): Promise<CrewEditResult> => ipcRenderer.invoke('crew:signInAgain', accountId),
+  onCrewSignInStarted: (callback: (data: CrewSignInStarted) => void) => {
+    const listener = (_: Electron.IpcRendererEvent, data: CrewSignInStarted) => callback(data);
+    ipcRenderer.on('crew:signInStarted', listener);
+    return () => ipcRenderer.removeListener('crew:signInStarted', listener);
+  },
+  crewListCards: (): Promise<CrewCardList> => ipcRenderer.invoke('crew:listCards'),
+  crewOpenCard: (raiseId: string): Promise<boolean> => ipcRenderer.invoke('crew:openCard', raiseId),
+  crewBeginLink: (): Promise<CrewLinkView> => ipcRenderer.invoke('crew:beginLink'),
+  crewConfirmLinkOwner: (isMe: boolean): Promise<boolean> => ipcRenderer.invoke('crew:confirmLinkOwner', isMe),
+  onCrewChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('crew:changed', listener);
+    return () => ipcRenderer.removeListener('crew:changed', listener);
+  },
 
 
   // Editor Integration

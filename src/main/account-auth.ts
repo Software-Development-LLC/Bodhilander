@@ -34,6 +34,26 @@ interface LoginFlow {
 
 const activeFlows = new Map<string, LoginFlow>();
 
+let loginCompletedHook: ((accountId: string) => void) | null = null;
+const settleWaiters = new Map<string, ((loggedIn: boolean) => void)[]>();
+
+/** Resolves once the login flow ends: true when main found the login on disk. */
+export function loginSettled(ptyId: string): Promise<boolean> {
+  if (!activeFlows.has(ptyId)) return Promise.resolve(false);
+  return new Promise((resolve) => settleWaiters.set(ptyId, [...(settleWaiters.get(ptyId) ?? []), resolve]));
+}
+
+function settleLogin(ptyId: string, loggedIn: boolean): void {
+  const waiters = settleWaiters.get(ptyId) ?? [];
+  settleWaiters.delete(ptyId);
+  for (const resolve of waiters) resolve(loggedIn);
+}
+
+/** Told of every login main found on disk, so Crew can lift a sign-in hold. */
+export function setLoginCompletedHook(fn: ((accountId: string) => void) | null): void {
+  loginCompletedHook = fn;
+}
+
 /**
  * Swatch colours handed to new accounts, in order (#165). The same family the
  * sidebar offers for groups, so the two kinds of dot look like one system.
@@ -211,6 +231,7 @@ function beginLoginPty(
       flow.watcher?.close();
       mainWindow?.webContents.send('accounts:login-exited', { accountId: flow.accountId, exitCode: event.exitCode });
     }
+    settleLogin(ptyId, false);
     ptyManager.off('exit', exitListener);
     activeFlows.delete(ptyId);
   };
@@ -247,6 +268,13 @@ function handleLoginCompleted(
     verified: loggedIn === true,
   });
   log.info(`[Accounts] Login completed for ${flow.accountId}${email ? ` (${email})` : ''}`);
+  if (loggedIn !== true) return;
+  settleLogin(ptyId, true);
+  try {
+    loginCompletedHook?.(flow.accountId);
+  } catch (err) {
+    log.warn(`[Accounts] The login-completed hook failed for ${flow.accountId}:`, err);
+  }
 }
 
 /**
@@ -297,6 +325,7 @@ export function cancelLoginFlow(
   }
 
   activeFlows.delete(ptyId);
+  settleLogin(ptyId, false);
 }
 
 /**

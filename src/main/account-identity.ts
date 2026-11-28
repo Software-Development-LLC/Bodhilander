@@ -13,10 +13,12 @@ export interface AccountIdentity {
   loggedIn: boolean | undefined;
   /** The profile's address, when the artifact records one. */
   email: string | null;
+  /** The profile's `oauthAccount.accountUuid`, when .claude.json records one. */
+  accountUuid: string | null;
 }
 
-const LOGGED_OUT: AccountIdentity = { loggedIn: false, email: null };
-const UNKNOWN: AccountIdentity = { loggedIn: undefined, email: null };
+const LOGGED_OUT: AccountIdentity = { loggedIn: false, email: null, accountUuid: null };
+const UNKNOWN: AccountIdentity = { loggedIn: undefined, email: null, accountUuid: null };
 
 /** The plaintext token stores, present only on platforms without a keyring. */
 const CREDENTIAL_FILES = ['.credentials.json', 'auth.json'];
@@ -78,9 +80,10 @@ function probeProfile(configDir: string): Probe {
   if (!profile || typeof profile !== 'object') return 'absent';
 
   const email = normalizeEmail(profile.emailAddress) ?? normalizeEmail(profile.email);
+  const accountUuid = typeof profile.accountUuid === 'string' ? profile.accountUuid.trim() || null : null;
   // An organization login can withhold the address; the uuid still proves one.
   if (!email && !profile.accountUuid) return 'absent';
-  return { loggedIn: true, email };
+  return { loggedIn: true, email, accountUuid };
 }
 
 /**
@@ -98,7 +101,7 @@ function probeTokenFile(configDir: string): Probe {
       normalizeEmail(creds?.claudeAiOauth?.email) ??
       normalizeEmail(creds?.account?.email) ??
       normalizeEmail(creds?.email);
-    return { loggedIn: true, email };
+    return { loggedIn: true, email, accountUuid: null };
   }
   return 'absent';
 }

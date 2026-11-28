@@ -274,6 +274,58 @@ describe('resumeLoginFlow — signing in to an account that already exists', () 
 
     expect(storedEmail(id)).toBe('will@example.com');
   });
+
+  test('loginSettled answers true for a login found on disk and false for one cancelled', async () => {
+    const pty = fakePtyManager();
+    const { id, configDir } = restoredAccount();
+    const first = accountAuth.resumeLoginFlow(pty, null, id);
+    const cancelled = accountAuth.loginSettled(first.ptyId);
+    accountAuth.cancelLoginFlow(pty, first.ptyId, false);
+    expect(await cancelled).toBe(false);
+
+    const again = accountAuth.resumeLoginFlow(pty, null, id);
+    const settled = accountAuth.loginSettled(again.ptyId);
+    writeConfigFile(configDir, '.claude.json', { oauthAccount: { accountUuid: 'u-1', emailAddress: 'will@example.com' } });
+    accountAuth.confirmLoginMacOS(null, again.ptyId);
+    expect(await settled).toBe(true);
+    accountAuth.cancelLoginFlow(pty, again.ptyId, false);
+    expect(await accountAuth.loginSettled('__login-none')).toBe(false);
+  });
+
+  test('an unverified confirmation leaves loginSettled waiting, until a cancel ends it', async () => {
+    const pty = fakePtyManager();
+    const { id } = restoredAccount();
+    const flow = accountAuth.resumeLoginFlow(pty, null, id);
+    let answer: boolean | null = null;
+    void accountAuth.loginSettled(flow.ptyId).then((v) => (answer = v));
+    accountAuth.confirmLoginMacOS(null, flow.ptyId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(answer).toBeNull();
+    accountAuth.cancelLoginFlow(pty, flow.ptyId, false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(answer).toBe(false);
+  });
+
+  test('a verified login tells the sign-in hook; an unverified one does not', () => {
+    const signedIn: string[] = [];
+    accountAuth.setLoginCompletedHook((accountId) => signedIn.push(accountId));
+    try {
+      const pty = fakePtyManager();
+      const { id, configDir } = restoredAccount();
+      const first = accountAuth.resumeLoginFlow(pty, null, id);
+      accountAuth.confirmLoginMacOS(null, first.ptyId);
+      expect(signedIn).toEqual([]);
+      accountAuth.cancelLoginFlow(pty, first.ptyId, false);
+
+      const again = accountAuth.resumeLoginFlow(pty, null, id);
+      writeConfigFile(configDir, '.claude.json', { oauthAccount: { accountUuid: 'u-1', emailAddress: 'will@example.com' } });
+      accountAuth.confirmLoginMacOS(null, again.ptyId);
+      expect(signedIn).toEqual([id]);
+      accountAuth.cancelLoginFlow(pty, again.ptyId, false);
+    } finally {
+      accountAuth.setLoginCompletedHook(null);
+    }
+  });
 });
 
 function storedEmail(id: string): string | null {

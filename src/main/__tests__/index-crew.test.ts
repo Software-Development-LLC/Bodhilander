@@ -1,0 +1,75 @@
+import { Database as BunDatabase } from 'bun:sqlite';
+import { afterAll, describe, expect, mock, test } from 'bun:test';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'index-spec-'));
+afterAll(() => fs.rmSync(userData, { recursive: true, force: true }));
+const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+const calls: string[] = [];
+const stub: unknown = new Proxy(function () {}, {
+  get: (_t, key) => (key === 'then' ? undefined : key === Symbol.toPrimitive ? () => 0 : key === Symbol.iterator ? [][Symbol.iterator] : stub),
+  apply: () => stub,
+  construct: () => stub as object,
+});
+let ready: (() => void) | null = null;
+const app = new Proxy(
+  {
+    whenReady: () => ({ then: (fn: () => void) => ((ready = fn), { catch: () => {} }) }),
+    on: (event: string, fn: (...args: unknown[]) => void) => (handlers[event] ??= []).push(fn),
+    requestSingleInstanceLock: () => true,
+    isPackaged: false,
+    getPath: () => userData,
+    getAppPath: () => userData,
+    getVersion: () => '0.0.0',
+  } as Record<string | symbol, unknown>,
+  { get: (t, key) => (key in t ? t[key] : stub) },
+);
+const ELECTRON = ['BrowserWindow', 'ipcMain', 'dialog', 'shell', 'crashReporter', 'Notification', 'screen', 'safeStorage', 'powerMonitor', 'nativeTheme', 'Menu', 'MenuItem', 'Tray', 'clipboard', 'nativeImage', 'net', 'session', 'webContents', 'protocol', 'globalShortcut', 'systemPreferences', 'autoUpdater', 'utilityProcess', 'MessageChannelMain', 'desktopCapturer', 'powerSaveBlocker', 'inAppPurchase', 'contentTracing', 'netLog', 'pushNotifications', 'TouchBar', 'ShareMenu', 'webFrameMain', 'contextBridge', 'ipcRenderer'];
+const ipc: Record<string, (...args: unknown[]) => unknown> = {};
+const ipcMain = new Proxy({ handle: (channel: string, fn: (...args: unknown[]) => unknown) => void (ipc[channel] = fn) } as Record<string | symbol, unknown>, {
+  get: (t, key) => (key in t ? t[key] : stub),
+});
+const electron: Record<string, unknown> = { app, ...Object.fromEntries(ELECTRON.map((k) => [k, stub])), ipcMain };
+mock.module('electron', () => ({ ...electron, default: electron }));
+mock.module('electron-log', () => ({ default: stub }));
+mock.module('node-pty', () => ({ spawn: stub }));
+class MemoryDb extends BunDatabase {
+  constructor() {
+    super(':memory:');
+  }
+  pragma(sql: string) {
+    return this.query(`PRAGMA ${sql}`).all();
+  }
+}
+mock.module('better-sqlite3', () => ({ default: MemoryDb }));
+mock.module('sodium-native', () => ({ default: stub }));
+mock.module('../crew/crew-main', () => ({
+  startCrew: () => calls.push('start'),
+  crewRecordSignIn: () => calls.push('signed-in'),
+  crewWindowsSignIn: () => null,
+  crewWindowsSetup: () => null,
+  stopCrew: () => calls.push('stop'),
+  crewRuntime: () => null,
+  crewHomeDeps: () => null,
+}));
+
+describe('the main process', () => {
+  test('loads with Crew started by its ready callback and stopped by its quit cleanup', async () => {
+    await import('../index');
+    expect(calls).toEqual([]);
+    ready?.();
+    expect(calls).toEqual(['start']);
+    for (const fn of handlers['before-quit'] ?? []) fn({ preventDefault: () => {} });
+    for (let i = 0; i < 100 && !calls.includes('stop'); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toEqual(['start', 'stop']);
+  });
+
+  test('prefs:set refuses every crew.* key', async () => {
+    await import('../index');
+    for (const key of ['crew.hubUrl', 'crew.machineId']) {
+      await expect(Promise.resolve(ipc['prefs:set']({}, key, 'https://h.example'))).rejects.toThrow(`${key} is set by Bodhilander only`);
+    }
+  });
+});

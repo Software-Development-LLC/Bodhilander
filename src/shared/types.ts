@@ -363,7 +363,7 @@ export interface UsageWindow {
 }
 
 /** Where the newest observation in a usage record came from. */
-export type UsageSource = 'poll' | 'statusline';
+export type UsageSource = 'poll' | 'statusline' | 'run';
 
 /** Why an account has no current usage reading. */
 export type UsageUnavailableReason =
@@ -1001,3 +1001,153 @@ export interface OrchestrationConfig {
 export type ConfigResult =
   | { status: 'ok'; config: OrchestrationConfig; fetchedAt: string; stale?: boolean }
   | { status: 'problem'; problem: string };
+
+/** Crew's connection as the renderer sees it. Only `online` is usable; none of the others is an error. */
+export type CrewAvailability =
+  | 'online'
+  | 'connecting'
+  | 'unlinked'
+  | 'pending'
+  | 'unavailable'
+  | 'update-required'
+  | 'link-again'
+  | 'key-unavailable'
+  | 'replaced';
+
+export interface CrewStatus {
+  availability: CrewAvailability;
+  owner: { name: string; upn: string } | null;
+}
+
+/** A Repair export of Crew's Windows setup, under Crew → Windows setup → Saved copies. */
+export interface CrewSavedCopy {
+  name: string;
+  sizeBytes: number;
+  savedAt: number;
+}
+
+/** Where Crew's Windows setup stands on this PC. */
+export type CrewWindowsState = { state: 'ready' } | { state: 'no-wsl' | 'missing' | 'wsl1' | 'needs-repair' | 'unbuilt'; message: string };
+
+export interface CrewWindowsProgress {
+  step: string;
+  message?: string;
+}
+
+export type CrewWindowsSetupResult = { ok: true; message?: string } | { ok: false; message: string; repair: boolean };
+
+/** `confirm` carries the prompt to show; Repair runs again with `confirmed` on Continue. */
+export type CrewWindowsRepairResult = CrewWindowsSetupResult | { confirm: string };
+
+/** How Sign in for Crew on Windows ended. */
+export type CrewWindowsSignInResult = { ok: true; accountUuid: string | null } | { ok: false; reason: string };
+
+/** What the sidebar says a hire is doing, from this machine's point of view. */
+export type CrewHireActivity = 'running' | 'idle' | 'held' | 'elsewhere' | 'provisioning' | 'paused' | 'let-go';
+
+export interface CrewHireSummary {
+  hireId: string;
+  name: string;
+  roleId: string;
+  /** The Hub's hire.state, as synced. */
+  state: string;
+  activity: CrewHireActivity;
+  /** The part after `held:` or `paused:`, or null. */
+  cause: string | null;
+  accountLabel: string | null;
+}
+
+export interface CrewRoutineInput {
+  cron: string;
+  timezone: string;
+  prompt: string;
+}
+
+export interface CrewRoutine {
+  routineId: string;
+  cron: string;
+  timezone: string;
+  prompt: string;
+  lastFired: number | null;
+}
+
+export interface CrewHireDetail extends CrewHireSummary {
+  repos: string[];
+  routines: CrewRoutine[];
+  /** The zone a new routine starts in: the owner's, else this machine's. */
+  defaultTimezone?: string;
+  /** Tokens per day; null is off. */
+  dailyTokenCap: number | null;
+  skillBundleId: string;
+  skillBundleHash: string;
+  /** Cached skill bundles for the hire's role that the owner can pin. */
+  bundles: { id: string; files: number }[];
+  /** The local claude_accounts row the hire's account reference resolves to, or null when it resolves to none. */
+  accountId: string | null;
+  accountEmail: string | null;
+}
+
+/** The hire's tokens over the last 7 days, summed by the Hub. A failed read is a reason, never a zero. */
+export type CrewHireUsage =
+  | { available: true; since: number; inputTokens: number; outputTokens: number; cacheCreationTokens: number; records: number }
+  | { available: false; reason: 'offline' | 'unreachable' | 'failed' };
+
+export type CrewCardKind = 'permission' | 'outbound' | 'skill_change' | 'note_patch' | 'move';
+
+export interface CrewCard {
+  raiseId: string;
+  hireId: string;
+  hireName: string;
+  kind: CrewCardKind;
+  summary: string;
+  raisedAt: number;
+  decision: 'approved' | 'denied' | null;
+  decidedBy: string | null;
+  /** sending: not yet acked by the Hub. parked: the run stopped waiting and resumes on the decision. closed: the run ended without one. */
+  state?: 'sending' | 'waiting' | 'parked' | 'decided' | 'closed';
+}
+
+/** null when this machine cannot read its cards, so the inbox never claims to be empty when it does not know. */
+export type CrewCardList = CrewCard[] | null;
+
+export type CrewLinkView =
+  | { step: 'show-codes'; name: string; confirmCode: string }
+  | { step: 'confirm-owner'; ownerName: string; ownerUpn: string }
+  | { step: 'stopped'; message: string };
+
+export type CrewEditResult = { ok: true } | { ok: false; error: string };
+
+/** The Office employees this machine could import, or null when no Office data folder is here. */
+export type CrewOfficeEmployees = string[] | null;
+export type CrewOfficeImportResult =
+  | { ok: true; skills: number; notes: number; work: number; skipped: string[]; failed: string[] }
+  | { ok: false; error: string };
+
+export interface CrewRole {
+  roleId: string;
+  name: string;
+}
+
+/** What the Hire form sends. The main process checks every field again before the Hub sees it. */
+export interface CrewHireInput {
+  name: string;
+  roleId: string;
+  repos: string[];
+  accountId: string;
+}
+
+/** An account the Hire form offers, and what it needs before a hire can run on it. */
+export interface CrewHireAccount {
+  id: string;
+  label: string;
+  needs: 'sign-in' | 'crew-token' | null;
+}
+
+/** hireId is set once the create was sent, even when the Hub has not answered yet. */
+export type CrewHireResult = CrewEditResult & { hireId?: string };
+
+/** The login pty Crew's Sign in again started, for the renderer to show. */
+export interface CrewSignInStarted {
+  accountId: string;
+  ptyId: string;
+}

@@ -1,4 +1,13 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification, screen } from 'electron';
+import { crewRecordSignIn, crewWindowsSetup, crewWindowsSignIn, startCrew, stopCrew } from './crew/crew-main';
+import { registerCrewSignIn } from './crew/crew-sign-in';
+import { registerSavedCopies } from './crew/wsl-backup';
+import { windowsBackupDir } from './crew/wsl-main';
+import { registerWindowsSignIn } from './crew/wsl-sign-in';
+import { registerWindowsSetup } from './crew/wsl-ipc';
+import { announceSignInStart } from './crew/sign-in-started';
+import { wireCrewIpc } from './crew/ipc-wiring';
+import { rendererMayWritePreference } from './crew/prefs';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ptyManager } from './pty-manager';
@@ -1076,6 +1085,25 @@ safeHandle('accounts:resumeLogin', (accountId: string) => {
   return accountAuth.resumeLoginFlow(ptyManager, mainWindow, id);
 });
 
+registerCrewSignIn({
+  handle: safeHandle,
+  resumeLogin: announceSignInStart(
+    (accountId) => accountAuth.resumeLoginFlow(ptyManager, mainWindow, accountId),
+    (channel, data) => mainWindow?.webContents.send(channel, data),
+  ),
+  loginSettled: accountAuth.loginSettled,
+  cancelLogin: (ptyId) => accountAuth.cancelLoginFlow(ptyManager, ptyId, false),
+  recordSignIn: (accountId) => crewRecordSignIn(accountId),
+  setLoginCompletedHook: accountAuth.setLoginCompletedHook,
+});
+
+registerSavedCopies({
+  handle: safeHandle,
+  backupDir: process.platform === 'win32' ? windowsBackupDir() : null,
+});
+registerWindowsSignIn(safeHandle, crewWindowsSignIn);
+registerWindowsSetup(safeHandle, (channel, payload) => mainWindow?.webContents.send(channel, payload), crewWindowsSetup);
+
 safeHandle('accounts:cancelLogin', (ptyId: string, deleteAccount: boolean) => {
   accountAuth.cancelLoginFlow(ptyManager, ptyId, deleteAccount);
 });
@@ -1214,6 +1242,7 @@ safeHandle('prefs:get', (key: string) => {
 });
 
 safeHandle('prefs:set', (key: string, value: string) => {
+  if (!rendererMayWritePreference(key)) throw new Error(`${key} is set by Bodhilander only`);
   prefsRepo.setPreference(key, value);
   usageService?.preferenceChanged(key);
 });
@@ -1532,6 +1561,11 @@ registerClaudeDesktopIpc({
   },
 });
 
+wireCrewIpc(
+  (channel, handler) => safeHandle(channel, handler),
+  () => mainWindow?.webContents.send('crew:changed'),
+);
+
 // ============================================================================
 // Remote Hosting (Relay) IPC Handlers
 // ============================================================================
@@ -1744,6 +1778,11 @@ app.whenReady().then(() => {
     // is a session manager first, and the engine ships behind it.
     log.error('[Main] Failed to start the run loop:', error);
   }
+  try {
+    startCrew();
+  } catch (error) {
+    log.error('[Main] Failed to start Crew:', error);
+  }
 }).catch((error) => {
   log.error('[Main] Failed to initialize app:', error);
 });
@@ -1905,6 +1944,11 @@ app.on('before-quit', (event) => {
           getRelayClient().stop();
         } catch (e) {
           log.error('Error stopping relay client on quit:', e);
+        }
+        try {
+          stopCrew();
+        } catch (e) {
+          log.error('Error stopping Crew on quit:', e);
         }
         stopBoardWatcherService();
         stopRunLoopService();

@@ -1,0 +1,134 @@
+import { describe, expect, mock, test } from 'bun:test';
+
+mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
+
+const { crewTools, bundlePath, BUILD_MESSAGE } = await import('../server');
+import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
+import { markTainted } from '../../taint';
+
+const BUNDLE = 'a'.repeat(64);
+
+function setup(scope: 'owner' | 'circle' = 'owner') {
+  const { raw, db } = crewDb();
+  raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, ?, ?, 'hi')`).run(uuid(1), HIRE, scope, PERSON);
+  raw.query(`INSERT INTO crew_hire_cache (hire_id, rev, data) VALUES (?, 1, ?)`).run(HIRE, JSON.stringify({ skillBundleHash: BUNDLE }));
+  raw.query(`INSERT INTO crew_note (note_id, hire_id, scope, path, body) VALUES ('n1', ?, 'owner', 'plan.md', 'owner text'), ('n2', ?, 'shared', 'team.md', 'shared text')`).run(HIRE, HIRE);
+  const cards: [string, Record<string, unknown>][] = [];
+  const sends: [string, Record<string, unknown>][] = [];
+  const notes: [string, Record<string, unknown>][] = [];
+  let ids = 0;
+  const tools = crewTools(
+    {
+      db,
+      raiseCard: (jobId, raise) => (cards.push([jobId, raise as unknown as Record<string, unknown>]), true),
+      sendMessage: (jobId, send) => (sends.push([jobId, send as unknown as Record<string, unknown>]), true),
+      writeNote: (jobId, write) => (notes.push([jobId, write as unknown as Record<string, unknown>]), true),
+      newId: () => uuid(50 + ++ids),
+    },
+    { id: uuid(1), hireId: HIRE, scope },
+    `chat:${scope}`,
+  );
+  const text = async (name: string, args: Record<string, unknown>) => (await tools.call(name, args)).content[0].text;
+  return { raw, db, tools, cards, sends, notes, text };
+}
+
+describe('Crew tools', () => {
+  test('note_write sends the prefixed path at the cached rev, 0 for a new note, under the run scope', async () => {
+    const t = setup();
+    t.raw.query(`UPDATE crew_note SET rev = 4 WHERE note_id = 'n1'`).run();
+    expect(await t.text('note_write', { path: 'owner/plan.md', content: 'new plan' })).toContain('Saved');
+    await t.tools.call('note_write', { path: 'shared/fresh.md', content: 'hello' });
+    await t.tools.call('note_write', { path: 'shared/team.md', deleted: true });
+    expect(t.notes).toEqual([
+      [uuid(1), { id: uuid(51), scope: 'owner', path: 'owner/plan.md', rev: 4, content: 'new plan', deleted: false, inboundId: uuid(1) }],
+      [uuid(1), { id: uuid(52), scope: 'owner', path: 'shared/fresh.md', rev: 0, content: 'hello', deleted: false, inboundId: uuid(1) }],
+      [uuid(1), { id: uuid(53), scope: 'owner', path: 'shared/team.md', rev: 0, content: '', deleted: true, inboundId: uuid(1) }],
+    ]);
+    expect(t.cards).toEqual([]);
+  });
+
+  test('note_write refuses a bad path, a missing body, and an owner note from a circle run', async () => {
+    const t = setup('circle');
+    for (const path of ['plan.md', 'owner/', 'shared/../x', 'shared/./x', 'shared/a\\b', 'shared//x', 'other/x']) {
+      expect((await t.tools.call('note_write', { path, content: 'x' })).isError).toBe(true);
+    }
+    expect((await t.tools.call('note_write', { path: 'shared/x' })).isError).toBe(true);
+    expect((await t.tools.call('note_write', { path: 'owner/plan.md', content: 'x' })).isError).toBe(true);
+    const audits = t.raw.query(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'note-scope-refused'`).get() as { n: number };
+    expect(audits.n).toBe(1);
+    expect(t.notes).toEqual([]);
+    await t.tools.call('note_write', { path: 'shared/team.md', content: 'circle may' });
+    expect(t.notes[0][1]).toMatchObject({ scope: 'circle', path: 'shared/team.md' });
+  });
+
+  test('a shared note change from a tainted run is a note_patch card carrying the note as the run started', async () => {
+    const t = setup();
+    const ownerFirst = setup();
+    t.raw.query(`UPDATE crew_note SET body = 'changed by sync', rev = 3 WHERE note_id = 'n2'`).run();
+    markTainted(t.db, HIRE, 'chat:owner', 'web_fetch');
+    expect(await t.text('note_write', { path: 'shared/team.md', content: 'patched' })).toContain('owner decides');
+    await t.tools.call('note_write', { path: 'shared/new.md', content: 'fresh' });
+    expect(t.cards.map(([, c]) => c)).toEqual([
+      { id: uuid(51), kind: 'note_patch', tainted: true, payload: { path: 'shared/team.md', rev: 0, baseContent: 'shared text', newContent: 'patched' }, inboundId: uuid(1) },
+      { id: uuid(52), kind: 'note_patch', tainted: true, payload: { path: 'shared/new.md', rev: 0, baseContent: '', newContent: 'fresh' }, inboundId: uuid(1) },
+    ]);
+    expect(t.notes).toEqual([]);
+    markTainted(ownerFirst.db, HIRE, 'chat:owner', 'web_fetch');
+    await ownerFirst.tools.call('note_write', { path: 'owner/plan.md', content: 'mine' });
+    expect(ownerFirst.notes).toHaveLength(1);
+    expect(ownerFirst.cards).toEqual([]);
+  });
+
+  test('send queues a send frame, never a card: to the recipient, or the asking conversation, tainted as the thread is', async () => {
+    const t = setup();
+    markTainted(t.db, HIRE, 'chat:owner', 'web_fetch');
+    expect(await t.text('send', { recipient: 'ana@bodhi.example', text: 'hello' })).toContain('after the owner approves');
+    await t.tools.call('send', { text: 'back to you' });
+    expect(t.sends).toEqual([
+      [uuid(1), { id: uuid(51), text: 'hello', tainted: true, recipient: 'ana@bodhi.example' }],
+      [uuid(1), { id: uuid(52), text: 'back to you', tainted: true, inboundId: uuid(1) }],
+    ]);
+    expect(t.cards).toEqual([]);
+    expect((await t.tools.call('send', { recipient: 'nobody', text: 'x' })).isError).toBe(true);
+    expect((await t.tools.call('send', { recipient: 'a@b.c', text: 'x'.repeat(28_001) })).isError).toBe(true);
+  });
+
+  test('a send with no recipient from a routine names nobody, so it is refused', async () => {
+    const t = setup();
+    t.raw.query(`UPDATE crew_job SET kind = 'routine' WHERE id = ?`).run(uuid(1));
+    expect((await t.tools.call('send', { text: 'hi' })).isError).toBe(true);
+    expect(t.sends).toEqual([]);
+  });
+
+  test('note_read reads by the job\'s run scope: a circle run never sees owner notes', async () => {
+    expect(await setup('owner').text('note_read', { scope: 'owner', path: 'plan.md' })).toBe('owner text');
+    const circle = setup('circle');
+    expect(await circle.text('note_read', { scope: 'shared', path: 'team.md' })).toBe('shared text');
+    const refused = await circle.tools.call('note_read', { scope: 'owner', path: 'plan.md' });
+    expect(refused.isError).toBe(true);
+    expect((circle.raw.query(`SELECT COUNT(*) AS n FROM crew_audit WHERE event = 'note-scope-refused'`).get() as { n: number }).n).toBe(1);
+  });
+
+  test('skill_propose raises a skill_change card against the pinned bundle and writes nothing', async () => {
+    const t = setup();
+    await t.tools.call('skill_propose', { files: [{ path: 'triage/SKILL.md', content: '# new' }] });
+    expect(t.cards[0][1]).toMatchObject({ kind: 'skill_change', tainted: false, payload: { baseBundle: BUNDLE, files: [{ path: 'triage/SKILL.md', content: '# new' }] } });
+  });
+
+  test('skill_propose refuses paths outside the bundle and proposals over 1 MB', async () => {
+    const t = setup();
+    for (const p of ['../x', '/etc/passwd', 'a/../../b', 'a\\b', 'a//b', './a', '']) {
+      expect((await t.tools.call('skill_propose', { files: [{ path: p, content: 'x' }] })).isError).toBe(true);
+    }
+    const big = 'x'.repeat(600 * 1024);
+    expect((await t.tools.call('skill_propose', { files: [{ path: 'a.md', content: big }, { path: 'b.md', content: big }] })).isError).toBe(true);
+    expect(t.cards).toEqual([]);
+    expect(bundlePath('skills/a.md')).toBe('skills/a.md');
+  });
+
+  test('start_build is refused until phase 2', async () => {
+    const t = setup();
+    const r = await t.tools.call('start_build', { issue: '1' });
+    expect(r).toEqual({ content: [{ type: 'text', text: BUILD_MESSAGE }], isError: true });
+  });
+});

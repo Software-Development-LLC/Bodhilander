@@ -21,6 +21,10 @@ import { ViewSwitcher, type ContentView } from './components/ViewSwitcher';
 import { RunInbox } from './components/RunInbox';
 import { RunList } from './components/RunList';
 import { BoardView } from './components/BoardView';
+import { CrewPanel } from './components/crew/CrewPanel';
+import { HireModal } from './components/crew/HireModal';
+import { CrewView, type CrewSelection } from './components/crew/CrewView';
+import { useCrew } from './store/crew';
 import { RunArm } from './components/RunArm';
 import { RunPrepare } from './components/RunPrepare';
 import { isSwitchPending, type SessionAccountIndicatorProps } from './components/SessionAccountIndicator';
@@ -295,6 +299,9 @@ const App: React.FC = () => {
   // Analytics and Arena all live in the same content area, so they are one
   // value rather than a boolean each.
   const [contentView, setContentView] = useState<ContentView>('terminal');
+  const crew = useCrew();
+  const [crewSelection, setCrewSelection] = useState<CrewSelection>({ kind: 'cards' });
+  const [hiring, setHiring] = useState(false);
   // Bumped when a run is armed so the inbox beside RunArm re-reads at once
   // rather than waiting out its poll -- the newly armed run shows immediately.
   const [runsRefresh, setRunsRefresh] = useState(0);
@@ -1787,6 +1794,34 @@ const App: React.FC = () => {
           </ul>
         ))}
 
+        <CrewPanel
+          status={crew.status}
+          hires={crew.hires}
+          error={crew.error}
+          selectedHireId={contentView === 'crew' && crewSelection.kind === 'hire' ? crewSelection.hireId : null}
+          onSelectHire={(hireId) => {
+            setCrewSelection({ kind: 'hire', hireId });
+            setContentView('crew');
+          }}
+          onOpenCards={() => {
+            setCrewSelection({ kind: 'cards' });
+            setContentView('crew');
+          }}
+          onHire={() => setHiring(true)}
+          beginLink={() => window.electronAPI.crewBeginLink()}
+          confirmLinkOwner={(isMe) => window.electronAPI.crewConfirmLinkOwner(isMe)}
+          unlink={() => window.electronAPI.crewUnlink()}
+        />
+        {hiring && (
+          <HireModal
+            onClose={() => setHiring(false)}
+            onHired={(hireId) => {
+              setHiring(false);
+              setCrewSelection({ kind: 'hire', hireId });
+              setContentView('crew');
+            }}
+          />
+        )}
       </aside>
 
       <main className="main">
@@ -1832,6 +1867,15 @@ const App: React.FC = () => {
           </div>
         )}
         {contentView === 'board' && <BoardView />}
+        {contentView === 'crew' && (
+          <CrewView
+            selection={crewSelection}
+            onLetGo={() => {
+              setCrewSelection({ kind: 'cards' });
+              void crew.refresh();
+            }}
+          />
+        )}
         {/* The terminal area is HIDDEN, never unmounted, when another view is
             selected. Unmounting would dispose every xterm instance and kill the
             PTYs, so switching tabs would visually reset all live sessions.

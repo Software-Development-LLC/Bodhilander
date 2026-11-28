@@ -1,0 +1,3 @@
+#!/bin/sh
+# A Crew run's gh: every call goes to the run's GitHub gateway socket.
+ELECTRON_RUN_AS_NODE=1 exec "$CREW_NODE" "$CREW_GH_SHIM_JS" "$@"

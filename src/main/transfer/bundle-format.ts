@@ -202,8 +202,10 @@ export const PROVIDER_KEY_PREFIX = 'providerApiKey.';
  * outstanding *here*. Carried to a third machine it would describe a restore
  * that never happened there, naming folders to relink that machine has never
  * had and accounts it was never asked to sign in to.
+ *
+ * `crew.` names this machine to the Crew Hub; a copy would claim its identity.
  */
-const LOCAL_PREFERENCE_PREFIXES = [PROVIDER_KEY_PREFIX, 'providerApiKeyUse.', 'relay.', 'arrival.'] as const;
+const LOCAL_PREFERENCE_PREFIXES = [PROVIDER_KEY_PREFIX, 'providerApiKeyUse.', 'relay.', 'arrival.', 'crew.'] as const;
 
 /**
  * Keys classified as staying home. Redundant for the filter now that the
