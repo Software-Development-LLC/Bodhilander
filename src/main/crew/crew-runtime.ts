@@ -183,6 +183,7 @@ export function startCrewRuntime(deps: CrewRuntimeDeps): CrewRuntime {
     db: deps.db,
     sendEdit: (input) => deps.hub.sendEdit(input),
     configDirOf: (id) => accountOf(id)?.configDir ?? null,
+    now,
   });
 
   const guard = (what: string, fn: () => unknown) => {

@@ -137,15 +137,32 @@ describe('changing a hire\'s account', () => {
     expect(pendingRows(raw)).toBe(0);
   });
 
-  test('settle forgets a change whose edit the fence, a purge or a refusal removed, and keeps one still queued', async () => {
+  test('an ack that removes the edit before its edit_result arrives does not lose the carry to a settle in between', async () => {
     const { changer, raw, queued, thread } = await seed();
+    changer.change('h1', account('b'));
+    queued('e1');
+    raw.query(`DELETE FROM crew_outbox_local WHERE id = 'e1'`).run();
+    expect(changer.settle()).toEqual([]);
+    expect(changer.onEditResult({ id: 'e1', result: 'applied' })).toEqual({ carried: 1, fresh: 0 });
+    expect(thread().account_id).toBe('b');
+  });
+
+  test('settle forgets a change whose edit is gone only once the Hub no longer keeps its answer, and keeps one still queued', async () => {
+    const { AccountChanger, deps, raw, queued, thread } = await seed();
+    let clock = 1_000;
+    const changer = new AccountChanger({ ...deps, now: () => clock });
     changer.change('h1', account('b'));
     changer.change('h1', account('b'));
     changer.change('h1', account('b'));
     queued('e1');
     queued('e2', 'unsendable');
+    const keys = () => raw.query(`SELECT key FROM crew_sync_state WHERE key LIKE 'account-change:%' ORDER BY key`).all();
+    clock += 30 * 24 * 3600_000 - 1;
     expect(changer.settle()).toEqual([]);
-    expect(raw.query(`SELECT key FROM crew_sync_state WHERE key LIKE 'account-change:%'`).all()).toEqual([{ key: 'account-change:e1' }]);
+    expect(keys()).toHaveLength(3);
+    clock += 1;
+    expect(changer.settle()).toEqual([]);
+    expect(keys()).toEqual([{ key: 'account-change:e1' }]);
     expect(thread().account_id).toBe('a');
   });
 

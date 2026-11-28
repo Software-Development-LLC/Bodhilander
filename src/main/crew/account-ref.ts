@@ -61,17 +61,21 @@ export interface AccountChangeDeps {
   sendEdit(input: EditInput): string;
   configDirOf(accountId: string): string | null;
   carry?: typeof carryTranscript;
+  now?(): number;
 }
 
 export type AccountChangeOutcome = { editId: string } | { refused: 'unknown-account' | 'hire-not-synced' | 'send-failed' };
 
 const PENDING_PREFIX = 'account-change:';
+/** As long as the Hub remembers an edit's answer, so an edit_result can still arrive for it. */
+const PENDING_KEEP_MS = 30 * 24 * 3600_000;
 
 interface PendingChange {
   hireId: string;
   accountId: string;
   configDir: string;
   applied?: boolean;
+  queuedAt?: number;
 }
 
 /**
@@ -86,7 +90,7 @@ export class AccountChanger {
     if (ref === null) return { refused: 'unknown-account' };
     if (!this.synced(hireId)) return { refused: 'hire-not-synced' };
     const id = randomUUID();
-    const change: PendingChange = { hireId, accountId: to.id, configDir: to.configDir };
+    const change: PendingChange = { hireId, accountId: to.id, configDir: to.configDir, queuedAt: this.now() };
     this.deps.db.prepare(`INSERT OR REPLACE INTO crew_sync_state (key, value) VALUES (?, ?)`).run(PENDING_PREFIX + id, JSON.stringify(change));
     let editId: string;
     try {
@@ -119,7 +123,10 @@ export class AccountChanger {
     return this.carry(key, change);
   }
 
-  /** Carries every applied change whose carry failed, and forgets every change whose edit is no longer queued. */
+  /**
+   * Carries every applied change whose carry failed. An unapplied change is forgotten by its
+   * edit_result; one whose edit was dropped unanswered goes once the Hub could no longer answer it.
+   */
   settle(): CarryResult[] {
     const rows = this.deps.db.prepare(`SELECT key, value FROM crew_sync_state WHERE key LIKE ?`).all(`${PENDING_PREFIX}%`) as {
       key: string;
@@ -135,9 +142,18 @@ export class AccountChanger {
         } catch (err) {
           log.warn(`[Crew] could not carry sessions for ${change.hireId}; trying again on the next settle`, err);
         }
-      } else if (!change || !queued.get(row.key.slice(PENDING_PREFIX.length))) this.forget(row.key);
+      } else if (!change || this.unanswerable(row.key, change, queued)) this.forget(row.key);
     }
     return carried;
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  private unanswerable(key: string, change: PendingChange, queued: Database.Statement): boolean {
+    if (queued.get(key.slice(PENDING_PREFIX.length))) return false;
+    return this.now() - (change.queuedAt ?? 0) >= PENDING_KEEP_MS;
   }
 
   private carry(key: string, change: PendingChange): CarryResult {
@@ -165,9 +181,9 @@ function pendingChange(stored: string): PendingChange | null {
   try {
     const v: unknown = JSON.parse(stored);
     if (typeof v !== 'object' || v === null) return null;
-    const { hireId, accountId, configDir, applied } = v as Record<string, unknown>;
+    const { hireId, accountId, configDir, applied, queuedAt } = v as Record<string, unknown>;
     if (typeof hireId !== 'string' || typeof accountId !== 'string' || typeof configDir !== 'string') return null;
-    return { hireId, accountId, configDir, applied: applied === true };
+    return { hireId, accountId, configDir, applied: applied === true, queuedAt: typeof queuedAt === 'number' ? queuedAt : undefined };
   } catch {
     return null;
   }
