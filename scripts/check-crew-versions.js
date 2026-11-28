@@ -1,8 +1,7 @@
 /**
- * electron-builder beforePack hook: a Windows build warns while
- * resources/crew-agent/versions.json still holds a placeholder, and fails when
- * CREW_RELEASE_STRICT=1, as the release workflow sets. The app holds Crew setup
- * at runtime until the pins are real.
+ * electron-builder beforePack hook: a Windows build warns while versions.json
+ * holds a placeholder, and fails under CREW_RELEASE_STRICT=1 (release CI).
+ * The app holds Crew setup at runtime until the pins are real.
  */
 
 const fs = require('fs');
