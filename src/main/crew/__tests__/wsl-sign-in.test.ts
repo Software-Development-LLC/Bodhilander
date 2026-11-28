@@ -5,7 +5,7 @@ import { TmpParentError } from '../run/sockets';
 const TOKEN = `sk-ant-oat01-${'a'.repeat(80)}`;
 const URL = 'https://claude.ai/oauth/authorize?code=true&state=x';
 
-function setup(mode: 'token' | 'login', opts: { creds?: boolean; stored?: string | null; uuid?: string; parent?: string } = {}) {
+function setup(mode: 'token' | 'login', opts: { creds?: boolean; stored?: string | null; uuid?: string; parent?: string; mkdirFails?: boolean } = {}) {
   const scripts: string[] = [];
   const opened: string[] = [];
   const written: string[] = [];
@@ -30,6 +30,7 @@ function setup(mode: 'token' | 'login', opts: { creds?: boolean; stored?: string
     records: { add: (n) => void records.add(n), remove: (n) => void records.delete(n), list: () => [...records] },
     sh: async (script) => {
       scripts.push(script);
+      if (script.startsWith('umask 077') && opts.mkdirFails) return { code: 1, stdout: '', stderr: 'denied' };
       if (script.startsWith('p=/tmp/crt-1000')) return { code: 0, stdout: opts.parent ?? 'PARENT directory|1000|300\nMADE\n', stderr: '' };
       if (script.startsWith('test -s')) return { code: opts.creds ? 0 : 1, stdout: '', stderr: '' };
       if (script.startsWith('cat ')) return { code: 0, stdout: JSON.stringify({ oauthAccount: { accountUuid: opts.uuid ?? 'u-1' } }), stderr: '' };
@@ -120,6 +121,13 @@ describe('Sign in for Crew on Windows', () => {
     expect(u.spawned()).toEqual([]);
     expect(u.s.liveTmpNames()).toEqual([]);
     expect(u.s.active).toBe(false);
+  });
+
+  test('an account dir that cannot be made rejects the sign-in and spawns nothing', async () => {
+    const u = setup('token', { mkdirFails: true });
+    await expect(u.s.start('a1')).rejects.toThrow('account-dir');
+    expect(u.spawned()).toEqual([]);
+    expect(u.s.liveTmpNames()).toEqual([]);
   });
 
   test('two sign-ins started together spawn one claude, and a cancel before the spawn spawns none', async () => {

@@ -86,7 +86,8 @@ export class WslSignIn {
     let tmpDir = '';
     let ready = false;
     try {
-      await d.sh(`umask 077 && mkdir -p ${q(configDir)}`);
+      const made = await d.sh(`umask 077 && mkdir -p ${q(configDir)}`);
+      if (made.code !== 0) throw new Error('account-dir-not-made');
       tmpDir = await makeWslTmpDir(d.sh, CREW_UID, {
         add: (n) => {
           tmpName = n;

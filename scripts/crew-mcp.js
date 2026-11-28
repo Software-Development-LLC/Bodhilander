@@ -76,6 +76,7 @@ async function handle(message) {
   if (message.id !== undefined) send({ jsonrpc: '2.0', id: message.id, result: {} });
 }
 
+const inFlight = new Set();
 let buffered = '';
 process.stdin.on('data', (chunk) => {
   buffered += chunk.toString('utf8');
@@ -90,7 +91,10 @@ process.stdin.on('data', (chunk) => {
     } catch {
       continue;
     }
-    void handle(message);
+    const p = handle(message).finally(() => inFlight.delete(p));
+    inFlight.add(p);
   }
 });
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => {
+  void Promise.allSettled([...inFlight]).then(() => process.exit(0));
+});
