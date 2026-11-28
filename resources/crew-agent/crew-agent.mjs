@@ -11,11 +11,20 @@ import { constants } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 
-export const VERSION = '1.1.1';
+export const VERSION = '1.1.2';
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const RUN_DIR_TRIES = 4;
 
-const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
+const send = (frame, out = process.stdout) => out.write(`${JSON.stringify(frame)}\n`);
+
+/** A socket's bytes go out as data frames; while stdout is full the socket stops being read. */
+export function relayData(conn, id, out = process.stdout) {
+  conn.on('data', (b) => {
+    if (send({ t: 'data', conn: id, b64: b.toString('base64') }, out)) return;
+    conn.pause();
+    out.once('drain', () => conn.resume());
+  });
+}
 
 function checkRoot(root, uid) {
   let st;
@@ -92,7 +101,7 @@ export async function serve(input = process.stdin, root = null) {
           const id = (next += 1);
           conns.set(id, conn);
           send({ t: 'open', conn: id, sock });
-          conn.on('data', (b) => send({ t: 'data', conn: id, b64: b.toString('base64') }));
+          relayData(conn, id);
           conn.on('end', () => send({ t: 'end', conn: id }));
           conn.on('error', () => conn.destroy());
           conn.on('close', () => conns.delete(id));
