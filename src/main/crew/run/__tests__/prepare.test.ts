@@ -43,6 +43,7 @@ function setup(opts: { ships?: boolean; loggedIn?: boolean; ref?: unknown; servi
   const accounts = [{ id: 'a1', label: 'Work Max', configDir: '/acct/a1', email: 'b@x.com' } as ClaudeAccount];
   const deps = {
     db, signIn, accounts: () => accounts, loggedIn: () => opts.loggedIn ?? true, userData, home: '/Users/me', claudePath: '/usr/local/bin/claude',
+    platform: 'linux' as NodeJS.Platform,
     env: { PATH: '/usr/bin', GH_TOKEN: 'ghp_x', ANTHROPIC_API_KEY: 'k' }, timeZone: () => 'UTC', handbook: () => '# Role\n',
     services: async () => {
       if (opts.services === 'root') throw new SocketRootError({ type: 'symlink', uid: 0, mode: '777' });

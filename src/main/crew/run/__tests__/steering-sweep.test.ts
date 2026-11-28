@@ -34,7 +34,7 @@ const left = (root: string): string[] => {
   const walk = (dir: string) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
-      out.push(path.relative(root, p));
+      out.push(path.relative(root, p).split(path.sep).join('/'));
       if (e.isDirectory()) walk(p);
     }
   };

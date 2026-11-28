@@ -76,6 +76,8 @@ describe('Crew tools as the main process builds them', () => {
     fs.mkdirSync(paths.owner, { recursive: true });
     fs.writeFileSync(path.join(paths.owner, 'report.md'), 'the report');
 
+    const real = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
     startCrew();
     try {
       const job = { id: 'job-1', hireId: HIRE, scope: 'owner' as const };
@@ -95,6 +97,7 @@ describe('Crew tools as the main process builds them', () => {
       expect(held.content[0].text).toBe('This run has read untrusted content, so it can only fetch from docs.github.com.');
     } finally {
       stopCrew();
+      if (real) Object.defineProperty(process, 'platform', real);
     }
   });
 });

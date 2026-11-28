@@ -37,8 +37,18 @@ mock.module('../hub-service', () => ({
 
 const { startCrew, stopCrew } = await import('../crew-main');
 
+async function onPlatform(platform: NodeJS.Platform, fn: () => Promise<void>): Promise<void> {
+  const real = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: platform });
+  try {
+    await fn();
+  } finally {
+    if (real) Object.defineProperty(process, 'platform', real);
+  }
+}
+
 describe('Crew in the main process', () => {
-  test('starts the Hub and the runtime once, prepares runs for real, and stops both', async () => {
+  test('starts the Hub and the runtime once, prepares runs for real, and stops both', () => onPlatform('linux', async () => {
     const rt = startCrew();
     expect(startCrew()).toBe(rt);
     expect(events).toEqual(['hub-start', 'hub-start']);
@@ -58,27 +68,21 @@ describe('Crew in the main process', () => {
     expect(hub.listenerCount('token')).toBe(0);
     expect(hub.listenerCount('refused')).toBe(0);
     expect(replaced).toBeNull();
-  });
+  }));
 
-  test('on Windows a run is held for setup until BodhiCrew passes its check, and the Hub is told', async () => {
-    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
-    Object.defineProperty(process, 'platform', { value: 'win32' });
-    try {
-      hub = fakeHub();
-      raw.query(`DELETE FROM crew_job`).run();
-      raw.query(`DELETE FROM crew_audit`).run();
-      startCrew();
-      raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(2), HIRE, PERSON);
-      hub.emit('job', {});
-      await new Promise((r) => setTimeout(r, 50));
-      expect(raw.query(`SELECT state FROM crew_job`).get()).toEqual({ state: 'queued' });
-      expect(hub.audits).toContainEqual(['hold', { state: 'held:setup' }, HIRE]);
-      expect(raw.query(`SELECT event FROM crew_audit WHERE event = 'held:setup'`).all()).toEqual([{ event: 'held:setup' }]);
-      stopCrew();
-    } finally {
-      if (platform) Object.defineProperty(process, 'platform', platform);
-    }
-  });
+  test('on Windows a run is held for setup until BodhiCrew passes its check, and the Hub is told', () => onPlatform('win32', async () => {
+    hub = fakeHub();
+    raw.query(`DELETE FROM crew_job`).run();
+    raw.query(`DELETE FROM crew_audit`).run();
+    startCrew();
+    raw.query(`INSERT INTO crew_job (id, hire_id, epoch, scope, requested_by, text) VALUES (?, ?, 1, 'owner', ?, 'hi')`).run(uuid(2), HIRE, PERSON);
+    hub.emit('job', {});
+    await new Promise((r) => setTimeout(r, 50));
+    expect(raw.query(`SELECT state FROM crew_job`).get()).toEqual({ state: 'queued' });
+    expect(hub.audits).toContainEqual(['hold', { state: 'held:setup' }, HIRE]);
+    expect(raw.query(`SELECT event FROM crew_audit WHERE event = 'held:setup'`).all()).toEqual([{ event: 'held:setup' }]);
+    stopCrew();
+  }));
 
   test('a replaced Hub client moves the runtime onto it', () => {
     startCrew();
