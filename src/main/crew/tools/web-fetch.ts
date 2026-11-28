@@ -57,12 +57,17 @@ function v4Public(b: number[]): boolean {
   if (x === 169 && y === 254) return false;
   if (x === 172 && y >= 16 && y < 32) return false;
   if (x === 192 && y === 168) return false;
+  if (x === 192 && y === 0 && b[2] === 0) return false;
+  if (x === 198 && (y === 18 || y === 19)) return false;
   return true;
 }
 
 const zero = (b: number[], from: number, to: number): boolean => b.slice(from, to).every((x) => x === 0);
 
-/** Whether a resolved address is public. Mapped and well-known-prefix NAT64 addresses are judged as their IPv4. */
+/**
+ * Whether a resolved address is public. Mapped and well-known-prefix NAT64
+ * addresses are judged as their IPv4; 6to4 and IPv4-translated ones are refused.
+ */
 export function addressAllowed(address: string): boolean {
   const v4 = v4Bytes(address);
   if (v4) return v4Public(v4);
@@ -70,9 +75,11 @@ export function addressAllowed(address: string): boolean {
   if (!b) return false;
   if (zero(b, 0, 10) && b[10] === 0xff && b[11] === 0xff) return v4Public(b.slice(12));
   if (zero(b, 0, 12)) return false;
+  if (zero(b, 0, 8) && b[8] === 0xff && b[9] === 0xff && zero(b, 10, 12)) return false;
+  if (b[0] === 0x20 && b[1] === 0x02) return false;
   if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) return zero(b, 4, 12) && v4Public(b.slice(12));
   if ((b[0] & 0xfe) === 0xfc) return false;
-  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return false;
+  if (b[0] === 0xfe && (b[1] & 0x80) === 0x80) return false;
   if (b[0] === 0xff) return false;
   return true;
 }

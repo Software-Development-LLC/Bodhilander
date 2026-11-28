@@ -34,7 +34,9 @@ const DNS = {
 describe('web_fetch addresses', () => {
   const refused = ['127.0.0.1', '::ffff:127.0.0.1', '::ffff:7f00:1', '64:ff9b::7f00:1', '64:ff9b:1::1', '::127.0.0.1', '::1', '::', '0.0.0.0', '169.254.169.254', '10.0.0.1', '172.16.5.4', '192.168.0.1', '100.64.0.1', '224.0.0.1', 'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', 'fe80::1%en0', '64:ff9b::a00:1', 'not-an-ip'];
   for (const a of refused) test(`refuses ${a}`, () => expect(addressAllowed(a)).toBe(false));
-  for (const a of [PUBLIC, '8.8.8.8', '2606:4700::1111', '64:ff9b::808:808', '::ffff:8.8.8.8', '172.32.0.1', '100.128.0.1']) test(`allows ${a}`, () => expect(addressAllowed(a)).toBe(true));
+  const reserved = ['2002:808:808::1', '2002:a00:1::1', '::ffff:0:8.8.8.8', '::ffff:0:7f00:1', 'fec0::1', 'feff::1', '198.18.0.1', '198.19.255.254', '192.0.0.1', '192.0.0.170'];
+  for (const a of reserved) test(`refuses reserved ${a}`, () => expect(addressAllowed(a)).toBe(false));
+  for (const a of [PUBLIC, '8.8.8.8', '2606:4700::1111', '64:ff9b::808:808', '::ffff:8.8.8.8', '172.32.0.1', '100.128.0.1', '198.17.255.1', '198.20.0.1', '192.0.1.1', '2003::1', 'fe00::1']) test(`allows ${a}`, () => expect(addressAllowed(a)).toBe(true));
 });
 
 describe('web_fetch', () => {
