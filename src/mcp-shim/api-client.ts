@@ -71,16 +71,14 @@ export const httpSend: HttpSend = (request) =>
         let body = '';
         res.setEncoding('utf8');
         res.on('data', (chunk: string) => { body += chunk; });
-        res.on('end', () => { clearTimeout(timer); resolve({ status: res.statusCode ?? 0, body }); });
-        res.on('error', (err) => { clearTimeout(timer); reject(err); });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        res.on('error', reject);
       },
     );
-    // Rejects itself: under Bun neither req.setTimeout nor destroy(err) reliably raises 'error'.
-    const timer = setTimeout(() => {
-      reject(Object.assign(new Error('timed out'), { timedOut: true }));
-      req.destroy();
-    }, request.timeoutMs);
-    req.on('error', (err) => { clearTimeout(timer); reject(err); });
+    req.setTimeout(request.timeoutMs, () => {
+      req.destroy(Object.assign(new Error('timed out'), { timedOut: true }));
+    });
+    req.on('error', reject);
     req.end(request.body);
   });
 
