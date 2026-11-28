@@ -29,6 +29,31 @@ function setup(opts: { settles?: boolean | null; throws?: boolean; onSettle?: ()
 }
 
 describe('Crew sign in again', () => {
+  test('two overlapping sign-ins for one account both record the login that lands after the first ends', async () => {
+    const handlers: Record<string, (...args: unknown[]) => unknown> = {};
+    const settles: Array<(ok: boolean) => void> = [];
+    const signedIn: string[] = [];
+    let hook: ((id: string) => void) | null = null;
+    let n = 0;
+    registerCrewSignIn({
+      handle: (channel, fn) => (handlers[channel] = fn),
+      resumeLogin: () => ({ ptyId: `__login-${++n}` }),
+      loginSettled: () => new Promise<boolean>((resolve) => settles.push(resolve)),
+      cancelLogin: () => {},
+      recordSignIn: (id) => signedIn.push(id),
+      setLoginCompletedHook: (fn) => (hook = fn),
+      timeoutMs: 60_000,
+    });
+    const first = handlers['crew:signInAgain']('a1') as Promise<unknown>;
+    const second = handlers['crew:signInAgain']('a1') as Promise<unknown>;
+    settles[0](true);
+    expect(await first).toEqual({ ok: true });
+    hook?.('a1');
+    settles[1](true);
+    expect(await second).toEqual({ ok: true });
+    expect(signedIn).toEqual(['a1']);
+  });
+
   test('resumes the login for the account and answers ok once it lands', async () => {
     const t = setup();
     expect(await t.call(' a1 ')).toEqual({ ok: true });

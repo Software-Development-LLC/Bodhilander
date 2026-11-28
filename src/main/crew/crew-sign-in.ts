@@ -15,18 +15,20 @@ export interface CrewSignInDeps {
 
 /** Only a login Crew started counts as a Crew sign-in; any other login of the account leaves Crew's state alone. */
 export function registerCrewSignIn(deps: CrewSignInDeps): void {
-  const fromCrew = new Set<string>();
+  const fromCrew = new Map<string, number>();
   deps.setLoginCompletedHook((accountId) => {
     if (fromCrew.has(accountId)) deps.recordSignIn(accountId);
   });
   deps.handle('crew:signInAgain', async (accountId: unknown): Promise<CrewEditResult> => {
     const id = typeof accountId === 'string' ? accountId.trim() : '';
     if (!id) return { ok: false, error: 'Account id is required.' };
-    fromCrew.add(id);
+    fromCrew.set(id, (fromCrew.get(id) ?? 0) + 1);
     try {
       return await signInFor(id);
     } finally {
-      fromCrew.delete(id);
+      const left = (fromCrew.get(id) ?? 1) - 1;
+      if (left > 0) fromCrew.set(id, left);
+      else fromCrew.delete(id);
     }
   });
 
