@@ -4,7 +4,7 @@ mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, 
 
 const { HubClient, resolveHubUrl, HUB_URL_DEVELOPMENT, HUB_URL_PRODUCTION } = await import('../hub-client');
 import type { HubSocket } from '../hub-client';
-import { FILE_CHUNK_BYTES, FILE_MAX_BYTES, HEARTBEAT_MS, LEASE_MS, MAX_FRAME_BYTES, parseMachineFrame } from '../protocol';
+import { FILE_CHUNK_BYTES, FILE_MAX_BYTES, HEARTBEAT_MS, LEASE_MS, MACHINE_FRAME_TYPES, MAX_FRAME_BYTES, parseMachineFrame } from '../protocol';
 import { createHash } from 'crypto';
 import { HIRE, MACHINE, PERSON, crewDb, uuid } from './crew-db';
 
@@ -1254,5 +1254,64 @@ describe('HubClient send_file', () => {
     t.timeouts.find((x) => x.ms === 5)!.fn();
     expect(await answer).toEqual({ state: 'pending' });
     expect(t.raw.query(`SELECT COUNT(*) AS n FROM crew_outbox_local WHERE frame_type = 'file'`).get()).toEqual({ n: 1 });
+  });
+});
+
+describe('no token reaches the Hub', () => {
+  const GATEWAY = 'ghs_plantedGatewayToken0123456789';
+  const MCP = 'mcp-planted-run-token-0123456789';
+  const OAUTH = 'sk-ant-oat01-planted-oauth-setup-token';
+  const TOKEN_KEY = /^(token|accessToken|refreshToken|oauthToken|setupToken|mcpToken|gatewayToken|authorization|bearer|secret)$/i;
+  const keys = (v: unknown, out: string[] = []): string[] => {
+    if (Array.isArray(v)) v.forEach((x) => keys(x, out));
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) keys(x, out.concat(k)).forEach((y) => out.includes(y) || out.push(y));
+    return out;
+  };
+
+  test('every frame type the machine sends carries no gateway, MCP or OAuth token', () => {
+    const env = { oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN, mcp: process.env.CREW_MCP_TOKEN };
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = OAUTH;
+    process.env.CREW_MCP_TOKEN = MCP;
+    try {
+      const t = setup();
+      t.online();
+      t.sock().hub(renewFor(1));
+      t.sock().hub(deliver(1));
+      t.sock().hub({ type: 'token', id: uuid(21), token: GATEWAY, expiresAt: t.c.w + 60_000, repos: ['o/r'] });
+      for (const i of t.intervals.filter((x) => x.live)) i.fn();
+      t.client.sendReply(uuid(1), `reply`);
+      t.client.sendTyping(uuid(1));
+      t.client.sendMessage(uuid(1), { id: uuid(30), text: 'hello', tainted: false, recipient: 'a@b.c' });
+      void t.client.sendFile(uuid(1), { id: uuid(40), name: 'r.md', size: 1, sha256: createHash('sha256').update('x').digest('hex'), tainted: false, bytes: Buffer.from('x'), recipient: 'a@b.c' });
+      t.client.sendCard(uuid(1), { id: uuid(20), kind: 'permission', tainted: false, payload: { tool: 'Bash', summary: 's' } });
+      t.client.sendMoveCard(HIRE, { account: 'missing', accountLabel: 'Work' });
+      t.client.sendUsage(uuid(1), {
+        runId: uuid(41), requestedBy: PERSON, accountUuid: 'acct', startedAt: 1, durationMs: 2, model: 'm', inputTokens: 3,
+        outputTokens: 4, cacheCreationTokens: 5, cacheReadTokens: 6, windows: [], windowsReadAt: 8,
+      });
+      void t.client.usageRead(HIRE, 1, 0);
+      t.client.sendEdit({ op: 'update', kind: 'hire', objectId: HIRE, hireId: HIRE, fields: { name: 'PO' } });
+      t.client.sendNoteWrite(uuid(1), { id: uuid(61), scope: 'owner', path: 'shared/team.md', rev: 0, content: 'hello', deleted: false, inboundId: uuid(1) });
+      t.client.sendOwnerNote(HIRE, 'owner/notes.md', 0, 'mine');
+      t.client.sendRoutineFired(uuid(1), uuid(24), 1, 2);
+      t.client.sendTokenRequest(uuid(1), uuid(22), PERSON, ['o/r']);
+      t.client.sendAudit('hold', { state: 'held:setup' }, HIRE);
+      t.client.sendArtifactRequest(uuid(23), 'crew-agent.tar');
+      t.client.sendUnlink(MACHINE);
+      t.sock().hub({ type: 'lease_revoke', hireId: HIRE, mode: 'drop' });
+
+      const frames = t.sockets.flatMap((s) => s.sent);
+      expect([...new Set(frames.map((f) => f.type))].sort()).toEqual([...MACHINE_FRAME_TYPES].sort());
+      for (const f of frames) {
+        const json = JSON.stringify(f);
+        for (const secret of [GATEWAY, MCP, OAUTH]) expect(json).not.toContain(secret);
+        expect(keys(f).filter((k) => TOKEN_KEY.test(k))).toEqual([]);
+      }
+    } finally {
+      if (env.oauth === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = env.oauth;
+      if (env.mcp === undefined) delete process.env.CREW_MCP_TOKEN;
+      else process.env.CREW_MCP_TOKEN = env.mcp;
+    }
   });
 });
