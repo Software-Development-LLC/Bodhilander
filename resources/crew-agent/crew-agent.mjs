@@ -10,6 +10,7 @@ import * as net from 'node:net';
 import { constants } from 'node:os';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 export const VERSION = '1.1.2';
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
@@ -204,7 +205,7 @@ export async function execRun(input = process.stdin) {
   });
 }
 
-const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname);
+const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   const mode = process.argv[2];
   if (mode === '--version') {
