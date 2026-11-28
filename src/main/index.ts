@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, crashReporter, Notification
 import { crewRecordSignIn, crewWindowsSetup, crewWindowsSignIn, startCrew, stopCrew } from './crew/crew-main';
 import { registerCrewSignIn } from './crew/crew-sign-in';
 import { registerSavedCopies } from './crew/wsl-backup';
+import { windowsBackupDir } from './crew/wsl-main';
 import { registerWindowsSignIn } from './crew/wsl-sign-in';
 import { registerWindowsSetup } from './crew/wsl-ipc';
 import { announceSignInStart } from './crew/sign-in-started';
@@ -1098,7 +1099,7 @@ registerCrewSignIn({
 
 registerSavedCopies({
   handle: safeHandle,
-  backupDir: process.platform === 'win32' && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Bodhilander', 'crew', 'backup') : null,
+  backupDir: process.platform === 'win32' ? windowsBackupDir() : null,
 });
 registerWindowsSignIn(safeHandle, crewWindowsSignIn);
 registerWindowsSetup(safeHandle, (channel, payload) => mainWindow?.webContents.send(channel, payload), crewWindowsSetup);

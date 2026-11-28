@@ -7,10 +7,18 @@ import { getCrewHub } from './hub-service';
 import type { ArtifactHub } from './artifacts';
 import type { WindowsCrewDeps } from './wsl-runtime';
 
+/** Setup, Repair and Saved copies all read this, so a backup is listed wherever it was written. */
+export function windowsCrewDir(): string {
+  return path.join(process.env.LOCALAPPDATA ?? app.getPath('userData'), 'Bodhilander', 'crew');
+}
+
+export function windowsBackupDir(): string {
+  return path.join(windowsCrewDir(), 'backup');
+}
+
 export function windowsSetupDeps(onRepaired: () => Promise<void>): Pick<WindowsCrewDeps, 'crewDir' | 'linked' | 'artifactHub' | 'onRepaired'> {
-  const base = process.env.LOCALAPPDATA ?? app.getPath('userData');
   return {
-    crewDir: path.join(base, 'Bodhilander', 'crew'),
+    crewDir: windowsCrewDir(),
     linked: () => !!getPreference(MACHINE_ID_PREF),
     artifactHub: () => getCrewHub() as unknown as ArtifactHub | null,
     onRepaired,
