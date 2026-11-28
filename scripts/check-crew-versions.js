@@ -1,6 +1,6 @@
 /**
  * electron-builder beforePack hook: a Windows build warns while versions.json
- * holds a placeholder, and fails under CREW_RELEASE_STRICT=1 (release CI).
+ * holds a placeholder, and fails under CREW_RELEASE_STRICT=1 (stable releases).
  * The app holds Crew setup at runtime until the pins are real.
  */
 

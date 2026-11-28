@@ -79,10 +79,12 @@ describe("the release check on Crew's versions.json", () => {
     }
   });
 
-  test("the release workflow's Windows packaging is strict", () => {
+  test("the release workflow's Windows packaging is strict for a stable release only, so betas still build", () => {
     const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
     const windows = workflow.slice(workflow.indexOf('- name: Build distributables (Windows)'), workflow.indexOf('- name: Build distributables (macOS)'));
-    expect(windows).toMatch(/^\s+CREW_RELEASE_STRICT: '1'$/m);
+    const strict = windows.match(/^\s+CREW_RELEASE_STRICT: (.+)$/m)?.[1];
+    expect(strict).toBe("${{ needs.check-version.outputs.is_prerelease == 'false' && '1' || '' }}");
+    expect(workflow).toMatch(/echo "is_prerelease=\$IS_PRERELEASE" >> \$GITHUB_OUTPUT/);
   });
 
   test('electron-builder runs it before packing', () => {
