@@ -166,6 +166,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # scripts/check-crew-versions.js fails the pack while versions.json
+          # still holds a placeholder hash, so no Windows build ships without Crew.
+          CREW_RELEASE_STRICT: '1'
           # Azure Trusted Signing (BDHLNDR — Windows signing). Credentials are
           # secrets; the non-secret identifiers are repo variables. When the
           # credentials are absent the build is produced UNSIGNED, exactly as

@@ -1,7 +1,8 @@
 /**
  * electron-builder beforePack hook: a Windows build warns while
- * resources/crew-agent/versions.json still holds a placeholder. The app holds
- * Crew setup at runtime until the pins are real.
+ * resources/crew-agent/versions.json still holds a placeholder, and fails when
+ * CREW_RELEASE_STRICT=1, as the release workflow sets. The app holds Crew setup
+ * at runtime until the pins are real.
  */
 
 const fs = require('fs');
@@ -36,7 +37,9 @@ function checkCrewVersions(file) {
 module.exports = async function beforePack(context) {
   if (context.electronPlatformName !== 'win32') return;
   const warning = checkCrewVersions(path.join(context.packager.projectDir, 'resources', 'crew-agent', 'versions.json'));
-  if (warning) console.warn(warning);
+  if (!warning) return;
+  if (process.env.CREW_RELEASE_STRICT === '1') throw new Error(warning.replace(/^WARNING: /, ''));
+  console.warn(warning);
 };
 module.exports.placeholders = placeholders;
 module.exports.checkCrewVersions = checkCrewVersions;

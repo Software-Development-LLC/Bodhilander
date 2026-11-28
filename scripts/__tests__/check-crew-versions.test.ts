@@ -65,6 +65,26 @@ describe("the release check on Crew's versions.json", () => {
     }
   });
 
+  test('with CREW_RELEASE_STRICT=1 a Windows build with placeholders fails, naming each one', async () => {
+    const strict = process.env.CREW_RELEASE_STRICT;
+    process.env.CREW_RELEASE_STRICT = '1';
+    try {
+      const shipped = JSON.parse(fs.readFileSync(SHIPPED, 'utf8'));
+      await expect(hook(ctx(project(shipped)))).rejects.toThrow(/rootfs\.sha256.*node\.sha256/);
+      await expect(hook(ctx(project(pinned())))).resolves.toBeUndefined();
+      await expect(hook(ctx(project(shipped), 'darwin'))).resolves.toBeUndefined();
+    } finally {
+      if (strict === undefined) delete process.env.CREW_RELEASE_STRICT;
+      else process.env.CREW_RELEASE_STRICT = strict;
+    }
+  });
+
+  test("the release workflow's Windows packaging is strict", () => {
+    const workflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+    const windows = workflow.slice(workflow.indexOf('- name: Build distributables (Windows)'), workflow.indexOf('- name: Build distributables (macOS)'));
+    expect(windows).toMatch(/^\s+CREW_RELEASE_STRICT: '1'$/m);
+  });
+
   test('electron-builder runs it before packing', () => {
     expect(fs.readFileSync(path.join(ROOT, 'electron-builder.yml'), 'utf8')).toMatch(/^beforePack: scripts\/check-crew-versions\.js$/m);
   });
