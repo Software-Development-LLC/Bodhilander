@@ -127,6 +127,15 @@ describe('Repair of a WSL1 setup', () => {
     expect(t.removed).toEqual(['C:\\dl\\rootfs.tar.gz']);
   });
 
+  test('a re-import that fails after the old setup is removed tells the user to run Repair again', async () => {
+    const wsl = fakeWsl({ '--set-version': fail(), ...EMPTY, '--unregister': ok(), '--import': fail() });
+    const t = repairDeps(wsl);
+    const out = await repairWsl1(t.deps);
+    expect(out.result).toBe('failed');
+    expect((out as { message: string }).message).toMatch(/Run Repair again\.$/);
+    expect(t.lock.held).toBe(false);
+  });
+
   test('set-version failing with no hires or accounts re-imports under the lock, with --version 2', async () => {
     const wsl = fakeWsl({ '--set-version': fail(), ...EMPTY });
     const t = repairDeps(wsl);

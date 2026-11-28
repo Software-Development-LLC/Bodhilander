@@ -4,7 +4,7 @@
  * re-running the start check, so held runs try again.
  */
 import type { CrewWindowsProgress, CrewWindowsRepairResult, CrewWindowsSetupResult, CrewWindowsState } from '../../shared/types';
-import { REPAIR_BUSY, SETUP_NEEDED_MESSAGE, type RepairOutcome, type WslCheck } from './wsl';
+import { REPAIR_BUSY, type RepairOutcome, type WslCheck } from './wsl';
 import { BUILD_NOT_READY, NEEDS_REPAIR, USER_CONFLICT, type SetupOutcome, type SetupStep, type StepResult } from './wsl-setup';
 
 export const REPAIR_CANCELLED = 'Repair was cancelled. Nothing was changed.';
@@ -80,7 +80,7 @@ export class WindowsSetupService {
   private async runRepair(confirmed: boolean): Promise<CrewWindowsRepairResult> {
     const wsl = await this.deps.check();
     if (wsl.state === 'no-wsl') return fail(wsl.message, false);
-    if (wsl.state === 'missing') return fail(SETUP_NEEDED_MESSAGE, false);
+    if (wsl.state === 'missing') return this.finish(() => {});
     if (wsl.state === 'wsl1') return this.repairWsl1(confirmed);
     const gate = this.deps.gateState();
     if (gate && !gate.ok && gate.message === USER_CONFLICT) {

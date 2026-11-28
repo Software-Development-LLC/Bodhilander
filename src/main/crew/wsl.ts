@@ -162,7 +162,7 @@ async function freshImport(deps: RepairDeps, rootfs: string): Promise<RepairOutc
   const un = await deps.exec(['--unregister', DISTRO]);
   if (un.code !== 0) return { result: 'failed', message: `Repair couldn't remove the old setup: ${firstLine(un)}` };
   const imp = await deps.exec(importArgs(deps.installDir, rootfs));
-  return imp.code === 0 ? { result: 'reimported' } : { result: 'failed', message: `Repair couldn't import Crew's Linux image: ${firstLine(imp)}` };
+  return imp.code === 0 ? { result: 'reimported' } : { result: 'failed', message: `Repair couldn't import Crew's Linux image: ${firstLine(imp)}. Run Repair again.` };
 }
 
 async function exportAndRestore(deps: RepairDeps, rootfs: string): Promise<RepairOutcome> {

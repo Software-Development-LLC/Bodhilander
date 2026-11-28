@@ -142,8 +142,13 @@ describe('Repair', () => {
     expect(t.svc.busy).toBe(false);
   });
 
-  test('no WSL or no BodhiCrew is not something Repair fixes', async () => {
+  test('no WSL is not something Repair fixes', async () => {
     expect(await service({ wsl: { state: 'no-wsl', message: NO_WSL_MESSAGE } }).svc.repair(true)).toEqual({ ok: false, message: NO_WSL_MESSAGE, repair: false });
-    expect(await service({ wsl: { state: 'missing', message: SETUP_NEEDED_MESSAGE } }).svc.repair(true)).toEqual({ ok: false, message: SETUP_NEEDED_MESSAGE, repair: false });
+  });
+
+  test('a missing BodhiCrew, as a failed re-import leaves it, is re-imported by Repair', async () => {
+    const t = service({ wsl: { state: 'missing', message: SETUP_NEEDED_MESSAGE } });
+    expect(await t.svc.repair(true)).toEqual({ ok: true });
+    expect(t.calls).toEqual(['setup', 'repaired']);
   });
 });
