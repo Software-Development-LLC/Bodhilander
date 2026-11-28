@@ -3,7 +3,8 @@ import { describe, expect, mock, test } from 'bun:test';
 mock.module('electron-log', () => ({ default: { warn: () => {}, info: () => {}, error: () => {} } }));
 
 const { RunLoop, ERROR_REPLY, threadKeyFor } = await import('../loop');
-import type { CrewJob, Prepared, PreparedRun, RunChild } from '../loop';
+import type { CrewJob, FinishedRun, Prepared, PreparedRun, RunChild } from '../loop';
+import { usageRecordFor } from '../../usage-report';
 import { RunSlots } from '../slots';
 import { HIRE, HIRE_B, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 
@@ -392,5 +393,48 @@ describe('parking', () => {
     t.job(1);
     await t.loop.tick();
     expect(prepares).toBe(1);
+  });
+
+  test('three resumed runs of one hire each report their own tokens, never the session totals, and no cost', async () => {
+    const own = [
+      { input_tokens: 1200, cache_creation_input_tokens: 300, cache_read_input_tokens: 0, output_tokens: 90 },
+      { input_tokens: 40, cache_creation_input_tokens: 20, cache_read_input_tokens: 1500, output_tokens: 70 },
+      { input_tokens: 25, cache_creation_input_tokens: 10, cache_read_input_tokens: 1600, output_tokens: 55 },
+    ];
+    const costs = [3.14, 3.25, 3.33];
+    const args: string[][] = [];
+    const t = setup({
+      prepare: async (job) => {
+        const thread = t.raw.query(`SELECT session_id FROM crew_thread WHERE hire_id = ?`).get(job.hireId) as { session_id: string } | null;
+        const sessionId = thread?.session_id ?? null;
+        args.push(sessionId ? ['-p', '--resume', sessionId] : ['-p']);
+        return { command: 'claude', args: args[args.length - 1], cwd: '/h', env: {}, input: job.text, accountId: 'acct-a', sessionId, token: null };
+      },
+    });
+    for (const n of [1, 2, 3]) t.job(n);
+    const totals = { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 };
+    for (let i = 0; i < 3; i++) {
+      await t.loop.tick();
+      for (const k of Object.keys(totals) as (keyof typeof totals)[]) totals[k] += own[i][k];
+      t.children[i].out({
+        type: 'result', subtype: 'success', is_error: false, result: `reply ${i}`, session_id: 'sess-1',
+        usage: own[i], total_cost_usd: costs[i],
+        modelUsage: { 'claude-opus': { inputTokens: totals.input_tokens, outputTokens: totals.output_tokens, costUSD: costs[i] } },
+      });
+      t.children[i].exit();
+    }
+    expect(args).toEqual([['-p'], ['-p', '--resume', 'sess-1'], ['-p', '--resume', 'sess-1']]);
+    const runs = t.finished as FinishedRun[];
+    expect(runs.map((r) => r.usage)).toEqual(own);
+    const stored = t.raw.query(`SELECT usage FROM crew_run ORDER BY rowid`).all() as { usage: string }[];
+    expect(stored.map((r) => JSON.parse(r.usage))).toEqual(own);
+    const records = runs.map((r) => usageRecordFor(r, 'u-acct', null));
+    expect(records.map((r) => [r.inputTokens, r.cacheCreationTokens, r.cacheReadTokens, r.outputTokens])).toEqual(
+      own.map((u) => [u.input_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens, u.output_tokens]),
+    );
+    for (const r of records) {
+      expect(Object.keys(r).sort()).toEqual(['accountUuid', 'cacheCreationTokens', 'cacheReadTokens', 'durationMs', 'inputTokens', 'model', 'outputTokens', 'requestedBy', 'runId', 'startedAt', 'windows', 'windowsReadAt']);
+      expect(JSON.stringify(r)).not.toMatch(/cost|usd|price/i);
+    }
   });
 });
