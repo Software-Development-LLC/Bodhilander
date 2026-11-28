@@ -21,6 +21,7 @@ const app = new Proxy(
     requestSingleInstanceLock: () => true,
     isPackaged: false,
     getPath: () => userData,
+    getAppPath: () => userData,
     getVersion: () => '0.0.0',
   } as Record<string | symbol, unknown>,
   { get: (t, key) => (key in t ? t[key] : stub) },
@@ -57,11 +58,12 @@ mock.module('../crew/crew-main', () => ({
 describe('the main process', () => {
   test('loads with Crew started by its ready callback and stopped by its quit cleanup', async () => {
     await import('../index');
-    expect(typeof ready).toBe('function');
-    expect(String(ready)).toMatch(/startCrew\(\)/);
-    const quit = handlers['before-quit'] ?? [];
-    expect(quit.some((fn) => /stopCrew\(\)/.test(String(fn)))).toBe(true);
     expect(calls).toEqual([]);
+    ready?.();
+    expect(calls).toEqual(['start']);
+    for (const fn of handlers['before-quit'] ?? []) fn({ preventDefault: () => {} });
+    for (let i = 0; i < 100 && !calls.includes('stop'); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(calls).toEqual(['start', 'stop']);
   });
 
   test('prefs:set refuses every crew.* key', async () => {

@@ -60,4 +60,11 @@ describe('Sign in for Crew on Windows', () => {
     await t.end({ ok: false, reason: 'wrong-account' });
     expect(screen.getByText(/a different Claude account/)).toBeTruthy();
   });
+
+  test('a sign-in that fails before claude starts says Windows setup needs repair, and can be tried again', async () => {
+    mount({ start: () => Promise.reject(new Error('TMPDIR parent is not private')) });
+    fireEvent.click(screen.getByText('Sign in for Crew'));
+    expect(await screen.findByText(/needs repair/)).toBeTruthy();
+    expect(screen.getByText('Sign in for Crew')).toBeTruthy();
+  });
 });

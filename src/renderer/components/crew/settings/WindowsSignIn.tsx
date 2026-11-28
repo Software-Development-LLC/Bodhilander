@@ -21,6 +21,8 @@ const REFUSED: Record<string, string> = {
   unavailable: "Crew's Windows setup is not ready. Finish setup first.",
 };
 
+const REPAIR = "Sign-in could not start because Crew's Windows setup needs repair. Run Repair in Windows setup, then try again.";
+
 /** Sign in a Claude account for Crew on Windows: the browser opens, and the code it shows is pasted here. */
 export const WindowsSignIn: React.FC<WindowsSignInProps> = ({ accountId, label, start, sendCode, cancel, onSignedIn }) => {
   const doStart = start ?? ((id: string) => window.electronAPI.crewWindowsSignIn(id));
@@ -37,6 +39,8 @@ export const WindowsSignIn: React.FC<WindowsSignInProps> = ({ accountId, label, 
       const r = await doStart(accountId);
       setNote(r.ok ? `${label} is signed in for Crew.` : REFUSED[r.reason] ?? 'Sign-in did not finish.');
       if (r.ok) onSignedIn?.();
+    } catch {
+      setNote(REPAIR);
     } finally {
       setWaiting(false);
       setCode('');

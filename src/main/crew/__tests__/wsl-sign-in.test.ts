@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { WslSignIn, type SignInChild } from '../wsl-sign-in';
+import { TmpParentError } from '../run/sockets';
 
 const TOKEN = `sk-ant-oat01-${'a'.repeat(80)}`;
 const URL = 'https://claude.ai/oauth/authorize?code=true&state=x';
 
-function setup(mode: 'token' | 'login', opts: { creds?: boolean; stored?: string | null; uuid?: string } = {}) {
+function setup(mode: 'token' | 'login', opts: { creds?: boolean; stored?: string | null; uuid?: string; parent?: string } = {}) {
   const scripts: string[] = [];
   const opened: string[] = [];
   const written: string[] = [];
@@ -29,7 +30,7 @@ function setup(mode: 'token' | 'login', opts: { creds?: boolean; stored?: string
     records: { add: (n) => void records.add(n), remove: (n) => void records.delete(n), list: () => [...records] },
     sh: async (script) => {
       scripts.push(script);
-      if (script.startsWith('p=/tmp/crt-1000')) return { code: 0, stdout: 'PARENT directory|1000|300\nMADE\n', stderr: '' };
+      if (script.startsWith('p=/tmp/crt-1000')) return { code: 0, stdout: opts.parent ?? 'PARENT directory|1000|300\nMADE\n', stderr: '' };
       if (script.startsWith('test -s')) return { code: opts.creds ? 0 : 1, stdout: '', stderr: '' };
       if (script.startsWith('cat ')) return { code: 0, stdout: JSON.stringify({ oauthAccount: { accountUuid: opts.uuid ?? 'u-1' } }), stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
@@ -111,6 +112,14 @@ describe('Sign in for Crew on Windows', () => {
     u.close(0);
     await done;
     expect(u.s.liveTmpNames()).toEqual([]);
+  });
+
+  test('a TMPDIR parent that is not ours rejects the sign-in and leaves no TMPDIR named as live', async () => {
+    const u = setup('token', { parent: 'PARENT directory|0|777\n' });
+    await expect(u.s.start('a1')).rejects.toBeInstanceOf(TmpParentError);
+    expect(u.spawned()).toEqual([]);
+    expect(u.s.liveTmpNames()).toEqual([]);
+    expect(u.s.active).toBe(false);
   });
 
   test('two sign-ins started together spawn one claude, and a cancel before the spawn spawns none', async () => {

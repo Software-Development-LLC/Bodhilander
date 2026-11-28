@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 const hook = require('../check-crew-versions.js') as ((ctx: unknown) => Promise<void>) & {
   placeholders(v: unknown): string[];
@@ -85,6 +86,24 @@ describe("the release check on Crew's versions.json", () => {
     const strict = windows.match(/^\s+CREW_RELEASE_STRICT: (.+)$/m)?.[1];
     expect(strict).toBe("${{ needs.check-version.outputs.is_prerelease == 'false' && '1' || '' }}");
     expect(workflow).toMatch(/echo "is_prerelease=\$IS_PRERELEASE" >> \$GITHUB_OUTPUT/);
+  });
+
+  test('a stable release refuses to publish unless every build leg succeeded and a Windows installer is present', () => {
+    type Step = { name?: string; if?: string; run?: string; env?: Record<string, string>; uses?: string };
+    const workflow = parseYaml(fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8'));
+    const steps: Step[] = workflow.jobs.release.steps;
+    const stable = "needs.check-version.outputs.is_prerelease == 'false'";
+
+    const buildGuard = steps[0];
+    expect(buildGuard.if).toBe(stable);
+    expect(buildGuard.env?.BUILD_RESULT).toBe('${{ needs.build.result }}');
+    expect(buildGuard.run).toMatch(/if \[ "\$BUILD_RESULT" != "success" \]; then[\s\S]*exit 1/);
+
+    const download = steps.findIndex((s) => s.name === 'Download all artifacts');
+    const exeGuard = steps[download + 1];
+    expect(exeGuard.if).toBe(stable);
+    expect(exeGuard.run).toMatch(/find artifacts -name '\*\.exe'[\s\S]*exit 1/);
+    expect(steps.findIndex((s) => s.name === 'Create Release')).toBeGreaterThan(download + 1);
   });
 
   test('electron-builder runs it before packing', () => {

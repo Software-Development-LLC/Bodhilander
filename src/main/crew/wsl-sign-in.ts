@@ -82,17 +82,24 @@ export class WslSignIn {
     const d = this.deps;
     const configDir = wslAccountDir(accountId);
     const mode = d.signIn.mode();
-    await d.sh(`umask 077 && mkdir -p ${q(configDir)}`);
     let tmpName = '';
-    const tmpDir = await makeWslTmpDir(d.sh, CREW_UID, {
-      add: (n) => {
-        tmpName = n;
-        this.tmpName = n;
-        d.records.add(n);
-      },
-      remove: (n) => d.records.remove(n),
-      list: () => d.records.list(),
-    });
+    let tmpDir = '';
+    let ready = false;
+    try {
+      await d.sh(`umask 077 && mkdir -p ${q(configDir)}`);
+      tmpDir = await makeWslTmpDir(d.sh, CREW_UID, {
+        add: (n) => {
+          tmpName = n;
+          this.tmpName = n;
+          d.records.add(n);
+        },
+        remove: (n) => d.records.remove(n),
+        list: () => d.records.list(),
+      });
+      ready = true;
+    } finally {
+      if (!ready) this.tmpName = null;
+    }
     const command = mode === 'token' ? ['setup-token'] : ['/login'];
     const args = asCrew('env', `CLAUDE_CONFIG_DIR=${configDir}`, `TMPDIR=${tmpDir}`, 'BROWSER=true', CLAUDE_BIN, ...command);
     let output = '';

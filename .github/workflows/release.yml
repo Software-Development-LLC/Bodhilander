@@ -276,12 +276,32 @@ jobs:
       contents: write
 
     steps:
+      # The build matrix is fail-fast: false and this job runs on always(), so
+      # without these a stable release could go out missing a platform.
+      - name: Refuse a stable release when a build leg failed
+        if: needs.check-version.outputs.is_prerelease == 'false'
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          if [ "$BUILD_RESULT" != "success" ]; then
+            echo "::error::A build leg did not succeed (result: $BUILD_RESULT); a stable release ships every platform or none."
+            exit 1
+          fi
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Download all artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
+
+      - name: Refuse a stable release without a Windows installer
+        if: needs.check-version.outputs.is_prerelease == 'false'
+        run: |
+          if [ -z "$(find artifacts -name '*.exe' -type f -print -quit)" ]; then
+            echo "::error::No .exe under artifacts/; a stable release without Windows would stop Windows updates."
+            exit 1
+          fi
 
       - name: Display structure of downloaded files
         run: ls -R artifacts
