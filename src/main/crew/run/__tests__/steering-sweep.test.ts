@@ -5,6 +5,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { sweepSteering, wslSweepSteering } from '../steering-sweep';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
@@ -55,7 +58,7 @@ describe('steering a run can leave behind', () => {
     expect(() => sweepSteering(path.join(os.tmpdir(), 'crew-steer-none', 'owner'))).not.toThrow();
   });
 
-  test('the WSL command removes the same set when a shell runs it', () => {
+  posixOnly('the WSL command removes the same set when a shell runs it', () => {
     const root = plant();
     execFileSync('/bin/sh', ['-c', wslSweepSteering(root)]);
     expect(left(root)).toEqual(KEPT);

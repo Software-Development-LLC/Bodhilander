@@ -6,6 +6,9 @@ import {
   RUN_DIR_TRIES, RunDirCollision, SocketRootError, ensureSocketRoot, makeRunDir, newRunToken, removeRunDir, runDirName, sweepRunDirs, socketPath, socketRoot, tokenMatches,
 } from '../sockets';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const made: string[] = [];
 afterEach(() => {
   for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
@@ -33,14 +36,14 @@ describe('sweeping run dirs at start', () => {
 });
 
 describe('the socket root', () => {
-  test('is made 0700 when missing, and passes when it is a 0700 directory of ours', () => {
+  posixOnly('is made 0700 when missing, and passes when it is a 0700 directory of ours', () => {
     const root = path.join(tmp(), 'cr');
     ensureSocketRoot(root, uid);
     expect(fs.lstatSync(root).mode & 0o777).toBe(0o700);
     expect(() => ensureSocketRoot(root, uid)).not.toThrow();
   });
 
-  test('a wrong mode, a symlink or another owner stops every run', () => {
+  posixOnly('a wrong mode, a symlink or another owner stops every run', () => {
     const base = tmp();
     const loose = path.join(base, 'loose');
     fs.mkdirSync(loose, { mode: 0o755 });
@@ -61,7 +64,7 @@ describe('the socket root', () => {
 });
 
 describe('run directories', () => {
-  test('two runs get different directories, and a taken name gets a longer one', () => {
+  posixOnly('two runs get different directories, and a taken name gets a longer one', () => {
     const root = tmp();
     const a = makeRunDir(root, 'run-a');
     const b = makeRunDir(root, 'run-b');

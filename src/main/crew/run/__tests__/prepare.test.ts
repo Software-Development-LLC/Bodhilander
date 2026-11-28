@@ -21,6 +21,9 @@ import type { AccountUsage, ClaudeAccount } from '../../../../shared/types';
 import type { CrewJob, PreparedRun } from '../loop';
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
@@ -80,7 +83,7 @@ describe('preparing a run', () => {
     expect(fs.existsSync(t.root)).toBe(false);
   });
 
-  test('resolves the account, writes settings, CLAUDE.md and mcp config, and keeps tokens out of the env', async () => {
+  posixOnly('resolves the account, writes settings, CLAUDE.md and mcp config, and keeps tokens out of the env', async () => {
     const t = setup();
     fs.mkdirSync(path.join(t.root, 'owner', '.claude'), { recursive: true });
     fs.writeFileSync(path.join(t.root, 'owner', '.claude', 'settings.json'), '{"hooks":{}}');
@@ -115,7 +118,7 @@ describe('preparing a run', () => {
     expect(s.sandbox.filesystem.denyWrite).toContain(path.join(t.root, 'git'));
   });
 
-  test('settings that cannot be built fail naming the hire and the run', async () => {
+  posixOnly('settings that cannot be built fail naming the hire and the run', async () => {
     const t = setup();
     const base = t.deps.sandbox();
     t.deps.sandbox = () => ({ ...base, reopen: ['/Users/me'] });

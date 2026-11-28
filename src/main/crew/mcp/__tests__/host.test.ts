@@ -10,6 +10,9 @@ const { ServicesNotReady } = await import('../../run/services');
 import type { McpServerHandler } from '../host';
 import { HIRE, crewDb, uuid } from '../../__tests__/crew-db';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const RELAY = path.join(import.meta.dir, '..', '..', '..', '..', '..', 'scripts', 'crew-mcp.js');
 const dirs: string[] = [];
 const hosts: InstanceType<typeof McpHost>[] = [];
@@ -56,13 +59,13 @@ function relay(socket: string, token: string, server: string, messages: unknown[
 }
 
 describe('MCP host', () => {
-  test('the socket lives under userData, within the sun_path limit', () => {
+  posixOnly('the socket lives under userData, within the sun_path limit', () => {
     expect(hostSocketPath('/Users/a/Library/Application Support/Bodhilander')).toBe('/Users/a/Library/Application Support/Bodhilander/crew/mcp.sock');
     expect(() => hostSocketPath(`/${'x'.repeat(100)}`)).toThrow('sun_path');
     expect(() => hostSocketPath(`/${'x'.repeat(100)}`)).toThrow(ServicesNotReady);
   });
 
-  test('the relay lists and calls the registered run\'s server, end to end', async () => {
+  posixOnly('the relay lists and calls the registered run\'s server, end to end', async () => {
     const { host } = await setup();
     const token = host.register({ jobId: uuid(1), hireId: HIRE, servers: { approve: echo('approve'), tools: echo('tools') } });
     const out = await relay(host.socketPath, token, 'tools', [
@@ -80,7 +83,7 @@ describe('MCP host', () => {
     expect(r.stderr).toContain('descriptor 3');
   });
 
-  test('a wrong or retired token is refused and audited', async () => {
+  posixOnly('a wrong or retired token is refused and audited', async () => {
     const { raw, host } = await setup();
     const token = host.register({ jobId: uuid(1), hireId: HIRE, servers: { approve: echo('a'), tools: echo('t') } });
     expect(await host.answer({ token: 'f'.repeat(64), server: 'tools', op: 'list' })).toEqual({ ok: false, error: 'refused' });
@@ -92,7 +95,7 @@ describe('MCP host', () => {
     expect(out[0].result).toEqual({ content: [{ type: 'text', text: 'refused' }], isError: true });
   });
 
-  test('an unlisted tool name is an error result, never a dispatch', async () => {
+  posixOnly('an unlisted tool name is an error result, never a dispatch', async () => {
     const { host } = await setup();
     const token = host.register({ jobId: uuid(1), hireId: HIRE, servers: { approve: echo('a'), tools: echo('t') } });
     const answer = await host.answer({ token, server: 'tools', op: 'call', name: 'rm' });
@@ -100,12 +103,12 @@ describe('MCP host', () => {
     expect(await host.answer({ token, server: 'other', op: 'list' })).toEqual({ ok: false, error: 'unknown server' });
   });
 
-  test('the socket is 0600', async () => {
+  posixOnly('the socket is 0600', async () => {
     const { host } = await setup();
     expect(fs.statSync(host.socketPath).mode & 0o777).toBe(0o600);
   });
 
-  test('a failed listen is not kept: the next ready() listens again', async () => {
+  posixOnly('a failed listen is not kept: the next ready() listens again', async () => {
     const { db } = crewDb();
     const dir = fs.mkdtempSync(path.join('/tmp', 'crh-'));
     dirs.push(dir);

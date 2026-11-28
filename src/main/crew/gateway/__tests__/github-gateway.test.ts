@@ -10,6 +10,9 @@ const { GithubGateway, TOKEN_REUSE_MS, WRITE_MESSAGE, planGh } = await import('.
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 import { isTainted, wrapUntrusted } from '../../taint';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const REPOS = ['acme/app'];
 const SHIM_DIR = path.join(import.meta.dir, '..', '..', '..', '..', '..', 'resources', 'crew', 'gh-shim');
 const OTHER = '55555555-5555-4555-8555-555555555555';
@@ -203,7 +206,7 @@ describe('GithubGateway', () => {
     expect(t.ran).toEqual([]);
   });
 
-  test('the shim speaks to the run\'s socket end to end', async () => {
+  posixOnly('the shim speaks to the run\'s socket end to end', async () => {
     const t = setup();
     const dir = fs.mkdtempSync('/tmp/crg-');
     dirs.push(dir);
@@ -223,7 +226,7 @@ describe('GithubGateway', () => {
     expect(answer).toEqual({ status: 1, stdout: '', stderr: `${WRITE_MESSAGE}\n` });
   });
 
-  test('a connection gets one answer, however many lines it sends', async () => {
+  posixOnly('a connection gets one answer, however many lines it sends', async () => {
     const t = setup();
     const dir = fs.mkdtempSync('/tmp/crg-');
     dirs.push(dir);

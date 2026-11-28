@@ -5,6 +5,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { APPROVE_SERVER, TOOLS_SERVER, crewMcpServers } from '../mcp-config';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const TOKEN = 'a'.repeat(64);
 const GATEWAY = 'b'.repeat(64);
 const dirs: string[] = [];
@@ -35,7 +38,7 @@ describe('the MCP relay registration', () => {
     }
   });
 
-  test('the relay gets the MCP token on descriptor 3, and its env holds neither token though the run env had both', () => {
+  posixOnly('the relay gets the MCP token on descriptor 3, and its env holds neither token though the run env had both', () => {
     const { servers } = fixture();
     const s = servers[TOOLS_SERVER] as Server;
     const r = spawnSync(s.command, s.args, { env: { ...process.env, CREW_GH_TOKEN: GATEWAY, CREW_MCP_TOKEN: TOKEN, ...s.env }, encoding: 'utf8' });

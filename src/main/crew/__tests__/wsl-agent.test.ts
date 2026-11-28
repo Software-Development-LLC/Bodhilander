@@ -146,7 +146,8 @@ describe('the run launch through exec-run', () => {
 
 const hasNode = spawnSync('node', ['--version']).status === 0;
 
-describe.skipIf(!hasNode)('crew-agent itself, under node', () => {
+// On Windows crew-agent runs inside WSL2, never natively.
+describe.skipIf(!hasNode || process.platform === 'win32')('crew-agent itself, under node', () => {
   test('--version matches versions.json', () => {
     const v = JSON.parse(fs.readFileSync(path.join(path.dirname(AGENT), 'versions.json'), 'utf8')).crewAgent.version;
     expect(spawnSync('node', [AGENT, '--version']).stdout.toString().trim()).toBe(v);

@@ -2,6 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { buildRunSettings, namedDenyCovers, projectsEntry } from '../sandbox-settings';
 import { hirePaths } from '../scope';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const paths = hirePaths('/ud', 'h1');
 const input = (scope: 'owner' | 'circle') => ({
   paths, scope, configDir: '/acct/a1', accountDirs: ['/acct/a1', '/acct/a2'], userData: '/ud',
@@ -10,7 +13,7 @@ const input = (scope: 'owner' | 'circle') => ({
 });
 
 describe('run settings', () => {
-  test('an owner run writes its hire folder only, and reads no account, keychain, other hire or userData', () => {
+  posixOnly('an owner run writes its hire folder only, and reads no account, keychain, other hire or userData', () => {
     const s = buildRunSettings(input('owner'));
     expect(s.autoMemoryEnabled).toBe(false);
     expect(s.sandbox.allowUnsandboxedCommands).toBe(false);
@@ -22,7 +25,7 @@ describe('run settings', () => {
     expect(s.sandbox.network).toEqual({ allowedDomains: ['api.anthropic.com'], allowUnixSockets: ['/tmp/cr-501/h1.sock'] });
   });
 
-  test('no run can read the owner\'s credential stores under home', () => {
+  posixOnly('no run can read the owner\'s credential stores under home', () => {
     for (const scope of ['owner', 'circle'] as const) {
       const s = buildRunSettings(input(scope));
       for (const p of ['.ssh', '.aws', '.config/gh', '.gnupg', '.netrc', '.docker', '.kube', '.npmrc', '.git-credentials', 'Library/Application Support/Google/Chrome']) {
@@ -32,7 +35,7 @@ describe('run settings', () => {
     }
   });
 
-  test('a circle run cannot read or write the owner folder or its transcripts', () => {
+  posixOnly('a circle run cannot read or write the owner folder or its transcripts', () => {
     const s = buildRunSettings(input('circle'));
     expect(s.sandbox.filesystem.allowWrite).toEqual([paths.circle]);
     const proj = projectsEntry('/acct/a1', paths.owner);
@@ -63,7 +66,7 @@ describe('reads denied by default on macOS', () => {
     ...input(scope), paths: homePaths, userData: UD, userDataEntries: ['crew', 'bodhilander.db'], listDir: (d: string) => tree[d] ?? [], ...over,
   });
 
-  test("a run never reads its own run/ folder, where its MCP token sits, nor the owner's ~/.claude.json", () => {
+  posixOnly("a run never reads its own run/ folder, where its MCP token sits, nor the owner's ~/.claude.json", () => {
     const withConfig = (d: string) => (d === '/Users/b' ? [...tree[d], '.claude.json'] : tree[d] ?? []);
     for (const scope of ['owner', 'circle'] as const) {
       const s = buildRunSettings(homeInput(scope, { listDir: withConfig, home: '/Users/b' }));
@@ -75,7 +78,7 @@ describe('reads denied by default on macOS', () => {
     }
   });
 
-  test('Bash reads nothing under /Users or /Volumes but what is re-opened, and the named denies stay', () => {
+  posixOnly('Bash reads nothing under /Users or /Volumes but what is re-opened, and the named denies stay', () => {
     const s = buildRunSettings(input('owner'));
     expect(s.sandbox.filesystem.denyRead).toEqual(expect.arrayContaining(['/Users', '/Volumes', '/System/Volumes/Data/Users', '/acct/a1', '/Users/b/.ssh', '/ud/crew/h2']));
   });
@@ -110,7 +113,7 @@ describe('reads denied by default on macOS', () => {
     expect(() => buildRunSettings({ ...input('owner'), clones: ['/acct'] })).toThrow('named deny');
   });
 
-  test('the file tools are denied every entry at each level from /Users to the crew folder but the step toward the hire', () => {
+  posixOnly('the file tools are denied every entry at each level from /Users to the crew folder but the step toward the hire', () => {
     const deny = buildRunSettings(homeInput('owner')).permissions.deny;
     for (const p of ['/Users/alice', '/Users/Shared', '/Users/b/Documents', '/Users/b/.ssh', '/Users/b/Library/Keychains', '/Users/b/Library/Application Support/Google', `${UD}/bodhilander.db`, `${UD}/crew/h2`, '/Volumes', '/System/Volumes/Data/Users', homePaths.run]) {
       expect(deny).toContain(`Read(/${p}/**)`);
@@ -121,11 +124,11 @@ describe('reads denied by default on macOS', () => {
     }
   });
 
-  test('a hire folder under /Users with no listing is refused, so the levels are never skipped', () => {
+  posixOnly('a hire folder under /Users with no listing is refused, so the levels are never skipped', () => {
     expect(() => buildRunSettings(homeInput('owner', { listDir: undefined }))).toThrow('listing');
   });
 
-  test('send_file is checked against the named denies, not the default /Users deny', () => {
+  posixOnly('send_file is checked against the named denies, not the default /Users deny', () => {
     const i = homeInput('circle');
     expect(namedDenyCovers(i, '/Users/b/.ssh/id_ed25519')).toBe(true);
     expect(namedDenyCovers(i, '/acct/a1/.credentials.json')).toBe(true);

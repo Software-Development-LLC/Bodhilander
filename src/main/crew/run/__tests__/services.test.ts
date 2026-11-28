@@ -12,6 +12,9 @@ import type { CrewJob } from '../loop';
 import type { SocketFs } from '../sockets';
 import { HIRE, PERSON, crewDb, uuid } from '../../__tests__/crew-db';
 
+// Runs inside WSL2 on Windows, never natively, so native Windows CI skips it.
+const posixOnly = test.skipIf(process.platform === 'win32');
+
 const made: string[] = [];
 afterEach(() => {
   for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
@@ -48,7 +51,7 @@ function setup() {
 }
 
 describe('run services', () => {
-  test('a run gets a private 0700 directory, its gateway socket, the MCP relay and the shim env; all of it ends with the run', async () => {
+  posixOnly('a run gets a private 0700 directory, its gateway socket, the MCP relay and the shim env; all of it ends with the run', async () => {
     const t = setup();
     const s = await t.manager.start(job, 'chat:owner', 'run-1');
     const uid = process.getuid!();
@@ -73,7 +76,7 @@ describe('run services', () => {
     expect(fs.existsSync(t.base)).toBe(true);
   });
 
-  test('two runs of one job in a row get different directories', async () => {
+  posixOnly('two runs of one job in a row get different directories', async () => {
     const t = setup();
     const a = await t.manager.start(job, 'chat:owner', 'run-1');
     const b = await t.manager.start({ ...job, id: uuid(2) }, 'chat:owner', 'run-2');
